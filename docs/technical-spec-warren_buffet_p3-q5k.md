@@ -94,6 +94,11 @@ Phase 3 answers "can we afford it?":
 | A13 | The platform spec is `docs/history/technical-spec-platform-layer.md`. |
 | A15 | Help numbers in SQL (Alex, 2026-10-14, run tag `warren_buffet_p3-q5k-s3-h6tz`). Applied migrations are never edited. The next time a migration redefines `wb_transfer_match`, `wb_detect_subscriptions`, `wb_subscription_overview` or `wb_rule_health_all` (or any object whose number the help states), that migration adds a comment next to each such number saying "if you change this value, update help entry <key> in src/money/helpText.js and its test". The JS mirrors live in `src/money/ruleNumbers.js`, and `helpText.test.js` checks them against the newest SQL definition. |
 | A16 | `never_fires` is fixed in step 10, the weekly cleanup step (Alex, same run tag). The new rule: flag a rule when its last match is older than about 1.5 times its expected interval, and give a brand-new rule that long before its first match is due. Step 3 does not change the check. |
+| A17 | `wb_splits.project_source` (`rule`, `claude`, `manual`). Rules never overwrite claude or manual. A hand removal (project_id null with source claude or manual) sticks, as tag exclusions do. A project written with no source counts as manual. (Alex, 2026-10-16, run tag `warren_buffet_p3-q5k-s4-n8rc`.) |
+| A18 | Step 4 adds a minimal "Suggested match" group to Review: the planned item's name and date beside the payment, with Confirm, "Not this one" and the "?" (no longer reserved). Step 8 builds the full card. |
+| A19 | Suggestions after planned-item writes come from explicit calls, not a trigger: the step 6 tools and step 8 screens call `wb_suggest_planned_matches` after they write. Processing is re-run once after seeding (step 7). |
+| A20 | Fully confirming a one-off sets its stage to `paid` automatically. Nothing ever sets it back automatically. |
+| A21 | The help does not state default numbers (the default tolerance and window). Per-item values are shown as live working instead. |
 | A14 | Recurring "what if" items are wanted (Alex, 2026-10-14, run tag `warren_buffet_p3-q5k-s2-m3qd`). `wb_planned_items.is_draft boolean not null default false`, for recurring items only; a one-off draft stays stage `draft`. Drafts of either kind stay out of free cash unless the drafts toggle includes them. |
 
 ---
@@ -167,7 +172,8 @@ No row is seeded in a migration.
 ### 3.5 New columns
 
 - `wb_splits.project_id`: nullable, references `wb_projects`, `on delete set null`, indexed (Step 2).
-- `wb_rules.set_project_id` (Step 4). Processing sets it on a single-split transaction only, like tags, and never over a hand value.
+- `wb_rules.set_project_id` (Step 4). Processing sets it on a single-split transaction only, like tags; the first matching rule wins. It never writes over a hand value, and it clears a rule's project when no rule sets one any more.
+- `wb_splits.project_source` (Step 4, A17). A trigger fills `manual` when a project is written with no source.
 
 ### 3.6 `wb_replace_splits` (Step 2, A6)
 
@@ -188,7 +194,7 @@ The rebuild reuses existing split rows by position, so their ids, project links 
 | `wb_confirm_planned_match` | invoker function: confirm / reject / partial amount in one transaction | 4 |
 | `wb_process_transactions` | sets `project_id` from rules; calls the suggestion function | 4 |
 | `wb_review_queue`, `wb_transaction_list` | gain `planned_match`, with `needs_review` kept in step | 4 |
-| `wb_planned_occurrences` | set-returning helper: occurrences in a date range | 5 |
+| `wb_planned_occurrences(p_from, p_to, p_include_drafts)` | set-returning helper: occurrences in a date range. **Moved from step 5 to step 4**, because matching needs recurring due dates. | 4 |
 | `wb_subscription_outflows` | view (decision 3) | 5 |
 | `wb_burn_rate` | view, with working: months used and exclusions (decision 8, A3) | 5 |
 | `wb_true_cost` | view: monthly true cost against expected monthly income (A8) | 5 |
@@ -222,8 +228,8 @@ Each step ends with verification and stops for Alex. Database claims are taken a
 | 1 | Read-only plan | none | no |
 | 2 | **Migration C.** The four tables, `wb_splits.project_id` and `wb_replace_splits` (§3.6). Rolled-back tests. CONFORMANT. | `db:table:wb_projects`, `db:table:wb_planned_items`, `db:table:wb_planned_matches`, `db:table:wb_settings`, `db:table:wb_splits`, `db:fn:wb_replace_splits` | no |
 | 3 | **Help for the Phase 2 screens.** The "?" component, `helpText.js` and its test. Entries for: the review reasons; the rule-health findings (entries only, A9); the subscription statuses and Keep watching; the monthly breakdown; Always do this. | none | Vercel on merge |
-| 4 | **Processing and suggestions.** `wb_rules.set_project_id`; the suggestion and confirm functions; `planned_match` in the queue and `wb_transaction_list`; its help entry; tests. | `db:fn:wb_process_transactions`, `db:fn:wb_suggest_planned_matches`, `db:fn:wb_confirm_planned_match`, `db:table:wb_rules`, `db:table:wb_planned_matches`, `db:table:wb_review_queue`, `db:table:wb_transaction_list` | no |
-| 5 | **Views and projection** (§3.7), with tests on invented data, including the monthly-equivalent test (A12). Help for free cash, true cost, burn rate, spendable cash, the reserve line and the floor. | `db:table:wb_subscription_outflows`, `db:fn:wb_planned_occurrences`, `db:fn:wb_cash_projection`, `db:fn:wb_free_cash`, `db:table:wb_burn_rate`, `db:table:wb_true_cost` | no |
+| 4 | **Processing and suggestions.** 4a (database): `wb_rules.set_project_id`, `wb_splits.project_source`, `wb_planned_occurrences`, the suggestion and confirm functions, `planned_match` in the queue and `wb_transaction_list`, `wb_replace_splits`, and tests. 4b (app): the minimal Suggested match group (A18) and its help entry. | `db:fn:wb_process_transactions`, `db:fn:wb_suggest_planned_matches`, `db:fn:wb_confirm_planned_match`, `db:fn:wb_planned_occurrences`, `db:fn:wb_replace_splits`, `db:table:wb_rules`, `db:table:wb_splits`, `db:table:wb_planned_matches`, `db:table:wb_planned_items`, `db:table:wb_review_queue`, `db:table:wb_transaction_list` | no |
+| 5 | **Views and projection** (§3.7), with tests on invented data, including the monthly-equivalent test (A12). Help for free cash, true cost, burn rate, spendable cash, the reserve line and the floor. | `db:table:wb_subscription_outflows`, `db:fn:wb_free_cash`, `db:table:wb_burn_rate`, `db:table:wb_true_cost` | no |
 | 6 | **MCP tools** (§4). Plain-sentence errors, schema-versus-handler tests, tool count. | `db:deploy` | mcp |
 | 7 | **Seeding in claude.ai.** Projects, premiums, inflows, one-offs, then the floor and horizon (Alex sets the floor). Confirm the first suggestions. | none | no |
 | 8 | **Plan tab UI.** Projects and planned items; the match card on Review; a project picker on splits. Help for the stages and the match card. | none | Vercel on merge |

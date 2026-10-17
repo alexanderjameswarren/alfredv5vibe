@@ -14,6 +14,10 @@ jest.mock("./moneyApi", () => ({
   applyFix: jest.fn(),
   recordSubscriptionPrice: jest.fn(),
   dismissSubscription: jest.fn(),
+  confirmPlannedMatch: jest.fn(),
+  rejectPlannedMatch: jest.fn(),
+  getSubscriptions: jest.fn(),
+  getSubscriptionDetail: jest.fn(),
 }));
 const api = require("./moneyApi");
 const ReviewScreen = require("./ReviewScreen").default;
@@ -83,6 +87,48 @@ it("a refused dismissal shows the plain sentence", async () => {
   render(<ReviewScreen onOpen={() => {}} />);
   fireEvent.click(await screen.findByRole("button", { name: "Not a subscription" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Only a detected subscription can be dismissed here.");
+});
+
+const suggestion = row({
+  transaction_id: "t5", reason: "planned_match", detail: "ZZ invoice, due 2026-03-10", amount: -198, txn_date: "2026-03-14",
+  planned_match_id: "m1", planned_item_id: "p1", planned_item_name: "ZZ invoice", planned_on: "2026-03-10",
+  planned_amount: -200, match_amount: -198, planned_tolerance: 5, planned_window_days: 10,
+});
+
+it("suggested match: the planned item beside the payment, Confirm and Not this one", async () => {
+  api.getReviewQueue.mockResolvedValue([suggestion]);
+  api.confirmPlannedMatch.mockResolvedValue({ status: "confirmed" });
+  api.rejectPlannedMatch.mockResolvedValue({ status: "rejected" });
+  render(<ReviewScreen onOpen={() => {}} />);
+  expect(await screen.findByText("Suggested match")).toBeInTheDocument();
+  expect(screen.getByText("ZZ invoice")).toBeInTheDocument();
+  expect(screen.getByText(/The app suggests this pays/)).toHaveTextContent("due Mar 10, 2026");
+  expect(screen.queryByRole("button", { name: "Mark reviewed" })).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(api.confirmPlannedMatch).toHaveBeenCalledWith("m1"));
+  fireEvent.click(await screen.findByRole("button", { name: "Not this one" }));
+  await waitFor(() => expect(api.rejectPlannedMatch).toHaveBeenCalledWith("m1"));
+});
+
+it("suggested match: confirm for a lower amount", async () => {
+  api.getReviewQueue.mockResolvedValue([suggestion]);
+  api.confirmPlannedMatch.mockResolvedValue({ status: "confirmed" });
+  render(<ReviewScreen onOpen={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Lower amount…" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm amount" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Type the amount");
+  fireEvent.change(screen.getByLabelText("Amount for the planned item"), { target: { value: "120" } });
+  fireEvent.click(screen.getByRole("button", { name: "Confirm amount" }));
+  await waitFor(() => expect(api.confirmPlannedMatch).toHaveBeenCalledWith("m1", 120));
+});
+
+it("suggested match: the ? shows the working", async () => {
+  api.getReviewQueue.mockResolvedValue([suggestion]);
+  render(<ReviewScreen onOpen={() => {}} />);
+  fireEvent.click(await screen.findByRole("button", { name: "About Suggested match" }));
+  expect(screen.getByRole("dialog")).toHaveTextContent("tolerance");
+  expect(screen.getByRole("dialog")).toHaveTextContent("4 days apart (window 10 days either side)");
 });
 
 it("says so when there is nothing to review", async () => {

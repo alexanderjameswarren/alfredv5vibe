@@ -188,9 +188,10 @@ export const REVIEW_LABELS = {
   split_mismatch: "Splits don't add up",
   price_change: "Subscription price changed",
   new_recurring: "Looks like a subscription",
+  planned_match: "Suggested match",
 };
 export const REVIEW_ORDER = [
-  "missing_required_tag", "transfer_candidate", "price_change", "new_recurring", "split_mismatch", "no_kind",
+  "missing_required_tag", "transfer_candidate", "planned_match", "price_change", "new_recurring", "split_mismatch", "no_kind",
 ];
 
 /** "2026-10-07" -> "2026-10". */

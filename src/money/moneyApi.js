@@ -40,7 +40,9 @@ const LIST_COLUMNS =
   "pending, merchant_id, merchant_name, merchant_source, kind, kind_source, transfer_pair_id, transfer_candidate, " +
   "reviewed, tag_names, split_count, needs_review, excluded_tags, notes";
 const QUEUE_COLUMNS =
-  "reason, detail, transaction_id, account_label, txn_date, amount, clean_description, payee, merchant_name, kind, tag_names";
+  "reason, detail, transaction_id, account_label, txn_date, amount, clean_description, payee, merchant_name, kind, tag_names, " +
+  "planned_match_id, planned_item_id, planned_item_name, planned_on, planned_amount, match_amount, planned_tolerance, " +
+  "planned_window_days";
 
 // Database refusals people can act on, in plain words. Anything else becomes a
 // generic sentence; the raw message goes to the console only, never the screen.
@@ -55,6 +57,9 @@ const KNOWN_ERRORS = [
   [/no distinctive word/, "There is no distinctive word to match on: type a pattern."],
   [/say what the rule does/, "Choose a kind or at least one tag for the rule."],
   [/wb_subscription_prices_amount_check/, "A price must be more than zero."],
+  [/confirmed matches on this split would exceed/, "That is more than this payment. Lower the amount."],
+  [/this match was already/, "This match was already decided. Reload the page."],
+  [/the amount cannot be zero/, "The amount cannot be zero."],
   [/that you can see|not found/, "That record no longer exists, or you can't see it."],
   [/jwt|permission denied|row-level security/i, "You're signed out or not allowed to change this. Sign in again."],
   [/failed to fetch|networkerror|network request/i, "Couldn't reach the server. Check the connection and try again."],
@@ -408,6 +413,25 @@ export async function getReviewQueue() {
   if (e2) fail("Couldn't load the review queue", e2);
   const subOf = new Map((links || []).map((l) => [l.id, l.subscription_id]));
   return rows.map((r) => (SUB_REASONS.includes(r.reason) ? { ...r, subscription_id: subOf.get(r.transaction_id) || null } : r));
+}
+
+/**
+ * Confirm a suggested planned match (spec A18, A20). A lower amount, for a
+ * payment only partly for the planned item, is taken as a positive number.
+ */
+export async function confirmPlannedMatch(matchId, amount = null) {
+  const { data, error } = await supabase.rpc("wb_confirm_planned_match",
+    { p_match_id: matchId, p_action: "confirm", p_amount: amount === null ? null : Math.abs(Number(amount)) });
+  if (error) fail("Couldn't confirm the match", error);
+  return data;
+}
+
+/** "Not this one": reject a suggested planned match, so it is never suggested again. */
+export async function rejectPlannedMatch(matchId) {
+  const { data, error } = await supabase.rpc("wb_confirm_planned_match",
+    { p_match_id: matchId, p_action: "reject", p_amount: null });
+  if (error) fail("Couldn't turn down the match", error);
+  return data;
 }
 
 /** Accept a charge's amount as the subscription's price from that day (clears price_change). */

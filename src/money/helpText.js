@@ -55,12 +55,11 @@ export const HELP = {
     todo: "Confirm it on Subscriptions. \"Not a subscription\" stops it for good. \"Keep watching\" hides it until the next charge, which brings it back.",
   },
   "review.planned_match": {
-    reserved: true, // shown from Phase 3 step 4
     title: "Suggested match",
-    what: "The app thinks this payment settles one of your planned items.",
-    included: "The same merchant, an amount within the item's tolerance, and a date within its window.",
-    leftOut: "Pending charges, and pairs you already turned down.",
-    todo: "\"Confirm\", or \"Not this one\".",
+    what: "The app thinks this payment settles one of your planned items. It is only a suggestion until you confirm it.",
+    included: "A settled payment at the planned item's merchant, in the same direction (money out for a bill, money in for income), for an amount within the item's tolerance, dated within the item's window either side of its due date. For a repeating item, each due date is checked on its own.",
+    leftOut: "Pending charges; planned items with no merchant, drafts, and cancelled or paid items; payments you already turned down; and payments for less than the planned amount, beyond its tolerance (match those by hand once the planning tools arrive).",
+    todo: "Confirm it to count the payment against the planned item. If only part of this payment is for the planned item, lower the amount before confirming. Or tap \"Not this one\", and it will not be suggested again.",
   },
 
   // --- Subscriptions ---

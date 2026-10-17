@@ -246,6 +246,27 @@ describe("subscriptions in review", () => {
   });
 });
 
+describe("planned matches", () => {
+  it("confirm calls wb_confirm_planned_match, with a lower amount as a positive number", async () => {
+    await api.confirmPlannedMatch("m1");
+    await api.confirmPlannedMatch("m1", -120);
+    expect(mockRpcs).toEqual([
+      ["wb_confirm_planned_match", { p_match_id: "m1", p_action: "confirm", p_amount: null }],
+      ["wb_confirm_planned_match", { p_match_id: "m1", p_action: "confirm", p_amount: 120 }],
+    ]);
+  });
+
+  it("Not this one rejects", async () => {
+    await api.rejectPlannedMatch("m1");
+    expect(mockRpcs).toEqual([["wb_confirm_planned_match", { p_match_id: "m1", p_action: "reject", p_amount: null }]]);
+  });
+
+  it("an over-amount refusal is a plain sentence", async () => {
+    mockRpc = () => ({ data: null, error: { message: "wb_planned_matches: confirmed matches on this split would exceed its amount" } });
+    await expect(api.confirmPlannedMatch("m1", 999)).rejects.toThrow("That is more than this payment. Lower the amount.");
+  });
+});
+
 describe("getKindRule", () => {
   it("names the last matched rule that sets a kind", async () => {
     mockRespond = (table) => table === "wb_transactions"
