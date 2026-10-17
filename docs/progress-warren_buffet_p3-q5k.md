@@ -8,13 +8,13 @@ No amounts in this file. The safety floor is never written into the repo.
 | 1 | Read-only plan | done, 2026-10-14 |
 | 2 | Migration C: tables, `wb_splits.project_id`, `wb_replace_splits` | done, 2026-10-14 (133 applied, 134 41/41) |
 | 3 | Help for Phase 2 (and Phase 1) screens | built; tests and build pass; awaiting Alex's app test |
-| 4 | Processing and match suggestions | not started |
+| 4 | Processing and match suggestions | done, 2026-10-17 (135 applied, 136 35/35; 4b app-tested by Alex) |
 | 5 | Views and projection | not started |
 | 6 | MCP tools | not started |
-| 7 | Seeding in claude.ai | not started |
+| 7 | Seeding in claude.ai. **Notes:** give every planned item a merchant wherever possible, because items with no merchant are never suggested; and **re-run processing once after seeding** (`reprocess_wb_transactions`), so suggestions are made for existing payments (A19) | not started |
 | 8 | Plan tab UI | not started |
 | 9 | Overview numbers | not started |
-| 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it | not started |
+| 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments) | not started |
 | 11 | Phase 3 review | not started |
 
 ## Log
@@ -109,3 +109,59 @@ No amounts in this file. The safety floor is never written into the repo.
   - The card runs from left 16 to right 359, with its top at 70 (10vh).
   - The document's scrollWidth is 375.
 - **Results:** app 2546/2546 (the SAM test passed this run), CLI 224/224, and the build compiled successfully.
+
+### Step 4 (2026-10-16, run tags `warren_buffet_p3-q5k-s4-d5lw` plan, `-s4-n8rc` 4a)
+- Plan approved, with A17–A21 in the spec. `wb_planned_occurrences` moved from step 5 to step 4 (spec §3.7).
+- **Wording for 4b**, from Alex's fixes:
+  - `review.planned_match`, "What to do": "If only part of this payment is for the planned item, lower the amount before confirming."
+  - "What's left out" includes "payments for less than the planned amount (match those by hand once the planning tools arrive)".
+  - No default numbers (A21).
+- 4a drafted as `supabase/migrations/_pending_warren_buffet_p3-q5k_match_suggestions.sql`, with these changes:
+  - `wb_rules.set_project_id`;
+  - `wb_splits.project_source`, with a fill trigger (no source means manual);
+  - `wb_planned_occurrences`, `wb_suggest_planned_matches` and `wb_confirm_planned_match`;
+  - `wb_replace_splits`, now with project_source;
+  - `wb_process_transactions`: 5c rule projects, then suggestions over the posted ids it processed; the result gains `rule_projects` and `matches_suggested`;
+  - `wb_review_queue`: `planned_match`, plus planned_* columns at the end for the Review group and its working;
+  - `wb_transaction_list.needs_review`.
+- The suggestion function keeps its candidate pairs in a jsonb variable, not a temp table, so it needs no TEMP privilege.
+- Tests: `_pending_…_match_suggestions_tests.sql`, 35 checks with invented fixtures; it rolls itself back.
+- PGlite: 35/35, and the regressions all pass: 115, 118, 121, 123, 125, 128, 130, 132 and 134.
+  - PGlite caught a problem along the way: the new "project needs a source" check broke direct project writes, including 134's. The fill trigger fixes it.
+  - Known edge: deleting a project leaves `project_source` at manual on its splits, so no rule sets a project there again. Tools only soft-delete, so this should be rare.
+- Waiting for Alex's gitsync before the drift check, the db: claims and numbering.
+
+### Step 4a numbered (2026-10-17, run tag `warren_buffet_p3-q5k-s4-q2jf`)
+- gitsync was a clean fast-forward (7a575cf..75c099d), 31 files: the email-capture fix and restructure-p4 UI work.
+  - The step 4 plan had said only email-capture would come in. That was wrong: it compared from b1dc642, not from this worktree's HEAD.
+- **Drift check: none.**
+  - No migration came in, nothing touching wb_ objects, and nothing under `src/money/`.
+  - Money imports only `EditCard` and `UnderlineTabs` from `src/shared/` (neither changed) and nothing from `src/utils/recurrence*`.
+  - The folder still ended at 134.
+- Claimed the 11 db: items and the two numbered paths.
+- Numbered the files `135_wb_phase3_step4_match_suggestions.sql` and `136_wb_phase3_step4_tests.sql`. The diff against the `_pending_` files shows only header changes. Both `_pending_` files are deleted.
+- PGlite: 136 passes 35/35, and 115, 118, 121, 123, 125, 128, 130, 132 and 134 all still pass.
+- Waiting for Alex to run 135 and then 136.
+
+### Step 4a verified, 4b built (2026-10-17, run tag `warren_buffet_p3-q5k-s4-g6vt`)
+- Alex ran 135 (conformant true, failures []) and 136 (35/35, rolled back).
+- **Verified on live** with the Alfred tools:
+  - `check_platform_conformance` is CONFORMANT, 67 tables.
+  - `wb_splits.project_source` is there, with its check constraint. `wb_rules.set_project_id` is there, with on delete set null.
+  - `get_wb_review_queue` still returns the queue through the redefined view.
+  - The schema tool cannot read views or function bodies. The live 136 run covers those: `result_counts_projects` and `result_counts_suggestions` read the new process result keys, and the queue and list checks read the new view columns.
+- **4a done.** 135 and 136 are marked applied.
+- **4b built:**
+  - `REVIEW_LABELS` and `REVIEW_ORDER` gain `planned_match`, "Suggested match", placed after "Looks like a transfer".
+  - `moneyApi`: the queue reads the planned_* columns. New `confirmPlannedMatch(id, amount?)` and `rejectPlannedMatch(id)`, both through `wb_confirm_planned_match`. Plain sentences for the over-amount, already-decided and zero refusals.
+  - Review: each suggestion shows "The app suggests this pays: <item>, due <date>, planned <amount>" under the payment, with Confirm, "Lower amount…" (amount box, then "Confirm amount") and "Not this one". There is no "Mark reviewed" on these rows.
+  - The "?" has live working: planned against paid, the amount gap against the tolerance, and the days apart against the window.
+  - `review.planned_match` is no longer reserved, and carries Alex's two wording fixes.
+  - Tests: 3 in `ReviewScreen.test.jsx` and 3 in `moneyApi.test.js`. `helpText.test.js` now requires the entry, because it is in `REVIEW_ORDER`.
+- Results: app 2616/2616 (157 suites), CLI 224/224, and the build compiled successfully.
+
+### Step 4 done (2026-10-17, run tag `warren_buffet_p3-q5k-s4-b3ys`)
+- Alex's app test passed, using a temporary planned item: the suggestion, the help working, the review chip, Not this one (not suggested again), Lower amount, Confirm, and the cleanup. The temporary item and its matches were deleted.
+- Wording: under "What's left out" in `review.planned_match`, the text is now "payments for less than the planned amount, beyond its tolerance (match those by hand once the planning tools arrive)".
+- Money tests 102/102; the build compiled successfully.
+- **Step 4 done.** Checkpoint: 135, 136, the app files and the docs, with `--release-db`.

@@ -2,11 +2,11 @@ import React, { useState } from "react";
 import AlwaysDoThisSheet from "./AlwaysDoThisSheet";
 import { HelpAfter } from "./HelpButton";
 import {
-  applyTags, dismissSubscription, getReviewQueue, getSubscriptionDetail, getSubscriptions, getTagTree,
-  recordSubscriptionPrice, reprocess, setKind, setReviewed,
+  applyTags, confirmPlannedMatch, dismissSubscription, getReviewQueue, getSubscriptionDetail, getSubscriptions, getTagTree,
+  recordSubscriptionPrice, rejectPlannedMatch, reprocess, setKind, setReviewed,
 } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
-import { formatDay, formatMoney, groupQueue, tagOptions, toNumber } from "./moneyFormat";
+import { formatDay, formatMoney, groupQueue, parseAmountInput, tagOptions, toNumber } from "./moneyFormat";
 
 const SMALL = "min-h-[44px] px-3 rounded-lg border border-border text-sm";
 
@@ -52,7 +52,71 @@ export function NewRecurringWorking({ rows }) {
   );
 }
 
-const WORKING = { price_change: PriceChangeWorking, new_recurring: NewRecurringWorking };
+const daysApart = (a, b) => Math.round(Math.abs(new Date(`${a}T00:00:00Z`) - new Date(`${b}T00:00:00Z`)) / 86400000);
+
+/** Live working for suggested matches: payment against plan, with the item's tolerance and window. */
+export function PlannedMatchWorking({ rows }) {
+  return (
+    <ul className="list-disc pl-5 space-y-1">
+      {rows.map((r) => {
+        const gap = Math.abs(Math.abs(toNumber(r.amount)) - Math.abs(toNumber(r.planned_amount)));
+        return (
+          <li key={r.planned_match_id}>
+            {r.planned_item_name}: planned {formatMoney(r.planned_amount)} due {formatDay(r.planned_on)}; paid
+            {" "}{formatMoney(r.amount)} on {formatDay(r.txn_date)}. That is {formatMoney(gap)} apart (tolerance
+            {" "}{formatMoney(r.planned_tolerance)}) and {daysApart(r.txn_date, r.planned_on)} days apart (window
+            {" "}{r.planned_window_days} days either side).
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+const WORKING = { price_change: PriceChangeWorking, new_recurring: NewRecurringWorking, planned_match: PlannedMatchWorking };
+
+/** Confirm (optionally for a lower amount) or turn down one suggested planned match. */
+function PlannedMatchActions({ row, busy, act }) {
+  const [lowering, setLowering] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [error, setError] = useState(null);
+  const confirmLower = () => {
+    const n = parseAmountInput(amount);
+    if (n === null || n === 0) { setError("Type the amount for the planned item, e.g. 120.00."); return; }
+    setError(null);
+    act(row.transaction_id, () => confirmPlannedMatch(row.planned_match_id, n));
+  };
+  return (
+    <>
+      {!lowering && (
+        <button type="button" disabled={busy} className={SMALL}
+          onClick={() => act(row.transaction_id, () => confirmPlannedMatch(row.planned_match_id))}>
+          Confirm
+        </button>
+      )}
+      {!lowering && (
+        <button type="button" disabled={busy} className={SMALL} onClick={() => setLowering(true)}>
+          Lower amount…
+        </button>
+      )}
+      {lowering && (
+        <span className="flex flex-wrap items-center gap-2">
+          <label className="sr-only" htmlFor={`lower-${row.planned_match_id}`}>Amount for the planned item</label>
+          <input id={`lower-${row.planned_match_id}`} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)}
+            placeholder={String(Math.abs(toNumber(row.match_amount)))}
+            className="min-h-[44px] w-28 px-3 rounded-lg border border-border bg-background text-sm" />
+          <button type="button" disabled={busy} className={SMALL} onClick={confirmLower}>Confirm amount</button>
+          <button type="button" disabled={busy} className={SMALL} onClick={() => { setLowering(false); setError(null); }}>Cancel</button>
+        </span>
+      )}
+      <button type="button" disabled={busy} className={SMALL}
+        onClick={() => act(row.transaction_id, () => rejectPlannedMatch(row.planned_match_id))}>
+        Not this one
+      </button>
+      {error && <p role="alert" className="w-full text-sm text-destructive">{error}</p>}
+    </>
+  );
+}
 
 /**
  * The review queue (spec §7.3), newest first, grouped by reason, with one tap
@@ -116,7 +180,7 @@ export default function ReviewScreen({ onOpen }) {
             {g.rows.map((r) => {
               const busy = busyId === r.transaction_id;
               return (
-                <li key={`${r.reason}-${r.transaction_id}-${r.detail || ""}`} className="py-3">
+                <li key={`${r.reason}-${r.transaction_id}-${r.planned_match_id || r.detail || ""}`} className="py-3">
                   <button type="button" onClick={() => onOpen(r.transaction_id)}
                     className="w-full text-left flex items-start justify-between gap-3 min-h-[44px]">
                     <span className="min-w-0">
@@ -126,6 +190,12 @@ export default function ReviewScreen({ onOpen }) {
                         {r.detail && r.reason === "missing_required_tag" ? ` · needs ${r.detail}` : ""}
                         {r.detail && (r.reason === "price_change" || r.reason === "new_recurring") ? ` · ${r.detail}` : ""}
                       </span>
+                      {r.reason === "planned_match" && (
+                        <span className="block text-sm mt-1 break-words">
+                          The app suggests this pays: <span className="font-medium">{r.planned_item_name}</span>,
+                          {" "}due {formatDay(r.planned_on)}, planned {formatMoney(r.planned_amount)}
+                        </span>
+                      )}
                     </span>
                     <span className="tabular-nums shrink-0">{formatMoney(r.amount)}</span>
                   </button>
@@ -153,6 +223,9 @@ export default function ReviewScreen({ onOpen }) {
                         <button type="button" onClick={() => onOpen(r.transaction_id)} className={SMALL}>Find the other side</button>
                       </>
                     )}
+                    {r.reason === "planned_match" && r.planned_match_id && (
+                      <PlannedMatchActions row={r} busy={busy} act={act} />
+                    )}
                     {r.reason === "split_mismatch" && (
                       <button type="button" onClick={() => onOpen(r.transaction_id)} className={SMALL}>Fix the parts</button>
                     )}
@@ -177,7 +250,7 @@ export default function ReviewScreen({ onOpen }) {
                         </button>
                       </>
                     )}
-                    {!["no_kind", "split_mismatch", "new_recurring"].includes(r.reason) && (
+                    {!["no_kind", "split_mismatch", "new_recurring", "planned_match"].includes(r.reason) && (
                       <button type="button" disabled={busy} onClick={() => act(r.transaction_id, () => setReviewed([r.transaction_id], true))} className={SMALL}>
                         Mark reviewed
                       </button>
