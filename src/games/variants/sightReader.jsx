@@ -8,12 +8,42 @@ import {
   chordName,
   chordNotes,
   describeChordDifference,
+  makeNote,
   makePrompt,
+  parseNoteName,
   pitchClassName,
   validFocusEntries,
 } from "../sightReader/music";
 import { CHORD_TYPES, chordTypeOf } from "../sightReader/chordTypes";
 import { FOCUS_LIST } from "../sightReader/focusList";
+
+// Dev only: ?staveExtremes on the URL draws the highest and lowest note each
+// clef can ask, under the prompt, so their framing can be checked without
+// waiting for them to come up. Latched in sessionStorage because in-app
+// navigation drops the query string. Always false in a production build.
+function devFlag(name, env = process.env.NODE_ENV) {
+  if (env === "production") return false;
+  const key = `alfred.dev.${name}`;
+  try {
+    if (new URLSearchParams(window.location.search).has(name)) {
+      window.sessionStorage.setItem(key, "1");
+      return true;
+    }
+    return window.sessionStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+devFlag("staveExtremes"); // latch at page load, before any navigation
+const EXTREME_NOTES = [
+  ["treble", "C6"],
+  ["treble", "B3"],
+  ["bass", "D4"],
+  ["bass", "C2"],
+].map(([clef, name]) => {
+  const { letter, alter, octave } = parseNoteName(name);
+  return { clef, name, event: { duration: "w", notes: [makeNote(letter, alter, octave)] } };
+});
 
 // Sight Reader — the screen.
 //
@@ -143,6 +173,7 @@ function loadMissTally() {
 }
 
 export default function SightReader() {
+  const [staveExtremes] = useState(() => devFlag("staveExtremes"));
   const [mode, setMode] = useState(DEFAULT_MODE);
   const [clefMode, setClefMode] = useState("both");
 
@@ -374,6 +405,31 @@ export default function SightReader() {
 
   return (
     <div>
+      {/* Dev server only; compiled out of a production build. The "off" line
+          is a tell: if it is missing too, the browser is running stale code. */}
+      {process.env.NODE_ENV !== "production" &&
+        (staveExtremes ? (
+          <div className="mb-4 p-2 border border-dashed border-border rounded-lg">
+            <p className="text-xs font-medium text-foreground mb-2">Dev preview</p>
+            <div className="grid grid-cols-2 gap-2">
+              {EXTREME_NOTES.map(({ clef, name, event }) => (
+                <div
+                  key={name}
+                  data-testid="stave-extreme"
+                  className="bg-card border border-border rounded-lg p-2 text-xs text-center text-muted-foreground"
+                >
+                  <BareStave clef={clef} event={event} />
+                  {clef} {name}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="mb-2 text-xs text-muted-foreground text-center">
+            Dev: stave preview off — add ?staveExtremes to the address
+          </p>
+        ))}
+
       {/* 1. The two toggles. SegmentedControl hides its own text label below
           1280px, which is why each group's options are self-describing. */}
       <div className="flex flex-wrap items-center gap-3 mb-4">

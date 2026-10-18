@@ -56,7 +56,7 @@ const RENDER_CANVAS_HEIGHT = 240;
 // a double flat further still. This is a property of the glyphs, not of the
 // pitch pools, so it is the one number here that is a constant rather than
 // derived.
-const GLYPH_MARGIN_PX = 16;
+export const GLYPH_MARGIN_PX = 16;
 
 /**
  * How far past the staff the most extreme prompt reaches, in diatonic steps.
@@ -105,7 +105,10 @@ function deriveOvershootSteps() {
   return worst;
 }
 
-const OVERSHOOT_STEPS = deriveOvershootSteps();
+export const OVERSHOOT_STEPS = deriveOvershootSteps();
+
+// Blank space framed above the top line and below the bottom one.
+export const frameMarginPx = (stepPx) => OVERSHOOT_STEPS * stepPx + GLYPH_MARGIN_PX;
 
 /**
  * @param {object} props
@@ -185,7 +188,7 @@ export default function BareStave({ clef, event }) {
     const bottomLineY = stave.getYForLine(STAVE_LINE_COUNT - 1);
     const lineSpan = bottomLineY - topLineY;
     const stepPx = lineSpan / ((STAVE_LINE_COUNT - 1) * 2);
-    const space = OVERSHOOT_STEPS * stepPx + GLYPH_MARGIN_PX;
+    const space = frameMarginPx(stepPx);
 
     // Size to the container rather than to the fixed pixel count VexFlow
     // writes, so the stave scales with the phone it is being read on. The

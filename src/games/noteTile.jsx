@@ -13,11 +13,11 @@ import React from "react";
 // unbounded upward — merging climbs past the staff and the ledger rule keeps
 // up on its own.
 //
-// The geometry does run out: index 11 puts the notehead above the viewBox and
-// it clips. That needs roughly 128 seed tiles' worth of merging to reach, so a
-// 25-cell board cannot get there. If a variant ever gives you more tiles, the
-// fix belongs here — raise the staff or shrink the spacing for everyone — not
-// in the variant.
+// The default geometry runs out: index 11 puts the notehead above the viewBox
+// and it clips. Drop reached it — its survivors carry across refills — so Drop
+// caps pitches at 12 (C6) and passes `maxPitch`, which lowers the staff and
+// tightens the spacing until 0..maxPitch all fit. Without `maxPitch` the
+// drawing is exactly as before, which is what the archived variants still get.
 
 // Board geometry, confirmed by the readability sweep: 68px tiles, 5x5.
 export const TILE = 68;
@@ -27,9 +27,36 @@ export const GAP = TILE / 9;
 const STAFF_LINE_COUNT = 5;
 const FIRST_LEDGER_INDEX = 10;
 
+// Fitted layout: blank margin kept above the highest notehead and below the
+// lowest, as a fraction of S. Notehead and ledger sizes are taken from the
+// default geometry as multiples of the line spacing, so a tightened staff
+// still reads as the same drawing, just smaller.
+const FIT_MARGIN = 0.05;
+const RY_PER_SPACING = 0.56; // 0.08 / (1/7)
+const RX_PER_SPACING = 0.75; // 0.107 / (1/7)
+const LEDGER_PER_SPACING = 1.372; // 0.196 / (1/7)
+
 // All tile geometry as fractions of the tile size S, so a tile is resolution-
 // independent and stays the same drawing at any scale.
-function tileGeometry(S) {
+export function tileGeometry(S, maxPitch = null) {
+  if (maxPitch != null) {
+    // Pitch 0 to maxPitch spans maxPitch half-spacings between notehead
+    // centres, plus one notehead height; that fills S less two margins.
+    const top = Math.max(maxPitch, STAFF_LINE_COUNT * 2 - 2);
+    const spacing = (S * (1 - 2 * FIT_MARGIN)) / (top / 2 + 2 * RY_PER_SPACING);
+    const bottomLine = S * (1 - FIT_MARGIN) - RY_PER_SPACING * spacing;
+    return {
+      spacing,
+      topLine: bottomLine - (STAFF_LINE_COUNT - 1) * spacing,
+      bottomLine,
+      staffX1: 0.179 * S,
+      staffX2: 0.821 * S,
+      noteCx: S / 2,
+      noteRx: RX_PER_SPACING * spacing,
+      noteRy: RY_PER_SPACING * spacing,
+      ledgerHalfWidth: LEDGER_PER_SPACING * spacing,
+    };
+  }
   const spacing = S / 7;
   const topLine = 0.25 * S;
   return {
@@ -61,7 +88,14 @@ function ledgerIndices(pitch) {
 //
 // Every tile is the same colour, deliberately. Staff position is the only
 // signal; colour-coding by pitch would let you play without reading.
-export default function NoteTile({ pitch, size = TILE }) {
+// Vertical extent of a pitch's notehead within its tile.
+export function noteBounds(pitch, size = TILE, maxPitch = null) {
+  const g = tileGeometry(size, maxPitch);
+  const cy = g.bottomLine - (g.spacing / 2) * pitch;
+  return { top: cy - g.noteRy, bottom: cy + g.noteRy };
+}
+
+export default function NoteTile({ pitch, size = TILE, maxPitch = null }) {
   const className = "block w-full h-full rounded-lg";
 
   if (pitch == null) {
@@ -76,7 +110,7 @@ export default function NoteTile({ pitch, size = TILE }) {
     );
   }
 
-  const g = tileGeometry(size);
+  const g = tileGeometry(size, maxPitch);
   const cy = g.bottomLine - (g.spacing / 2) * pitch;
 
   return (

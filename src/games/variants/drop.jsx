@@ -28,6 +28,10 @@ const STEP_TOLERANCE = 1;
 // How many steps the tapped tile rises. Flat: chain length buys reach and
 // board space, never a bigger promotion.
 const PROMOTION_STEPS = 1;
+// The ceiling: C6, two ledger lines up — the highest the tile draws in full.
+// Tapping a chain whose tapped tile is already here clears the whole chain:
+// nothing survives to climb past it.
+export const MAX_PITCH = 12;
 // Reroll budget per board. null means unlimited — shuffle is no longer a
 // strategic resource, only the way out of a stuck board.
 const SHUFFLE_LIMIT = null;
@@ -110,6 +114,37 @@ const BAND_TREATMENTS = {
 // when the animation starts, so tapping straight through it is safe.
 const DROP_MS = 140;
 
+// Dev only: ?notePreview on the URL draws one tile per pitch under the board,
+// so the high-pitch drawing limit can be seen without playing up to it.
+// In-app navigation drops the query string, so the flag is latched in
+// sessionStorage the first time it is seen and lasts until the tab closes.
+// CRA sets NODE_ENV to "production" in a build, so this is always false there.
+// `env` is a parameter only so the test can pass "production".
+export function devFlag(name, env = process.env.NODE_ENV) {
+  if (env === "production") return false;
+  const key = `alfred.dev.${name}`;
+  try {
+    if (new URLSearchParams(window.location.search).has(name)) {
+      window.sessionStorage.setItem(key, "1");
+      return true;
+    }
+    return window.sessionStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+devFlag("notePreview"); // latch at page load, before any navigation
+const PREVIEW_PITCHES = Array.from({ length: MAX_PITCH + 1 }, (_, p) => p);
+
+// Dev preview's test board: a fresh board whose bottom row starts with three
+// C6 tiles, so the ceiling clear can be tried in one tap.
+function ceilingTestBoard() {
+  const b = newBoard();
+  b[20] = b[21] = b[22] = MAX_PITCH;
+  b[23] = 0;
+  return b;
+}
+
 // One fresh pitch from SEED_RANGE, inclusive at both ends. Shared by the
 // initial seed and by refill so the range is read in exactly one place.
 function spawnPitch() {
@@ -179,6 +214,27 @@ function coversRow(board, chain) {
     if (board[rowStart + col] != null) occupied += 1;
   }
   return chain.length === occupied;
+}
+
+// A chain tap on `board` at `i`, before gravity: null when the tap is invalid.
+// `cleared` is how many tiles left the board — N-1 normally, N when the tapped
+// tile is already at MAX_PITCH and the whole chain goes. `arms` is judged on
+// the board as it stood, and only a survivor can be armed.
+export function resolveChainTap(board, i) {
+  const chain = rowChain(board, i);
+  if (chain.length < 2) return null;
+
+  const atCeiling = board[i] >= MAX_PITCH;
+  const next = board.slice();
+  for (const cell of chain) next[cell] = null;
+  if (!atCeiling) next[i] = Math.min(board[i] + PROMOTION_STEPS, MAX_PITCH);
+
+  return {
+    next,
+    chainLength: chain.length,
+    cleared: atCeiling ? chain.length : chain.length - 1,
+    arms: !atCeiling && coversRow(board, chain),
+  };
 }
 
 // Every tile falls straight down within its own column, order preserved, until
@@ -406,13 +462,16 @@ const VARIANT_ID = "drop";
 // renders wrong, so they are deliberately total: a save either passes every one
 // or is thrown away whole.
 //
-// Well above anything reachable — flat promotion tops out around 9 on a 5x5
-// board — but low enough to catch a number that has been mangled rather than
-// merely grown.
-const MAX_SANE_PITCH = 20;
+// Pitch is the exception: any non-negative integer passes, and anything above
+// MAX_PITCH is clamped on load. Saves from before the ceiling can hold higher
+// tiles, and a run is worth keeping over one tile's exact height.
 
 const isCount = (v) => Number.isInteger(v) && v >= 0;
-const isPitch = (v) => Number.isInteger(v) && v >= 0 && v <= MAX_SANE_PITCH;
+// For fields added after saves already existed: absent reads as zero, so an
+// older run is kept rather than thrown away whole.
+const isOptionalCount = (v) => v === undefined || isCount(v);
+const isPitch = (v) => Number.isInteger(v) && v >= 0;
+const clampBoard = (b) => b.map((p) => (p == null ? p : Math.min(p, MAX_PITCH)));
 
 function isSaneBoard(b) {
   if (!Array.isArray(b) || b.length !== CELLS) return false;
@@ -443,6 +502,7 @@ function isSaneEntry(e) {
     isSaneArm(e.armedBefore, e.board) &&
     isCount(e.tapsBefore) &&
     isCount(e.largestChainBefore) &&
+    isOptionalCount(e.tilesClearedBefore) &&
     (e.kind !== "tap" || isCount(e.chainLength))
   );
 }
@@ -457,6 +517,7 @@ function isSaneSave(s) {
     isCount(s.bankedClears) &&
     isCount(s.taps) &&
     isCount(s.largestChain) &&
+    isOptionalCount(s.tilesCleared) &&
     Array.isArray(s.history) &&
     s.history.length <= UNDO_DEPTH &&
     s.history.every(isSaneEntry)
@@ -465,17 +526,25 @@ function isSaneSave(s) {
 
 // A restored run, or a fresh one if there is nothing usable saved.
 function initialRun() {
-  return (
-    readSave(VARIANT_ID, isSaneSave) || {
-      board: newBoard(),
-      history: [],
-      armed: null,
-      taps: 0,
-      largestChain: 0,
-      bankedClears: 0,
-      searchExhausted: false,
-    }
-  );
+  const saved = readSave(VARIANT_ID, isSaneSave);
+  if (saved) {
+    return {
+      ...saved,
+      board: clampBoard(saved.board),
+      history: saved.history.map((e) => ({ ...e, board: clampBoard(e.board) })),
+      tilesCleared: saved.tilesCleared ?? 0,
+    };
+  }
+  return {
+    board: newBoard(),
+    history: [],
+    armed: null,
+    taps: 0,
+    largestChain: 0,
+    tilesCleared: 0,
+    bankedClears: 0,
+    searchExhausted: false,
+  };
 }
 
 // The game-over modal. Board cleared is deliberately NOT a modal — clearing a
@@ -610,6 +679,7 @@ export default function Drop() {
   // Read once, lazily, on mount. A restored run and a fresh one have exactly
   // the same shape, so nothing downstream knows which it got.
   const [restored] = useState(initialRun);
+  const [notePreview] = useState(() => devFlag("notePreview"));
 
   const [board, setBoard] = useState(restored.board);
 
@@ -660,6 +730,11 @@ export default function Drop() {
   const [taps, setTaps] = useState(restored.taps);
   const [largestChain, setLargestChain] = useState(restored.largestChain);
 
+  // The score: tiles that have left the board this run. A chain of N clears
+  // N-1 (one survives, promoted); destroying the armed tile clears 1. Survives
+  // Refill, reset by New board, rewound by undo like taps.
+  const [tilesCleared, setTilesCleared] = useState(restored.tilesCleared);
+
   // Save on any change to the run, rather than from inside each of tap,
   // destroy, shuffle, refill and undo. One place cannot fall out of step with
   // the mutators, and a future move type is persisted without anyone
@@ -675,10 +750,11 @@ export default function Drop() {
       armed,
       taps,
       largestChain,
+      tilesCleared,
       bankedClears,
       searchExhausted,
     });
-  }, [board, history, armed, taps, largestChain, bankedClears, searchExhausted]);
+  }, [board, history, armed, taps, largestChain, tilesCleared, bankedClears, searchExhausted]);
 
   // Where focus lands when the modal closes.
   const boardRef = useRef(null);
@@ -750,40 +826,38 @@ export default function Drop() {
           armedBefore: armed,
           tapsBefore: taps,
           largestChainBefore: largestChain,
+          tilesClearedBefore: tilesCleared,
         })
       );
       setTaps((n) => n + 1);
+      setTilesCleared((n) => n + 1);
       setFall(fallDistances(next, settled));
       setArmed(null);
       setBoard(settled);
       return;
     }
 
-    const chain = rowChain(board, i);
+    const move = resolveChainTap(board, i);
     // An invalid tap does nothing at all — no error, no flash, no sound, and
     // deliberately no disarm either.
-    if (chain.length < 2) return;
-
-    // Judged before anything is cleared: this is what arms the survivor.
-    const arms = coversRow(board, chain);
-
-    const next = board.slice();
-    for (const cell of chain) next[cell] = null;
-    next[i] = board[i] + PROMOTION_STEPS; // flat, whatever the chain length
+    if (!move) return;
+    const { next, chainLength, cleared: clearedNow, arms } = move;
 
     const settled = applyGravity(next);
     setHistory((h) =>
       pushMove(h, {
         kind: "tap",
         board,
-        chainLength: chain.length,
+        chainLength,
         armedBefore: armed,
         tapsBefore: taps,
         largestChainBefore: largestChain,
+        tilesClearedBefore: tilesCleared,
       })
     );
     setTaps((n) => n + 1);
-    setLargestChain((m) => Math.max(m, chain.length));
+    setTilesCleared((n) => n + clearedNow);
+    setLargestChain((m) => Math.max(m, chainLength));
     setFall(fallDistances(next, settled));
     // Any valid chain tap clears the standing arm before resolving; this tap
     // may then arm its own survivor.
@@ -811,11 +885,32 @@ export default function Drop() {
         armedBefore: armed,
         tapsBefore: taps,
         largestChainBefore: largestChain,
+        tilesClearedBefore: tilesCleared,
       })
     );
     setFall(NO_FALL);
     setArmed(null);
     setBoard(next);
+  }
+
+  // Dev preview only. Recorded as a shuffle-kind move so one Undo puts the
+  // real run back; with SHUFFLE_LIMIT null that kind costs nothing.
+  function loadCeilingTest() {
+    setHistory((h) =>
+      pushMove(h, {
+        kind: "shuffle",
+        board,
+        armedBefore: armed,
+        tapsBefore: taps,
+        largestChainBefore: largestChain,
+        tilesClearedBefore: tilesCleared,
+      })
+    );
+    setFall(NO_FALL);
+    setArmed(null);
+    setResultDismissed(false);
+    setSearchExhausted(false);
+    setBoard(ceilingTestBoard());
   }
 
   // Undo stays live after the board is finished, so a dead end can be backed
@@ -831,6 +926,8 @@ export default function Drop() {
     setArmed(entry.armedBefore);
     setTaps(entry.tapsBefore);
     setLargestChain(entry.largestChainBefore);
+    // Entries saved before the score existed carry no count; leave it as is.
+    if (entry.tilesClearedBefore !== undefined) setTilesCleared(entry.tilesClearedBefore);
     setFall(NO_FALL);
     setResultDismissed(false);
     setSearchExhausted(false); // different board, so the old verdict is void
@@ -864,6 +961,7 @@ export default function Drop() {
     setBankedClears(0);
     setTaps(0);
     setLargestChain(0);
+    setTilesCleared(0);
     setArmed(null);
     // Drop the save before the effect writes the fresh run. If that write then
     // fails — storage full or disabled — we are left with nothing rather than
@@ -911,14 +1009,65 @@ export default function Drop() {
           rows carry no gap between them — that puts a full gap between tiles,
           same as before, and leaves the bands meeting edge to edge. The board
           is one gap taller than it was; nothing else moves. */}
+      {/* Dev server only (process.env.NODE_ENV is "production" in a build, so
+          this whole block is compiled out). The "off" line is a deliberate
+          tell: if it is missing too, the browser is running stale code. */}
+      {process.env.NODE_ENV !== "production" &&
+        (notePreview ? (
+          <div className="mb-4 p-2 border border-dashed border-border rounded-lg">
+            <p className="text-xs font-medium text-foreground mb-2">Dev preview</p>
+            <button
+              type="button"
+              onClick={loadCeilingTest}
+              className="mb-2 px-3 py-2 min-h-[44px] rounded bg-card border border-border text-xs text-foreground"
+            >
+              Load C6 test board (Undo restores your run)
+            </button>
+            <div className="grid grid-cols-4 gap-2">
+              {PREVIEW_PITCHES.map((p) => (
+                <div
+                  key={p}
+                  data-testid="note-preview-tile"
+                  className="text-center text-xs text-muted-foreground"
+                >
+                  <NoteTile pitch={p} size={TILE} maxPitch={MAX_PITCH} />
+                  pitch {p}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="mb-2 text-xs text-muted-foreground text-center">
+            Dev: note preview off — add ?notePreview to the address
+          </p>
+        ))}
+
+      <p className="mb-3 text-sm text-muted-foreground text-center">
+        Tiles cleared{" "}
+        <strong className="text-foreground">{tilesCleared}</strong>
+      </p>
+
+      {/* When only a shuffle is left, the board wears a ring in --primary (the
+          Shuffle button's brown) and a tap anywhere on it shuffles. An outline,
+          not a border, so it costs no layout; the offset clears the row bands,
+          which reach half a gap past the board. Tile taps bubble up here, so
+          the armed tile stops propagation — destroying it is still a move. */}
       <div
         ref={boardRef}
         tabIndex={-1}
-        className="mx-auto"
+        className={`mx-auto${canShuffle ? " cursor-pointer" : ""}`}
+        onClick={canShuffle ? shuffle : undefined}
         style={{
           width: `min(${boardWidth}px, 100%)`,
           display: "grid",
           rowGap: `${GAP - 2 * band.padY}px`,
+          ...(canShuffle
+            ? {
+                outline: "3px solid var(--primary)",
+                outlineOffset: `${GAP / 2 + 3}px`,
+                borderRadius: "var(--radius)",
+              }
+            : null),
         }}
       >
         {Array.from({ length: GRID }, (_, row) => (
@@ -949,8 +1098,13 @@ export default function Drop() {
                   // because nothing about the element would have changed.
                   key={`${col}-${history.length}`}
                   type="button"
-                  onClick={() => tap(i)}
-                  disabled={pitch == null || over || cleared}
+                  onClick={(e) => {
+                    if (armed === i) e.stopPropagation();
+                    tap(i);
+                  }}
+                  // Empty cells stay enabled while a shuffle is offered: a
+                  // disabled button swallows the tap instead of passing it up.
+                  disabled={(pitch == null && !canShuffle) || over || cleared}
                   className={`aspect-square p-0 bg-transparent border-0 disabled:opacity-100${
                     fall[i] > 0 ? " drop-fell" : ""
                   }`}
@@ -983,7 +1137,7 @@ export default function Drop() {
                       : `note ${pitch}${armed === i ? ", armed" : ""}`
                   }
                 >
-                  <NoteTile pitch={pitch} size={TILE} />
+                  <NoteTile pitch={pitch} size={TILE} maxPitch={MAX_PITCH} />
                 </button>
               );
             })}
@@ -1059,12 +1213,13 @@ export default function Drop() {
 
       {/* True game over only. Dismissing touches no board state: the finished
           board stays exactly as it is and still refuses taps, and only New
-          board acts. Boards cleared leads the figures — it is the score. */}
+          board acts. Tiles cleared leads the figures — it is the score. */}
       {over && !resultDismissed && (
         <ResultModal
           title="Game over"
           detail={`${finishCause(board)}.`}
           figures={[
+            { label: "Tiles cleared", value: tilesCleared },
             { label: "Boards cleared this session", value: boardsCleared },
             { label: "Tiles remaining", value: remaining },
             { label: "Taps taken", value: taps },
