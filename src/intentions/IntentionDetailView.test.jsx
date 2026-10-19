@@ -61,6 +61,63 @@ function editToClosedAndSave() {
   fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 }
 
+describe("Log Execution (Step 8)", () => {
+  const daily = { id: "i1", text: "Water plants", status: "active", recurrenceConfig: { type: "fixed", frequency: "daily", interval: 1 } };
+
+  test("a repeating intention offers Log Execution: the 'Log execution' pop-up, its Log button records it", async () => {
+    const onMarkDone = jest.fn().mockResolvedValue(true);
+    renderDetail({ intention: daily, onMarkDone });
+    expect(screen.queryByRole("button", { name: "Complete" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Log Execution" }));
+    const dialog = screen.getByRole("dialog", { name: "Log execution" });
+    expect(within(dialog).getByText(/^Completed on:/)).toBeTruthy();
+    expect(within(dialog).getByText(/^Next:/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Log" }));
+    await waitFor(() =>
+      expect(onMarkDone).toHaveBeenCalledWith("i1", expect.objectContaining({ note: "", completedOn: expect.any(String) })),
+    );
+  });
+
+  test("offered on a one-off too, with no Next and no Skip", () => {
+    renderDetail({ onMarkDone: jest.fn(), onUpdateEvent: jest.fn() });
+    fireEvent.click(screen.getByRole("button", { name: "Log Execution" }));
+    expect(screen.queryByText(/^Next:/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+  });
+
+  test("not offered once closed", () => {
+    renderDetail({ intention: { ...daily, status: "closed" }, onMarkDone: jest.fn() });
+    expect(screen.queryByRole("button", { name: "Log Execution" })).toBeNull();
+  });
+
+  test("Skip appears on a repeating intention with a live date", () => {
+    const onUpdateEvent = jest.fn();
+    renderDetail({ intention: daily, onMarkDone: jest.fn(), onUpdateEvent });
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(onUpdateEvent).toHaveBeenCalledWith("e1", { archived: true });
+  });
+
+  test("the row keeps its order: Start Now, Reschedule, Skip, Log Execution, Edit, Archive", () => {
+    renderDetail({ intention: daily, onMarkDone: jest.fn(), onUpdateEvent: jest.fn() });
+    const names = screen.getAllByRole("button").map((b) => b.textContent.trim());
+    const order = ["Start Now", "Reschedule", "Skip", "Log Execution", "Edit", "Archive"].map((n) => names.indexOf(n));
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  test("hidden, not greyed, while an execution is in progress or paused: Continue instead", () => {
+    renderDetail({
+      intention: daily,
+      onMarkDone: jest.fn(),
+      onUpdateEvent: jest.fn(),
+      executions: [{ id: "x", intentId: "i1", eventId: "e1", status: "paused" }],
+    });
+    expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Log Execution" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+  });
+});
+
 test("edit: Save with Closed and live events asks first, saving nothing", () => {
   const { onUpdateIntention, onSetStatus } = renderDetail();
   editToClosedAndSave();
@@ -110,7 +167,8 @@ test("page row: four buttons always; labels follow the live event and open execu
         onBack={jest.fn()}
       />,
     );
-    for (const name of [...labels, "Edit", "More actions"]) {
+    // Where widths cannot be measured, every action is a button and there is no ⋯.
+    for (const name of [...labels, "Edit", "Archive"]) {
       expect(screen.getAllByRole("button", { name }).length).toBeGreaterThan(0);
     }
     if (executions.length) {
@@ -137,7 +195,10 @@ test("Reschedule: disabled while the run is active, enabled once paused", () => 
       />,
     );
     expect(screen.getByRole("button", { name: "Reschedule" }).disabled).toBe(disabled);
-    expect(Boolean(screen.queryByText(/Pause or cancel it before moving the date/))).toBe(disabled);
+    expect(Boolean(screen.queryByText(/Pause or delete it before moving the date/))).toBe(disabled);
+    expect(screen.queryByTitle(/before moving the date/)).toBeNull();
+    expect(screen.getByRole("heading", { name: "In progress (1)" })).toBeTruthy();
+    expect(screen.queryByText("Current execution")).toBeNull();
     unmount();
   }
 });
@@ -167,17 +228,17 @@ test("title pill: Closed with live events opens the sheet; nothing saved yet", (
   expect(onSetStatus).not.toHaveBeenCalled();
 });
 
-describe("Copy (P3)", () => {
-  test("sits before ⋯ and copies text then link when there is no description", async () => {
+describe("Copy (P3, P4 icon)", () => {
+  test("a small icon after the title copies text then link, with a check mark and no toast", async () => {
     const writeText = jest.fn().mockResolvedValue();
     Object.assign(navigator, { clipboard: { writeText } });
     const onNotify = jest.fn();
     renderDetail({ onNotify });
-    const names = screen.getAllByRole("button").map((b) => b.textContent || b.getAttribute("aria-label"));
-    expect(names.indexOf("Copy")).toBe(names.indexOf("More actions") - 1);
+    expect(screen.getByRole("heading", { name: /Water plants/ }).contains(screen.getByRole("button", { name: "Copy" }))).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
-    await waitFor(() => expect(onNotify).toHaveBeenCalledWith("Copied"));
+    await screen.findByRole("button", { name: "Copied" });
     expect(writeText).toHaveBeenCalledWith("Water plants\n\nhttps://alfredv5vibe.vercel.app/i1");
+    expect(onNotify).not.toHaveBeenCalled();
   });
 
   test("stays enabled on a closed intention", () => {

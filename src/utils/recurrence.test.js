@@ -40,6 +40,32 @@ describe("nextOccurrence: fixed schedules count from the event's date, never bef
   });
 });
 
+describe("nextOccurrence: rule A, the earlier of scheduled and completed", () => {
+  test("scheduled Mon Oct 19, completed early Sat Oct 17, daily -> Sun Oct 18", () => {
+    expect(nextOccurrence(daily, { eventDate: "2026-10-19", completedOn: "2026-10-17", today: "2026-10-17" })).toBe(
+      "2026-10-18",
+    );
+  });
+
+  test("scheduled Oct 7, backfilled as completed Oct 7, daily -> today", () => {
+    expect(nextOccurrence(daily, { eventDate: "2026-10-07", completedOn: "2026-10-07", today: "2026-10-17" })).toBe(
+      "2026-10-17",
+    );
+  });
+
+  test("weekly on Tuesday, scheduled Tue Oct 20, completed Sat Oct 17 -> Tue Oct 20", () => {
+    expect(nextOccurrence(tuesdays, { eventDate: "2026-10-20", completedOn: "2026-10-17", today: "2026-10-17" })).toBe(
+      "2026-10-20",
+    );
+  });
+
+  test("a skip counts from the skipped date, not from today", () => {
+    expect(nextOccurrence(daily, { eventDate: "2026-10-20", completedOn: "2026-10-17", today: "2026-10-17", skipped: true })).toBe(
+      "2026-10-21",
+    );
+  });
+});
+
 describe("nextOccurrence: interval from completion", () => {
   test("counts from the completion, not the event", () => {
     expect(

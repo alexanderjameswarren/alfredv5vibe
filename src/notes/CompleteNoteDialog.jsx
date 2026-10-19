@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Check, Repeat } from "lucide-react";
 import { longDate } from "../utils/recurrenceDisplay";
+import CancelButton from "../shared/CancelButton";
 
 // Asked on Complete: when it was done, a note box, and for a repeating intention the
 // next date. The box starts with the note already written during the run, so
@@ -13,7 +14,12 @@ import { longDate } from "../utils/recurrenceDisplay";
 // ended), kind is the repeat line's text, and recompute(completedOn) gives the next
 // date for another completion date (it matters only for "after completion" repeats).
 // onComplete(text, nextDate, completedOn).
-export default function CompleteNoteDialog({ initialNote = "", onComplete, onCancel, next = null, completion = null }) {
+// `title` and `confirmLabel`: "Complete" on the execution page; Log Execution
+// passes "Log execution" and "Log" (Step 8).
+export default function CompleteNoteDialog({
+  initialNote = "", onComplete, onCancel, next = null, completion = null,
+  title = "Complete", confirmLabel = "Complete", confirmIcon: ConfirmIcon = Check,
+}) {
   const today = completion?.today || next?.today;
   const [text, setText] = useState(initialNote);
   const [busy, setBusy] = useState(false);
@@ -54,11 +60,11 @@ export default function CompleteNoteDialog({ initialNote = "", onComplete, onCan
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={busy ? undefined : onCancel}>
       <div
         role="dialog"
-        aria-label="Complete execution"
+        aria-label={title === "Complete" ? "Complete execution" : title}
         className="bg-background border border-border rounded-lg shadow-xl p-5 w-full max-w-sm mx-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="text-lg font-semibold mb-3">Complete</h3>
+        <h3 className="text-lg font-semibold mb-3">{title}</h3>
         {(completion || next) && (
           <div className="mb-4 p-3 rounded-lg bg-muted/50 border border-border space-y-3">
             {completion && (
@@ -107,24 +113,17 @@ export default function CompleteNoteDialog({ initialNote = "", onComplete, onCan
         {failed && (
           <p className="text-sm text-destructive mt-2">The note was not saved. Try again, or clear it to complete without one.</p>
         )}
-        <div className="flex flex-col gap-2 mt-4">
+        <div className="flex gap-2 mt-4">
           <button
             type="button"
             onClick={complete}
             disabled={busy}
-            className="flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm disabled:opacity-60"
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm disabled:opacity-60"
           >
-            <Check className="w-5 h-5" />
-            Complete
+            <ConfirmIcon className="w-5 h-5" />
+            {confirmLabel}
           </button>
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-            className="px-4 py-2 min-h-[44px] text-sm text-muted-foreground rounded hover:bg-muted"
-          >
-            Cancel
-          </button>
+          <CancelButton onClick={onCancel} disabled={busy} />
         </div>
       </div>
     </div>

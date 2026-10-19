@@ -19,6 +19,14 @@ function changed(note) {
   for (const fn of [...listeners]) fn(note);
 }
 
+/**
+ * A completed execution appeared, moved or went (Log Execution, its Undo, a date
+ * change): everything that lists completions reloads, as after a note change.
+ */
+export function completionsChanged() {
+  changed(null);
+}
+
 /** Every note (general and execution) on these items and intentions, newest first. */
 export async function listNotesForTargets({ itemIds = [], intentionIds = [], limit = 100 }) {
   const targets = [];

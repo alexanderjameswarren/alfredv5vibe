@@ -114,7 +114,7 @@ export function liveEventsFor(events, intentId) {
 
 // A date is the plan for a day; once its run is ACTIVE, moving it is
 // incoherent. A paused run may be moved ("I'll finish it Friday").
-export const RUN_ACTIVE_MOVE_REASON = "An execution is in progress. Pause or cancel it before moving the date.";
+export const RUN_ACTIVE_MOVE_REASON = "An execution is in progress. Pause or delete it before moving the date.";
 
 /**
  * The one rule behind Start Now / Schedule on intention detail, item detail and

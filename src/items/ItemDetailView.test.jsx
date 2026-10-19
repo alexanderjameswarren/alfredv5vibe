@@ -55,7 +55,6 @@ function renderItem(item, props = {}) {
   return handlers;
 }
 
-const ROW = ["Start Now", "Schedule", "Edit", "Copy", "More actions"];
 
 test("notes: one timeline across the item and both its intentions, recent completions by item", async () => {
   notesApi.listNotesForTargets.mockResolvedValue([
@@ -166,37 +165,83 @@ test("notes: adding a general note targets the item; an archived item has no inp
   await screen.findByText("None yet");
 });
 
-test("row: Start Now, Schedule, Edit, Copy, ⋯ — labels, no icon-only", () => {
-  renderItem({ status: "active" });
-  const names = screen.getAllByRole("button").map((b) => b.textContent || b.getAttribute("aria-label"));
-  expect(names.filter((n) => ROW.includes(n))).toEqual([
+test("row, in order: Start Now, Schedule, Log Execution, Add to Collection, Clone, Edit, Archive, then ⋯", () => {
+  renderItem({ status: "active" }, { onCompleteItem: jest.fn() });
+  const names = screen.getAllByRole("button").map((b) => b.textContent.trim() || b.getAttribute("aria-label"));
+  const row = ["Start Now", "Schedule", "Log Execution", "Add to Collection", "Clone", "Edit", "Archive", "More actions"];
+  expect(names.filter((n) => row.includes(n))).toEqual([
     "Start Now",
     "Schedule",
+    "Log Execution",
+    "Add to Collection",
+    "Clone",
     "Edit",
-    "Copy",
+    "Archive",
     "More actions",
   ]);
 });
 
-test("Copy: name, description and link, then the toast", async () => {
+test("Copy: a small icon after the name, name, description and link, no toast", async () => {
   const writeText = jest.fn().mockResolvedValue();
   Object.assign(navigator, { clipboard: { writeText } });
   const onNotify = jest.fn();
   renderItem({ status: "active", description: "Front and back" }, { onNotify });
   fireEvent.click(screen.getByRole("button", { name: "Copy" }));
-  await waitFor(() => expect(onNotify).toHaveBeenCalledWith("Copied"));
+  await screen.findByRole("button", { name: "Copied" });
   expect(writeText).toHaveBeenCalledWith("Water plants\n\nFront and back\n\nhttps://alfredv5vibe.vercel.app/it1");
+  expect(onNotify).not.toHaveBeenCalled();
 });
 
-test("menu: Create Intention, Clone, Add to Collection, Archive", () => {
+test("menu: Create Intention, after everything that fits", () => {
   renderItem({ status: "active" });
   fireEvent.click(screen.getByRole("button", { name: "More actions" }));
-  expect(screen.getAllByRole("menuitem").map((b) => b.textContent)).toEqual([
-    "Create Intention",
-    "Clone",
-    "Add to Collection",
-    "Archive",
-  ]);
+  expect(screen.getAllByRole("menuitem").map((b) => b.textContent)).toEqual(["Create Intention"]);
+});
+
+test("Skip only when the picked intention repeats and has a live date", () => {
+  const daily = { type: "fixed", frequency: "daily", interval: 1 };
+  const { unmount } = render(
+    <ItemDetailView
+      item={{ id: "it1", name: "Water plants", status: "active" }}
+      intents={[{ id: "i1", itemId: "it1", status: "active", recurrenceConfig: daily }]}
+      events={[{ id: "e1", intentId: "i1", time: "2099-01-01" }]}
+      contexts={[]}
+      items={[]}
+      getIntentDisplay={(i) => i.text}
+      onUpdateEvent={jest.fn()}
+      onUpdateItem={jest.fn()}
+      onBack={jest.fn()}
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Skip" })).toBeTruthy();
+  unmount();
+  renderItem({ status: "active" }, { onUpdateEvent: jest.fn() });
+  expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+});
+
+test("Log Execution on an item opens 'Log execution' and records through onCompleteItem", async () => {
+  const onCompleteItem = jest.fn().mockResolvedValue(true);
+  renderItem({ status: "active" }, { onCompleteItem });
+  fireEvent.click(screen.getByRole("button", { name: "Log Execution" }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Log execution" })).getByRole("button", { name: "Log" }));
+  await waitFor(() => expect(onCompleteItem).toHaveBeenCalledWith("it1", expect.objectContaining({ note: "" })));
+});
+
+test("Log Execution and Skip are hidden while the picked intention has an execution in progress", () => {
+  const daily = { type: "fixed", frequency: "daily", interval: 1 };
+  renderItem(
+    { status: "active" },
+    {
+      onCompleteItem: jest.fn(),
+      onUpdateEvent: jest.fn(),
+      intents: [{ id: "i1", itemId: "it1", status: "active", recurrenceConfig: daily }],
+      events: [{ id: "e1", intentId: "i1", time: "2099-01-01" }],
+      executions: [{ id: "x", intentId: "i1", eventId: "e1", status: "active" }],
+    },
+  );
+  expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Log Execution" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
 });
 
 test("Schedule creates for the item on the picked date", () => {
@@ -212,7 +257,7 @@ test("closed: Start Now, Schedule and the Create Intention row are disabled; Clo
   expect(screen.getByRole("button", { name: "Schedule" }).disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "More actions" }));
   expect(screen.getByRole("menuitem", { name: "Create Intention" }).disabled).toBe(true);
-  expect(screen.getByRole("menuitem", { name: "Clone" }).disabled).toBe(false);
+  expect(screen.getByRole("button", { name: "Clone" }).disabled).toBe(false);
   expect(screen.getByText("This item is closed. Set it to Active to use it.")).toBeTruthy();
 });
 

@@ -225,10 +225,12 @@ describe("what the taps do", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it("copies without opening anything", () => {
-    const { onCopy, onOpen } = setup({ sourceType: "task", aiStatus: "not_started" });
+  it("copies the text with the id, shows a check mark, and opens nothing", async () => {
+    Object.assign(navigator, { clipboard: { writeText: jest.fn().mockResolvedValue() } });
+    const { onOpen } = setup({ sourceType: "task", aiStatus: "not_started" });
     fireEvent.click(copyBtn());
-    expect(onCopy).toHaveBeenCalledWith("inbox-1");
+    await screen.findByRole("button", { name: /Copied/ });
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining("inbox-1"));
     expect(onOpen).not.toHaveBeenCalled();
   });
 

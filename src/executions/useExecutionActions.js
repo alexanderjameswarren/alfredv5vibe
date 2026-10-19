@@ -1,6 +1,8 @@
 import { storage, writeError } from "../utils/storage";
+import { completionsChanged, saveNote } from "../notes/notesApi";
 import { uid, flattenElements } from "../utils/flattenElements";
-import { formatEventDate, getTodayDate } from "../utils/eventDates";
+import { getTodayDate } from "../utils/eventDates";
+import { longDate } from "../utils/recurrenceDisplay";
 import { getRecurrenceConfig } from "../utils/recurrence";
 import { itemActionTarget, isDueBy } from "../utils/runNow";
 import { carriedItems, liveEventsFor } from "../utils/status";
@@ -59,6 +61,7 @@ export function useExecutionActions({
   watchStatus,
   setItems,
   notify,
+  offerUndoFor,
 }) {
   // The rows an execution insert can flip to active (088): its intention, that
   // intention's item, and every item it carries.
@@ -681,8 +684,8 @@ export function useExecutionActions({
    * last_completed_at is written by the database (executions_last_completed), and
    * the list must not wait on a realtime message that may not come.
    */
-  async function refreshCompletedRecords(execution) {
-    const intent = intents.find((i) => i.id === execution.intentId);
+  async function refreshCompletedRecords(execution, knownIntent = null) {
+    const intent = knownIntent || intents.find((i) => i.id === execution.intentId);
     const itemIds = [...new Set([...(execution.itemIds || []), intent?.itemId].filter(Boolean))];
     const fresh = await storage.get(`intent:${execution.intentId}`);
     if (fresh) setIntents((prev) => prev.map((i) => (i.id === fresh.id ? fresh : i)));
@@ -708,7 +711,151 @@ export function useExecutionActions({
       if (!saved) throw writeError("The completion date");
       setActiveExecution(saved);
       await refreshCompletedRecords(saved);
-      notify?.(`Completed on ${formatEventDate(completedOn)}.`);
+      completionsChanged();
+      notify?.(`Completed on ${longDate(completedOn, getTodayDate())}.`);
+      ok = true;
+    });
+    return ok;
+  }
+
+  const hasOpen = (intentId) =>
+    [...activeExecutions, ...pausedExecutions].some((x) => x.intentId === intentId);
+
+  /**
+   * Complete without an execution (Step 8): record that an intention was done on
+   * `completedOn`, as completing an execution of it would. Writes a closed `done`
+   * execution on the live event (or on a new event dated that day, inserted archived,
+   * so nothing goes live), saves the note on it and archives the event. Then, as
+   * closeExecution: a repeat gets its next event on `nextDate`; a one-time intention
+   * is closed. Undo removes all of it, restores the status (not someday, which
+   * status_guard refuses) and deletes `createdIntent` if this made one;
+   * last_completed_at falls back by itself (the 100 trigger recomputes on delete).
+   */
+  async function recordDone(intent, { note = "", nextDate = null, completedOn = null }, createdIntent = null) {
+    const intentId = intent.id;
+    const day = completedOn || getTodayDate();
+    const live = liveEventsFor(events, intentId)[0] || null;
+    let event = live;
+    let createdEvent = null;
+    if (!event) {
+      createdEvent = {
+        id: uid(),
+        user_id: user.id,
+        intentId,
+        time: day,
+        itemIds: intent.itemId ? [intent.itemId] : [],
+        contextId: intent.contextId || null,
+        collectionId: intent.collectionId || null,
+        archived: true,
+        createdAt: new Date().toISOString(),
+      };
+      if (!(await storage.set(`event:${createdEvent.id}`, createdEvent))) throw writeError("Recording it");
+      event = createdEvent;
+    }
+    const closedAt = closedAtFor(day);
+    const execution = {
+      id: uid(),
+      user_id: user.id,
+      eventId: event.id,
+      intentId,
+      contextId: intent.contextId || null,
+      collectionId: intent.collectionId || null,
+      itemIds: event.itemIds || [],
+      startedAt: closedAt,
+      closedAt,
+      status: "closed",
+      outcome: "done",
+      elements: [],
+      progress: [],
+    };
+    if (!(await storage.set(`execution:${execution.id}`, execution))) throw writeError("Recording it");
+    if (note.trim()) {
+      await saveNote({ body: note, targetType: "intention", targetId: intentId, executionId: execution.id });
+    }
+    if (live) {
+      const archived = { ...live, archived: true };
+      await storage.set(`event:${live.id}`, archived);
+      setEvents((prev) => prev.map((e) => (e.id === live.id ? archived : e)));
+    } else {
+      setEvents((prev) => [...prev, createdEvent]);
+    }
+
+    let successor = null;
+    const previousStatus = intent.status;
+    const oneTime = getRecurrenceConfig(intent).type === "once";
+    if (oneTime) {
+      const closedIntent = await storage.patch(`intent:${intentId}`, { status: "closed" });
+      if (closedIntent) setIntents((prev) => prev.map((i) => (i.id === intentId ? closedIntent : i)));
+    } else {
+      successor = await triggerRecurrence(intentId, event, { nextDate });
+    }
+    await refreshCompletedRecords(execution, intent);
+
+    completionsChanged();
+    offerUndoFor?.(`Logged an execution on ${longDate(day, getTodayDate())}.`, async () => {
+      if (successor) {
+        await storage.delete(`event:${successor.id}`);
+        setEvents((prev) => prev.filter((e) => e.id !== successor.id));
+      }
+      // Its note goes with it (notes.execution_id cascades).
+      await storage.delete(`execution:${execution.id}`);
+      if (live) {
+        if (!(await storage.set(`event:${live.id}`, live))) throw writeError("Restoring its date");
+        setEvents((prev) => prev.map((e) => (e.id === live.id ? live : e)));
+      } else {
+        await storage.delete(`event:${createdEvent.id}`);
+        setEvents((prev) => prev.filter((e) => e.id !== createdEvent.id));
+      }
+      if (createdIntent) {
+        await storage.delete(`intent:${createdIntent.id}`);
+        setIntents((prev) => prev.filter((i) => i.id !== createdIntent.id));
+      } else if (oneTime && previousStatus && previousStatus !== "someday") {
+        const back = await storage.patch(`intent:${intentId}`, { status: previousStatus });
+        if (back) setIntents((prev) => prev.map((i) => (i.id === intentId ? back : i)));
+      }
+      await refreshCompletedRecords(execution, intent);
+      completionsChanged();
+    });
+  }
+
+  /** Complete an intention without an execution (Step 8). See recordDone. */
+  async function markDone(intentId, options = {}) {
+    const intent = intents.find((i) => i.id === intentId);
+    if (!intent || hasOpen(intentId)) return false;
+    let ok = false;
+    await withLoading("Saving...", async () => {
+      await recordDone(intent, options);
+      ok = true;
+    });
+    return ok;
+  }
+
+  /**
+   * Complete an item (Step 8): the intention Start Now would pick, or, when it has
+   * none, a new one-time intention made exactly as Start Now makes it.
+   */
+  async function completeItem(itemId, options = {}) {
+    const item = items.find((i) => i.id === itemId);
+    if (!item) return false;
+    const target = itemActionTarget(item.id, intents, events, [...activeExecutions, ...pausedExecutions])?.intent;
+    if (target) return markDone(target.id, options);
+    let ok = false;
+    await withLoading("Saving...", async () => {
+      const newIntent = {
+        id: uid(),
+        user_id: user.id,
+        text: item.name,
+        createdAt: new Date().toISOString(),
+        isIntention: true,
+        archived: false,
+        itemId: item.id,
+        contextId: item.contextId || null,
+        recurrenceConfig: { type: "once" },
+      };
+      const saved = await storage.set(`intent:${newIntent.id}`, newIntent);
+      if (!saved) throw writeError("Recording it");
+      setIntents((prev) => [...prev, saved]);
+      await recordDone(saved, options, saved);
       ok = true;
     });
     return ok;
@@ -718,6 +865,8 @@ export function useExecutionActions({
     activate,
     closeExecution,
     changeCompletionDate,
+    markDone,
+    completeItem,
     cancelExecutionForEvent,
     pauseExecution,
     makeExecutionActive,

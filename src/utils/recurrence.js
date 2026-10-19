@@ -74,9 +74,10 @@ export function calculateNextEventDate(config, referenceDate) {
  * The next occurrence after a run is completed or skipped (Restructure P4 Step 6).
  * All dates are "YYYY-MM-DD"; returns one, or null when the config does not repeat.
  *
- * - Fixed schedule: the first occurrence after the EVENT's scheduled date, and never
- *   earlier than today (stepping forward along the schedule). A daily run started
- *   Monday and closed Tuesday gives Tuesday, not Wednesday.
+ * - Fixed schedule: the first occurrence after the EARLIER of the scheduled date and
+ *   the completion (rule A), never earlier than today (stepping forward along the
+ *   schedule). Started Monday, closed Tuesday gives Tuesday; scheduled Monday,
+ *   completed early on Saturday gives Sunday.
  * - Interval from completion: the completion date plus the interval.
  * - Interval, skipped: the skipped event's date plus the interval, clamped to today.
  */
@@ -93,12 +94,38 @@ export function nextOccurrence(config, { eventDate = null, completedOn = null, t
     return next ? dateString(next) : null;
   }
 
-  // No event date: the first occurrence on or after today.
-  let next = calculateNextEventDate(config, eventDate ? parseLocalDate(eventDate) : addDays(todayDate, -1));
+  // Rule A (Step 8): count from the EARLIER of the scheduled date and the completion,
+  // so finishing early does not jump a day. A skip counts from the skipped date.
+  // No date at all: the first occurrence on or after today.
+  const from = skipped
+    ? eventDate
+    : [eventDate, completedOn].filter(Boolean).sort()[0] || null;
+  let next = calculateNextEventDate(config, from ? parseLocalDate(from) : addDays(todayDate, -1));
   for (let i = 0; next && next < todayDate && i < 1000; i++) {
     next = calculateNextEventDate(config, next);
   }
   return next ? dateString(next) : null;
+}
+
+/**
+ * The Complete pop-up's "Next" for an intention (Steps 7 and 8), or null when it has
+ * none to offer: not repeating, or background or closed (only an active intention
+ * gets a next event; someday counts, since completing makes it active). `eventDate` is the occurrence being completed. `recompute(completedOn)`
+ * gives the date for another completion day, never before today, and null past the
+ * repeat's end. `describe(config, endDate, today)` is the repeat line's text.
+ */
+export function nextForCompletion(intent, { eventDate = null, today, describe }) {
+  // Someday too: completing makes it active (088), so a next event follows.
+  if (!intent || !['active', 'someday', undefined, null].includes(intent.status)) return null;
+  const config = getRecurrenceConfig(intent);
+  if (!config || config.type === 'once') return null;
+  const endDate = intent.endDate || null;
+  const recompute = (completedOn) => {
+    let date = nextOccurrence(config, { eventDate: eventDate || completedOn, completedOn, today });
+    if (date && date < today) date = today; // an earlier completion never suggests the past
+    return date && (!endDate || date <= endDate) ? date : null;
+  };
+  return { defaultDate: recompute(today), kind: describe(config, endDate, today), today, endDate, recompute };
 }
 
 /** A local-midnight Date as "YYYY-MM-DD" (never via toISOString, which shifts the day). */

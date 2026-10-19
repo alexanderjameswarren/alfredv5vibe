@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import NumberInput, { parseWhole } from "../NumberInput";
+import CancelButton from "../CancelButton";
 
 /**
  * Custom recurrence dialog — Google Calendar-style fixed schedule builder.
@@ -236,22 +237,16 @@ export default function CustomRecurrenceDialog({ initialConfig, onDone, onCancel
         </div>
 
         {/* Actions */}
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="px-4 py-2 text-sm border border-border rounded hover:bg-muted transition-colors"
-          >
-            Cancel
-          </button>
+        <div className="flex gap-2">
           <button
             type="button"
             onClick={handleDone}
             disabled={!valid}
-            className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex-1 px-4 py-2.5 min-h-[44px] text-sm bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Done
           </button>
+          <CancelButton onClick={onCancel} />
         </div>
       </div>
     </div>

@@ -76,7 +76,8 @@ import PinnedFooter, { FooterSpacer } from "../shared/PinnedFooter";
 import EditCard from "../shared/EditCard";
 import InsertRowButton from "../shared/InsertRowButton";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
-import { computeBaseline } from "../utils/inboxSuggestions";
+import { computeBaseline, copyTextForTask } from "../utils/inboxSuggestions";
+import CopyButton from "../shared/CopyButton";
 import StatusPicker from "../shared/StatusPicker";
 import { splitCaptureName } from "../utils/captureName";
 import { isFirstStep } from "../utils/elementOffsets";
@@ -1090,7 +1091,11 @@ export default function InboxDetailView({
             the record. */}
         <div className="space-y-2.5">
           <div className="flex items-center justify-between gap-2">
-            <SectionHeading icon={AlignLeft}>Original capture</SectionHeading>
+            {/* The page has no title; the copy icon sits after its first heading. */}
+            <span className="flex items-center gap-1">
+              <SectionHeading icon={AlignLeft}>Original capture</SectionHeading>
+              <CopyButton getText={() => copyTextForTask(inboxItem)} title="Copy the text, with this item's id, for a Claude session" />
+            </span>
             {onSaveCaptureText && !editingCapture && (
               <button
                 onClick={() => startCaptureEdit()}

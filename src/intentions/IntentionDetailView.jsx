@@ -1,10 +1,12 @@
 import React, { useState } from "react";
-import { Archive, ArrowLeft, CalendarPlus, CalendarX, ClipboardCopy, Play, Settings } from "lucide-react";
-import { copyRecord } from "../shared/copyRecord";
-import OverflowMenu from "../shared/OverflowMenu";
+import { ArrowLeft, CalendarPlus, CalendarX, NotebookPen, Play, Settings } from "lucide-react";
+import CompleteNoteDialog from "../notes/CompleteNoteDialog";
+import { recordCopyText } from "../shared/copyRecord";
+import CopyButton from "../shared/CopyButton";
+import ActionBar, { archiveAction, logAction, skipAction } from "../shared/ActionBar";
 import { ACTION_BUTTON } from "../shared/actionButton";
 import { getTodayDate } from "../utils/eventDates";
-import { getRecurrenceConfig } from "../utils/recurrence";
+import { getRecurrenceConfig, nextForCompletion } from "../utils/recurrence";
 import { describeRepeat } from "../utils/recurrenceDisplay";
 import ObjectIcon from "../shared/ObjectIcon";
 import DetailMeta from "../shared/DetailMeta";
@@ -14,7 +16,7 @@ import OriginalCapture from "../inbox/OriginalCapture";
 import IntentionCard from "./IntentionCard";
 import RecordLinks from "../shared/RecordLinks";
 import ScheduledLine from "../shared/ScheduledLine";
-import ExecutionBadge from "../executions/ExecutionBadge";
+import InProgressSection from "../executions/InProgressSection";
 import NoteTimeline from "../notes/NoteTimeline";
 import RecentCompletions from "../notes/RecentCompletions";
 import OpenExecutionNotes from "../notes/OpenExecutionNotes";
@@ -55,8 +57,11 @@ export default function IntentionDetailView({
   onSetStatus,
   collections = [],
   onDirtyChange,
+  // Step 8: (intentId, { note, nextDate, completedOn }) => Promise<boolean>.
+  onMarkDone,
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const [completing, setCompleting] = useState(false);
   // The move waiting on the live-events sheet's answer — `{ status, form }`, where
   // `form` is the edit form's save riding along — and why a move was refused.
   const [pending, setPending] = useState(null);
@@ -80,7 +85,7 @@ export default function IntentionDetailView({
     if (status !== "background" && status !== "closed") return true;
     if (hasActiveExecutions) {
       setStatusBlocked(
-        `Cannot move to ${STATUS_LABELS[status]}: an execution is in progress. Finish or cancel it first.`,
+        `Cannot move to ${STATUS_LABELS[status]}: an execution is in progress. Finish or delete it first.`,
       );
       return false;
     }
@@ -220,6 +225,11 @@ export default function IntentionDetailView({
           <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold min-w-0">
             <ObjectIcon type="intention" className="w-6 h-6 text-primary" align="first-line" />
             <span className="min-w-0">{intention.text}</span>
+            {/* Enabled even when closed: copying changes nothing. */}
+            <CopyButton
+              getText={() => recordCopyText({ title: intention.text, description: intention.description, id: intention.id })}
+              title="Copy for a Claude chat"
+            />
           </h2>
           {onSetStatus && <StatusMenu row={intention} onChoose={chooseStatus} />}
         </div>
@@ -276,102 +286,122 @@ export default function IntentionDetailView({
 
         {statusNotices}
 
-        {/* Record actions, matching item detail and the cards (recordActions):
-            Start Now / Continue, Schedule / Reschedule, Edit, ⋯ holding
-            Archive. Always present; the first two are disabled while closed.
-            Archive keeps the active-execution guard. */}
-        <div className="flex flex-wrap gap-2 mt-3">
-          {onStartNow && (
-            <button
-              onClick={() => (actions.open ? onOpenExecution?.(actions.open) : onStartNow(intention.id))}
-              disabled={Boolean(closedTitle)}
-              title={closedTitle || undefined}
-              className={`${ACTION_BUTTON} bg-success hover:bg-success-hover text-white`}
-            >
-              <Play className="w-4 h-4" />
-              {actions.primaryLabel}
-            </button>
-          )}
-          {onSchedule && (
-            <span title={closedTitle || actions.moveBlocked || undefined}>
-              <SchedulePopover
-                label={actions.scheduleLabel}
-                icon={<CalendarPlus className="w-4 h-4" />}
-                initialDate={actions.liveDate || getTodayDate()}
-                minDate={getTodayDate()}
-                onPick={(date) => onSchedule(intention.id, date)}
-                disabled={Boolean(closedTitle || actions.moveBlocked)}
-                className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
-              />
-            </span>
-          )}
-          <button
-            onClick={() => setIsEditing(true)}
-            className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
-          >
-            <Settings className="w-4 h-4" />
-            Edit
-          </button>
-          {/* Enabled even when closed: copying changes nothing. */}
-          <button
-            onClick={() =>
-              copyRecord({ title: intention.text, description: intention.description, id: intention.id }, onNotify)
-            }
-            className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
-          >
-            <ClipboardCopy className="w-4 h-4" />
-            Copy
-          </button>
-          <OverflowMenu
-            actions={[
-              // Drops the live date. Recurring: the next one follows (updateEvent).
-              actions.live && onUpdateEvent && {
-                label: isRecurring ? "Skip this date" : "Unschedule",
-                icon: CalendarX,
-                onClick: () => onUpdateEvent(actions.live.id, { archived: true }),
-                disabled: Boolean(actions.open),
-                // Paused too: archiving the date would orphan the paused run.
-                title: actions.open ? "Finish or cancel the execution before dropping its date" : null,
-              },
-              onArchiveIntention && {
-                label: "Archive",
-                icon: Archive,
-                destructive: true,
-                onClick: () => onArchiveIntention(intention.id),
-                disabled: hasActiveExecutions,
-                title: hasActiveExecutions ? "Cannot archive: active execution in progress" : null,
-              },
-            ].filter(Boolean)}
-          />
-        </div>
-        {/* Phones show no tooltips, so the reason is also spelled out here. */}
+        {/* Record actions (Restructure P4), in one order: Start Now, Schedule /
+            Reschedule, Skip, Complete, Edit, Archive. As many as fit are buttons;
+            the rest go into ⋯ in the same order (ActionBar). */}
+        <ActionBar
+          actions={[
+            onStartNow && {
+              key: "start",
+              pinned: true,
+              menu: null,
+              button: (
+                <button
+                  onClick={() => (actions.open ? onOpenExecution?.(actions.open) : onStartNow(intention.id))}
+                  disabled={Boolean(closedTitle)}
+                  className={`${ACTION_BUTTON} bg-success hover:bg-success-hover text-white`}
+                >
+                  <Play className="w-4 h-4" />
+                  {actions.primaryLabel}
+                </button>
+              ),
+            },
+            onSchedule && {
+              key: "schedule",
+              pinned: true,
+              menu: null,
+              button: (
+                <SchedulePopover
+                  label={actions.scheduleLabel}
+                  icon={<CalendarPlus className="w-4 h-4" />}
+                  initialDate={actions.liveDate || getTodayDate()}
+                  minDate={getTodayDate()}
+                  onPick={(date) => onSchedule(intention.id, date)}
+                  disabled={Boolean(closedTitle || actions.moveBlocked)}
+                  className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
+                />
+              ),
+            },
+            // Skip and Log Execution are hidden while an execution is in progress or
+            // paused: the page then offers Continue, never both.
+            // Skip: a repeating intention with a live date only.
+            isRecurring && actions.live && !actions.open && onUpdateEvent && {
+              key: "skip",
+              ...skipAction(() => onUpdateEvent(actions.live.id, { archived: true })),
+            },
+            // Log Execution (Step 8): every intention not closed.
+            onMarkDone && !closedTitle && !actions.open && {
+              key: "log",
+              ...logAction(() => setCompleting(true)),
+            },
+            {
+              key: "edit",
+              menu: { label: "Edit", icon: Settings, onClick: () => setIsEditing(true) },
+              button: (
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
+                >
+                  <Settings className="w-4 h-4" />
+                  Edit
+                </button>
+              ),
+            },
+            onArchiveIntention && {
+              key: "archive",
+              ...archiveAction(
+                () => onArchiveIntention(intention.id),
+                hasActiveExecutions ? "Cannot archive: active execution in progress" : null,
+              ),
+            },
+          ].filter(Boolean)}
+          menuOnly={[
+            // A one-time intention's date can still be dropped.
+            !isRecurring && actions.live && onUpdateEvent && {
+              label: "Unschedule",
+              icon: CalendarX,
+              onClick: () => onUpdateEvent(actions.live.id, { archived: true }),
+              disabled: Boolean(actions.open),
+              title: actions.open ? "Finish the execution first" : null,
+            },
+          ].filter(Boolean)}
+        />
+        {/* The disabled buttons' reason, as visible text (no tooltip repeats it). */}
         {(closedTitle || actions.moveBlocked) && (onStartNow || onSchedule) && (
           <p className="mt-2 text-sm text-muted-foreground">{closedTitle || actions.moveBlocked}</p>
+        )}
+        {completing && (
+          <CompleteNoteDialog
+            title="Log execution"
+            confirmLabel="Log"
+            confirmIcon={NotebookPen}
+            completion={{ today: getTodayDate() }}
+            next={nextForCompletion(intention, {
+              eventDate: actions.live ? String(actions.live.time).slice(0, 10) : null,
+              today: getTodayDate(),
+              describe: (config, endDate, day) => describeRepeat({ config, endDate, today: day }),
+            })}
+            onCancel={() => setCompleting(false)}
+            onComplete={async (note, nextDate, completedOn) => {
+              const ok = await onMarkDone(intention.id, { note, nextDate, completedOn });
+              if (ok) setCompleting(false);
+              return ok;
+            }}
+          />
         )}
       </div>
 
       {/* The linked item is a header link now; the Linked Item card is gone. */}
 
-      {/* The open execution (at most one), with what has been noted so far. */}
-      {executions.some((ex) => ex.intentId === intention.id) && (
-        <div className="mb-6">
-          <h3 className="text-lg font-medium mb-3">Current execution</h3>
-          {executions
-            .filter((ex) => ex.intentId === intention.id)
-            .map((exec) => (
-              <ExecutionBadge
-                key={exec.id}
-                exec={exec}
-                intents={intents || [intention]}
-                contexts={contexts || []}
-                getIntentDisplay={getIntentDisplay}
-                onOpen={(ex) => onOpenExecution?.(ex)}
-              >
-                <OpenExecutionNotes executionId={exec.id} />
-              </ExecutionBadge>
-            ))}
-        </div>
-      )}
+      {/* The open execution (at most one): the same "In progress" section as every list. */}
+      <InProgressSection
+        executions={executions.filter((ex) => ex.intentId === intention.id)}
+        intents={intents || [intention]}
+        contexts={contexts || []}
+        getIntentDisplay={getIntentDisplay}
+        onOpen={(ex) => onOpenExecution?.(ex)}
+        extraFor={(exec) => <OpenExecutionNotes executionId={exec.id} />}
+      />
 
       <RecentCompletions intentId={intention.id} onOpenExecution={onOpenExecution} />
 
