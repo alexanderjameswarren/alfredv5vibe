@@ -3,7 +3,8 @@ import { ArrowLeft, CalendarPlus, CalendarX, NotebookPen, Play, Settings } from 
 import CompleteNoteDialog from "../notes/CompleteNoteDialog";
 import { recordCopyText } from "../shared/copyRecord";
 import CopyButton from "../shared/CopyButton";
-import ActionBar, { archiveAction, logAction, skipAction } from "../shared/ActionBar";
+import ActionBar, { archiveAction, logAction, skipAction, stopAction } from "../shared/ActionBar";
+import useStopRepeat, { canStop } from "../shared/useStopRepeat";
 import { ACTION_BUTTON } from "../shared/actionButton";
 import { getTodayDate } from "../utils/eventDates";
 import { getRecurrenceConfig, nextForCompletion } from "../utils/recurrence";
@@ -59,6 +60,8 @@ export default function IntentionDetailView({
   onSetStatus,
   // closeRecords (close reason): Closed from the pill or the edit form goes through it.
   onCloseRecords,
+  // stopRepeat (Step 10): (intentId, { archiveEvents }).
+  onStopRepeat,
   collections = [],
   onDirtyChange,
   // Step 8: (intentId, { note, nextDate, completedOn }) => Promise<boolean>.
@@ -77,6 +80,7 @@ export default function IntentionDetailView({
     intentionIds: intention ? [intention.id] : [],
   });
   const reminders = useReminderSummary({ intentId: intention?.id || null });
+  const stopping = useStopRepeat({ events, onStopRepeat, onDone: () => reminders.reload() });
 
   if (!intention) return null;
 
@@ -177,6 +181,7 @@ export default function IntentionDetailView({
           onCancel={cancelSheet}
         />
       )}
+      {stopping.sheet}
       {closing && (
         <CloseDialog
           title={`Close "${intention.text}"`}
@@ -380,6 +385,11 @@ export default function IntentionDetailView({
             onMarkDone && !closedTitle && !actions.open && {
               key: "log",
               ...logAction(() => setCompleting(true)),
+            },
+            // Stop (Step 10): a repeat not yet ended; hidden while an execution is open.
+            onStopRepeat && !closedTitle && !actions.open && canStop(intention) && {
+              key: "stop",
+              ...stopAction(() => stopping.request(intention)),
             },
             {
               key: "edit",

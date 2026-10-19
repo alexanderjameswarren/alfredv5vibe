@@ -7,7 +7,7 @@ const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 /**
  * The sheet's words for an intention with a live event, scheduled reminders, or both.
- * One answer covers both: archive the date and cancel the reminders, or keep them.
+ * One answer covers both: archive the event and cancel the reminders, or keep them.
  */
 export function sheetWording(status, date, reminderCount, eventCount = date ? 1 : 0) {
   const closing = status === "closed";
@@ -18,16 +18,16 @@ export function sheetWording(status, date, reminderCount, eventCount = date ? 1 
   if (eventCount > 1) {
     const events = `${eventCount} scheduled events (from ${date})`;
     return {
-      summary: `${events}${r ? ` and ${r}` : ""}. Closing archives the dates${r ? ` and cancels ${them}` : ""}.`,
-      archive: `Close, archive the dates${r ? ` and cancel ${them}` : ""}`,
+      summary: `${events}${r ? ` and ${r}` : ""}. Closing archives these events${r ? ` and cancels ${them}` : ""}.`,
+      archive: closing ? `Close, archive these events${r ? ` and cancel ${them}` : ""}` : `Archive these events${r ? ` and cancel ${them}` : ""}`,
       keep: "Keep them",
     };
   }
   if (hasEvent && !r) {
     return {
-      summary: `Scheduled for ${date}.${closing ? " Closing archives that date." : ""}`,
-      archive: closing ? "Close and archive the date" : "Archive the date",
-      keep: "Keep the date",
+      summary: `Scheduled for ${date}.${closing ? " Closing archives this event." : ""}`,
+      archive: closing ? "Close and archive this event" : "Archive this event",
+      keep: "Keep this event",
     };
   }
   if (!hasEvent) {
@@ -38,14 +38,14 @@ export function sheetWording(status, date, reminderCount, eventCount = date ? 1 
     };
   }
   return {
-    summary: `1 scheduled event (${date}) and ${r}.${closing ? ` Closing archives the date and cancels ${them}.` : ""}`,
-    archive: closing ? `Close, archive the date and cancel ${them}` : `Archive the date and cancel ${them}`,
+    summary: `1 scheduled event (${date}) and ${r}.${closing ? ` Closing archives this event and cancels ${them}.` : ""}`,
+    archive: closing ? `Close, archive this event and cancel ${them}` : `Archive this event and cancel ${them}`,
     keep: "Keep them",
   };
 }
 
 // Asked before an intention with its one live event, or scheduled reminders, moves
-// to background or closed. Closing always archives the date and cancels the
+// to background or closed. Closing always archives the event and cancels the
 // reminders (a closed intention keeps no plan); parking may keep them.
 // `eventCount` and `title` are for a list row's Close (Restructure P4).
 export default function StatusEventsSheet({ status, event, eventCount, reminderCount = 0, title, onArchive, onKeep, onCancel }) {

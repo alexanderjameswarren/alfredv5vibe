@@ -10,28 +10,28 @@ const noop = () => {};
 
 test("closing offers archive and cancel only — no Keep", () => {
   render(<StatusEventsSheet status="closed" event={event} onArchive={noop} onKeep={noop} onCancel={noop} />);
-  expect(screen.getByText(`Scheduled for ${shown}. Closing archives that date.`)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Close and archive the date" })).toBeTruthy();
+  expect(screen.getByText(`Scheduled for ${shown}. Closing archives this event.`)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Close and archive this event" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: /Keep/ })).toBeNull();
 });
 
-test("parking may keep the date", () => {
+test("parking may keep the event", () => {
   render(<StatusEventsSheet status="background" event={event} onArchive={noop} onKeep={noop} onCancel={noop} />);
-  expect(screen.getByRole("button", { name: "Archive the date" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Keep the date" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Archive this event" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Keep this event" })).toBeTruthy();
 });
 
 test("counts an event and reminders together", () => {
   render(<StatusEventsSheet status="background" event={event} reminderCount={2} onArchive={noop} onKeep={noop} onCancel={noop} />);
   expect(screen.getByText(`1 scheduled event (${shown}) and 2 reminders.`)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Archive the date and cancel the reminders" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Archive this event and cancel the reminders" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Keep them" })).toBeTruthy();
 });
 
 test("a row closing several events names them all", () => {
   expect(sheetWording("closed", "Oct 20", 1, 2)).toEqual({
-    summary: "2 scheduled events (from Oct 20) and 1 reminder. Closing archives the dates and cancels the reminder.",
-    archive: "Close, archive the dates and cancel the reminder",
+    summary: "2 scheduled events (from Oct 20) and 1 reminder. Closing archives these events and cancels the reminder.",
+    archive: "Close, archive these events and cancel the reminder",
     keep: "Keep them",
   });
 });

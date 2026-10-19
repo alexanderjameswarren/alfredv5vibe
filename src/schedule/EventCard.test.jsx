@@ -21,8 +21,8 @@ test("Start is disabled with the reason on a closed intention's event", () => {
   renderEvent("closed");
   const start = screen.getByRole("button", { name: "Start" });
   expect(start.disabled).toBe(true);
-  expect(start.title).toBe("This intention is closed. Set it to Active to use it.");
-  expect(screen.getByText("This intention is closed. Set it to Active to use it.")).toBeTruthy();
+  expect(start.title).toBe("This intention is Closed. Set it to Active to use it.");
+  expect(screen.getByText("This intention is Closed. Set it to Active to use it.")).toBeTruthy();
 });
 
 test("edit form: the date is locked while its run is active, not when paused", () => {

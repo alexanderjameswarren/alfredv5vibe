@@ -192,6 +192,15 @@ describe("markDone: complete a repeating intention without an execution", () => 
     expect(triggerRecurrence).toHaveBeenCalledWith("i1", live, { nextDate: "2026-10-21" });
   });
 
+  test("logging an execution on a Background intention: one toast, and Undo puts Background back", async () => {
+    const restore = jest.fn();
+    const { a, undo } = setup({ watchStatus: () => async () => ({ moved: true, restore }) });
+    await a.markDone("i1", { completedOn: "2026-10-15" });
+    expect(undo().message).toMatch(/\. Moved to Active\.$/);
+    await undo().restore();
+    expect(restore).toHaveBeenCalled();
+  });
+
   test("Undo stops at a failed delete and restores nothing else", async () => {
     const { a, undo } = setup();
     await a.markDone("i1", { completedOn: "2026-10-15" });

@@ -17,10 +17,13 @@ jest.mock("../utils/remindersApi", () => ({
 const today = getTodayDate();
 const DAILY = { type: "fixed", frequency: "daily", interval: 1 };
 
-function setup({ intents, items = [], events = [] }) {
+const restoreStatuses = jest.fn();
+
+function setup({ intents, items = [], events = [], flipped = false }) {
   let undo = null;
   const actions = useIntentionActions({
     user: { id: "u" },
+    watchStatus: () => async () => ({ moved: flipped, restore: restoreStatuses }),
     intents,
     setIntents: jest.fn(),
     items,
@@ -43,6 +46,78 @@ beforeEach(() => {
   storage.get.mockResolvedValue(null);
   storage.delete.mockResolvedValue(true);
   saveNote.mockImplementation(async (n) => ({ id: "note1", ...n }));
+});
+
+describe("schedule: one tap, one message", () => {
+  it("scheduling a Background intention says both in one toast", async () => {
+    const { actions, undo } = setup({ intents: [{ id: "a", status: "background" }], flipped: true });
+    await actions.moveToPlanner("a", "2099-01-01");
+    expect(undo().message).toMatch(/^Scheduled for .*\. Moved to Active\.$/);
+  });
+
+  it("its Undo deletes the event, then puts the status back", async () => {
+    const order = [];
+    storage.delete.mockImplementation(async (k) => (order.push(k), true));
+    restoreStatuses.mockImplementation(async () => order.push("status"));
+    const { actions, undo } = setup({ intents: [{ id: "a", status: "background" }], flipped: true });
+    await actions.moveToPlanner("a", "2099-01-01");
+    await undo().restore();
+    expect(order).toEqual([expect.stringMatching(/^event:/), "status"]);
+  });
+
+  it("its Undo stops at a failed delete, before the status", async () => {
+    const { actions, undo } = setup({ intents: [{ id: "a", status: "background" }], flipped: true });
+    await actions.moveToPlanner("a", "2099-01-01");
+    storage.delete.mockResolvedValueOnce(false);
+    await expect(undo().restore()).rejects.toThrow("Undo");
+    expect(restoreStatuses).not.toHaveBeenCalled();
+  });
+
+  it("no status move, no second sentence", async () => {
+    const { actions, undo } = setup({ intents: [{ id: "a", status: "active" }] });
+    await actions.moveToPlanner("a", "2099-01-01");
+    expect(undo().message).not.toMatch(/Moved to/);
+  });
+});
+
+describe("stopRepeat", () => {
+  const rec = { id: "rec", status: "active", recurrenceConfig: DAILY, endDate: null };
+
+  it("ends today, keeps the repeat, moves to Background, and says so", async () => {
+    const { actions, undo } = setup({ intents: [rec], events: [{ id: "e", intentId: "rec", time: "2099-01-01", archived: false }] });
+    await actions.stopRepeat("rec");
+    expect(storage.patch).toHaveBeenCalledWith("intent:rec", { status: "background", endDate: today });
+    expect(storage.set).not.toHaveBeenCalled();
+    expect(undo().message).toBe("Stopped repeating. Moved to Background.");
+  });
+
+  it("with the question answered: archives the dates and cancels reminders; Undo puts back what is ahead", async () => {
+    cancelRemindersForStatus.mockResolvedValue(["r1"]);
+    const { actions, undo } = setup({
+      intents: [rec],
+      events: [
+        { id: "future", intentId: "rec", time: "2099-01-01", archived: false },
+        { id: "past", intentId: "rec", time: "2000-01-01", archived: false },
+      ],
+    });
+    await actions.stopRepeat("rec", { archiveEvents: true });
+    expect(storage.set).toHaveBeenCalledWith("event:future", expect.objectContaining({ archived: true }));
+    storage.set.mockClear();
+    await undo().restore();
+    expect(storage.patch).toHaveBeenLastCalledWith("intent:rec", { endDate: null, status: "active" });
+    expect(storage.set).toHaveBeenCalledWith("event:future", expect.objectContaining({ archived: false }));
+    expect(storage.set).not.toHaveBeenCalledWith("event:past", expect.anything());
+    expect(restoreRemindersAfterStatus).toHaveBeenCalledWith(["r1"]);
+  });
+
+  it("Undo stops at a failed write and restores nothing after it", async () => {
+    const { actions, undo } = setup({ intents: [rec], events: [{ id: "future", intentId: "rec", time: "2099-01-01", archived: false }] });
+    await actions.stopRepeat("rec", { archiveEvents: true });
+    storage.patch.mockResolvedValueOnce(null);
+    storage.set.mockClear();
+    await expect(undo().restore()).rejects.toThrow(/Restoring the repeat/);
+    expect(storage.set).not.toHaveBeenCalled();
+  });
 });
 
 describe("closeRecords: close reason", () => {

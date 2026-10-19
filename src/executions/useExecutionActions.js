@@ -758,6 +758,8 @@ export function useExecutionActions({
     const day = completedOn || getTodayDate();
     const live = liveEventsFor(events, intentId)[0] || null;
     let event = live;
+    // The execution (and a repeat's next event) insert can un-park the records (088).
+    const settle = watchStatus?.({ intents: [intent], items: carriedItems(intent, intent.itemId ? [intent.itemId] : [], items) });
     let createdEvent = null;
     if (!event) {
       createdEvent = {
@@ -812,9 +814,10 @@ export function useExecutionActions({
       successor = await triggerRecurrence(intentId, event, { nextDate });
     }
     await refreshCompletedRecords(execution, intent);
+    const flip = settle ? await settle({ announce: false }) : null;
 
     completionsChanged();
-    offerUndoFor?.(`Logged an execution on ${longDate(day, getTodayDate())}.`, async () => {
+    offerUndoFor?.(`Logged an execution on ${longDate(day, getTodayDate())}.${flip?.moved ? " Moved to Active." : ""}`, async () => {
       // The execution goes first (its note cascades); each write that fails stops the
       // Undo there, so it never carries on past a half-undone state.
       if (!(await storage.delete(`execution:${execution.id}`))) throw writeError("Removing the execution");
@@ -837,6 +840,7 @@ export function useExecutionActions({
         if (!back) throw writeError("Restoring the status");
         setIntents((prev) => prev.map((i) => (i.id === intentId ? back : i)));
       }
+      await flip?.restore();
       await refreshCompletedRecords(execution, intent);
       completionsChanged();
     });

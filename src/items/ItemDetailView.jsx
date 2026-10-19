@@ -2,7 +2,8 @@ import React, { useState } from "react";
 import { ArrowLeft, CalendarPlus, Copy, CopyPlus, NotebookPen, Play, Plus, Settings } from "lucide-react";
 import { recordCopyText } from "../shared/copyRecord";
 import ObjectIcon from "../shared/ObjectIcon";
-import ActionBar, { archiveAction, logAction, skipAction } from "../shared/ActionBar";
+import ActionBar, { archiveAction, logAction, skipAction, stopAction } from "../shared/ActionBar";
+import useStopRepeat, { canStop } from "../shared/useStopRepeat";
 import CopyButton from "../shared/CopyButton";
 import CancelButton from "../shared/CancelButton";
 import CompleteNoteDialog from "../notes/CompleteNoteDialog";
@@ -75,6 +76,8 @@ export default function ItemDetailView({
   onCloseRecords,
   // Step 8: (itemId, { note, nextDate, completedOn }) => Promise<boolean>.
   onCompleteItem,
+  // Step 10: stopRepeat(intentId, { archiveEvents }) for the picked intention.
+  onStopRepeat,
   onViewItem,
   onViewIntentionDetail,
   onViewContextDetail,
@@ -95,6 +98,7 @@ export default function ItemDetailView({
   const [completing, setCompleting] = useState(false);
   // The Close pop-up (close reason): { form, targets, picked, defaults, pending }.
   const [closing, setClosing] = useState(null);
+  const stopping = useStopRepeat({ events, onStopRepeat });
   const openClone = () => {
     setCloneName(item.name + " (Copy)");
     setShowCloneDialog(true);
@@ -283,6 +287,7 @@ export default function ItemDetailView({
             />
           )}
           {closeDialog}
+          {stopping.sheet}
         </div>
 
         {/* The execution page's link row: the context pill. */}
@@ -351,6 +356,11 @@ export default function ItemDetailView({
             onCompleteItem && !closedTitle && !actions.open && {
               key: "log",
               ...logAction(() => setCompleting(true)),
+            },
+            // Stop (Step 10): when the picked intention repeats and has not ended.
+            onStopRepeat && !closedTitle && !actions.open && canStop(target?.intent) && {
+              key: "stop",
+              ...stopAction(() => stopping.request(target.intent)),
             },
             onAddToCollection && {
               key: "collection",

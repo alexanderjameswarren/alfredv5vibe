@@ -235,7 +235,7 @@ export default function Alfred() {
   const [editingContext, setEditingContext] = useState(null);
   // A context card's gear opens context detail straight on its edit page.
   const [editContextOnOpen, setEditContextOnOpen] = useState(false);
-  // "Moved to active" after a write the 088 triggers may answer. Before the
+  // "Moved to Active" after a write the 088 triggers may answer. Before the
   // action hooks, which take `watchStatus`.
   const { notice, showNotice } = useNotice();
   const { watchStatus } = useStatusSync({ setIntents, setItems, showNotice });
@@ -272,7 +272,7 @@ export default function Alfred() {
     withLoading,
     offerUndoFor,
   });
-  const { moveToPlanner, scheduleFromItem, updateIntent, archiveIntention, setIntentionStatus, closeRecords } = useIntentionActions({
+  const { moveToPlanner, scheduleFromItem, updateIntent, archiveIntention, setIntentionStatus, stopRepeat, closeRecords } = useIntentionActions({
     user,
     intents,
     setIntents,
@@ -1356,6 +1356,7 @@ export default function Alfred() {
             onArchiveIntention={archiveIntention}
             onSetStatus={setIntentionStatus}
             onCloseRecords={closeRecords}
+            onStopRepeat={stopRepeat}
             onSchedule={moveToPlanner}
             onStartNow={startNowFromIntention}
             onMarkDone={markDone}
@@ -1429,6 +1430,7 @@ export default function Alfred() {
             onStartNowIntention={startNowFromIntention}
             onCloseRecords={closeRecords}
             onCompleteItem={completeItem}
+            onStopRepeat={stopRepeat}
             onViewItem={viewItemDetail}
             onViewContextDetail={viewContextDetail}
             onViewIntentionDetail={(id) => viewIntentionDetail(id, "item-detail")}

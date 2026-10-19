@@ -132,6 +132,33 @@ has another live event (existing guards).
   execution at the Completed on date (midday), on a new event inserted already archived when
   there is no live one; Undo removes the execution (its note cascades) and the next event
   and restores the date. Disabled while an execution is open.
+- **Stop, as built (Step 10):** `stopAction` (CircleStop, neutral; unused elsewhere — SAM
+  and Timer stop with Square) in ActionBar after Log Execution, before Edit, on intention
+  detail and on item detail for the picked intention; only when it repeats and has not
+  ended (`canStop`: no end date, or one after today), hidden while an execution is open.
+  `useStopRepeat` asks the one StatusEventsSheet question (title "Stop repeating"; archive
+  or keep) when a live date today or later or a scheduled reminder is pending, else stops
+  at once. `stopRepeat` patches `{ status: 'background', endDate: today }`, archives every
+  live date and cancels reminders on "archive", and toasts "Stopped repeating. Moved to
+  Background." Undo restores end date and status (never someday), then the dates still
+  ahead and the reminders; it stops at the first failed write. `status_changed_at` is
+  stamped by status_guard and cannot be restored by the client until Step 11.
+  Restart: Schedule inserts an event, so 088's trigger moves Background to Active; Edit
+  clears the end date (status stays Background until something is scheduled).
+  Decided after testing (2026-10-19): the button reads "Stop repeating" (Pause is the
+  execution's word). Reschedule (moving a date) does NOT un-park a Background intention;
+  only a new event does (the Phase 1 rule). A past-due live event asks the question too,
+  in Stop and in Close (`loadClosePending` takes every live event). The question says
+  "Archive this event" / "Keep this event" and Close's line "Closing archives this
+  event." Step 11: Stop's Undo restores `status_changed_at` under `CLOSE_REASON_SAVED`.
+  One tap, one message: `settle({ announce: false })` returns whether a status flipped,
+  and Schedule folds it into its toast: "Scheduled for Today, October 19. Moved to
+  Active." Status names in messages are capitalised.
+  Undo reverses everything the tap did: `settle` returns `{ moved, restore }`, and the
+  Undo of Schedule, Schedule from an item and Log Execution runs `restore` last, putting
+  each flipped record back to its earlier status (and `status_changed_at` under
+  `CLOSE_REASON_SAVED`); Someday stays Active (status_guard refuses it); it stops at the
+  first failed write. Log Execution's toast also says "Moved to Active." when it did.
 - **Stop** sets `end_date` to today, keeps `recurrence_config` (row reads "Ended"), and ALWAYS
   moves the intention to background. If there is a future event or a pending reminder it first
   asks the single Cancel/Keep question (`StatusEventsSheet`). Scheduling again flips it back
