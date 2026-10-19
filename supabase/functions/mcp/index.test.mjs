@@ -307,13 +307,19 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_WB_8A = ["set_wb_transaction_subscription"];
   // 2026-10-13, +2 for Warren Buffet Step 10: rule health and bulk create.
   const EXPECTED_ADDED_WB_10 = ["get_wb_rule_health", "bulk_create_wb_taxonomy", "acknowledge_wb_rule_health"];
+  // 2026-10-19, +13 for Warren Buffet Phase 3 Step 6: projects, planned items, matches, settings, free cash.
+  const EXPECTED_ADDED_WB_PHASE3 = ["get_wb_projects", "get_wb_planned_items", "get_wb_planned_matches",
+    "get_wb_settings", "get_wb_free_cash", "get_wb_true_cost", "get_wb_cash_projection", "upsert_wb_project",
+    "upsert_wb_planned_item", "create_wb_planned_match", "update_wb_planned_match", "set_wb_transaction_project",
+    "update_wb_settings"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
-                      ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10]) {
+                      ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
+                      ...EXPECTED_ADDED_WB_PHASE3]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 121,
-    `expected 121 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 134,
+    `expected 134 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -424,6 +430,54 @@ test("Warren Buffet Phase 2 schemas advertise exactly the args their handlers re
     get_wb_subscriptions: 1, upsert_wb_subscription: 2, record_wb_subscription_price: 2,
     set_wb_transaction_subscription: 2, get_wb_rule_health: 1, bulk_create_wb_taxonomy: 3, acknowledge_wb_rule_health: 2,
   });
+});
+
+test("Warren Buffet Phase 3 schemas advertise exactly the args their handlers read, at the agreed tiers", () => {
+  const src = readFileSync(join(TOOLS, "warren-buffet-p3.ts"), "utf-8");
+  const helperArgs = {};
+  let rest = src;
+  for (const h of ["itemFields", "settingsFields", "matchPlan"]) {
+    const start = rest.search(new RegExp(`(export )?(async )?function ${h}\\(`));
+    const body = rest.slice(start).split("\n}\n")[0];
+    helperArgs[h] = [...body.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]);
+    rest = rest.replace(body, "");
+  }
+  const blocks = rest.split("defineTool({").slice(1);
+  assert.equal(blocks.length, 13, `expected 13 tools in warren-buffet-p3.ts, found ${blocks.length}`);
+  const tiers = {};
+  for (const b of blocks) {
+    const name = /name:\s*"([^"]+)"/.exec(b)[1];
+    tiers[name] = Number(/tier:\s*(\d)/.exec(b)[1]);
+    const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+    for (const [h, keys] of Object.entries(helperArgs)) if (b.includes(`${h}(`)) keys.forEach((k) => read.add(k));
+    if (tiers[name] === 3) read.add("confirmed");
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
+  }
+  assert.deepEqual(tiers, {
+    get_wb_projects: 1, get_wb_planned_items: 1, get_wb_planned_matches: 1, get_wb_settings: 1, get_wb_free_cash: 1,
+    get_wb_true_cost: 1, get_wb_cash_projection: 1, upsert_wb_project: 2, upsert_wb_planned_item: 2,
+    create_wb_planned_match: 3, update_wb_planned_match: 2, set_wb_transaction_project: 2, update_wb_settings: 3,
+  });
+});
+
+test("Warren Buffet Phase 3 descriptions", () => {
+  const desc = (n) => registered.find((r) => r.name === n).cfg.description;
+  for (const n of ["get_wb_planned_items", "get_wb_planned_matches", "get_wb_free_cash", "get_wb_true_cost",
+                   "get_wb_cash_projection", "upsert_wb_planned_item", "create_wb_planned_match"]) {
+    assert.match(desc(n), /money in is positive, money out is negative/, n);
+  }
+  assert.match(desc("get_wb_cash_projection"), /Never every day/);
+  assert.match(desc("get_wb_free_cash"), /unused credit never counts/);
+  assert.match(desc("create_wb_planned_match"), /Without confirmed: true this returns a proposal/);
+  assert.match(desc("update_wb_settings"), /never choose a floor for him/);
+  assert.match(desc("upsert_wb_planned_item"), /never suggested/);
+  assert.match(desc("get_wb_review_queue"), /planned_match/);
+  // No real amounts in descriptions: every number is a limit, a count of days or months, or a tier.
+  for (const r of registered.filter((x) => /_wb_/.test(x.name))) {
+    assert.doesNotMatch(r.cfg.description, /\$\s?\d/, r.name);
+  }
 });
 
 test("Warren Buffet Phase 2 descriptions state the sign rule, the manual rule and merchant matching", () => {

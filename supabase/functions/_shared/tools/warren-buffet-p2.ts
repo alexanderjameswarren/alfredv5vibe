@@ -44,6 +44,7 @@ type Db = any;
 export const HAND_SOURCES = ["claude", "manual"] as const;
 export const REVIEW_REASONS = [
   "no_kind", "missing_required_tag", "transfer_candidate", "split_mismatch", "price_change", "new_recurring",
+  "planned_match",
 ] as const;
 export const SUB_CADENCES = ["monthly", "quarterly", "annual", "other"] as const;
 export const SUB_STATUSES = ["watching", "active", "paused", "cancelled"] as const;
@@ -71,7 +72,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const QUEUE_COLUMNS =
   "reason, detail, transaction_id, account_id, account_label, txn_date, amount, description, clean_description, " +
   "payee, merchant_id, merchant_name, merchant_source, kind, kind_source, pending, reviewed, transfer_candidate, " +
-  "transfer_pair_id, tag_names";
+  "transfer_pair_id, tag_names, planned_match_id, planned_item_id, planned_item_name, planned_on, planned_amount, " +
+  "match_amount, planned_tolerance, planned_window_days";
 const MERCHANT_COLUMNS = "id, name, match_patterns, default_kind, not_subscription, notes, created_at, updated_at";
 const SUB_COLUMNS =
   "id, name, plan, status, cadence, merchant_id, merchant_name, merchant_not_subscription, billed_through_id, " +
@@ -80,7 +82,7 @@ const SUB_COLUMNS =
   "charge_count, overdue, days_past_expected, owner, notes, interval_count, interval_unit";
 const PRICE_COLUMNS = "id, subscription_id, effective_on, amount, source, transaction_id, notes, created_at";
 const RULE_COLUMNS =
-  "id, name, priority, active, match, set_kind, set_merchant_id, add_tag_ids, created_by, " +
+  "id, name, priority, active, match, set_kind, set_merchant_id, set_project_id, add_tag_ids, created_by, " +
   "created_from_transaction_id, hit_count, last_hit_at, notes, created_at, updated_at";
 const TAG_COLUMNS = "id, group_id, parent_id, name, is_active, sort_order, notes";
 const LIST_COLUMNS =
@@ -124,6 +126,27 @@ export const KNOWN_DB_ERRORS: Array<[RegExp, string]> = [
   [/wb_subscription_prices_transaction_id_fkey/, "No transaction with that id."],
   [/wb_subscriptions_interval_check/, "monthly, quarterly and annual have fixed intervals; for any other interval use cadence other with interval_count (1 to 104) and interval_unit (week or month)."],
   [/a transaction id does not exist or you cannot see it/, "One of the transaction ids does not exist, or you cannot see it."],
+  // Phase 3: projects, planned items and matches.
+  [/wb_projects_name_key/, "A project with that name already exists."],
+  [/wb_projects_status_check/, "A project's status is active, on_hold, done or cancelled."],
+  [/wb_planned_items_stage_check/, "A one-off planned item needs a stage (draft, estimate, quoted, invoiced, paid or cancelled); a recurring one has none."],
+  [/wb_planned_items_interval_check/, "A recurring item needs interval_count (1 to 120) and interval_unit (week or month); a one-off has neither."],
+  [/wb_planned_items_is_draft_check/, "is_draft is for recurring items; a one-off draft uses stage draft."],
+  [/wb_planned_items_ends_check/, "ends_on is for recurring items, and cannot be before due_on."],
+  [/wb_planned_items_amount_check/, "A planned amount cannot be zero."],
+  [/wb_(planned_items|splits|rules)_(set_)?project_id_fkey/, "No project with that id."],
+  [/wb_planned_items_merchant_id_fkey/, "No merchant with that id."],
+  [/confirmed matches on this split would exceed/,
+    "That is more than what's left of this payment (part of it may already be matched to another planned item); lower the amount."],
+  [/a pending transaction cannot be matched/, "A pending charge cannot be matched; wait until it posts."],
+  [/recurring planned item needs occurrence_on/, "A recurring planned item needs occurrence_on: the due date this payment settles."],
+  [/one-off planned item has no occurrence_on/, "A one-off planned item has no occurrence_on."],
+  [/amount_applied must have the planned item's sign/, "The amount applied must go the same way as the planned item."],
+  [/wb_planned_matches_key/, "That payment is already matched (or turned down) for this planned item and date."],
+  [/this match was already/, "That match was already confirmed or turned down."],
+  [/the amount cannot be zero/, "The amount cannot be zero."],
+  [/no match .* that you can see/, "No planned match with that id that you can see."],
+  [/a split would be smaller than the planned matches confirmed/, "A split cannot be smaller than the planned matches confirmed against it."],
 ];
 
 /** A known database refusal as a plain sentence; anything else as the platform's operational error. */
@@ -283,8 +306,15 @@ async function describeRules(T: string, db: Db, rules: Obj[]): Promise<Obj[]> {
   const tagIds = [...new Set(rules.flatMap((r) => (r.add_tag_ids as string[]) ?? []))];
   const merchantIds = [...new Set(rules.flatMap((r) =>
     [r.set_merchant_id, (r.match as Obj | null)?.merchant_id].filter(Boolean) as string[]))];
+  const projectIds = [...new Set(rules.map((r) => r.set_project_id).filter(Boolean) as string[])];
   const tags = new Map<string, string>();
   const merchants = new Map<string, string>();
+  const projects = new Map<string, string>();
+  if (projectIds.length) {
+    const { data, error } = await db.from("wb_projects").select("id, name").in("id", projectIds);
+    if (error) throw new Error(dbError(T, error));
+    for (const p of (data ?? []) as Obj[]) projects.set(p.id as string, p.name as string);
+  }
   if (tagIds.length) {
     const { data, error } = await db.from("wb_tags").select("id, name").in("id", tagIds);
     if (error) throw new Error(dbError(T, error));
@@ -300,6 +330,7 @@ async function describeRules(T: string, db: Db, rules: Obj[]): Promise<Obj[]> {
     add_tags: ((r.add_tag_ids as string[]) ?? []).map((id) => ({ id, name: tags.get(id) ?? null })),
     match_merchant_name: merchants.get((r.match as Obj | null)?.merchant_id as string) ?? null,
     set_merchant_name: merchants.get(r.set_merchant_id as string) ?? null,
+    ...(r.set_project_id ? { set_project_name: projects.get(r.set_project_id as string) ?? null } : {}),
   }));
 }
 
@@ -315,12 +346,15 @@ function ruleFields(T: string, args: Obj): Obj {
   if (args.match !== undefined) out.match = parseMatch(T, args.match);
   if (args.set_kind !== undefined) out.set_kind = oneOf(T, "set_kind", args.set_kind, WB_KINDS);
   if (args.set_merchant_id !== undefined) out.set_merchant_id = optUuid(T, "set_merchant_id", args.set_merchant_id);
+  if (args.set_project_id !== undefined) out.set_project_id = optUuid(T, "set_project_id", args.set_project_id);
   if (args.add_tag_ids !== undefined) out.add_tag_ids = optIdList(T, "add_tag_ids", args.add_tag_ids, 20);
   if (args.notes !== undefined) out.notes = optText(T, "notes", args.notes);
   return out;
 }
 
-const hasAction = (r: Obj) => !!r.set_kind || !!r.set_merchant_id || ((r.add_tag_ids as string[] | undefined)?.length ?? 0) > 0;
+const hasAction = (r: Obj) => !!r.set_kind || !!r.set_merchant_id || !!r.set_project_id ||
+  ((r.add_tag_ids as string[] | undefined)?.length ?? 0) > 0;
+const NEEDS_ACTION = "a rule needs set_kind, set_merchant_id, set_project_id or add_tag_ids.";
 
 const MERCHANT_FIRST =
   "Rules should match on the merchant (match.merchant_id), not on an exact description: create or fix the merchant first.";
@@ -616,7 +650,7 @@ export const createWbRuleTool = defineTool({
     const fields = ruleFields(T, args);
     if (!fields.name) throw new Error(`${T}: name is required.`);
     if (!fields.match) throw new Error(`${T}: match is required. ${MERCHANT_FIRST}`);
-    if (!hasAction(fields)) throw new Error(`${T}: a rule needs set_kind, set_merchant_id or add_tag_ids.`);
+    if (!hasAction(fields)) throw new Error(`${T}: ${NEEDS_ACTION}`);
     const doReprocess = optBool(T, "reprocess", args.reprocess) ?? true;
 
     const { data, error } = await ctx.db.from("wb_rules")
@@ -657,7 +691,7 @@ export const updateWbRuleTool = defineTool({
     if (ce) throw new Error(dbError(T, ce));
     if (!cur) throw new Error(`${T}: no rule ${id} that you can see. Nothing was changed.`);
     if (!hasAction({ ...(cur as unknown as Obj), ...fields })) {
-      throw new Error(`${T}: a rule needs set_kind, set_merchant_id or add_tag_ids. Nothing was changed.`);
+      throw new Error(`${T}: ${NEEDS_ACTION} Nothing was changed.`);
     }
     const before = doReprocess ? await idsMatchedBy(T, ctx.db, id) : [];
 
@@ -863,6 +897,10 @@ export const splitWbTransactionTool = defineTool({
         tax_year: optInt(T, `splits[${i}].tax_year`, o.tax_year, 2000, 2100),
         notes: optText(T, `splits[${i}].notes`, o.notes),
         tag_ids: optIdList(T, `splits[${i}].tag_ids`, o.tag_ids, 20),
+        // Only when given: an existing part keeps its project otherwise; null clears it, and that sticks.
+        ...(o.project_id !== undefined
+          ? { project_id: o.project_id === null ? null : uuidOf(T, `splits[${i}].project_id`, o.project_id) }
+          : {}),
       };
     });
     const { data, error } = await ctx.db.rpc("wb_replace_splits", { p_transaction_id: id, p_splits: splits, p_source: source });
