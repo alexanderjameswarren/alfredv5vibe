@@ -22,7 +22,7 @@ Testing notes:
 | 9 | Skip control (+ EventCard Archive Event → Skip; audit closed-as-done readers); follow-ups: Recent executions with skips in line and Show all, Delete Execution on closed executions, Skip Undo fix, recycle bin hides skips, Undo audit | Done, tested 2026-10-19 |
 | 10 | Stop control ("Stop repeating"); follow-ups: past-due events ask, "this event" wording, one merged toast | Done, tested 2026-10-19 |
 | 10a | Close reason, front end: one Close pop-up in all six places (choice, note, events/reminders question), execution/note creation, disabled rule; follow-ups: shared toggles with icons, pop-up at the page root | Done, tested 2026-10-19 (reason and Closed on saved from Step 11) |
-| 11 | Database step (waits on warren_buffet_p2-m4t), incl. `closed_reason`, status_guard Undo exception, MCP fields, backfill list | |
+| 11 | Database step (waits on warren_buffet_p2-m4t), incl. `closed_reason`, status_guard Undo exception, MCP fields, backfill list | Migration 139 numbered 2026-10-19 (db: items claimed), awaiting Alex's apply; mcp/ai-enrich deploy and the is_item drop wait on Warren |
 | 11a | Close reason, finish: write `closed_reason`, Undo back to Someday, review and apply the backfill | |
 | 12 | Reminder badges via realtime | |
 
@@ -97,6 +97,17 @@ Test: add a reminder on detail, go back, the card badge is there without reload.
 ## Log
 - 2026-10-13 Step 1 code done. Related tests pass (intentionRows, intentions, contexts).
   `deno check` not run: the local deno cache lacks the supabase-js npm packages.
+- 2026-10-19 Step 11 follow-up, WAITING: the `intents.is_item` drop moved to its own
+  migration, `_pending_restructure_p4-v9k_drop_is_item.sql`. Deployed check: mcp v155
+  (2026-10-19, from warren_buffet_p3-q5k) already has Step 1's change; ai-enrich v18
+  (2026-09-25) predates it and still selects is_item. Apply the drop after ai-enrich is
+  redeployed from main (and the Step 11 mcp deploy, which waits on Warren's mcp file).
+  Alex reviewed: status_written_at agreed; all eight backfill ids are closed (four
+  intents incl. mue50pca5iavc7gwjqd under item mue50p2vjlonxqxsz, five items).
+- 2026-10-19 Step 11 written for review (spec "Database step", As written): one pending
+  migration, app code behind `CLOSE_REASON_SAVED = true`, MCP handler changes. No drift
+  from the sync (124-138 are Warren Buffet, email capture). Conflict: mcp/index.ts held by
+  warren_buffet_p3-q5k. Nothing applied, deployed or db:-claimed.
 - 2026-10-19 Step 10 follow-up tested (labels, merged toast). Fix: Undo reverses the
   status too. `useStatusSync` settle returns `{ moved, restore }`; Schedule, Schedule
   from an item and Log Execution restore flipped statuses in their Undo (new

@@ -147,7 +147,12 @@ export async function getExecutionHistory(
     });
     if (error) return { error: error.message };
 
-    const rows = (data?.rows as unknown[]) ?? [];
+    // Restructure P4: a closed execution is a completion only with outcome 'done'.
+    // Skipped (a passed-over date) and cancelled rows are history, never "last done".
+    const rows = ((data?.rows as Record<string, unknown>[]) ?? []).map((r) => ({
+      ...r,
+      is_completion: r.status === "closed" && r.outcome === "done",
+    }));
     const total = (data?.total as number) ?? rows.length;
     return { data: rows, total };
   } catch (e) {
@@ -173,7 +178,7 @@ export async function getIntents(
     let query = client
       .from("intents")
       .select(
-        "id, text, is_intention, item_id, context_id, tags, collection_id, recurrence_config, target_start_date, end_date, status, status_changed_at, created_at, updated_at",
+        "id, text, is_intention, item_id, context_id, tags, collection_id, recurrence_config, target_start_date, end_date, status, status_changed_at, closed_reason, created_at, updated_at",
         // Counted, so truncation is measured rather than inferred from
         // "we got exactly `limit` rows back".
         { count: "exact" }

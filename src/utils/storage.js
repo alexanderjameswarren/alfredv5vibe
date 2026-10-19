@@ -5,21 +5,24 @@ import { toCamelCase, toSnakeCase } from "./caseConvert";
 // hand, so a whole-record UPDATE from stale browser state must not carry it.
 // It is still sent on INSERT; storage.patch is how it changes afterwards.
 const STATUS_TABLES = new Set(["items", "intents"]);
+// closed_reason travels with status (Restructure P4), so it is patched, never set.
 export function withoutStatus(table, dbValue) {
   if (!STATUS_TABLES.has(table)) return dbValue;
-  const { status, status_changed_at, ...rest } = dbValue;
+  const { status, status_changed_at, closed_reason, ...rest } = dbValue;
   return rest;
 }
 
 // Columns the app never writes, on insert or update: execution notes live in
-// the notes table (Restructure P2), and last_completed_at is set by triggers.
+// the notes table (Restructure P2), last_completed_at is set by triggers,
+// status_written_at by status_guard, and intents.is_item is dropped (Restructure
+// P4: a tab still holding it from before the drop must not send it back).
 export function withoutDbOwned(table, dbValue) {
   if (table === "executions") {
     const { notes, ...rest } = dbValue;
     return rest;
   }
   if (STATUS_TABLES.has(table)) {
-    const { last_completed_at, ...rest } = dbValue;
+    const { last_completed_at, status_written_at, is_item, ...rest } = dbValue;
     return rest;
   }
   return dbValue;

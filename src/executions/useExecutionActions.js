@@ -1,11 +1,11 @@
 import { storage, writeError } from "../utils/storage";
 import { completionsChanged, saveNote } from "../notes/notesApi";
 import { uid, flattenElements } from "../utils/flattenElements";
-import { getTodayDate } from "../utils/eventDates";
+import { getTodayDate, toLocalDateString } from "../utils/eventDates";
 import { longDate } from "../utils/recurrenceDisplay";
 import { getRecurrenceConfig } from "../utils/recurrence";
 import { itemActionTarget, isDueBy } from "../utils/runNow";
-import { carriedItems, closeFields, liveEventsFor } from "../utils/status";
+import { carriedItems, closeFields, liveEventsFor, restoredCloseFields, CLOSE_REASON_SAVED } from "../utils/status";
 import {
   createNotificationSteps,
   completeNotificationStep,
@@ -80,9 +80,11 @@ export function useExecutionActions({
     return [...activeExecutions, ...pausedExecutions].find((e) => e.intentId === intentId) || null;
   }
 
-  async function activate(eventId) {
+  // `priorEventDate`: the date Start Now moved this event from (Step 11), kept on the execution.
+  async function activate(eventId, { priorEventDate = null } = {}) {
     const event = events.find((e) => e.id === eventId);
     if (!event) return;
+    const prior = CLOSE_REASON_SAVED && priorEventDate ? { priorEventDate } : {};
     const open = openExecutionFor(event.intentId);
     if (open) {
       setPreviousView(view);
@@ -104,6 +106,7 @@ export function useExecutionActions({
           contextId: event.contextId,
           collectionId: event.collectionId,
           itemIds: [],
+          ...prior,
           startedAt: new Date().toISOString(),
           status: "active",
           elements: [],
@@ -153,6 +156,7 @@ export function useExecutionActions({
         intentId: event.intentId,
         contextId: event.contextId,
         itemIds: event.itemIds,
+        ...prior,
         startedAt: new Date().toISOString(),
         status: "active",
         elements: itemElements,
@@ -271,9 +275,10 @@ export function useExecutionActions({
         // live-looking rows behind for a run that never happened is not a
         // state worth defending.
         await endNotificationChain(activeExecution.id);
-        await storage.delete(`execution:${activeExecution.id}`);
+        if (!(await storage.delete(`execution:${activeExecution.id}`))) throw writeError("Deleting the execution");
         setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
         setPausedExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
+        await restoreStartNow(activeExecution);
         setActiveExecution(null);
         setView(previousView);
         return;
@@ -341,6 +346,33 @@ export function useExecutionActions({
       setActiveExecution(null);
       setView(previousView);
     });
+  }
+
+  /**
+   * Delete Execution puts back what Start Now changed (Step 11): the date it moved, when
+   * the event is still on the day it was moved to and that date is today or later; and
+   * a status it un-parked from Background. Stops at the first failed write.
+   */
+  async function restoreStartNow(execution) {
+    const today = getTodayDate();
+    const { priorEventDate, priorIntentStatus } = execution;
+    if (priorEventDate && priorEventDate >= today) {
+      const event = events.find((e) => e.id === execution.eventId);
+      const startedOn = execution.startedAt ? toLocalDateString(new Date(execution.startedAt)) : null;
+      if (event && !event.archived && String(event.time).slice(0, 10) === startedOn) {
+        const saved = await storage.set(`event:${event.id}`, { ...event, time: priorEventDate });
+        if (!saved) throw writeError("Restoring its date");
+        setEvents((prev) => prev.map((e) => (e.id === event.id ? saved : e)));
+      }
+    }
+    if (priorIntentStatus === "background") {
+      const intent = intents.find((i) => i.id === execution.intentId);
+      if (intent && intent.status === "active") {
+        const back = await storage.patch(`intent:${intent.id}`, { status: "background" });
+        if (!back) throw writeError("Restoring the status");
+        setIntents((prev) => prev.map((i) => (i.id === back.id ? back : i)));
+      }
+    }
   }
 
   async function cancelExecutionForEvent(eventId) {
@@ -577,6 +609,8 @@ export function useExecutionActions({
     const live = liveEventsFor(events, intentId)[0];
     if (live) {
       const today = getTodayDate();
+      // What Start Now moves, recorded on the execution so Delete Execution can put it back.
+      let priorEventDate = null;
       if (!isDueBy(live, today)) {
         const moved = await withLoading('Moving to today...', async () => {
           const saved = await storage.set(`event:${live.id}`, { ...live, time: today });
@@ -585,9 +619,12 @@ export function useExecutionActions({
           return true;
         });
         if (!moved) return;
+        priorEventDate = String(live.time).slice(0, 10);
       }
-      return activate(live.id);
+      return activate(live.id, { priorEventDate });
     }
+    // A new event un-parks a Background intention (088); recorded for Delete Execution.
+    const priorIntentStatus = CLOSE_REASON_SAVED && intent.status === "background" ? { priorIntentStatus: "background" } : {};
     return withLoading('Starting execution...', async () => {
       // Find linked item if any
       const linkedItem = intent.itemId
@@ -621,6 +658,7 @@ export function useExecutionActions({
           contextId: intent.contextId || null,
           collectionId: intent.collectionId,
           itemIds: [],
+          ...priorIntentStatus,
           startedAt: new Date().toISOString(),
           status: "active",
           elements: [],
@@ -664,6 +702,7 @@ export function useExecutionActions({
         intentId: intent.id,
         contextId: intent.contextId || null,
         itemIds: linkedItem ? [linkedItem.id] : [],
+        ...priorIntentStatus,
         startedAt: new Date().toISOString(),
         status: "active",
         elements: itemElements,
@@ -835,8 +874,12 @@ export function useExecutionActions({
       if (createdIntent) {
         if (!(await storage.delete(`intent:${createdIntent.id}`))) throw writeError("Removing the intention");
         setIntents((prev) => prev.filter((i) => i.id !== createdIntent.id));
-      } else if (oneTime && previousStatus && previousStatus !== "someday") {
-        const back = await storage.patch(`intent:${intentId}`, { status: previousStatus });
+      } else if (oneTime && previousStatus && (CLOSE_REASON_SAVED || previousStatus !== "someday")) {
+        // Closed -> someday is allowed inside the Undo window (Step 11's status_guard).
+        const back = await storage.patch(`intent:${intentId}`, {
+          status: previousStatus,
+          ...restoredCloseFields(intent),
+        });
         if (!back) throw writeError("Restoring the status");
         setIntents((prev) => prev.map((i) => (i.id === intentId ? back : i)));
       }

@@ -60,7 +60,7 @@ export const toolDefinitions = [
   {
     name: "get_execution_history",
     description:
-      "Get execution history with optional filters. Executions track when intents/events were carried out (e.g., when a recipe was cooked, when a task was completed).",
+      "Get execution history with optional filters. Executions track when intents/events were carried out (e.g., when a recipe was cooked, when a task was completed). Only rows with is_completion true (status closed, outcome done) are completions; outcome skipped is a date passed over and cancelled was abandoned — never report those as done or as the last time something happened.",
     inputSchema: {
       type: "object" as const,
       properties: {

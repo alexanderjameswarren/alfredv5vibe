@@ -466,6 +466,24 @@ Deploying mcp from this worktree would ship its older `index.ts` over their live
 does not start until their mcp work is in main and Alex has run `gitsync` here. Stop and tell
 Alex at that point; nothing is claimed or deployed early.
 
+**As written (2026-10-19, after gitsync to 138; not applied).** The migration is
+`supabase/migrations/_pending_restructure_p4-v9k_restructure_p4.sql` (replaces the planned
+`_phase4` name): drop `intents.is_item`; `closed_reason` on items and intents; a new
+server-only `status_written_at` (filled from `status_changed_at`, then default now());
+`status_guard` allows closed -> someday within 10 minutes by `status_written_at` and keeps an
+app-supplied `status_changed_at` no later than now(); reminders into `supabase_realtime`;
+`executions.prior_event_date` and `prior_intent_status`; `closed_reason = 'done'` on Alex's
+eight confirmed records (closed rows, and an item's closed intentions); `platform_search_items`
+returns `closed_reason`. App: `CLOSE_REASON_SAVED = true` (writes need the migration, so it
+must be applied BEFORE this code reaches main); `restoredCloseFields` for Close, Log
+Execution and Stop Undos; Close's Undo returns Someday; Start Now records the moved date or
+un-parked status and Delete Execution restores them (`restoreStartNow`); storage strips
+`is_item`, `status_written_at`, and keeps `closed_reason` out of whole-record writes. MCP:
+`get_intents` selects `closed_reason`; `get_execution_history` rows carry `is_completion`
+and its description (tool-definitions.ts) says skips are not completions. Still to do:
+the same wording in `mcp/index.ts` (held by warren_buffet_p3-q5k) and `ai-enrich/index.ts`;
+the reminders realtime subscription (Step 12).
+
 ## Bugs — causes and fixes
 - (a) `rankByActivity` (status.js) re-tiers after `sortRows`, and orders the scheduled tier by
   event date; the card's first date is "last done". Fix (as built, Step 4): `rankRows` lifts
