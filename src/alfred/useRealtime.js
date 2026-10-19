@@ -13,6 +13,9 @@ export function useRealtime({
   setEvents,
   setActiveExecutions,
   setPausedExecutions,
+  // Step 12: any reminder change (added, cancelled, fired, restored). No payload is
+  // needed: the badges come from one indexed query, re-run.
+  onReminderChange,
 }) {
   async function setupRealtimeSubscriptions(currentUser) {
     if (!currentUser) return null;
@@ -131,6 +134,25 @@ export function useRealtime({
       )
       .subscribe();
 
+    // Subscribe to reminders (in supabase_realtime since migration 139). Filtered to the
+    // user, as the inbox is: reminders are owner-only.
+    const remindersChannel = supabase
+      .channel('reminders-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'reminders',
+          filter: `user_id=eq.${currentUser.id}`
+        },
+        (payload) => {
+          console.log('[Realtime] Reminder change:', payload.eventType);
+          onReminderChange?.(payload);
+        }
+      )
+      .subscribe();
+
     // Return cleanup function
     return () => {
       console.log('[Realtime] Unsubscribing all channels');
@@ -141,6 +163,7 @@ export function useRealtime({
       intentsChannel.unsubscribe();
       eventsChannel.unsubscribe();
       executionsChannel.unsubscribe();
+      remindersChannel.unsubscribe();
     };
   }
 

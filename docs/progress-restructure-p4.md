@@ -22,9 +22,9 @@ Testing notes:
 | 9 | Skip control (+ EventCard Archive Event → Skip; audit closed-as-done readers); follow-ups: Recent executions with skips in line and Show all, Delete Execution on closed executions, Skip Undo fix, recycle bin hides skips, Undo audit | Done, tested 2026-10-19 |
 | 10 | Stop control ("Stop repeating"); follow-ups: past-due events ask, "this event" wording, one merged toast | Done, tested 2026-10-19 |
 | 10a | Close reason, front end: one Close pop-up in all six places (choice, note, events/reminders question), execution/note creation, disabled rule; follow-ups: shared toggles with icons, pop-up at the page root | Done, tested 2026-10-19 (reason and Closed on saved from Step 11) |
-| 11 | Database step (waits on warren_buffet_p2-m4t), incl. `closed_reason`, status_guard Undo exception, MCP fields, backfill list | Migration 139 numbered 2026-10-19 (db: items claimed), awaiting Alex's apply; mcp/ai-enrich deploy and the is_item drop wait on Warren |
-| 11a | Close reason, finish: write `closed_reason`, Undo back to Someday, review and apply the backfill | |
-| 12 | Reminder badges via realtime | |
+| 11 | Database step (waits on warren_buffet_p2-m4t), incl. `closed_reason`, status_guard Undo exception, MCP fields, backfill list | Migration 139 applied and checkpointed 2026-10-19 (094ab5f; CONFORMANT, 67 tables; db: claims released). Waiting: the is_item drop (pending file), the mcp and ai-enrich deploys |
+| 11a | Close reason, finish: write `closed_reason`, Undo back to Someday, review and apply the backfill | Done with Step 11 (139 and `CLOSE_REASON_SAVED`), tested 2026-10-19 |
+| 12 | Reminder badges via realtime (+ Step 11 fix: Delete Execution removes an event Start Now created) | Done, tested 2026-10-19; last-done loose end resolved |
 
 ## Steps and testing
 
@@ -93,10 +93,42 @@ carrying the trigger-written `last_completed_at` never reached the app, cause un
 Step 7 works around it by re-reading (`refreshCompletedRecords`). While wiring realtime,
 find out why that update did not arrive, and report it.
 Test: add a reminder on detail, go back, the card badge is there without reload.
+As built (2026-10-19): a `reminders-changes` channel (user-filtered) in `useRealtime`;
+any change re-runs `refreshReminderIndex` and fires `remindersChanged()`
+(`useReminderIndex.js`), which the intention page listens to (`onRemindersChanged`) to
+re-read its reminder lines. Loose end, findings: RLS is not the cause (intents_access is
+owner-or-shared, evaluable by realtime). No migration ever added intents, items, events
+or executions to `supabase_realtime` (only 139 adds reminders), and the snapshot does not
+dump publications, so whether they are in it is checked live (testing Part 1). Found and
+fixed in this project's files: four state writes rebuilt lists from a stale copy
+(`setIntents(intents.map…)`, `setEvents(events.map…)` in useIntentionActions,
+useEventActions, useExecutionActions), which overwrite a realtime update that arrived
+meanwhile; now functional updates. Not ours: `useItemActions.js:50` has the same pattern.
 
 ## Log
 - 2026-10-13 Step 1 code done. Related tests pass (intentionRows, intentions, contexts).
   `deno check` not run: the local deno cache lacks the supabase-js npm packages.
+- 2026-10-19 Step 12 complete (all four parts passed). Realtime check: intents, items,
+  events, executions and reminders are all in supabase_realtime, replica identity
+  default. LOOSE END RESOLVED: the last_completed_at update did arrive by realtime; it was
+  overwritten by the stale-copy list writes (`setIntents(intents.map…)` and the like),
+  now functional updates. Log Execution in tab 2 updated tab 1's card (last done Oct 17 ->
+  Oct 19, next Tue Oct 20) without a reload. Step 11a marked done: its work shipped in 139.
+  Still open, all waiting on others: the mcp deploy (warren_buffet_p3-q5k holds
+  mcp/index.ts), the ai-enrich redeploy, then `_pending_restructure_p4-v9k_drop_is_item.sql`.
+- 2026-10-19 Step 11 testing passed (all three parts). Fix: Delete Execution also deletes
+  an event Start Now created. No column: Start Now writes the new event's createdAt and the
+  execution's startedAt from one timestamp, and `restoreStartNow` deletes the event only
+  when the two match to the millisecond and the event is still live on that day; events
+  that existed before can never match. Then Step 12 built (see Step 12 above).
+- 2026-10-19 Step 11 applied: migration 139 run by Alex, verification matched (six new
+  columns, none unfilled, reminders in realtime, nine 'done' rows, new guard comment);
+  CONFORMANT (67 tables); checkpointed (main 094ab5f), all six db: claims released.
+  Snapshot note: main's schema-snapshot.sql content includes 139, but its header says
+  "through migration 138" — scripts/schema-snapshot.mjs labels it with the highest file in
+  the main checkout's migrations folder, read before the merge brought 139 in.
+  Still waiting: `_pending_restructure_p4-v9k_drop_is_item.sql` (after ai-enrich and mcp
+  redeploy); the mcp deploy (Warren holds mcp/index.ts) and ai-enrich deploy.
 - 2026-10-19 Step 11 follow-up, WAITING: the `intents.is_item` drop moved to its own
   migration, `_pending_restructure_p4-v9k_drop_is_item.sql`. Deployed check: mcp v155
   (2026-10-19, from warren_buffet_p3-q5k) already has Step 1's change; ai-enrich v18

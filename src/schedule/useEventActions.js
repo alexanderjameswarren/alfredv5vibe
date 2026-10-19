@@ -67,7 +67,7 @@ export function useEventActions({
       const updated = { ...event, ...updates };
       const savedEvent = await storage.set(`event:${event.id}`, updated);
       if (!savedEvent) throw writeError("The event");
-      setEvents(events.map((e) => (e.id === eventId ? savedEvent : e)));
+      setEvents((prev) => prev.map((e) => (e.id === eventId ? savedEvent : e)));
 
       // If archiving a recurring event, trigger recurrence to create next event
       let successor = null;

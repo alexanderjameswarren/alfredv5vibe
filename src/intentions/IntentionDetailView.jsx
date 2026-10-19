@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ArrowLeft, CalendarPlus, CalendarX, NotebookPen, Play, Settings } from "lucide-react";
 import CompleteNoteDialog from "../notes/CompleteNoteDialog";
 import { recordCopyText } from "../shared/copyRecord";
@@ -13,6 +13,7 @@ import ObjectIcon from "../shared/ObjectIcon";
 import DetailMeta from "../shared/DetailMeta";
 import SchedulePopover from "../shared/recurrence/SchedulePopover";
 import { IntentionReminderLines, useReminderSummary } from "../inbox/PendingReminder";
+import { onRemindersChanged } from "../reminders/useReminderIndex";
 import OriginalCapture from "../inbox/OriginalCapture";
 import IntentionCard from "./IntentionCard";
 import RecordLinks from "../shared/RecordLinks";
@@ -80,6 +81,8 @@ export default function IntentionDetailView({
     intentionIds: intention ? [intention.id] : [],
   });
   const reminders = useReminderSummary({ intentId: intention?.id || null });
+  // A reminder added, cancelled or fired elsewhere (realtime, Step 12) re-reads the lines.
+  useEffect(() => onRemindersChanged(reminders.reload), [reminders.reload]);
   const stopping = useStopRepeat({ events, onStopRepeat, onDone: () => reminders.reload() });
 
   if (!intention) return null;

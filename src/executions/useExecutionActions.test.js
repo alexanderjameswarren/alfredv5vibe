@@ -103,6 +103,20 @@ describe("Delete Execution puts back what Start Now changed (Step 11)", () => {
     expect(storage.set).not.toHaveBeenCalled();
   });
 
+  test("an event Start Now created is removed, so it reads Not scheduled again", async () => {
+    const started = run({ priorIntentStatus: "background" });
+    const made = { id: "e1", intentId: "i1", time: todayStr, createdAt: started.startedAt.replace("Z", "+00:00") };
+    await actionsFor(started, { events: [made], intents: [{ id: "i1", status: "active" }] }).closeExecution("cancelled");
+    expect(storage.delete).toHaveBeenCalledWith("event:e1");
+    expect(storage.patch).toHaveBeenCalledWith("intent:i1", { status: "background" });
+  });
+
+  test("an event that existed before Start Now is never removed", async () => {
+    const before = { id: "e1", intentId: "i1", time: todayStr, createdAt: "2026-10-01T09:00:00Z" };
+    await actionsFor(run({}), { events: [before] }).closeExecution("cancelled");
+    expect(storage.delete).not.toHaveBeenCalledWith("event:e1");
+  });
+
   test("a status Start Now un-parked goes back to Background", async () => {
     await actionsFor(run({ priorIntentStatus: "background" }), { intents: [{ id: "i1", status: "active" }] }).closeExecution("cancelled");
     expect(storage.patch).toHaveBeenCalledWith("intent:i1", { status: "background" });
@@ -117,6 +131,14 @@ describe("Delete Execution puts back what Start Now changed (Step 11)", () => {
     ).rejects.toThrow("Deleting the execution");
     expect(storage.set).not.toHaveBeenCalled();
   });
+});
+
+test("Start Now with no date: the event it makes carries the execution's startedAt as createdAt", async () => {
+  storage.set.mockImplementation(async (_, v) => v);
+  await actionsFor(null, { intents: [{ id: "i1", status: "active" }], events: [] }).startNowFromIntention("i1");
+  const event = storage.set.mock.calls.find(([k]) => k.startsWith("event:"))[1];
+  const exec = storage.set.mock.calls.find(([k]) => k.startsWith("execution:"))[1];
+  expect(event.createdAt).toBe(exec.startedAt);
 });
 
 test("Start Now on a future date records the date it moved", async () => {

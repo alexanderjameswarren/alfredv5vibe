@@ -300,7 +300,7 @@ export function useExecutionActions({
       if (event) {
         const archivedEvent = { ...event, archived: true };
         await storage.set(`event:${event.id}`, archivedEvent);
-        setEvents(events.map((e) => (e.id === event.id ? archivedEvent : e)));
+        setEvents((prev) => prev.map((e) => (e.id === event.id ? archivedEvent : e)));
       }
 
       // Handle recurrence: close a done one-off, or create next event for recurring
@@ -349,17 +349,27 @@ export function useExecutionActions({
   }
 
   /**
-   * Delete Execution puts back what Start Now changed (Step 11): the date it moved, when
-   * the event is still on the day it was moved to and that date is today or later; and
-   * a status it un-parked from Background. Stops at the first failed write.
+   * Delete Execution puts back what Start Now changed (Step 11): the event it created
+   * (deleted), or the date it moved, when the event is still on the day it was moved to
+   * and that date is today or later; and a status it un-parked from Background. Events
+   * that existed before are never removed. Stops at the first failed write.
    */
   async function restoreStartNow(execution) {
     const today = getTodayDate();
     const { priorEventDate, priorIntentStatus } = execution;
-    if (priorEventDate && priorEventDate >= today) {
-      const event = events.find((e) => e.id === execution.eventId);
-      const startedOn = execution.startedAt ? toLocalDateString(new Date(execution.startedAt)) : null;
-      if (event && !event.archived && String(event.time).slice(0, 10) === startedOn) {
+    const event = events.find((e) => e.id === execution.eventId);
+    const startedOn = execution.startedAt ? toLocalDateString(new Date(execution.startedAt)) : null;
+    const untouched = event && !event.archived && String(event.time).slice(0, 10) === startedOn;
+    // Start Now made this event when it has the execution's startedAt as its createdAt,
+    // to the millisecond (both written in one call); no scheduled event can match that.
+    const madeByStartNow =
+      untouched && event.createdAt && execution.startedAt &&
+      new Date(event.createdAt).getTime() === new Date(execution.startedAt).getTime();
+    if (madeByStartNow) {
+      if (!(await storage.delete(`event:${event.id}`))) throw writeError("Removing today's event");
+      setEvents((prev) => prev.filter((e) => e.id !== event.id));
+    } else if (priorEventDate && priorEventDate >= today) {
+      if (untouched) {
         const saved = await storage.set(`event:${event.id}`, { ...event, time: priorEventDate });
         if (!saved) throw writeError("Restoring its date");
         setEvents((prev) => prev.map((e) => (e.id === event.id ? saved : e)));
@@ -536,7 +546,9 @@ export function useExecutionActions({
       const savedIntent = await storage.set(`intent:${newIntent.id}`, newIntent);
       setIntents((prev) => [...prev, savedIntent || newIntent]);
 
-      // Create event for today
+      // Create event for today. Its createdAt is the execution's startedAt, to the
+      // millisecond: how Delete Execution knows Start Now made it (restoreStartNow).
+      const startedAt = new Date().toISOString();
       const newEvent = {
         id: uid(),
         user_id: user.id,
@@ -545,7 +557,7 @@ export function useExecutionActions({
         itemIds: [item.id],
         contextId: item.contextId || null,
         archived: false,
-        createdAt: new Date().toISOString(),
+        createdAt: startedAt,
       };
       const savedEvent = await storage.set(`event:${newEvent.id}`, newEvent);
       if (!savedEvent) throw writeError("Today's event");
@@ -579,7 +591,7 @@ export function useExecutionActions({
         intentId: newIntent.id,
         contextId: item.contextId || null,
         itemIds: [item.id],
-        startedAt: new Date().toISOString(),
+        startedAt,
         status: "active",
         elements: itemElements,
         progress: [],
@@ -632,7 +644,9 @@ export function useExecutionActions({
         : null;
       const settle = watchExecution(intent, linkedItem ? [linkedItem.id] : []);
 
-      // Create event for today
+      // Create event for today. Its createdAt is the execution's startedAt, to the
+      // millisecond: how Delete Execution knows Start Now made it (restoreStartNow).
+      const startedAt = new Date().toISOString();
       const newEvent = {
         id: uid(),
         user_id: user.id,
@@ -642,7 +656,7 @@ export function useExecutionActions({
         contextId: intent.contextId || null,
         collectionId: intent.collectionId || null,
         archived: false,
-        createdAt: new Date().toISOString(),
+        createdAt: startedAt,
       };
       const savedEvent = await storage.set(`event:${newEvent.id}`, newEvent);
       if (!savedEvent) throw writeError("Today's event");
@@ -659,7 +673,7 @@ export function useExecutionActions({
           collectionId: intent.collectionId,
           itemIds: [],
           ...priorIntentStatus,
-          startedAt: new Date().toISOString(),
+          startedAt,
           status: "active",
           elements: [],
           completedItemIds: [],
@@ -703,7 +717,7 @@ export function useExecutionActions({
         contextId: intent.contextId || null,
         itemIds: linkedItem ? [linkedItem.id] : [],
         ...priorIntentStatus,
-        startedAt: new Date().toISOString(),
+        startedAt,
         status: "active",
         elements: itemElements,
         progress: [],

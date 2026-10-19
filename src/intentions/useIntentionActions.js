@@ -179,7 +179,8 @@ export function useIntentionActions({
       const updated = intentionUpdateRow(intent, updates);
 
       const savedIntent = await storage.set(`intent:${intent.id}`, updated);
-      setIntents(intents.map((i) => (i.id === intentId ? savedIntent || updated : i)));
+      // Functional: a realtime update that landed meanwhile must not be overwritten.
+      setIntents((prev) => prev.map((i) => (i.id === intentId ? savedIntent || updated : i)));
 
       // If scheduledDate provided, create an event
       if (scheduledDate) {
@@ -194,7 +195,7 @@ export function useIntentionActions({
     return withLoading('Archiving...', async () => {
       const archivedIntent = { ...intent, archived: true };
       await storage.set(`intent:${intentId}`, archivedIntent);
-      setIntents(intents.map((i) => (i.id === intentId ? archivedIntent : i)));
+      setIntents((prev) => prev.map((i) => (i.id === intentId ? archivedIntent : i)));
 
       // Archive all related events
       const relatedEvents = events.filter((e) => e.intentId === intentId && !e.archived);
