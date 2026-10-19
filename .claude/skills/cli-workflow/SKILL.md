@@ -523,6 +523,8 @@ At the step that needs the database, not before:
    steps blocked another thread's deploy for thirteen hours, and `status` now
    warns about any held for more than an hour.
 
+`supabase/schema-snapshot.sql` is regenerated automatically by gitpush whenever a commit or merge carries a migration newer than the snapshot — main Push and Finish (same commit) and worktree Checkpoint and Finish (merge commit, regenerated in main) — and `npm run schema:snapshot` refreshes it by hand. Threads never edit it.
+
 **Why `_pending_`.** Two threads both look at `supabase/migrations/`, both see
 `083`, both write `084`. The filenames differ, so nothing conflicts and no claim
 is contested — claims coordinate paths, and this is a collision in a number.

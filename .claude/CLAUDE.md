@@ -132,6 +132,8 @@ see the SQL section below for why.
    next step: one held across steps blocked another thread's deploy for thirteen
    hours, and `status` now warns about any held for more than an hour.
 
+`supabase/schema-snapshot.sql` is regenerated automatically by gitpush whenever a commit or merge carries a migration newer than the snapshot — main Push and Finish (same commit) and worktree Checkpoint and Finish (merge commit, regenerated in main) — and `npm run schema:snapshot` refreshes it by hand. Threads never edit it.
+
 **Finishing.** Stop and ask Alex to run `gitpush` in **Finish** mode — for the
 worktree, or for `main` if the work never used one. That is what releases your
 file claims, removes the worktree and deletes the branch. Do not release them

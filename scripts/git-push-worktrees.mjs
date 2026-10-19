@@ -55,7 +55,18 @@ import {
   removeClaims,
   resolveRepo,
 } from "./lib/claims-core.mjs";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { clearMainCode, readMainCode } from "./lib/project-code.mjs";
+import {
+  SNAPSHOT_PATH,
+  commitWithSnapshot,
+  mergeBranch,
+  readSnapshotThrough,
+  snapshotDecision,
+  worktreeMergeWithSnapshot,
+} from "./lib/schema-snapshot.mjs";
 import {
   addPaths,
   ask,
@@ -112,6 +123,8 @@ const USAGE = `gitpush — bring work into main and push it.
   --release-db / --keep-db               Checkpoint: the db: claims
   --include-unclaimed all|none|<paths…>  main: changes nobody claimed
   --message, -m "..."                    the commit message
+  --dry-run                              show the plan, then stop: nothing changes
+  --pretend-migration <n>                with --dry-run: plan as if migration n were included
   --help, -h
 
   Anything not given is asked. The plan and the final yes/no are always shown —
@@ -209,9 +222,21 @@ function commitIn(w, paths, message) {
   return true;
 }
 
-/** Merge a worktree's branch into main and push. Returns false to stop. */
-function mergeAndPush(w, root) {
-  if (!gitLive(["merge", "--no-ff", w.branch, "-m", `Merge ${w.branch}`], root)) {
+/** Run npm run schema:snapshot's script in a checkout. */
+function runSnapshot(cwd) {
+  say(`\n  Regenerating ${SNAPSHOT_PATH} (needs Docker)…`);
+  const r = spawnSync(process.execPath, [path.join(cwd, "scripts", "schema-snapshot.mjs")], {
+    cwd,
+    stdio: "inherit",
+  });
+  return r.status === 0
+    ? { ok: true }
+    : { ok: false, message: "the schema snapshot failed (see above), so nothing was committed." };
+}
+
+/** Merge a worktree's branch into main and push: { merged, pushed }. */
+function mergeAndPush(w, root, includeSnapshot = false) {
+  if (!mergeBranch((args) => gitLive(args, root), w.branch, includeSnapshot)) {
     const conflicts = tryGit(["diff", "--name-only", "--diff-filter=U"], root);
     say("\n  The merge stopped.");
     if (conflicts.ok && conflicts.stdout) {
@@ -219,13 +244,57 @@ function mergeAndPush(w, root) {
       for (const f of conflicts.stdout.split(/\r?\n/)) say(`    ${f}`);
     }
     say(`  To back out:  git -C "${root}" merge --abort`);
-    return false;
+    return { merged: false, pushed: false };
   }
   if (!gitLive(["push"], root)) {
     say("\n  The push failed. The merge is in main locally but not pushed.");
-    return false;
+    return { merged: true, pushed: false };
   }
+  return { merged: true, pushed: true };
+}
+
+/** Every path a worktree's merge would bring into main: its commits plus `toCommit`. */
+function mergedPaths(w, toCommit) {
+  const r = tryGit(["diff", "--name-only", `${BASE}...HEAD`], w.path);
+  const committed = r.ok && r.stdout ? r.stdout.split(/\r?\n/) : [];
+  const pretend = OPTS["pretend-migration"];
+  const fake = pretend ? [`supabase/migrations/${pretend}_dry_run.sql`] : [];
+  return [...new Set([...committed, ...toCommit, ...fake])];
+}
+
+/** Keep main's current snapshot so a failure after regenerating can put it back. */
+function snapshotKeeper(root) {
+  const file = path.join(root, SNAPSHOT_PATH);
+  const before = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  return () => (before === null ? fs.rmSync(file, { force: true }) : fs.writeFileSync(file, before));
+}
+
+/** --dry-run stops at the plan, before the yes/no and before anything changes. */
+function dryRunStop() {
+  if (!OPTS["dry-run"]) return false;
+  say("\n--dry-run: stopping here. Nothing was committed, merged, pushed or released.");
   return true;
+}
+
+/** The plan line, and the worktree merge run with the snapshot when it is needed. */
+function snapshotPlan(w, root, toCommit) {
+  const through = readSnapshotThrough(root);
+  const decision = snapshotDecision(mergedPaths(w, toCommit), through);
+  if (decision.run) {
+    say(`Snapshot regenerate ${SNAPSHOT_PATH} in main, into the merge commit — ${decision.reason}.`);
+  }
+}
+
+function mergeWorktree(w, ctx, toCommit, commitWorktree) {
+  const result = worktreeMergeWithSnapshot(mergedPaths(w, toCommit), {
+    through: readSnapshotThrough(ctx.root),
+    runSnapshot: () => runSnapshot(ctx.root),
+    restoreSnapshot: snapshotKeeper(ctx.root),
+    commitWorktree,
+    merge: (includeSnapshot) => mergeAndPush(w, ctx.root, includeSnapshot),
+  });
+  if (result.message) say(`\n  Stopped: ${result.message} Main and ${w.owner} are unchanged.`);
+  return result.ok;
 }
 
 /**
@@ -269,6 +338,14 @@ function doMain(w, ctx, release) {
   for (const m of docs.moves) say(`Move    ${m.from} → ${m.to}  (in the same commit)`);
   for (const f of docs.missing) say(`  No ${f} here — nothing to move for it.`);
   if (release && !code) say(`  main has no project code, so there are no project docs to move.`);
+  const through = readSnapshotThrough(w.path);
+  const pretend = OPTS["pretend-migration"];
+  const snap = snapshotDecision(
+    [...staging.map((f) => f.path), ...(pretend ? [`supabase/migrations/${pretend}_dry_run.sql`] : [])],
+    through,
+  );
+  if (snap.run) say(`Snapshot regenerate ${SNAPSHOT_PATH} into the same commit — ${snap.reason}.`);
+  if (dryRunStop()) return "cancelled";
   say(
     w.ahead.hasUpstream
       ? `Push    ${w.branch} to ${w.ahead.upstream}.`
@@ -297,7 +374,15 @@ function doMain(w, ctx, release) {
   if (toCommit.length) {
     const message =
       OPTS.message ?? askMessage(readMainCode(ctx) ?? "main", release ? "finish" : "push");
-    if (!stageAndCommit(w.path, toCommit, message)) return "failed";
+    // A commit carrying a newer migration takes the regenerated snapshot with it;
+    // if the snapshot fails, nothing is committed.
+    const result = commitWithSnapshot(toCommit, {
+      through,
+      runSnapshot: () => runSnapshot(w.path),
+      commit: (paths) => stageAndCommit(w.path, paths, message),
+    });
+    if (result.message) say(`\n  Stopped: ${result.message}`);
+    if (!result.ok) return "failed";
   }
 
   if (!gitLive(["push"], w.path)) {
@@ -434,8 +519,10 @@ function doFinish(w, ctx) {
   for (const m of docs.moves) say(`Move    ${m.from} → ${m.to}  (in the same commit)`);
   for (const f of docs.missing) say(`  No ${f} here — nothing to move for it.`);
   say(`\nMerge   ${w.branch} into ${BASE}, then push.`);
+  snapshotPlan(w, ctx.root, claimedChanges.map((f) => f.path));
   say(`Release all ${w.files.length + w.db.length} claim(s) held by ${w.owner}.`);
   say(`Remove  the worktree, then delete branch ${w.branch}.`);
+  if (dryRunStop()) return "cancelled";
 
   // Windows will not delete a folder anything still has open, and in the Step 7
   // dry run that was a VS Code window sitting in the worktree. Better asked now
@@ -451,23 +538,27 @@ function doFinish(w, ctx) {
 
   if (!confirm("\nClosed? Do all of that?")) return "cancelled";
 
-  let toCommit = claimedChanges.map((f) => f.path);
-  if (docs.moves.length) {
-    try {
-      applyDocsMove(w.path, docs.moves);
-    } catch (err) {
-      say(`\n  Could not move the docs: ${err.message}`);
-      return "failed";
-    }
-    toCommit = [...new Set([...toCommit, ...docsMovePaths(docs.moves, changedFiles(w.path))])];
-    say(`\n  Moved ${docs.moves.length} doc(s) into docs/history/.`);
-  }
+  const claimedPaths = claimedChanges.map((f) => f.path);
+  const message =
+    claimedPaths.length || docs.moves.length ? OPTS.message ?? askMessage(w.owner, "finish") : null;
 
-  if (toCommit.length) {
-    const message = OPTS.message ?? askMessage(w.owner, "finish");
-    if (!commitIn(w, toCommit, message)) return "failed";
-  }
-  if (!mergeAndPush(w, ctx.root)) return "failed";
+  // The docs move is part of the worktree commit, so it runs only after the
+  // snapshot (if one is needed) has succeeded.
+  const commitWorktree = () => {
+    let toCommit = claimedPaths;
+    if (docs.moves.length) {
+      try {
+        applyDocsMove(w.path, docs.moves);
+      } catch (err) {
+        say(`\n  Could not move the docs: ${err.message}`);
+        return false;
+      }
+      toCommit = [...new Set([...toCommit, ...docsMovePaths(docs.moves, changedFiles(w.path))])];
+      say(`\n  Moved ${docs.moves.length} doc(s) into docs/history/.`);
+    }
+    return toCommit.length ? commitIn(w, toCommit, message) : true;
+  };
+  if (!mergeWorktree(w, ctx, claimedPaths, commitWorktree)) return "failed";
 
   const released = removeClaims(ctx, w.owner);
   say(`\n  Released ${released.length} claim(s): ${released.join(", ") || "none"}`);
@@ -568,6 +659,7 @@ function doCheckpoint(w, ctx) {
   heading("About to");
   say(`Commit  ${paths.length} path(s): ${paths.join(", ")}`);
   say(`Merge   ${w.branch} into ${BASE}, then push.`);
+  snapshotPlan(w, ctx.root, paths);
   say(
     `Release ${dbToRelease.length} database claim(s)${dbToRelease.length ? `: ${dbToRelease.join(", ")}` : ""}.`,
   );
@@ -576,12 +668,12 @@ function doCheckpoint(w, ctx) {
     say(`        KEEPING ${dbKept.join(", ")} — re-claim at the next step instead.`);
   }
   say(`Keep    the worktree and every file claim ${w.owner} holds.`);
+  if (dryRunStop()) return "cancelled";
 
   if (!confirm("\nDo all of that?")) return "cancelled";
 
   const message = OPTS.message ?? askMessage(w.owner, "checkpoint");
-  if (!commitIn(w, paths, message)) return "failed";
-  if (!mergeAndPush(w, ctx.root)) return "failed";
+  if (!mergeWorktree(w, ctx, paths, () => commitIn(w, paths, message))) return "failed";
 
   if (dbToRelease.length) {
     const released = removeClaims(ctx, w.owner, (item) =>
@@ -604,6 +696,8 @@ function main() {
         "release-db": { kind: "bool" },
         "keep-db": { kind: "bool" },
         "include-unclaimed": { kind: "list" },
+        "dry-run": { kind: "bool" },
+        "pretend-migration": { kind: "value" },
         message: { kind: "value", alias: "m" },
         help: { kind: "bool", alias: "h" },
       },
@@ -616,6 +710,10 @@ function main() {
     throw err;
   }
   if (args.options.help) stop(USAGE, 0);
+  const pretend = args.options["pretend-migration"];
+  if (pretend !== undefined && (!args.options["dry-run"] || !/^\d+$/.test(pretend))) {
+    stop("--pretend-migration takes a number and only works with --dry-run.\nNothing was changed.", 2);
+  }
   OPTS = args.options;
 
   const here = resolveRepo();

@@ -378,7 +378,9 @@ test("step 5: the three false blocks are allowed", () => {
 test("step 5: real writes and claims through a wrapper are still blocked", () => {
   for (const command of [
     'bash -c "echo x > docs/guard-probe-x.md"',
-    "sh -c 'rm package.json'",
+    // A fixture path no thread has a reason to claim; package.json broke this
+    // whenever main held it, because the guard rightly allows a claimed file.
+    "sh -c 'rm scripts/fixtures/guard-probe-never-claimed.json'",
     'powershell -Command "Set-Content docs/guard-probe-x.md x"',
     `node -e "require('fs').writeFileSync('docs/guard-probe-x.md','x')"`,
   ]) {

@@ -25,6 +25,7 @@
     "prestart": "node scripts/prebuild.js",
     "prebuild": "node scripts/prebuild.js",
     "inline:repair-script": "node scripts/inline-note-duplicates.js",
+    "schema:snapshot": "node scripts/schema-snapshot.mjs",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
