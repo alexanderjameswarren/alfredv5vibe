@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { getTodayDate } from "../utils/eventDates";
+import CancelButton from "../shared/CancelButton";
 
 /**
  * Change a completed execution's date (Restructure P4 Step 7): any past day, never a
@@ -46,23 +47,16 @@ export default function CompletedOnDialog({ initialDate, onSave, onCancel, today
             {error}
           </p>
         )}
-        <div className="flex flex-col gap-2 mt-4">
+        <div className="flex gap-2 mt-4">
           <button
             type="button"
             onClick={save}
             disabled={busy}
-            className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm disabled:opacity-60"
+            className="flex-1 px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm disabled:opacity-60"
           >
             Save
           </button>
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-            className="px-4 py-2 min-h-[44px] text-sm text-muted-foreground rounded hover:bg-muted"
-          >
-            Cancel
-          </button>
+          <CancelButton onClick={onCancel} disabled={busy} />
         </div>
       </div>
     </div>

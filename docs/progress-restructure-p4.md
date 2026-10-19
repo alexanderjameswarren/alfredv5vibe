@@ -3,6 +3,12 @@
 Spec: `docs/technical-spec-restructure-p4.md`. Owner: `restructure_p4-v9k`.
 Test every step in desktop Chrome's mobile view against the local dev server.
 
+Testing notes:
+- Each part: what it tests and why, "Set up", then "Testing", numbered continuously, one app
+  action per step with its expected result. Reuse the named test records.
+- Never put Undo in a separate step. The toast disappears while Alex reads the next step, so
+  Undo goes in the SAME step as the action ("tap Log, then tap Undo on the message straight away").
+
 | # | Step | Status |
 |---|---|---|
 | 1 | is_item out of the code; MCP select, types, recurring_only | Done, checkpointed c018a23 |
@@ -11,8 +17,8 @@ Test every step in desktop Chrome's mobile view against the local dev server.
 | 4 | Intentions list: merged rows + bug (a); follow-ups (In progress section, context edit page, archive buttons, duplicate run card) | Done, checkpointed 59a700b |
 | 5 | Recurrence in plain words; follow-ups: four-line rows, Related Intentions close, name clamp, one-line line 2 | Done, checkpointed e8a7b0c |
 | 6 | Next-date function + `triggerRecurrence` takes a date (+ item detail duplicate fix, no "next" in repeat lines, repeat-dialog number boxes) | Done, checkpointed 858e4f5 |
-| 7 | Completion dialog: next-date field, Completed on; no past event dates; edit a completed date | Done, tested 2026-10-17 (last edit awaiting its short test); awaiting Checkpoint |
-| 8 | Done control | |
+| 7 | Completion dialog: next-date field, Completed on; no past event dates; edit a completed date | Done, checkpointed d3bbf2d |
+| 8 | Log Execution (was Done/Complete) + header fix; follow-ups: rule A, one-time intentions and items, ActionBar, CopyButton, hidden while open, one Cancel, no repeated tooltips | Done, tested 2026-10-19 |
 | 9 | Skip control (+ EventCard Archive Event → Skip; audit closed-as-done readers) | |
 | 10 | Stop control | |
 | 10a | Close reason, front end: one Close pop-up in all six places (choice, note, events/reminders question), execution/note creation, disabled rule | |
@@ -82,11 +88,46 @@ on intents writes (approved, claimed 2026-10-13).
 Test: SQL verification; skipped line visible; reload the app after the drop.
 
 **12. Reminder badges.** `useRealtime` subscribes to reminders and refreshes the index.
+Loose end to settle here (from Step 7): after a completion, the intents realtime UPDATE
+carrying the trigger-written `last_completed_at` never reached the app, cause unknown;
+Step 7 works around it by re-reading (`refreshCompletedRecords`). While wiring realtime,
+find out why that update did not arrive, and report it.
 Test: add a reminder on detail, go back, the card badge is there without reload.
 
 ## Log
 - 2026-10-13 Step 1 code done. Related tests pass (intentionRows, intentions, contexts).
   `deno check` not run: the local deno cache lacks the supabase-js npm packages.
+- 2026-10-19 Step 8 complete (all four follow-up parts passed). Last fixes: one `CancelButton`
+  (X icon, light neutral, beside the main button) in Log execution, Complete, Completed on,
+  Schedule/Reschedule, the close question, the repeat dialogs and Clone; no tooltip where the
+  reason line shows (Start Now, Schedule/Reschedule on both detail pages, EventCard date);
+  "Pause or delete it" (and "Finish or delete", "Complete or delete" in the two older
+  reasons); the intention page uses `InProgressSection` ("In progress (1)").
+  Known limit (Step 11): an item that was Someday stays Active after Undo.
+- 2026-10-18 Step 8 follow-ups 2: "Log Execution" replaces Complete on intention and item
+  pages (pop-up "Log execution", button "Log", toast "Logged an execution on …"; icon
+  NotebookPen; `logAction`); Log Execution and Skip are hidden while an execution is open;
+  the record table is in the spec and matches the code; Recent completions reloads at once
+  (`completionsChanged`, new RecentCompletions.test.jsx). Checked: "p4 interval test"'s two
+  "Friday, October 16" entries are two real done executions (no skipped one listed; the
+  list's function only returns done).
+- 2026-10-17 Step 8 follow-ups (spec "Step 8 follow-ups"): rule A for fixed schedules;
+  Next shown for someday repeats; Complete on every non-closed intention (one-time ones
+  close) and on items (creates an intention as Start Now does when there is none); Skip only
+  on a repeating intention with a live date; shared ActionBar (fit to width, ⋯ for the rest)
+  on intention and item detail; shared CopyButton (icon after the title on intention, item
+  and inbox detail; labelled on the inbox task card), old Copy buttons removed. New:
+  ActionBar.jsx/.test, CopyButton.jsx/.test; InboxListCard.jsx/.test claimed.
+- 2026-10-17 Step 8 built. Intention detail of an ACTIVE-or-other non-closed repeating
+  intention has a brown "Complete" (the Done control, labelled with the app's word), which
+  opens the same Complete pop-up (Completed on, Next, note) and calls `markDone`: a closed
+  `done` execution on the live event (or on a new event dated that day, inserted already
+  archived), the note on it, the event archived, the next event on the chosen Next, rows
+  re-read; toast "Completed on …" with Undo (removes execution and next event, restores the
+  date). Disabled with "Finish the execution first" while an execution is open. Shared
+  `nextForCompletion` (recurrence.js) now feeds both pop-ups. Also: a completed execution's
+  header no longer shows the scheduled date. Tests in useExecutionActions.test.js,
+  IntentionDetailView.test.jsx, ExecutionDetailView.test.jsx.
 - 2026-10-17 Step 7 COMPLETE. Last additions: Change on a completed execution's date
   (`CompletedOnDialog`, `changeCompletionDate`; any past day; events untouched); no
   migration needed, the 100 trigger already keeps last_completed_at at the latest done

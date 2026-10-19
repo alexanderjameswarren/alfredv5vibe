@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import CancelButton from "../CancelButton";
 
 /**
  * A trigger button that opens a small date popover and schedules on confirm.
@@ -170,13 +171,7 @@ export default function SchedulePopover({
             >
               {confirmLabel}
             </button>
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="px-3 py-2 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg text-sm"
-            >
-              Cancel
-            </button>
+            <CancelButton onClick={() => setOpen(false)} />
           </div>
         </div>
       )}

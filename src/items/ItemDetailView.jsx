@@ -1,8 +1,13 @@
 import React, { useState } from "react";
-import { Archive, ArrowLeft, CalendarPlus, ClipboardCopy, Copy, Play, Plus, Settings } from "lucide-react";
-import { copyRecord } from "../shared/copyRecord";
+import { ArrowLeft, CalendarPlus, Copy, CopyPlus, NotebookPen, Play, Plus, Settings } from "lucide-react";
+import { recordCopyText } from "../shared/copyRecord";
 import ObjectIcon from "../shared/ObjectIcon";
-import OverflowMenu from "../shared/OverflowMenu";
+import ActionBar, { archiveAction, logAction, skipAction } from "../shared/ActionBar";
+import CopyButton from "../shared/CopyButton";
+import CancelButton from "../shared/CancelButton";
+import CompleteNoteDialog from "../notes/CompleteNoteDialog";
+import { getRecurrenceConfig, nextForCompletion } from "../utils/recurrence";
+import { describeRepeat } from "../utils/recurrenceDisplay";
 import { ACTION_BUTTON } from "../shared/actionButton";
 import DetailMeta from "../shared/DetailMeta";
 import RecordLinks from "../shared/RecordLinks";
@@ -66,6 +71,8 @@ export default function ItemDetailView({
   onStartNowIntention,
   // Related Intentions rows close (Restructure P4); Archive is on intention detail.
   onCloseRecords,
+  // Step 8: (itemId, { note, nextDate, completedOn }) => Promise<boolean>.
+  onCompleteItem,
   onViewItem,
   onViewIntentionDetail,
   onViewContextDetail,
@@ -83,6 +90,11 @@ export default function ItemDetailView({
   const [isEditing, setIsEditing] = useState(Boolean(startInEditMode));
   const [showCloneDialog, setShowCloneDialog] = useState(false);
   const [cloneName, setCloneName] = useState("");
+  const [completing, setCompleting] = useState(false);
+  const openClone = () => {
+    setCloneName(item.name + " (Copy)");
+    setShowCloneDialog(true);
+  };
   const [relatedStatus, setRelatedStatus] = useState(() => readStoredStatusFilter("item-related"));
   // One timeline: the item's own notes plus every one of its intentions', archived ones included.
   const notesIntentions = (intents || []).filter((i) => item && i.itemId === item.id);
@@ -132,6 +144,7 @@ export default function ItemDetailView({
   // One picker for every item button: an intention mid-run first (itemActionTarget).
   const target = itemActionTarget(item.id, intents, events, executions);
   const actions = recordActions(target?.intent, events, executions);
+  const targetRepeats = Boolean(target) && getRecurrenceConfig(target.intent).type !== "once";
 
   // Get context name for badge
   const contextName =
@@ -203,6 +216,10 @@ export default function ItemDetailView({
           <h2 className="flex items-start gap-2 text-xl sm:text-2xl font-bold min-w-0">
             <ObjectIcon type="item" className="w-6 h-6 text-primary" align="first-line" />
             <span className="min-w-0">{item.name}</span>
+            <CopyButton
+              getText={() => recordCopyText({ title: item.name, description: item.description, id: item.id })}
+              title="Copy for a Claude chat"
+            />
           </h2>
           {onSetStatus && <StatusMenu row={item} onChoose={(status) => onSetStatus(item.id, status)} />}
         </div>
@@ -221,86 +238,130 @@ export default function ItemDetailView({
         {/* Reminders stay on the capture the item was filed from. */}
         {item.sourceInboxId && <PendingReminder inboxId={item.sourceInboxId} />}
 
-        {/* Phones show no tooltips, so the disabled buttons' reason is spelled out. */}
+        {/* The disabled buttons' reason, as visible text (no tooltip repeats it). */}
         {(closedTitle || actions.moveBlocked) && (
           <p className="mt-2 text-sm text-muted-foreground">{closedTitle || actions.moveBlocked}</p>
         )}
 
-        {/* Record actions: Start Now / Continue (the one primary), Schedule /
-            Reschedule, Edit, ⋯ — the same rule as intention detail, applied to
-            the intention Run Now would pick. Labels at every width. The rarer
-            actions live in the menu, each with icon and label: Create
-            Intention, Clone, Add to Collection, Archive. */}
-        <div className="flex flex-wrap gap-2 mt-3">
-          {onStartNow && (
-            <button
-              onClick={() => (actions.open ? onOpenExecution?.(actions.open) : onStartNow(item.id, target?.intent.id))}
-              disabled={Boolean(closedTitle)}
-              title={closedTitle || undefined}
-              className={`${ACTION_BUTTON} bg-success hover:bg-success-hover text-white`}
-            >
-              <Play className="w-4 h-4" />
-              {actions.primaryLabel}
-            </button>
-          )}
-          {onScheduleItem && (
-            <span title={closedTitle || actions.moveBlocked || undefined}>
-              <SchedulePopover
-                label={actions.scheduleLabel}
-                icon={<CalendarPlus className="w-4 h-4" />}
-                initialDate={actions.liveDate || getTodayDate()}
-                minDate={getTodayDate()}
-                onPick={(date) => onScheduleItem(item, date, target?.intent.id)}
-                disabled={Boolean(closedTitle || actions.moveBlocked)}
-                className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
-              />
-            </span>
-          )}
-          <button
-            onClick={() => setIsEditing(true)}
-            className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
-          >
-            <Settings className="w-4 h-4" />
-            Edit
-          </button>
-          <button
-            onClick={() => copyRecord({ title: item.name, description: item.description, id: item.id }, onNotify)}
-            className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
-          >
-            <ClipboardCopy className="w-4 h-4" />
-            Copy
-          </button>
-          <OverflowMenu
-            actions={[
-              onOpenAddIntention && {
-                label: "Create Intention",
-                icon: Plus,
-                onClick: () => onOpenAddIntention(item.id),
-                disabled: Boolean(closedTitle),
-                title: closedTitle,
-              },
-              onClone && {
-                label: "Clone",
-                icon: Copy,
-                onClick: () => {
-                  setCloneName(item.name + " (Copy)");
-                  setShowCloneDialog(true);
-                },
-              },
-              onAddToCollection && { label: "Add to Collection", icon: CollectionIcon, onClick: onAddToCollection },
-              // `onUpdateItem` offers the Undo; leaves the page it was showing.
-              {
-                label: "Archive",
-                icon: Archive,
-                destructive: true,
-                onClick: () => {
-                  onUpdateItem(item.id, { archived: true });
-                  onBack();
-                },
-              },
-            ].filter(Boolean)}
+        {/* Record actions (Restructure P4), in one order: Start Now, Schedule, Skip,
+            Complete, Add to Collection, Clone, Edit, Archive, all acting on the
+            intention Start Now would pick. As many as fit are buttons; the rest go
+            into ⋯ in the same order (ActionBar), then Create Intention. */}
+        <ActionBar
+          actions={[
+            onStartNow && {
+              key: "start",
+              pinned: true,
+              menu: null,
+              button: (
+                <button
+                  onClick={() => (actions.open ? onOpenExecution?.(actions.open) : onStartNow(item.id, target?.intent.id))}
+                  disabled={Boolean(closedTitle)}
+                  className={`${ACTION_BUTTON} bg-success hover:bg-success-hover text-white`}
+                >
+                  <Play className="w-4 h-4" />
+                  {actions.primaryLabel}
+                </button>
+              ),
+            },
+            onScheduleItem && {
+              key: "schedule",
+              pinned: true,
+              menu: null,
+              button: (
+                <SchedulePopover
+                  label={actions.scheduleLabel}
+                  icon={<CalendarPlus className="w-4 h-4" />}
+                  initialDate={actions.liveDate || getTodayDate()}
+                  minDate={getTodayDate()}
+                  onPick={(date) => onScheduleItem(item, date, target?.intent.id)}
+                  disabled={Boolean(closedTitle || actions.moveBlocked)}
+                  className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
+                />
+              ),
+            },
+            // Skip: only when the picked intention repeats and has a live date.
+            // Skip and Log Execution are hidden while the picked intention has an
+            // execution in progress or paused (the page offers Continue then).
+            targetRepeats && actions.live && !actions.open && onUpdateEvent && {
+              key: "skip",
+              ...skipAction(() => onUpdateEvent(actions.live.id, { archived: true })),
+            },
+            onCompleteItem && !closedTitle && !actions.open && {
+              key: "log",
+              ...logAction(() => setCompleting(true)),
+            },
+            onAddToCollection && {
+              key: "collection",
+              menu: { label: "Add to Collection", icon: CollectionIcon, onClick: onAddToCollection },
+              button: (
+                <button onClick={onAddToCollection} className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}>
+                  <CollectionIcon className="w-4 h-4" />
+                  Add to Collection
+                </button>
+              ),
+            },
+            onClone && {
+              key: "clone",
+              menu: { label: "Clone", icon: CopyPlus, onClick: openClone },
+              button: (
+                <button onClick={openClone} className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}>
+                  <CopyPlus className="w-4 h-4" />
+                  Clone
+                </button>
+              ),
+            },
+            {
+              key: "edit",
+              menu: { label: "Edit", icon: Settings, onClick: () => setIsEditing(true) },
+              button: (
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}
+                >
+                  <Settings className="w-4 h-4" />
+                  Edit
+                </button>
+              ),
+            },
+            // `onUpdateItem` offers the Undo; leaves the page it was showing.
+            {
+              key: "archive",
+              ...archiveAction(() => {
+                onUpdateItem(item.id, { archived: true });
+                onBack();
+              }),
+            },
+          ].filter(Boolean)}
+          menuOnly={[
+            onOpenAddIntention && {
+              label: "Create Intention",
+              icon: Plus,
+              onClick: () => onOpenAddIntention(item.id),
+              disabled: Boolean(closedTitle),
+              title: closedTitle,
+            },
+          ].filter(Boolean)}
+        />
+        {completing && (
+          <CompleteNoteDialog
+            title="Log execution"
+            confirmLabel="Log"
+            confirmIcon={NotebookPen}
+            completion={{ today: getTodayDate() }}
+            next={nextForCompletion(target?.intent, {
+              eventDate: actions.live ? String(actions.live.time).slice(0, 10) : null,
+              today: getTodayDate(),
+              describe: (config, endDate, day) => describeRepeat({ config, endDate, today: day }),
+            })}
+            onCancel={() => setCompleting(false)}
+            onComplete={async (note, nextDate, completedOn) => {
+              const ok = await onCompleteItem(item.id, { note, nextDate, completedOn });
+              if (ok) setCompleting(false);
+              return ok;
+            }}
           />
-        </div>
+        )}
       </div>
 
       {/* Clone Dialog */}
@@ -322,13 +383,7 @@ export default function ItemDetailView({
                 }
               }}
             />
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setShowCloneDialog(false)}
-                className="px-4 py-2 min-h-[44px] bg-secondary hover:bg-secondary text-foreground rounded-lg"
-              >
-                Cancel
-              </button>
+            <div className="flex gap-2">
               <button
                 onClick={() => {
                   if (cloneName.trim()) {
@@ -336,10 +391,11 @@ export default function ItemDetailView({
                     onClone(item.id, cloneName.trim());
                   }
                 }}
-                className="px-4 py-2 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg"
+                className="flex-1 px-4 py-2 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg"
               >
                 Clone
               </button>
+              <CancelButton onClick={() => setShowCloneDialog(false)} />
             </div>
           </div>
         </div>

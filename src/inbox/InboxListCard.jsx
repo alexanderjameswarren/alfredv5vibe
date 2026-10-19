@@ -33,9 +33,10 @@
  * require opening a form first, which was Step 5b's reasoning and has not changed.
  */
 
-import { Calendar, Check, Copy, File, FolderOpen, Navigation2, Trash2 } from "lucide-react";
+import { Calendar, Check, File, FolderOpen, Navigation2, Trash2 } from "lucide-react";
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
-import { canProcessInOneTap, isEnriched, listTitleFor } from "../utils/inboxSuggestions";
+import { canProcessInOneTap, copyTextForTask, isEnriched, listTitleFor } from "../utils/inboxSuggestions";
+import CopyButton from "../shared/CopyButton";
 
 /** A YYYY-MM-DD date, written short ("Thu, Oct 1"). */
 function shortDate(value) {
@@ -92,13 +93,13 @@ function PreviewMark({ icon: Glyph, tone, children }) {
  * @param {Array}    contexts    To name the suggested context. Only the name is used.
  * @param {Function} onOpen      (id) => void. The whole card, minus the buttons.
  * @param {Function} onProcess   (id) => void. File it from its suggestions.
- * @param {Function} onCopy      (id) => void. Task items only.
+ * Task items copy through the shared CopyButton (no callback needed).
  * @param {Function} onDiscard   (id) => void. Archives with reason 'discarded'.
  * @param {object}   [reminder] `{ text, muted }` from reminderBadge: the soonest scheduled
  *   reminder ("7:17 AM"), or, muted, the latest sent one ("Sent 7:36 AM"). Omitted
  *   when there is neither.
  */
-export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProcess, onCopy, onDiscard, onSetStatus, reminder }) {
+export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProcess, onDiscard, onSetStatus, reminder }) {
   const enriched = isEnriched(inboxItem);
   // What the filed item and intention will start as (088). One tap flips it.
   const status = inboxItem.suggestedStatus === "active" ? "active" : "someday";
@@ -226,14 +227,13 @@ export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProc
           </button>
         )}
         {!canProcess && isTask && (
-          <button
-            onClick={stop(() => onCopy(inboxItem.id))}
+          // The shared CopyButton (Restructure P4): a check mark for a moment, no toast.
+          <CopyButton
+            size="large"
+            getText={() => copyTextForTask(inboxItem)}
             title="Copy the text, with this item's id, for a Claude session"
             className="inline-flex items-center gap-1.5 min-h-[44px] px-4 py-2 rounded-lg bg-success hover:bg-success-hover text-white text-sm transition-colors"
-          >
-            <Copy className="w-4 h-4" aria-hidden="true" />
-            Copy
-          </button>
+          />
         )}
         <button
           onClick={stop(() => onDiscard(inboxItem.id))}

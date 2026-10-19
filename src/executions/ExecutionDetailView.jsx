@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { ArrowLeft, Check, Pause, Pencil, Play, Timer, Trash2 } from "lucide-react";
 import { formatEventDate, getTodayDate, toLocalDateString } from "../utils/eventDates";
-import { statusOf } from "../utils/status";
 import ObjectIcon from "../shared/ObjectIcon";
 import {
   useNotificationChain,
@@ -14,8 +13,8 @@ import { useExecutionNotes } from "../notes/useExecutionNotes";
 import RecordLinks from "../shared/RecordLinks";
 import CompleteNoteDialog from "../notes/CompleteNoteDialog";
 import CompletedOnDialog from "./CompletedOnDialog";
-import { getRecurrenceConfig, nextOccurrence } from "../utils/recurrence";
-import { describeRepeat, repeats } from "../utils/recurrenceDisplay";
+import { nextForCompletion } from "../utils/recurrence";
+import { describeRepeat } from "../utils/recurrenceDisplay";
 import { NoteList, ARCHIVED_NOTICE } from "../notes/NoteTimeline";
 import { useRecordNotes } from "../notes/useRecordNotes";
 
@@ -169,31 +168,12 @@ export default function ExecutionDetailView({
   const today = getTodayDate();
   const completionOnComplete = { today };
 
-  // A repeating, active intention also offers its next date, by the shared rule
-  // (nextOccurrence). Only an active intention gets a successor (triggerRecurrence),
-  // so nothing is promised for one parked in background.
-  const nextOnComplete = (() => {
-    if (!intent || statusOf(intent) !== "active") return null;
-    const config = getRecurrenceConfig(intent);
-    if (!repeats(config)) return null;
-    const endDate = intent.endDate || null;
-    const recompute = (completedOn) => {
-      let date = nextOccurrence(config, {
-        eventDate: event?.time ? String(event.time).slice(0, 10) : null,
-        completedOn,
-        today,
-      });
-      if (date && date < today) date = today; // an earlier completion never suggests the past
-      return date && (!endDate || date <= endDate) ? date : null;
-    };
-    return {
-      defaultDate: recompute(today),
-      kind: describeRepeat({ config, endDate, today }),
-      today,
-      endDate,
-      recompute,
-    };
-  })();
+  // A repeating, active intention also offers its next date, by the shared rule.
+  const nextOnComplete = nextForCompletion(intent, {
+    eventDate: event?.time ? String(event.time).slice(0, 10) : null,
+    today,
+    describe: (config, endDate, day) => describeRepeat({ config, endDate, today: day }),
+  });
 
   return (
     <div>
@@ -242,7 +222,9 @@ export default function ExecutionDetailView({
             </button>
           )}
         </div>
-        {dateDisplay && (
+        {/* The scheduled date, for an open execution only: a completed one shows
+            its real date on the Completed line, which a backfill can make differ. */}
+        {dateDisplay && !closed && (
           <p className="text-sm text-muted-foreground mt-1">{dateDisplay}</p>
         )}
         {closed && (

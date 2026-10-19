@@ -83,8 +83,13 @@ has another live event (existing guards).
   (`alfred_recent_completions` returns skipped rows with their outcome — database step).
   EventCard "Archive Event" on a recurring event becomes this same Skip. Every reader that
   treats a closed execution as done is audited in the Skip step.
-- **Done** without a run inserts a closed `outcome='done'` execution on the live event (or a
-  new event dated today), archives the event, and opens the same next-date popover.
+- **Done** without an execution inserts a closed `outcome='done'` execution on the live event
+  (or a new event dated today), archives the event, and opens the same next-date popover.
+  As built (Step 8): a brown "Complete" button on intention detail for a repeating, not-closed
+  intention, opening the Complete pop-up (Completed on, Next, note); `markDone` writes the
+  execution at the Completed on date (midday), on a new event inserted already archived when
+  there is no live one; Undo removes the execution (its note cascades) and the next event
+  and restores the date. Disabled while an execution is open.
 - **Stop** sets `end_date` to today, keeps `recurrence_config` (row reads "Ended"), and ALWAYS
   moves the intention to background. If there is a future event or a pending reminder it first
   asks the single Cancel/Keep question (`StatusEventsSheet`). Scheduling again flips it back
@@ -218,6 +223,62 @@ Item rows drop the description in this layout. Line 3 wraps; the buttons are unt
 **Related Intentions** on item detail now render through RowList as intention-only rows:
 Close instead of Archive, same rules (hidden on Closed, disabled with "Finish the execution
 first" during a run, one pop-up when pending, Undo). Collection cards keep Archive (Phase 6).
+
+## Vocabulary (one verb per meaning)
+- **Start Now**: begin an execution. **Continue**: open the one in progress.
+- **Complete**: finish the execution in progress. Only on the execution page.
+- **Log Execution**: record an execution that already happened, in one step (intention and
+  item pages, and their ⋯). Pop-up "Log execution", main button "Log", toast "Logged an
+  execution on Sunday, October 18." with Undo. Brown, icon NotebookPen.
+- **Close**: the thing is done for good. **Skip**: pass over this date. **Delete
+  Execution**: remove an execution. Always "execution", never "run".
+While an execution is in progress or paused, the page shows Continue and HIDES Log
+Execution and Skip (never Continue and Log Execution together); Reschedule keeps its greyed
+state and reason.
+
+## What Log Execution writes (`recordDone`, `markDone`, `completeItem`)
+| Case | Writes |
+|---|---|
+| Item with no intention | creates the intention (as Start Now does), creates an event for the Completed on day (archived), creates the execution closed as done |
+| Intention with a live event | reuses it (archived), creates the execution closed as done |
+| Intention with no live event | creates an event for the Completed on day (archived), creates the execution closed as done |
+| Item with intentions | uses the intention Start Now would pick, then as above |
+| Then | a repeating intention gets its next event on the Next date; a one-time intention closes |
+Recent completions on the page reloads at once (`completionsChanged` in notesApi), on log,
+on Undo and on a completion-date change.
+
+## Step 8 follow-ups (as built)
+**Rule A (fixed schedules).** Count from the EARLIER of the scheduled date and Completed on,
+step along the schedule, never before today. Examples: scheduled Mon Oct 19, completed Sat
+Oct 17, daily → Sun Oct 18; scheduled Mon, completed Tue, daily → Tue; scheduled Oct 7,
+completed Oct 7 (backfill), daily → today; weekly Tuesday, scheduled Tue Oct 20, completed
+Sat Oct 17 → Tue Oct 20. A skip counts from the skipped date. Interval repeats unchanged.
+One helper: `nextOccurrence`; `nextForCompletion` offers Next for active AND someday
+intentions (completing makes someday active), not for background or closed.
+
+**Complete everywhere.** Every intention not closed has Complete (Complete pop-up: Completed
+on, Next for repeats, note). A one-time intention is closed by it (as completing an
+execution). Items have Complete too: it completes the intention Start Now would pick, or
+creates one first exactly as Start Now does; Undo also deletes an intention it created.
+`recordDone`, `markDone`, `completeItem` in `useExecutionActions`. Skip shows only when the
+(picked) intention repeats and has a live date. Complete and Skip are disabled with "Finish
+the execution first" while an execution is open.
+
+**Action rows** (`src/shared/ActionBar.jsx`, with `skipAction`, `completeAction`,
+`archiveAction`). Intention page: Start Now, Reschedule/Schedule, Skip, Complete, Edit,
+Archive. Item page: Start Now, Schedule, Skip, Complete, Add to Collection, Clone, Edit,
+Archive. As many as fit at the current width (ResizeObserver) are buttons; the rest go into
+⋯ in the same order; no ⋯ when everything fits. Start Now and Schedule are pinned (always
+buttons; Schedule is a popover and cannot live in a menu). Menu-only, after the rest:
+"Unschedule" (one-time intention with a live date) and "Create Intention" (item). Archive is
+the red outline as a button, red text in the menu. Clone's icon is CopyPlus so the Copy icon
+means only copy.
+
+**Copy** (`src/shared/CopyButton.jsx`, small and large). A faint icon after the title on
+intention and item detail; on the inbox detail page (no title) after the "Original capture"
+heading. Tapping copies what Copy copied before and turns the icon into a check mark for a
+moment; no toast. The inbox task card keeps a labelled Copy button with the same feedback.
+The old Copy buttons in the action rows are gone.
 
 ## Context edit page (Step 4 follow-up, as built)
 One context edit form, as a whole page, the way item detail's edit is: context detail's

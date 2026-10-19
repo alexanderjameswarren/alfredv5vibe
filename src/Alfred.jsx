@@ -347,6 +347,8 @@ export default function Alfred() {
     activate,
     closeExecution,
     changeCompletionDate,
+    markDone,
+    completeItem,
     cancelExecutionForEvent,
     pauseExecution,
     makeExecutionActive,
@@ -379,6 +381,7 @@ export default function Alfred() {
     watchStatus,
     setItems,
     notify,
+    offerUndoFor,
   });
   const {
     handleCapture,
@@ -1353,6 +1356,7 @@ export default function Alfred() {
             onSetStatus={setIntentionStatus}
             onSchedule={moveToPlanner}
             onStartNow={startNowFromIntention}
+            onMarkDone={markDone}
             collections={activeCollections}
             onDirtyChange={setUnsavedChanges}
           />
@@ -1422,6 +1426,7 @@ export default function Alfred() {
             onCancelExecution={cancelExecutionForEvent}
             onStartNowIntention={startNowFromIntention}
             onCloseRecords={closeRecords}
+            onCompleteItem={completeItem}
             onViewItem={viewItemDetail}
             onViewContextDetail={viewContextDetail}
             onViewIntentionDetail={(id) => viewIntentionDetail(id, "item-detail")}

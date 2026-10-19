@@ -1,8 +1,8 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, cleanup } from "@testing-library/react";
 import ExecutionDetailView, { DELETE_EXECUTION_CONFIRM } from "./ExecutionDetailView";
 import * as api from "../notes/notesApi";
-import { getTodayDate } from "../utils/eventDates";
+import { formatEventDate, getTodayDate } from "../utils/eventDates";
 import { longDate } from "../utils/recurrenceDisplay";
 
 jest.mock("../NotificationChainInline", () => ({
@@ -211,6 +211,17 @@ test("Complete is brown, Pause amber outline, Make Active teal", () => {
   renderRun("active");
   expect(screen.getByRole("button", { name: "Complete" }).className).toMatch(/bg-primary/);
   expect(screen.getByRole("button", { name: "Pause" }).className).toMatch(/border-warning bg-warning-light/);
+});
+
+test("the header's scheduled date shows on an open execution, not on a completed one", async () => {
+  renderRun("active");
+  expect(await screen.findByText(formatEventDate("2026-10-08"))).toBeTruthy();
+  cleanup();
+  renderRun("closed", {
+    execution: { id: "x", status: "closed", outcome: "done", closedAt: "2026-10-07T12:00:00Z", intentId: "i1", itemIds: [], elements: [] },
+  });
+  await screen.findByText(/Completed .* · read only/);
+  expect(screen.queryByText(formatEventDate("2026-10-08"))).toBeNull();
 });
 
 test("a completed execution's date has a Change link opening the date pop-up", async () => {

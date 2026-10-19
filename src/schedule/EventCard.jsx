@@ -57,7 +57,7 @@ export default function EventCard({
       .is('closed_at', null);
 
     if (activeExecs && activeExecs.length > 0) {
-      alert('Cannot archive: this event has an active execution. Complete or cancel it first.');
+      alert('Cannot archive: this event has an active execution. Complete or delete it first.');
       return;
     }
 
@@ -217,7 +217,6 @@ export default function EventCard({
               min={getTodayDate()}
               onChange={(e) => setScheduledDate(e.target.value)}
               disabled={runIsActive}
-              title={runIsActive ? RUN_ACTIVE_MOVE_REASON : undefined}
               className="w-full px-3 py-2 min-h-[44px] border border-border rounded disabled:opacity-50"
             />
             {runIsActive && <p className="mt-1 text-xs text-muted-foreground">{RUN_ACTIVE_MOVE_REASON}</p>}

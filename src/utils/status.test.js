@@ -80,7 +80,7 @@ test("recordActions: labels follow open execution and live event", () => {
   expect(recordActions(intent, [], [])).toMatchObject({ primaryLabel: "Start Now", scheduleLabel: "Schedule", liveDate: null });
   expect(recordActions(intent, [ev], [])).toMatchObject({ primaryLabel: "Start Now", scheduleLabel: "Reschedule", liveDate: "2026-10-12" });
   expect(recordActions(intent, [ev], [{ id: "x", intentId: "i" }]).primaryLabel).toBe("Continue");
-  expect(recordActions(intent, [ev], [{ id: "x", intentId: "i", status: "active" }]).moveBlocked).toMatch(/Pause or cancel/);
+  expect(recordActions(intent, [ev], [{ id: "x", intentId: "i", status: "active" }]).moveBlocked).toMatch(/Pause or delete/);
   expect(recordActions(intent, [ev], [{ id: "x", intentId: "i", status: "paused" }]).moveBlocked).toBeNull();
   expect(recordActions(intent, [{ ...ev, archived: true }], [{ id: "x", intentId: "j" }])).toMatchObject({ primaryLabel: "Start Now", scheduleLabel: "Schedule" });
 });

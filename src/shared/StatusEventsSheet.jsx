@@ -1,6 +1,7 @@
 import React from "react";
 import { STATUS_LABELS } from "../utils/status";
 import { formatEventDate } from "../utils/eventDates";
+import CancelButton from "./CancelButton";
 
 const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
@@ -62,17 +63,17 @@ export default function StatusEventsSheet({ status, event, eventCount, reminderC
         <h3 className="text-lg font-semibold mb-2">{title || `Move to ${STATUS_LABELS[status]}`}</h3>
         <p className="text-sm mb-4">{words.summary}</p>
         <div className="flex flex-col gap-2">
-          <button type="button" onClick={onArchive} className="px-4 py-2 min-h-[44px] text-sm bg-primary text-white rounded hover:opacity-90">
-            {words.archive}
-          </button>
+          <div className="flex gap-2">
+            <button type="button" onClick={onArchive} className="flex-1 px-4 py-2 min-h-[44px] text-sm bg-primary text-white rounded-lg hover:opacity-90">
+              {words.archive}
+            </button>
+            <CancelButton onClick={onCancel} />
+          </div>
           {!closing && (
-            <button type="button" onClick={onKeep} className="px-4 py-2 min-h-[44px] text-sm border border-border rounded hover:bg-muted">
+            <button type="button" onClick={onKeep} className="px-4 py-2 min-h-[44px] text-sm border border-border rounded-lg hover:bg-muted">
               {words.keep}
             </button>
           )}
-          <button type="button" onClick={onCancel} className="px-4 py-2 min-h-[44px] text-sm text-muted-foreground rounded hover:bg-muted">
-            Cancel
-          </button>
         </div>
       </div>
     </div>

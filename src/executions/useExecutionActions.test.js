@@ -2,6 +2,9 @@
 import { useExecutionActions, withActive, closedAtFor } from "./useExecutionActions";
 import { storage } from "../utils/storage";
 import * as chainApi from "../utils/notificationStepsApi";
+import * as notesApi from "../notes/notesApi";
+
+jest.mock("../notes/notesApi", () => ({ saveNote: jest.fn(), completionsChanged: jest.fn() }));
 
 jest.mock("../utils/storage", () => ({
   storage: { set: jest.fn(), delete: jest.fn(), patch: jest.fn(), get: jest.fn() },
@@ -124,6 +127,117 @@ test("changeCompletionDate: only a done execution's date, then the rows refresh 
   expect(await actionsFor({ ...closedRun, outcome: "skipped" }).changeCompletionDate("2026-10-07")).toBe(false);
   expect(await actionsFor({ ...closedRun, status: "active" }).changeCompletionDate("2026-10-07")).toBe(false);
   expect(storage.patch).not.toHaveBeenCalled();
+});
+
+describe("markDone: complete a repeating intention without an execution", () => {
+  const live = { id: "e1", intentId: "i1", time: "2026-10-20", archived: false, itemIds: ["it1"] };
+
+  function setup(extra = {}) {
+    let undo = null;
+    let events = [live];
+    const triggerRecurrence = jest.fn().mockResolvedValue({ id: "next" });
+    const a = actionsFor(null, {
+      intents: [{ id: "i1", itemId: "it1", contextId: "c1", status: "active", recurrenceConfig: { type: "fixed", frequency: "daily", interval: 1 } }],
+      events,
+      setEvents: (f) => { events = typeof f === "function" ? f(events) : f; },
+      triggerRecurrence,
+      offerUndoFor: (message, restore) => { undo = { message, restore }; },
+      ...extra,
+    });
+    return { a, triggerRecurrence, undo: () => undo, events: () => events };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    storage.set.mockImplementation(async (_, v) => v);
+    storage.delete.mockResolvedValue(true);
+    storage.get.mockResolvedValue(null);
+    notesApi.saveNote.mockResolvedValue({ id: "n" });
+  });
+
+  test("records a closed done execution on the live event, with the note, and makes the next event", async () => {
+    const { a, triggerRecurrence, events } = setup();
+    expect(await a.markDone("i1", { note: "felt good", nextDate: "2026-10-21", completedOn: "2026-10-15" })).toBe(true);
+    const [key, execution] = storage.set.mock.calls.find(([k]) => k.startsWith("execution:"));
+    expect(key).toMatch(/^execution:/);
+    expect(execution).toMatchObject({ eventId: "e1", intentId: "i1", status: "closed", outcome: "done" });
+    expect(execution.closedAt).toBe(new Date(2026, 9, 15, 12, 0).toISOString());
+    expect(notesApi.saveNote).toHaveBeenCalledWith(expect.objectContaining({ body: "felt good", executionId: execution.id }));
+    expect(events().find((e) => e.id === "e1").archived).toBe(true);
+    expect(triggerRecurrence).toHaveBeenCalledWith("i1", live, { nextDate: "2026-10-21" });
+  });
+
+  test("says 'Logged an execution on …' and tells Recent completions to reload, on log and on Undo", async () => {
+    const { a, undo } = setup();
+    await a.markDone("i1", { completedOn: "2026-10-15" });
+    expect(undo().message).toMatch(/^Logged an execution on Thursday, October 15/);
+    expect(notesApi.completionsChanged).toHaveBeenCalledTimes(1);
+    await undo().restore();
+    expect(notesApi.completionsChanged).toHaveBeenCalledTimes(2);
+  });
+
+  test("Undo removes the execution and the next event, and brings the date back", async () => {
+    const { a, undo, events } = setup();
+    await a.markDone("i1", { completedOn: "2026-10-15" });
+    storage.set.mockClear();
+    await undo().restore();
+    expect(storage.delete).toHaveBeenCalledWith("event:next");
+    expect(storage.delete).toHaveBeenCalledWith(expect.stringMatching(/^execution:/));
+    expect(storage.set).toHaveBeenCalledWith("event:e1", live);
+    expect(events().find((e) => e.id === "e1").archived).toBe(false);
+  });
+
+  test("with no live event it records on a new event that is already archived", async () => {
+    const { a } = setup({ events: [] });
+    await a.markDone("i1", { completedOn: "2026-10-15" });
+    const [, event] = storage.set.mock.calls.find(([k]) => k.startsWith("event:"));
+    expect(event).toMatchObject({ intentId: "i1", time: "2026-10-15", archived: true });
+  });
+
+  test("a one-time intention is closed, and Undo reopens it", async () => {
+    let intents = [{ id: "o1", status: "active", recurrenceConfig: { type: "once" } }];
+    let undo = null;
+    storage.patch.mockImplementation(async (key, fields) => ({ id: key.split(":")[1], ...fields }));
+    const triggerRecurrence = jest.fn();
+    const a = actionsFor(null, {
+      intents,
+      events: [],
+      setIntents: (f) => { intents = typeof f === "function" ? f(intents) : f; },
+      triggerRecurrence,
+      offerUndoFor: (m, restore) => { undo = restore; },
+    });
+    expect(await a.markDone("o1", { completedOn: "2026-10-15" })).toBe(true);
+    expect(storage.patch).toHaveBeenCalledWith("intent:o1", { status: "closed" });
+    expect(triggerRecurrence).not.toHaveBeenCalled();
+    await undo();
+    expect(storage.patch).toHaveBeenCalledWith("intent:o1", { status: "active" });
+  });
+
+  test("an item with no intention gets one, made as Start Now makes it; Undo deletes it", async () => {
+    let intents = [];
+    let undo = null;
+    storage.patch.mockImplementation(async (key, fields) => ({ id: key.split(":")[1], ...fields }));
+    const a = actionsFor(null, {
+      items: [{ id: "it9", name: "Tile grout", contextId: "c1" }],
+      intents,
+      events: [],
+      setIntents: (f) => { intents = typeof f === "function" ? f(intents) : f; },
+      offerUndoFor: (m, restore) => { undo = restore; },
+    });
+    expect(await a.completeItem("it9", { completedOn: "2026-10-15" })).toBe(true);
+    const [, created] = storage.set.mock.calls.find(([k]) => k.startsWith("intent:"));
+    expect(created).toMatchObject({ text: "Tile grout", itemId: "it9", recurrenceConfig: { type: "once" } });
+    expect(storage.patch).toHaveBeenCalledWith(`intent:${created.id}`, { status: "closed" });
+    await undo();
+    expect(storage.delete).toHaveBeenCalledWith(`intent:${created.id}`);
+    expect(intents.find((i) => i.id === created.id)).toBeUndefined();
+  });
+
+  test("refused while the intention has an open execution", async () => {
+    const { a } = setup({ activeExecutions: [{ id: "x", intentId: "i1", status: "active" }] });
+    expect(await a.markDone("i1", {})).toBe(false);
+    expect(storage.set).not.toHaveBeenCalled();
+  });
 });
 
 test("closedAtFor: now for today, midday for any earlier day", () => {
