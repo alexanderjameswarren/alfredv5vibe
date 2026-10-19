@@ -20,7 +20,7 @@ import { NoteList, ARCHIVED_NOTICE } from "../notes/NoteTimeline";
 import { useRecordNotes } from "../notes/useRecordNotes";
 
 export const DELETE_EXECUTION_CONFIRM =
-  "Delete this execution? Its notes and ticked steps are deleted. The scheduled date stays.";
+  "Delete this execution? Its notes and ticked steps are deleted. A date Start Now moved to today goes back.";
 export const DELETE_CLOSED_CONFIRM = "Delete this execution? It will be removed from the history.";
 
 export default function ExecutionDetailView({

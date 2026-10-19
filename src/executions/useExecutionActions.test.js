@@ -78,6 +78,58 @@ test("completing or deleting a paused run drops it from the paused list", async 
   }
 });
 
+describe("Delete Execution puts back what Start Now changed (Step 11)", () => {
+  const today = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const todayStr = ymd(today);
+  const later = ymd(new Date(today.getFullYear() + 1, 0, 5));
+  const run = (extra) => ({ id: "x", intentId: "i1", eventId: "e1", status: "active", startedAt: today.toISOString(), elements: [], ...extra });
+
+  beforeEach(() => {
+    storage.delete.mockResolvedValue(true);
+    storage.set.mockImplementation(async (_, v) => v);
+    storage.patch.mockImplementation(async (k, f) => ({ id: k.split(":")[1], ...f }));
+  });
+
+  test("the moved date goes back while the event is still on the day it was moved to", async () => {
+    await actionsFor(run({ priorEventDate: later }), { events: [{ id: "e1", intentId: "i1", time: todayStr }] }).closeExecution("cancelled");
+    expect(storage.set).toHaveBeenCalledWith("event:e1", expect.objectContaining({ time: later }));
+  });
+
+  test("not when the event has moved since, or the old date has passed", async () => {
+    await actionsFor(run({ priorEventDate: later }), { events: [{ id: "e1", intentId: "i1", time: "2099-01-01" }] }).closeExecution("cancelled");
+    await actionsFor(run({ priorEventDate: "2000-01-01" }), { events: [{ id: "e1", intentId: "i1", time: todayStr }] }).closeExecution("cancelled");
+    expect(storage.set).not.toHaveBeenCalled();
+  });
+
+  test("a status Start Now un-parked goes back to Background", async () => {
+    await actionsFor(run({ priorIntentStatus: "background" }), { intents: [{ id: "i1", status: "active" }] }).closeExecution("cancelled");
+    expect(storage.patch).toHaveBeenCalledWith("intent:i1", { status: "background" });
+  });
+
+  test("a failed delete stops before anything is restored", async () => {
+    storage.delete.mockResolvedValueOnce(false);
+    writeError.mockImplementation((what) => new Error(what));
+    const withLoading = async (_l, fn) => fn();
+    await expect(
+      actionsFor(run({ priorEventDate: later }), { withLoading, events: [{ id: "e1", intentId: "i1", time: todayStr }] }).closeExecution("cancelled"),
+    ).rejects.toThrow("Deleting the execution");
+    expect(storage.set).not.toHaveBeenCalled();
+  });
+});
+
+test("Start Now on a future date records the date it moved", async () => {
+  storage.set.mockImplementation(async (_, v) => v);
+  const future = "2099-01-05";
+  await actionsFor(null, {
+    intents: [{ id: "i1", status: "active" }],
+    events: [{ id: "e1", intentId: "i1", time: future, archived: false, itemIds: [] }],
+  }).startNowFromIntention("i1");
+  const exec = storage.set.mock.calls.find(([k]) => k.startsWith("execution:"))[1];
+  expect(exec.priorEventDate).toBe(future);
+});
+
 test("an open execution still writes", async () => {
   storage.set.mockResolvedValue({});
   await actionsFor({ ...closedRun, status: "active" }).pauseExecution();
@@ -252,10 +304,15 @@ describe("markDone: complete a repeating intention without an execution", () => 
       offerUndoFor: (m, restore) => { undo = restore; },
     });
     expect(await a.markDone("o1", { completedOn: "2026-10-15" })).toBe(true);
-    expect(storage.patch).toHaveBeenCalledWith("intent:o1", { status: "closed" });
+    // The automatic close saves reason 'done' and Closed on = the Completed on day (Step 11).
+    expect(storage.patch).toHaveBeenCalledWith("intent:o1", {
+      status: "closed",
+      closedReason: "done",
+      statusChangedAt: new Date(2026, 9, 15, 12, 0).toISOString(),
+    });
     expect(triggerRecurrence).not.toHaveBeenCalled();
     await undo();
-    expect(storage.patch).toHaveBeenCalledWith("intent:o1", { status: "active" });
+    expect(storage.patch).toHaveBeenCalledWith("intent:o1", { status: "active", closedReason: null });
   });
 
   test("an item with no intention gets one, made as Start Now makes it; Undo deletes it", async () => {
@@ -272,7 +329,7 @@ describe("markDone: complete a repeating intention without an execution", () => 
     expect(await a.completeItem("it9", { completedOn: "2026-10-15" })).toBe(true);
     const [, created] = storage.set.mock.calls.find(([k]) => k.startsWith("intent:"));
     expect(created).toMatchObject({ text: "Tile grout", itemId: "it9", recurrenceConfig: { type: "once" } });
-    expect(storage.patch).toHaveBeenCalledWith(`intent:${created.id}`, { status: "closed" });
+    expect(storage.patch).toHaveBeenCalledWith(`intent:${created.id}`, expect.objectContaining({ status: "closed", closedReason: "done" }));
     await undo();
     expect(storage.delete).toHaveBeenCalledWith(`intent:${created.id}`);
     expect(intents.find((i) => i.id === created.id)).toBeUndefined();

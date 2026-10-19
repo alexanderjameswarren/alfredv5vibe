@@ -3,7 +3,7 @@ import { uid } from "../utils/flattenElements";
 import { assertNoActiveRun } from "../utils/runGuard";
 import { getTodayDate, formatEventDate } from "../utils/eventDates";
 import { intentionUpdateRow } from "../utils/intentionRows";
-import { liveEventsFor, carriedItems, STATUS_LABELS, closeFields, CLOSE_REASON_SAVED } from "../utils/status";
+import { liveEventsFor, carriedItems, STATUS_LABELS, closeFields, restoredCloseFields, CLOSE_REASON_SAVED } from "../utils/status";
 import { closedAtFor } from "../executions/useExecutionActions";
 import { saveNote, deleteNote, completionsChanged } from "../notes/notesApi";
 import { cancelRemindersForStatus, restoreRemindersAfterStatus } from "../utils/remindersApi";
@@ -329,8 +329,9 @@ export function useIntentionActions({
       offerUndoFor("Stopped repeating. Moved to Background.", async () => {
         const back = await storage.patch(`intent:${intentId}`, {
           endDate: intent.endDate || null,
-          // Never back to someday: status_guard refuses it.
+          // Never back to someday: status_guard allows that only from closed.
           ...(previous && previous !== "someday" ? { status: previous } : {}),
+          ...(CLOSE_REASON_SAVED && previous !== "someday" && intent.statusChangedAt ? { statusChangedAt: intent.statusChangedAt } : {}),
         });
         if (!back) throw writeError("Restoring the repeat");
         setIntents((prev) => prev.map((i) => (i.id === intentId ? back : i)));
@@ -453,7 +454,8 @@ export function useIntentionActions({
       }
 
       const what = statusUndoWhat(archivedEvents.length, cancelledReminders.length);
-      const restorable = (s) => s && s !== "someday";
+      // Someday comes back too once Step 11's guard allows closed -> someday (Undo window).
+      const restorable = (s) => Boolean(s) && (CLOSE_REASON_SAVED || s !== "someday");
       const futureEvents = archivedEvents.filter((e) => String(e.time).slice(0, 10) >= today);
       const canUndo =
         before.some(({ intent, stop }) => stop || restorable(intent.status)) ||
@@ -470,19 +472,19 @@ export function useIntentionActions({
         if (createdNote) await deleteNote(createdNote.id);
         for (const { intent, stop } of before) {
           const fields = {
-            ...(intent.status && intent.status !== "someday" ? { status: intent.status } : {}),
+            ...(restorable(intent.status) ? { status: intent.status } : {}),
             ...(stop ? { endDate: intent.endDate || null } : {}),
-            ...(CLOSE_REASON_SAVED ? { closedReason: intent.closedReason ?? null, statusChangedAt: intent.statusChangedAt } : {}),
+            ...restoredCloseFields(intent),
           };
           if (!Object.keys(fields).length) continue;
           const back = await storage.patch(`intent:${intent.id}`, fields);
           if (!back) throw writeError("Restoring the intention");
           setIntents((prev) => prev.map((i) => (i.id === intent.id ? back : i)));
         }
-        if (itemBefore?.status && itemBefore.status !== "someday") {
+        if (restorable(itemBefore?.status)) {
           const back = await storage.patch(`item:${itemBefore.id}`, {
             status: itemBefore.status,
-            ...(CLOSE_REASON_SAVED ? { closedReason: itemBefore.closedReason ?? null, statusChangedAt: itemBefore.statusChangedAt } : {}),
+            ...restoredCloseFields(itemBefore),
           });
           if (!back) throw writeError("Restoring the item");
           setItems?.((prev) => prev.map((i) => (i.id === itemBefore.id ? back : i)));

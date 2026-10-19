@@ -34,7 +34,17 @@ jest.mock("../supabaseClient", () => {
 });
 
 const mock = require("../supabaseClient");
-const { storage, withoutStatus, writeError } = require("./storage");
+const { storage, withoutStatus, withoutDbOwned, writeError } = require("./storage");
+
+test("withoutDbOwned drops is_item, status_written_at and last_completed_at on intents and items", () => {
+  const row = { id: "a", is_item: true, status_written_at: "t", last_completed_at: "t", text: "x" };
+  expect(withoutDbOwned("intents", row)).toEqual({ id: "a", text: "x" });
+  expect(withoutDbOwned("items", row)).toEqual({ id: "a", text: "x" });
+});
+
+test("withoutStatus also keeps closed_reason out of a whole-record write", () => {
+  expect(withoutStatus("intents", { id: "a", closed_reason: "done" })).toEqual({ id: "a" });
+});
 
 const sent = (entry, k) => entry.find((c) => c[0] === k)?.[1];
 

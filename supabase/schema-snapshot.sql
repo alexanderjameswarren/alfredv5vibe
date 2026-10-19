@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-19 08:35, through migration 138 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-19 13:23, through migration 138 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -2757,7 +2757,7 @@ CREATE OR REPLACE FUNCTION "public"."platform_search_items"("p_context_id" "text
     AS $$
   with filtered as (
     select i.id, i.name, i.description, i.context_id, i.tags, i.is_capture_target,
-           i.created_at, i.status, i.last_completed_at
+           i.created_at, i.status, i.closed_reason, i.last_completed_at
       from items i
      where i.user_id = auth.uid()
        and i.archived = false
@@ -2793,7 +2793,7 @@ $$;
 ALTER FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[]) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[]) IS 'Alfred: get_items'' reader. Live items owned by the caller, filtered by context, search text, tags (any-of) and status (any-of) before the limit. Returns { rows, total }. Restructure P1 added status and p_status. Restructure P2: search text also matches notes on the item, its intentions and its executions; rows carry last_completed_at.';
+COMMENT ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[]) IS 'Alfred: get_items'' reader. Live items owned by the caller, filtered by context, search text, tags (any-of) and status (any-of) before the limit. Returns { rows, total }. Restructure P1 added status and p_status. Restructure P2: search text also matches notes on the item, its intentions and its executions; rows carry last_completed_at. Restructure P4: rows carry closed_reason.';
 
 
 
@@ -4067,13 +4067,28 @@ CREATE OR REPLACE FUNCTION "public"."status_guard"() RETURNS "trigger"
     AS $$
 begin
   -- Nothing returns to someday; this also defeats a stale whole-record write.
+  -- Restructure P4: except the Undo of a close, within 10 minutes of it.
   if new.status = 'someday' and old.status is distinct from 'someday' then
-    new.status := old.status;
+    if not (old.status = 'closed'
+            and old.status_written_at is not null
+            and old.status_written_at > now() - interval '10 minutes') then
+      new.status := old.status;
+    end if;
   end if;
 
   if new.status is distinct from old.status then
-    new.status_changed_at := now();
+    new.status_written_at := now();
+    -- Restructure P4: a value the app supplies with the change (Closed on, or an
+    -- Undo putting the earlier one back) is kept, if it is not in the future.
+    if new.status_changed_at is distinct from old.status_changed_at
+       and new.status_changed_at is not null
+       and new.status_changed_at <= now() then
+      null;
+    else
+      new.status_changed_at := now();
+    end if;
   else
+    new.status_written_at := old.status_written_at;
     new.status_changed_at := old.status_changed_at;
   end if;
 
@@ -4085,7 +4100,7 @@ $$;
 ALTER FUNCTION "public"."status_guard"() OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."status_guard"() IS 'Restructure P1. BEFORE UPDATE on any table with status and status_changed_at. Keeps the old status when an update would move it back to someday, stamps status_changed_at when status changes, and otherwise keeps the stored status_changed_at.';
+COMMENT ON FUNCTION "public"."status_guard"() IS 'Restructure P1, P4. BEFORE UPDATE on any table with status, status_changed_at and status_written_at (intents, items). Keeps the old status when an update would move it back to someday, except closed -> someday within 10 minutes of the close by status_written_at (Undo). On a status change, stamps status_written_at now(), keeps an app-supplied status_changed_at that is no later than now() and otherwise stamps now(); an update that does not change status keeps both stored values.';
 
 
 
@@ -7508,7 +7523,10 @@ CREATE TABLE IF NOT EXISTS "public"."executions" (
     "updated_at" timestamp with time zone DEFAULT "now"(),
     "created_at" timestamp with time zone DEFAULT "now"(),
     "started_at" timestamp with time zone,
-    "closed_at" timestamp with time zone
+    "closed_at" timestamp with time zone,
+    "prior_event_date" "date",
+    "prior_intent_status" "text",
+    CONSTRAINT "executions_prior_intent_status_check" CHECK (("prior_intent_status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text"])))
 );
 
 
@@ -7536,6 +7554,14 @@ COMMENT ON COLUMN "public"."executions"."progress" IS 'jsonb three-state step tr
 
 COMMENT ON COLUMN "public"."executions"."elements" IS 'FROZEN COPY of items.elements, captured at execution start. This is deliberate — editing
 the source item mid-session must not change the steps of a session already in flight.';
+
+
+
+COMMENT ON COLUMN "public"."executions"."prior_event_date" IS 'Restructure P4. The live event''s date before Start Now moved it to today; null when Start Now moved nothing. Delete Execution of an in-progress execution puts it back when the event is still on the day it was moved to and this date is today or later.';
+
+
+
+COMMENT ON COLUMN "public"."executions"."prior_intent_status" IS 'Restructure P4. The intention''s status before Start Now un-parked it (background); null when Start Now changed no status. Delete Execution of an in-progress execution restores it.';
 
 
 
@@ -7672,6 +7698,9 @@ CREATE TABLE IF NOT EXISTS "public"."intents" (
     "status" "text" DEFAULT 'someday'::"text" NOT NULL,
     "status_changed_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "last_completed_at" timestamp with time zone,
+    "closed_reason" "text",
+    "status_written_at" timestamp with time zone DEFAULT "now"(),
+    CONSTRAINT "intents_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
     CONSTRAINT "intents_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
 );
 
@@ -7721,11 +7750,19 @@ COMMENT ON COLUMN "public"."intents"."status" IS 'Lifecycle: someday (never live
 
 
 
-COMMENT ON COLUMN "public"."intents"."status_changed_at" IS 'When status last changed. Owned by status_guard: client writes to it are ignored. Backfill: archived rows took updated_at (the archive time), live rows the migration time.';
+COMMENT ON COLUMN "public"."intents"."status_changed_at" IS 'When status last changed. Owned by status_guard: stamped now() on a status change unless the app supplies a value no later than now() with it (Closed on; Undo). Ignored on updates that do not change status. Backfill: archived rows took updated_at, live rows the migration time.';
 
 
 
 COMMENT ON COLUMN "public"."intents"."last_completed_at" IS 'Latest completion (closed + done execution) of this intention. Owned by executions_last_completed: client writes are ignored. Recalculated on execution insert, update and delete. Restructure P2.';
+
+
+
+COMMENT ON COLUMN "public"."intents"."closed_reason" IS 'Restructure P4. Why it was closed: done (Completed) | wont_do (Won''t do). Null = unknown (closed before P4, or never recorded). Written by the app''s Close pop-up and by the automatic close of a one-time intention on completion; not cleared on reopen.';
+
+
+
+COMMENT ON COLUMN "public"."intents"."status_written_at" IS 'Restructure P4. Server time of the last status change, always now(); owned by status_guard, client writes ignored. Measures the 10-minute Undo window for closed -> someday, since status_changed_at may hold an app-supplied past date.';
 
 
 
@@ -7794,6 +7831,9 @@ CREATE TABLE IF NOT EXISTS "public"."items" (
     "status_changed_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "is_reference" boolean DEFAULT false NOT NULL,
     "last_completed_at" timestamp with time zone,
+    "closed_reason" "text",
+    "status_written_at" timestamp with time zone DEFAULT "now"(),
+    CONSTRAINT "items_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
     CONSTRAINT "items_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
 );
 
@@ -7834,7 +7874,7 @@ COMMENT ON COLUMN "public"."items"."status" IS 'Lifecycle: someday (never live, 
 
 
 
-COMMENT ON COLUMN "public"."items"."status_changed_at" IS 'When status last changed. Owned by status_guard: client writes to it are ignored. Backfill: archived rows took updated_at (the archive time), live rows the migration time.';
+COMMENT ON COLUMN "public"."items"."status_changed_at" IS 'When status last changed. Owned by status_guard: stamped now() on a status change unless the app supplies a value no later than now() with it (Closed on; Undo). Ignored on updates that do not change status. Backfill: archived rows took updated_at, live rows the migration time.';
 
 
 
@@ -7843,6 +7883,14 @@ COMMENT ON COLUMN "public"."items"."is_reference" IS 'Reference material rather 
 
 
 COMMENT ON COLUMN "public"."items"."last_completed_at" IS 'Latest completion (closed + done execution) across every execution linked to this item, through executions.item_ids or through an intention whose item_id is this item. Owned by triggers (executions_last_completed, intents_last_completed): client writes are ignored. Restructure P2.';
+
+
+
+COMMENT ON COLUMN "public"."items"."closed_reason" IS 'Restructure P4. Why it was closed: done (Completed) | wont_do (Won''t do). Null = unknown (closed before P4, or never recorded). Written by the app''s Close pop-up; not cleared on reopen.';
+
+
+
+COMMENT ON COLUMN "public"."items"."status_written_at" IS 'Restructure P4. Server time of the last status change, always now(); owned by status_guard, client writes ignored. Measures the 10-minute Undo window for closed -> someday, since status_changed_at may hold an app-supplied past date.';
 
 
 

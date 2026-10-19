@@ -182,7 +182,22 @@ describe("closeRecords: close reason", () => {
     await actions.closeRecords({ intentIds: ["rec"], label: "Run", reason: "wont_do", note: "no", pickedIntentId: "rec" });
     await undo().restore();
     expect(deleteNote).toHaveBeenCalledWith("note1");
-    expect(storage.patch).toHaveBeenLastCalledWith("intent:rec", { status: "active", endDate: null });
+    expect(storage.patch).toHaveBeenLastCalledWith("intent:rec", { status: "active", endDate: null, closedReason: null });
+  });
+
+  it("the close writes the reason and Closed on; Undo puts the earlier ones back", async () => {
+    const before = { ...rec, closedReason: null, statusChangedAt: "2026-10-01T09:00:00.000Z" };
+    const { actions, undo } = setup({ intents: [before] });
+    await actions.closeRecords({ intentIds: ["rec"], label: "Run", reason: "wont_do", closedOn: "2026-10-10", pickedIntentId: "rec" });
+    expect(storage.patch).toHaveBeenCalledWith("intent:rec", expect.objectContaining({
+      status: "closed",
+      closedReason: "wont_do",
+      statusChangedAt: new Date(2026, 9, 10, 12, 0).toISOString(),
+    }));
+    await undo().restore();
+    expect(storage.patch).toHaveBeenLastCalledWith("intent:rec", {
+      status: "active", endDate: null, closedReason: null, statusChangedAt: "2026-10-01T09:00:00.000Z",
+    });
   });
 });
 
@@ -213,7 +228,7 @@ describe("closeRecords", () => {
     expect(undo().message).toBe('Closed "Call" and archived 1 event and cancelled 1 reminder.');
   });
 
-  it("Undo restores status, end date, future events and reminders; not someday or past dates", async () => {
+  it("Undo restores status (Someday too, in the Undo window), end date, future events and reminders; not past dates", async () => {
     cancelRemindersForStatus.mockResolvedValue(["r1"]);
     const item = { id: "fan", status: "someday" };
     const { actions, undo } = setup({
@@ -228,16 +243,17 @@ describe("closeRecords", () => {
     storage.patch.mockClear();
     storage.set.mockClear();
     await undo().restore();
-    expect(storage.patch).toHaveBeenCalledWith("intent:rec", { status: "active", endDate: "2099-01-01" });
-    expect(storage.patch).not.toHaveBeenCalledWith("item:fan", expect.anything());
+    expect(storage.patch).toHaveBeenCalledWith("intent:rec", { status: "active", endDate: "2099-01-01", closedReason: null });
+    expect(storage.patch).toHaveBeenCalledWith("item:fan", { status: "someday", closedReason: null });
     expect(storage.set).toHaveBeenCalledWith("event:future", expect.objectContaining({ archived: false }));
     expect(storage.set).not.toHaveBeenCalledWith("event:past", expect.anything());
     expect(restoreRemindersAfterStatus).toHaveBeenCalledWith(["r1"]);
   });
 
-  it("offers no Undo when everything was someday and nothing was pending", async () => {
+  it("a close from Someday has an Undo now (status_guard's Undo window)", async () => {
     const { actions, undo } = setup({ intents: [{ id: "a", status: "someday", recurrenceConfig: { type: "once" } }] });
     await actions.closeRecords({ intentIds: ["a"], label: "Idea" });
-    expect(undo()).toEqual({ message: 'Closed "Idea".', restore: null });
+    await undo().restore();
+    expect(storage.patch).toHaveBeenLastCalledWith("intent:a", { status: "someday", closedReason: null });
   });
 });
