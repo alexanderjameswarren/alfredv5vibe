@@ -330,7 +330,38 @@ detail and no "Close" label. Not its own URL: a new route needs `src/viewPaths.j
 warren_buffet_p2-m4t; the page is a mode of `/contexts/detail`, as item edit is of item
 detail. "Add Context" on the Contexts list is unchanged (inline create form).
 
-## Close reason (DESIGN, not built)
+## Close reason (front end built 2026-10-19, Step 10a; writing the reason waits on Step 11)
+
+**As built (Step 10a).** `CloseDialog` (shared): Completed / Won't do (Close waits for a
+choice unless Completed is preselected), Closed on (the Complete pop-up's `DateRow`; any
+past day, never the future: "It cannot be closed in the future."), optional note, the
+`sheetWording` line when future events or reminders are pending, shared CancelButton. All
+six places go through `closeRecords` with `{ reason, note, closedOn, pickedIntentId }`:
+row Close (`useRowClose`), intention pill and edit form (`IntentionDetailView`), item
+pill and edit form (`ItemDetailView`). Defaults: `closeDefaults` (Closed on = the picked
+intention's live date when not in the future, else today; Completed preselected when the
+item or any intention being closed has `last_completed_at`). Disabled rule: Closed is a
+disabled choice in `StatusMenu` and `StatusPicker` (`blocked`) with "Finish the execution
+first" printed under it; the row Close button lost its repeating tooltip.
+- Item pill and item edit form close the item AND its open intentions, as the row Close
+  does (before, they closed only the item). Picked intention: the one Start Now would pick.
+- Until Step 11 (`CLOSE_REASON_SAVED = false` in `status.js`): a close saves the status
+  (and end date, archived events, cancelled reminders) and the Completed execution or the
+  note; the reason and Closed on are held in the pop-up and NOT saved. Closed on still
+  dates the execution a Completed close creates. `status_changed_at` is stamped now() by
+  status_guard. Turning the flag on writes `closed_reason` and `status_changed_at` on every
+  closed record, restores both on Undo, and does the same for the automatic close.
+- The execution is written after the statuses (so its insert cannot activate a someday
+  intention) and never makes a next event. Undo deletes it (or the standalone note) first,
+  then restores; it stops at the first failed write; the rows re-read last_completed_at.
+- Follow-ups: the two choices are `ToggleButton`s (`src/shared/ToggleButton.jsx`, shared
+  with the inbox's New Item / New Intention), ONE style, the inbox's: `tone` "primary"
+  (Completed, New Item) is a brown outline with brown text, filled dark brown with white
+  text when chosen; "secondary" (Won't do, New Intention) a tan outline with dark text,
+  filled light tan when chosen. Icons Check (as Complete) and Ban (unused elsewhere;
+  CircleSlash is SAM's). The pop-up is portalled to `document.body`.
+
+### Design
 Every close records why. Labels **Completed** / **Won't do**; stored in a new column
 `closed_reason` on `items` and `intents`: `'done'` | `'wont_do'` (`'done'` matches
 `executions.outcome`). Null = unknown (closed before this, or not backfilled).

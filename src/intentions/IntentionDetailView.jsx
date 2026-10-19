@@ -23,6 +23,8 @@ import OpenExecutionNotes from "../notes/OpenExecutionNotes";
 import { useRecordNotes } from "../notes/useRecordNotes";
 import StatusMenu from "../shared/StatusMenu";
 import StatusEventsSheet from "../shared/StatusEventsSheet";
+import CloseDialog from "../shared/CloseDialog";
+import { CLOSE_BLOCKED, closeDefaults, loadClosePending } from "../shared/useRowClose";
 import { liveEventsFor, closedBlockTitle, recordActions, STATUS_LABELS } from "../utils/status";
 
 export default function IntentionDetailView({
@@ -55,6 +57,8 @@ export default function IntentionDetailView({
   onSchedule,
   onStartNow,
   onSetStatus,
+  // closeRecords (close reason): Closed from the pill or the edit form goes through it.
+  onCloseRecords,
   collections = [],
   onDirtyChange,
   // Step 8: (intentId, { note, nextDate, completedOn }) => Promise<boolean>.
@@ -66,6 +70,8 @@ export default function IntentionDetailView({
   // `form` is the edit form's save riding along — and why a move was refused.
   const [pending, setPending] = useState(null);
   const [statusBlocked, setStatusBlocked] = useState(null);
+  // The Close pop-up's state: { form, defaults, future, reminderCount, loading }.
+  const [closing, setClosing] = useState(null);
   const notesState = useRecordNotes({
     target: { type: "intention", id: intention?.id },
     intentionIds: intention ? [intention.id] : [],
@@ -89,6 +95,11 @@ export default function IntentionDetailView({
       );
       return false;
     }
+    // Closed always asks, in the one Close pop-up (close reason).
+    if (status === "closed" && onCloseRecords) {
+      openClose(form);
+      return false;
+    }
     // Asked when there is a live event, pending reminders, or both (one answer for all).
     if (liveEvents.length > 0 || reminders.scheduled.length > 0) {
       setPending({ status, form });
@@ -99,6 +110,28 @@ export default function IntentionDetailView({
 
   function chooseStatus(status) {
     if (gateStatus(status)) onSetStatus(intention.id, status);
+  }
+
+  // `form`: the edit form's Save, riding along to be saved first.
+  async function openClose(form) {
+    setClosing({ form, ...closeDefaults({ intents: [intention], picked: intention, events }), loading: true });
+    const found = await loadClosePending(events, [intention]);
+    setClosing((c) => c && { ...c, ...found, loading: false });
+  }
+
+  async function confirmClose({ reason, note, closedOn }) {
+    const held = closing;
+    setClosing(null);
+    if (held.form) await onUpdateIntention(held.form.id, held.form.fields, held.form.scheduledDate);
+    await onCloseRecords({ intentIds: [intention.id], label: intention.text, reason, note, closedOn, pickedIntentId: intention.id });
+    reminders.reload();
+    if (held.form) setIsEditing(false);
+    return true;
+  }
+
+  function cancelClose() {
+    if (closing?.form && onDirtyChange) onDirtyChange(true, "this intention");
+    setClosing(null);
   }
 
   // Edit form Save: fields first, then status through its own patch.
@@ -144,6 +177,17 @@ export default function IntentionDetailView({
           onCancel={cancelSheet}
         />
       )}
+      {closing && (
+        <CloseDialog
+          title={`Close "${intention.text}"`}
+          today={closing.today}
+          defaultClosedOn={closing.defaultClosedOn}
+          defaultReason={closing.defaultReason}
+          pending={closing.loading ? null : closing}
+          onConfirm={confirmClose}
+          onCancel={cancelClose}
+        />
+      )}
     </>
   );
 
@@ -186,6 +230,7 @@ export default function IntentionDetailView({
           showScheduling={true}
           isEditing={true}
           editableStatus={Boolean(onSetStatus)}
+          closeBlocked={hasActiveExecutions ? CLOSE_BLOCKED : null}
           formNotice={statusNotices}
           onCancel={() => setIsEditing(false)}
           onArchive={onArchiveIntention}
@@ -231,7 +276,9 @@ export default function IntentionDetailView({
               title="Copy for a Claude chat"
             />
           </h2>
-          {onSetStatus && <StatusMenu row={intention} onChoose={chooseStatus} />}
+          {onSetStatus && (
+            <StatusMenu row={intention} onChoose={chooseStatus} blocked={hasActiveExecutions ? { closed: CLOSE_BLOCKED } : {}} />
+          )}
         </div>
 
         {/* Details — `intents.description`, migration 069. Step 17c.

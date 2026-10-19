@@ -21,7 +21,7 @@ Testing notes:
 | 8 | Log Execution (was Done/Complete) + header fix; follow-ups: rule A, one-time intentions and items, ActionBar, CopyButton, hidden while open, one Cancel, no repeated tooltips | Done, tested 2026-10-19 |
 | 9 | Skip control (+ EventCard Archive Event → Skip; audit closed-as-done readers); follow-ups: Recent executions with skips in line and Show all, Delete Execution on closed executions, Skip Undo fix, recycle bin hides skips, Undo audit | Done, tested 2026-10-19 |
 | 10 | Stop control | |
-| 10a | Close reason, front end: one Close pop-up in all six places (choice, note, events/reminders question), execution/note creation, disabled rule | |
+| 10a | Close reason, front end: one Close pop-up in all six places (choice, note, events/reminders question), execution/note creation, disabled rule; follow-ups: shared toggles with icons, pop-up at the page root | Done, tested 2026-10-19 (reason and Closed on saved from Step 11) |
 | 11 | Database step (waits on warren_buffet_p2-m4t), incl. `closed_reason`, status_guard Undo exception, MCP fields, backfill list | |
 | 11a | Close reason, finish: write `closed_reason`, Undo back to Someday, review and apply the backfill | |
 | 12 | Reminder badges via realtime | |
@@ -97,6 +97,23 @@ Test: add a reminder on detail, go back, the card badge is there without reload.
 ## Log
 - 2026-10-13 Step 1 code done. Related tests pass (intentionRows, intentions, contexts).
   `deno check` not run: the local deno cache lacks the supabase-js npm packages.
+- 2026-10-19 Step 10a follow-up tested (icons; Cancel keeps both edit forms). Then the
+  toggles took the inbox's style: `ToggleButton` has one style by `tone`, filled when
+  chosen; the inbox is unchanged, only the Close pop-up's toggles changed. New
+  ToggleButton.test.jsx.
+- 2026-10-19 Step 10a complete (all four parts passed; Alex confirmed: item pill and edit
+  form close the item's open intentions too; nothing preselected when nothing is done).
+  Follow-ups: Completed / Won't do use the new shared `ToggleButton` (the inbox's section
+  toggles now use it too), chosen = brown outline and text, Check and Ban icons;
+  `CloseDialog` renders at the page root (portal) so the edit form under it cannot take
+  its taps; tests for Cancel from both edit forms keeping the form and its changes.
+- 2026-10-19 Step 10a built (the prompt called it "Step 10"; the table's 10 is Stop, still
+  to do). One `CloseDialog` in all six places through `closeRecords`; Completed with none
+  done records a done execution on the picked intention dated Closed on (no next event);
+  otherwise a standalone note; Undo removes it first and stops on a failed write; Closed
+  disabled with "Finish the execution first" in the pill menu and edit-form picker. Item
+  pill and edit form now close the item's open intentions too (for Alex to confirm). The
+  reason and Closed on are held, not saved, until Step 11 (`CLOSE_REASON_SAVED`).
 - 2026-10-19 Step 9 complete (follow-up testing passed). Last follow-ups: "Show all (N older)"
   under Recent executions, the inbox "Recently archived" control (no Phase 2 view-all page
   existed; `countRecentExecutions`, reads up to 50 of each kind, the completions function's

@@ -5,7 +5,7 @@ import { getTodayDate } from "../utils/eventDates";
 import { longDate } from "../utils/recurrenceDisplay";
 import { getRecurrenceConfig } from "../utils/recurrence";
 import { itemActionTarget, isDueBy } from "../utils/runNow";
-import { carriedItems, liveEventsFor } from "../utils/status";
+import { carriedItems, closeFields, liveEventsFor } from "../utils/status";
 import {
   createNotificationSteps,
   completeNotificationStep,
@@ -306,7 +306,8 @@ export function useExecutionActions({
           // Closed, not archived: finishing is a reason to keep it. Its one
           // live event was the one just archived above.
           if (outcome === "done") {
-            const closedIntent = await storage.patch(`intent:${intent.id}`, { status: "closed" });
+            // Automatic close: reason 'done', Closed on = the completion (Step 11 writes them).
+            const closedIntent = await storage.patch(`intent:${intent.id}`, { status: "closed", ...closeFields("done", closed.closedAt) });
             if (closedIntent) setIntents((prev) => prev.map((i) => (i.id === intent.id ? closedIntent : i)));
           }
         } else {
@@ -805,7 +806,7 @@ export function useExecutionActions({
     const previousStatus = intent.status;
     const oneTime = getRecurrenceConfig(intent).type === "once";
     if (oneTime) {
-      const closedIntent = await storage.patch(`intent:${intentId}`, { status: "closed" });
+      const closedIntent = await storage.patch(`intent:${intentId}`, { status: "closed", ...closeFields("done", closedAt) });
       if (closedIntent) setIntents((prev) => prev.map((i) => (i.id === intentId ? closedIntent : i)));
     } else {
       successor = await triggerRecurrence(intentId, event, { nextDate });

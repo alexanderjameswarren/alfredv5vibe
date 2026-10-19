@@ -31,6 +31,8 @@ import OriginalCapture from "../inbox/OriginalCapture";
 import ItemCard from "./ItemCard";
 import RowList from "../shared/RowList";
 import { buildRows } from "../utils/rowModel";
+import CloseDialog from "../shared/CloseDialog";
+import { CLOSE_BLOCKED, closeBlocked, closeDefaults, closeTargets, loadClosePending } from "../shared/useRowClose";
 import InProgressSection from "../executions/InProgressSection";
 import NoteTimeline from "../notes/NoteTimeline";
 import RecentCompletions from "../notes/RecentCompletions";
@@ -91,6 +93,8 @@ export default function ItemDetailView({
   const [showCloneDialog, setShowCloneDialog] = useState(false);
   const [cloneName, setCloneName] = useState("");
   const [completing, setCompleting] = useState(false);
+  // The Close pop-up (close reason): { form, targets, picked, defaults, pending }.
+  const [closing, setClosing] = useState(null);
   const openClone = () => {
     setCloneName(item.name + " (Copy)");
     setShowCloneDialog(true);
@@ -146,6 +150,52 @@ export default function ItemDetailView({
   const actions = recordActions(target?.intent, events, executions);
   const targetRepeats = Boolean(target) && getRecurrenceConfig(target.intent).type !== "once";
 
+  // Closed from the pill or the edit form: the item and its open intentions, as the
+  // row's Close does, in the one Close pop-up. Not while any of them has an open run.
+  const itemCloseBlocked = closeBlocked({ item, intents: itemIntentions }, executions) ? CLOSE_BLOCKED : null;
+
+  async function openItemClose(form = null) {
+    const targets = closeTargets({ item, intents: itemIntentions });
+    const picked = targets.intents.find((i) => i.id === target?.intent.id) || targets.intents[0] || null;
+    setClosing({ form, targets, picked, ...closeDefaults({ item, intents: targets.intents, picked, events }), loading: true });
+    const found = await loadClosePending(events, targets.intents);
+    setClosing((c) => c && { ...c, ...found, loading: false });
+  }
+
+  async function confirmItemClose({ reason, note, closedOn }) {
+    const held = closing;
+    setClosing(null);
+    if (held.form) await onUpdateItem(held.form.id, held.form.updates);
+    await onCloseRecords({
+      item: held.targets.item || item,
+      intentIds: held.targets.intents.map((i) => i.id),
+      label: item.name,
+      reason,
+      note,
+      closedOn,
+      pickedIntentId: held.picked?.id || null,
+    });
+    if (held.form) setIsEditing(false);
+    return true;
+  }
+
+  function cancelItemClose() {
+    if (closing?.form && onDirtyChange) onDirtyChange(true, "this item");
+    setClosing(null);
+  }
+
+  const closeDialog = closing && (
+    <CloseDialog
+      title={`Close "${item.name}"`}
+      today={closing.today}
+      defaultClosedOn={closing.defaultClosedOn}
+      defaultReason={closing.defaultReason}
+      pending={closing.loading ? null : closing}
+      onConfirm={confirmItemClose}
+      onCancel={cancelItemClose}
+    />
+  );
+
   // Get context name for badge
   const contextName =
     item.contextId && contexts
@@ -169,6 +219,8 @@ export default function ItemDetailView({
           item={item}
           contexts={contexts}
           onUpdate={async (id, { status, ...updates }) => {
+            // Closed asks first; the fields are saved with the close.
+            if (status === "closed" && onCloseRecords) return openItemClose({ id, updates });
             await onUpdateItem(id, updates);
             // Status goes through its own patch, after the fields (see storage.set).
             if (status && onSetStatus) await onSetStatus(id, status);
@@ -180,6 +232,7 @@ export default function ItemDetailView({
           }}
           isEditing={true}
           editableStatus={Boolean(onSetStatus)}
+          closeBlocked={itemCloseBlocked}
           onCancel={() => setIsEditing(false)}
           allItems={items}
           onDirtyChange={onDirtyChange}
@@ -189,6 +242,7 @@ export default function ItemDetailView({
           // case the phase started from.
           stickyFooter
         />
+        {closeDialog}
       </div>
     );
   }
@@ -221,7 +275,14 @@ export default function ItemDetailView({
               title="Copy for a Claude chat"
             />
           </h2>
-          {onSetStatus && <StatusMenu row={item} onChoose={(status) => onSetStatus(item.id, status)} />}
+          {onSetStatus && (
+            <StatusMenu
+              row={item}
+              blocked={itemCloseBlocked ? { closed: itemCloseBlocked } : {}}
+              onChoose={(status) => (status === "closed" && onCloseRecords ? openItemClose() : onSetStatus(item.id, status))}
+            />
+          )}
+          {closeDialog}
         </div>
 
         {/* The execution page's link row: the context pill. */}

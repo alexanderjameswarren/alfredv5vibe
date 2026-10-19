@@ -1355,6 +1355,7 @@ export default function Alfred() {
             onCancelExecution={cancelExecutionForEvent}
             onArchiveIntention={archiveIntention}
             onSetStatus={setIntentionStatus}
+            onCloseRecords={closeRecords}
             onSchedule={moveToPlanner}
             onStartNow={startNowFromIntention}
             onMarkDone={markDone}

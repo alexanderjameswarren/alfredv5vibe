@@ -286,7 +286,12 @@ export default function ItemCard({
           {editableStatus && (
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm text-muted-foreground">Status</span>
-              <StatusPicker value={editStatus} onChange={setEditStatus} options={statusOptionsFor(statusOf(item))} />
+              <StatusPicker
+                value={editStatus}
+                onChange={setEditStatus}
+                options={statusOptionsFor(statusOf(item))}
+                blocked={closeBlocked ? { closed: closeBlocked } : {}}
+              />
             </div>
           )}
           <div>

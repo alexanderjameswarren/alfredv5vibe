@@ -136,7 +136,7 @@ export default function CompleteNoteDialog({
  * onPick(value) returns an error to show, or null when the date was taken.
  * `min` and `max` are plain "YYYY-MM-DD" dates, as a date input expects.
  */
-function DateRow({ id, label, value, today, min, max, onPick, disabled, children }) {
+export function DateRow({ id, label, value, today, min, max, onPick, disabled, children }) {
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState(null);
   return (

@@ -177,7 +177,12 @@ export default function IntentionCard({
           {editableStatus && (
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm text-muted-foreground">Status</span>
-              <StatusPicker value={editStatus} onChange={setEditStatus} options={statusOptionsFor(statusOf(intent))} />
+              <StatusPicker
+                value={editStatus}
+                onChange={setEditStatus}
+                options={statusOptionsFor(statusOf(intent))}
+                blocked={closeBlocked ? { closed: closeBlocked } : {}}
+              />
             </div>
           )}
           {formNotice}

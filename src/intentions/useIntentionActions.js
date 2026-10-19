@@ -3,7 +3,9 @@ import { uid } from "../utils/flattenElements";
 import { assertNoActiveRun } from "../utils/runGuard";
 import { getTodayDate, formatEventDate } from "../utils/eventDates";
 import { intentionUpdateRow } from "../utils/intentionRows";
-import { liveEventsFor, carriedItems, STATUS_LABELS } from "../utils/status";
+import { liveEventsFor, carriedItems, STATUS_LABELS, closeFields, CLOSE_REASON_SAVED } from "../utils/status";
+import { closedAtFor } from "../executions/useExecutionActions";
+import { saveNote, deleteNote, completionsChanged } from "../notes/notesApi";
 import { cancelRemindersForStatus, restoreRemindersAfterStatus } from "../utils/remindersApi";
 import { getRecurrenceConfig } from "../utils/recurrence";
 
@@ -289,21 +291,35 @@ export function useIntentionActions({
   // and scheduled reminders cancelled; a recurring intention also gets end_date
   // today, as Stop does. Undo restores statuses (not someday, which status_guard
   // refuses), end dates, events dated today or later, and reminders still ahead.
-  async function closeRecords({ item = null, intentIds = [], label }) {
+  //
+  // Close reason (P4, every one of the six places comes here through CloseDialog):
+  // `reason` 'done' | 'wont_do', `note`, `closedOn` ("YYYY-MM-DD"), and `pickedIntentId`,
+  // the one intention a Completed close may record an execution on. Completed with no
+  // completed execution on it yet: a closed `done` execution dated Closed on, on its
+  // live event or a new archived one, carrying the note; it never makes a next event.
+  // Otherwise the note is a standalone note (item first, else the intention). Undo
+  // deletes what was created first, then restores; it stops at the first failed write.
+  async function closeRecords({ item = null, intentIds = [], label, reason = null, note = "", closedOn = null, pickedIntentId = null }) {
     const targets = intents.filter((i) => intentIds.includes(i.id));
     const today = getTodayDate();
+    const day = closedOn || today;
+    const closedAt = closedAtFor(day);
+    const extra = closeFields(reason, closedAt);
+    const picked = targets.find((i) => i.id === pickedIntentId) || null;
+    // Captured before the close archives it: a Completed close records on this date.
+    const pickedLive = picked ? liveEventsFor(events, picked.id)[0] || null : null;
     return withLoading("Closing...", async () => {
       const before = [];
       for (const intent of targets) {
         const stop = getRecurrenceConfig(intent).type !== "once" && (!intent.endDate || intent.endDate > today);
-        const saved = await storage.patch(`intent:${intent.id}`, { status: "closed", ...(stop ? { endDate: today } : {}) });
+        const saved = await storage.patch(`intent:${intent.id}`, { status: "closed", ...extra, ...(stop ? { endDate: today } : {}) });
         if (!saved) throw new Error("Close was not saved.");
         setIntents((prev) => prev.map((i) => (i.id === intent.id ? saved : i)));
         before.push({ intent, stop });
       }
       let itemBefore = null;
       if (item && item.status !== "closed") {
-        const saved = await storage.patch(`item:${item.id}`, { status: "closed" });
+        const saved = await storage.patch(`item:${item.id}`, { status: "closed", ...extra });
         if (!saved) throw new Error("Close was not saved.");
         setItems?.((prev) => prev.map((i) => (i.id === item.id ? saved : i)));
         itemBefore = item;
@@ -327,18 +343,76 @@ export function useIntentionActions({
       }
       if (before.length) refreshReminderIndex?.();
 
+      // What the reason writes. After the status moves, so the execution's insert
+      // cannot activate a someday intention on its way to closed.
+      let createdExecution = null;
+      let createdEvent = null;
+      let createdNote = null;
+      if (reason === "done" && picked && !picked.lastCompletedAt) {
+        let event = pickedLive;
+        if (!event) {
+          createdEvent = {
+            id: uid(),
+            user_id: user.id,
+            intentId: picked.id,
+            time: day,
+            itemIds: picked.itemId ? [picked.itemId] : [],
+            contextId: picked.contextId || null,
+            collectionId: picked.collectionId || null,
+            archived: true,
+            createdAt: new Date().toISOString(),
+          };
+          if (!(await storage.set(`event:${createdEvent.id}`, createdEvent))) throw writeError("Recording the completion");
+          setEvents((prev) => [...prev, createdEvent]);
+          event = createdEvent;
+        }
+        createdExecution = {
+          id: uid(),
+          user_id: user.id,
+          eventId: event.id,
+          intentId: picked.id,
+          contextId: picked.contextId || null,
+          collectionId: picked.collectionId || null,
+          itemIds: event.itemIds || [],
+          startedAt: closedAt,
+          closedAt,
+          status: "closed",
+          outcome: "done",
+          elements: [],
+          progress: [],
+        };
+        if (!(await storage.set(`execution:${createdExecution.id}`, createdExecution))) throw writeError("Recording the completion");
+        if (note.trim()) await saveNote({ body: note, targetType: "intention", targetId: picked.id, executionId: createdExecution.id });
+      } else if (note.trim()) {
+        const target = item ? { targetType: "item", targetId: item.id } : { targetType: "intention", targetId: (picked || targets[0])?.id };
+        if (target.targetId) createdNote = await saveNote({ body: note, ...target });
+      }
+      if (createdExecution) {
+        await refreshClosed(targets, item);
+        completionsChanged();
+      }
+
       const what = statusUndoWhat(archivedEvents.length, cancelledReminders.length);
       const restorable = (s) => s && s !== "someday";
       const futureEvents = archivedEvents.filter((e) => String(e.time).slice(0, 10) >= today);
       const canUndo =
         before.some(({ intent, stop }) => stop || restorable(intent.status)) ||
-        restorable(itemBefore?.status) || futureEvents.length > 0 || cancelledReminders.length > 0;
+        restorable(itemBefore?.status) || futureEvents.length > 0 || cancelledReminders.length > 0 ||
+        Boolean(createdExecution || createdNote);
       // Nothing to put back (all were someday, which status_guard refuses): a plain notice.
       offerUndoFor(`Closed "${label}"${what}.`, canUndo ? async () => {
+        // What the close created goes first (the execution's note cascades with it).
+        if (createdExecution && !(await storage.delete(`execution:${createdExecution.id}`))) throw writeError("Removing the completion");
+        if (createdEvent) {
+          if (!(await storage.delete(`event:${createdEvent.id}`))) throw writeError("Removing the completion");
+          setEvents((prev) => prev.filter((e) => e.id !== createdEvent.id));
+        }
+        if (createdNote) await deleteNote(createdNote.id);
         for (const { intent, stop } of before) {
           const fields = {
             ...(intent.status && intent.status !== "someday" ? { status: intent.status } : {}),
             ...(stop ? { endDate: intent.endDate || null } : {}),
+            ...(CLOSE_REASON_SAVED ? { closedReason: intent.closedReason ?? null, statusChangedAt: intent.statusChangedAt } : {}),
           };
           if (!Object.keys(fields).length) continue;
           const back = await storage.patch(`intent:${intent.id}`, fields);
@@ -346,7 +420,10 @@ export function useIntentionActions({
           setIntents((prev) => prev.map((i) => (i.id === intent.id ? back : i)));
         }
         if (itemBefore?.status && itemBefore.status !== "someday") {
-          const back = await storage.patch(`item:${itemBefore.id}`, { status: itemBefore.status });
+          const back = await storage.patch(`item:${itemBefore.id}`, {
+            status: itemBefore.status,
+            ...(CLOSE_REASON_SAVED ? { closedReason: itemBefore.closedReason ?? null, statusChangedAt: itemBefore.statusChangedAt } : {}),
+          });
           if (!back) throw writeError("Restoring the item");
           setItems?.((prev) => prev.map((i) => (i.id === itemBefore.id ? back : i)));
         }
@@ -358,8 +435,25 @@ export function useIntentionActions({
           await restoreRemindersAfterStatus(cancelledReminders);
           refreshReminderIndex?.();
         }
+        // last_completed_at falls back by itself (the 100 trigger); the rows re-read it.
+        if (createdExecution) {
+          await refreshClosed(targets, item);
+          completionsChanged();
+        }
       } : null);
     });
+  }
+
+  // Re-reads the records a close touched, for last_completed_at (set by triggers).
+  async function refreshClosed(targets, item) {
+    for (const intent of targets) {
+      const fresh = await storage.get(`intent:${intent.id}`);
+      if (fresh) setIntents((prev) => prev.map((i) => (i.id === fresh.id ? fresh : i)));
+    }
+    if (item && setItems) {
+      const fresh = await storage.get(`item:${item.id}`);
+      if (fresh) setItems((prev) => prev.map((i) => (i.id === fresh.id ? fresh : i)));
+    }
   }
 
   return { moveToPlanner, scheduleFromItem, updateIntent, archiveIntention, setIntentionStatus, closeRecords };

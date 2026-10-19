@@ -206,6 +206,80 @@ test("Reschedule: disabled while the run is active, enabled once paused", () => 
   }
 });
 
+test("Closed from the pill opens the Close pop-up; disabled with the reason while an execution is open", async () => {
+  const onCloseRecords = jest.fn().mockResolvedValue(undefined);
+  const { unmount } = render(
+    <IntentionDetailView
+      intention={{ id: "i1", text: "Water plants", status: "active" }}
+      events={[]}
+      contexts={[]}
+      items={[]}
+      getIntentDisplay={(i) => i.text}
+      onSetStatus={jest.fn()}
+      onCloseRecords={onCloseRecords}
+      onBack={jest.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /^Status: Active/ }));
+  fireEvent.click(screen.getByRole("menuitemradio", { name: "Closed" }));
+  const dialog = await screen.findByRole("dialog", { name: "Close" });
+  fireEvent.click(within(dialog).getByRole("radio", { name: "Won't do" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  await waitFor(() =>
+    expect(onCloseRecords).toHaveBeenCalledWith(expect.objectContaining({ intentIds: ["i1"], reason: "wont_do", pickedIntentId: "i1" })),
+  );
+  unmount();
+
+  render(
+    <IntentionDetailView
+      intention={{ id: "i1", text: "Water plants", status: "active" }}
+      events={[]}
+      executions={[{ id: "x", intentId: "i1", status: "paused" }]}
+      contexts={[]}
+      items={[]}
+      getIntentDisplay={(i) => i.text}
+      onSetStatus={jest.fn()}
+      onCloseRecords={onCloseRecords}
+      onBack={jest.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /^Status: Active/ }));
+  const closed = screen.getByRole("menuitemradio", { name: /Closed/ });
+  expect(closed.disabled).toBe(true);
+  expect(closed.textContent).toMatch("Finish the execution first");
+  expect(closed.hasAttribute("title")).toBe(false);
+});
+
+test("edit form: Closed then Save opens Close; its Cancel leaves the form open with the changes", async () => {
+  const onCloseRecords = jest.fn();
+  const onUpdateIntention = jest.fn();
+  render(
+    <IntentionDetailView
+      intention={{ id: "i1", text: "Water plants", status: "active" }}
+      events={[]}
+      contexts={[]}
+      items={[]}
+      getIntentDisplay={(i) => i.text}
+      onSetStatus={jest.fn()}
+      onCloseRecords={onCloseRecords}
+      onUpdateIntention={onUpdateIntention}
+      onBack={jest.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByDisplayValue("Water plants"), { target: { value: "Water plants twice" } });
+  fireEvent.click(screen.getByRole("radio", { name: "Closed" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+  const dialog = await screen.findByRole("dialog", { name: "Close" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog", { name: "Close" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Save Changes" })).toBeTruthy();
+  expect(screen.getByDisplayValue("Water plants twice")).toBeTruthy();
+  expect(screen.getByRole("radio", { name: "Closed" }).getAttribute("aria-checked")).toBe("true");
+  expect(onUpdateIntention).not.toHaveBeenCalled();
+  expect(onCloseRecords).not.toHaveBeenCalled();
+});
+
 test("header: context pill and linked item are links; no Linked Item card", () => {
   const onViewContextDetail = jest.fn();
   const onViewItemDetail = jest.fn();

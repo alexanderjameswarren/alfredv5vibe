@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import useRowClose, { closeTargets, closeBlocked, CloseRowButton, CLOSE_BLOCKED } from "./useRowClose";
 import { getReminderSummary } from "../utils/remindersApi";
@@ -50,26 +50,40 @@ function Harness({ events = [], executions = [], onCloseRecords, theRow = row })
   );
 }
 
+const confirmIn = (dialog) => within(dialog).getByRole("button", { name: "Close" });
+
 describe("useRowClose", () => {
-  it("closes at once when nothing is pending", async () => {
+  it("always asks: a reason first, then it closes with reason, note, Closed on and the picked intention", async () => {
     const onCloseRecords = jest.fn();
     render(<Harness onCloseRecords={onCloseRecords} />);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText('Close "Vent fan"')).toBeInTheDocument();
+    expect(confirmIn(dialog)).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("radio", { name: "Won't do" }));
+    fireEvent.change(within(dialog).getByLabelText("Note (optional)"), { target: { value: "not needed" } });
+    fireEvent.click(confirmIn(dialog));
     await waitFor(() =>
-      expect(onCloseRecords).toHaveBeenCalledWith({ item, intentIds: ["a"], label: "Vent fan" }),
+      expect(onCloseRecords).toHaveBeenCalledWith({
+        item, intentIds: ["a"], label: "Vent fan", reason: "wont_do", note: "not needed", closedOn: today, pickedIntentId: "a",
+      }),
     );
-    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("asks one question when a live event is today or later", async () => {
-    const onCloseRecords = jest.fn();
-    render(<Harness onCloseRecords={onCloseRecords} events={[{ id: "e", intentId: "a", time: today, archived: false }]} />);
+  it("shows what closing archives when a live event is today or later", async () => {
+    render(<Harness onCloseRecords={jest.fn()} events={[{ id: "e", intentId: "a", time: today, archived: false }]} />);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText('Close "Vent fan"')).toBeInTheDocument();
-    expect(onCloseRecords).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Close and archive the date" }));
-    expect(onCloseRecords).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/Closing archives that date/)).toBeInTheDocument();
+  });
+
+  it("Closed on defaults to a past live date; Completed is preselected once one is done", async () => {
+    const past = "2026-01-05";
+    const doneBefore = { ...row, intents: [{ ...open, lastCompletedAt: "2026-01-01T12:00:00Z" }, done] };
+    render(<Harness onCloseRecords={jest.fn()} theRow={doneBefore} events={[{ id: "e", intentId: "a", time: past, archived: false }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("radio", { name: "Completed" })).toHaveAttribute("aria-checked", "true");
+    expect(within(dialog).getByText(/Closed on: .*January 5/)).toBeInTheDocument();
   });
 
   it("asks when reminders are pending, and Cancel closes nothing", async () => {
@@ -86,7 +100,9 @@ describe("useRowClose", () => {
   it("is disabled while a run is open", () => {
     render(<Harness onCloseRecords={jest.fn()} executions={[{ intentId: "a", status: "active" }]} />);
     expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Close" })).toHaveAttribute("title", CLOSE_BLOCKED);
+    // The card prints CLOSE_BLOCKED; no tooltip repeats it.
+    expect(screen.getByRole("button", { name: "Close" })).not.toHaveAttribute("title");
+    expect(CLOSE_BLOCKED).toBe("Finish the execution first");
   });
 
   it("offers no Close on a row whose chip reads Closed", () => {
@@ -103,6 +119,11 @@ describe("useRowClose", () => {
     const onCloseRecords = jest.fn();
     render(<Harness onCloseRecords={onCloseRecords} theRow={{ ...row, intents: [done] }} />);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    await waitFor(() => expect(onCloseRecords).toHaveBeenCalledWith({ item, intentIds: [], label: "Vent fan" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("radio", { name: "Completed" }));
+    fireEvent.click(confirmIn(dialog));
+    await waitFor(() =>
+      expect(onCloseRecords).toHaveBeenCalledWith(expect.objectContaining({ item, intentIds: [], reason: "done", pickedIntentId: null })),
+    );
   });
 });

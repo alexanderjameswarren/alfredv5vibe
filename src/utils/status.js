@@ -112,6 +112,17 @@ export function liveEventsFor(events, intentId) {
     .sort((a, b) => String(a.time).localeCompare(String(b.time)));
 }
 
+// Close reason (Restructure P4): false until Step 11 adds `closed_reason` to items and
+// intents and lets status_guard accept a client `status_changed_at`. While false a close
+// saves only the status; the reason and Closed on are held, not written.
+export const CLOSE_REASON_SAVED = false;
+
+/** The extra fields a close writes on each record it closes, once Step 11 is live. */
+export function closeFields(reason, closedAt) {
+  if (!CLOSE_REASON_SAVED || !reason) return {};
+  return { closedReason: reason, statusChangedAt: closedAt };
+}
+
 // A date is the plan for a day; once its run is ACTIVE, moving it is
 // incoherent. A paused run may be moved ("I'll finish it Friday").
 export const RUN_ACTIVE_MOVE_REASON = "An execution is in progress. Pause or delete it before moving the date.";
