@@ -19,6 +19,9 @@ export const DETECT_SPREAD_PERCENT = 10;
 // Help: subscription.status.overdue.
 export const OVERDUE_GRACE_DAYS = 7;
 
+// wb_burn_rate_on (Phase 3 step 5 migration), v_months. Help: overview.burn_rate, overview.true_cost.
+export const BURN_MONTHS = 3;
+
 // wb_rule_health_all (131_wb_phase2_step10_acks.sql). Help: rule_health.*.
 export const NEVER_FIRES_AFTER_DAYS = 14;
 export const NEVER_FIRES_SKIP_MONTHS = 3;

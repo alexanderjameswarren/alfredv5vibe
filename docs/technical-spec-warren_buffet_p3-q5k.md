@@ -80,7 +80,7 @@ Phase 3 answers "can we afford it?":
 | # | decision |
 |---|---|
 | A1 | Match suggestions run in one function, `wb_suggest_planned_matches(transaction_ids, planned_item_ids)`. It is called at the end of `wb_process_transactions` and by planned-item writes. No wb-sync change. (Subscription detection runs in wb-sync, not in processing; this differs on purpose.) |
-| A2 | The projection is a function, `wb_cash_projection(include_drafts, today)`. Burn rate, subscription outflows and true cost stay views. |
+| A2 | The projection is a function, `wb_cash_projection(include_drafts, today)`. Burn rate, subscription outflows and true cost stay views. Two dated helpers sit behind the views, `wb_burn_rate_on(today)` and `wb_subscription_occurrences(from, to, today)`, so the projection can be run as of any day (A23). |
 | A3 | The burn rate also excludes splits on subscription-linked charges (`wb_transactions.subscription_id` set), so subscriptions are not counted twice. |
 | A4 | The projection starts from spending_cash minus what is owed on credit cards, including any balance owed on emergency_credit. Unused credit never counts as cash. |
 | A5 | Matches carry `occurrence_on`. Stage applies to one-off planned items only; a recurring item has no stage. |
@@ -99,6 +99,13 @@ Phase 3 answers "can we afford it?":
 | A19 | Suggestions after planned-item writes come from explicit calls, not a trigger: the step 6 tools and step 8 screens call `wb_suggest_planned_matches` after they write. Processing is re-run once after seeding (step 7). |
 | A20 | Fully confirming a one-off sets its stage to `paid` automatically. Nothing ever sets it back automatically. |
 | A21 | The help does not state default numbers (the default tolerance and window). Per-item values are shown as live working instead. |
+| A22 | The six step 5 help entries (`overview.burn_rate`, `overview.spendable_cash`, `overview.free_cash`, `overview.reserve_cash`, `overview.safety_floor`, `overview.true_cost`) are written in step 5 as reserved, and unreserved in step 9 when Overview shows them. (Alex, 2026-10-17, run tag `warren_buffet_p3-q5k-s5-c4wr`.) |
+| A23 | `wb_burn_rate_on` and `wb_subscription_occurrences` are the dated helpers behind the views (see A2). |
+| A24 | An active subscription more than 7 days past its expected date counts once, on day 1 of the projection. Paused subscriptions, and prepaid terms that do not renew, never count. A charge 0–7 days late also counts on day 1, because it is imminent (confirmed by Alex, 2026-10-17, run tag `warren_buffet_p3-q5k-s5-y8kd`). |
+| A25 | Missed dates of recurring planned items are not counted on day 1. They **must** appear as unmatched in the weekly cleanup's planned-items section (step 10, "done when"). |
+| A26 | Burn subtracts only the confirmed `amount_applied` of planned matches; the rest of a mixed payment still counts. |
+| A27 | True cost uses the median burn; the mean is working. |
+| A28 | With no safety floor set, free cash uses 0 and returns `floor_missing: true`. |
 | A14 | Recurring "what if" items are wanted (Alex, 2026-10-14, run tag `warren_buffet_p3-q5k-s2-m3qd`). `wb_planned_items.is_draft boolean not null default false`, for recurring items only; a one-off draft stays stage `draft`. Drafts of either kind stay out of free cash unless the drafts toggle includes them. |
 
 ---
@@ -195,7 +202,10 @@ The rebuild reuses existing split rows by position, so their ids, project links 
 | `wb_process_transactions` | sets `project_id` from rules; calls the suggestion function | 4 |
 | `wb_review_queue`, `wb_transaction_list` | gain `planned_match`, with `needs_review` kept in step | 4 |
 | `wb_planned_occurrences(p_from, p_to, p_include_drafts)` | set-returning helper: occurrences in a date range. **Moved from step 5 to step 4**, because matching needs recurring due dates. | 4 |
+| `wb_monthly_equivalent(amount, interval_count, interval_unit)` | immutable function: the JS monthly-equivalent rule (A12) | 5 |
+| `wb_subscription_occurrences(from, to, today)` | dated helper: active subscriptions' expected charges (A23, A24) | 5 |
 | `wb_subscription_outflows` | view (decision 3) | 5 |
+| `wb_burn_rate_on(today)` | dated helper: 3 months, exclusions, median and mean (A23, A26) | 5 |
 | `wb_burn_rate` | view, with working: months used and exclusions (decision 8, A3) | 5 |
 | `wb_true_cost` | view: monthly true cost against expected monthly income (A8) | 5 |
 | `wb_cash_projection(include_drafts boolean, today date)` | invoker function, day by day (A2, A4, A7) | 5 |
@@ -229,7 +239,7 @@ Each step ends with verification and stops for Alex. Database claims are taken a
 | 2 | **Migration C.** The four tables, `wb_splits.project_id` and `wb_replace_splits` (§3.6). Rolled-back tests. CONFORMANT. | `db:table:wb_projects`, `db:table:wb_planned_items`, `db:table:wb_planned_matches`, `db:table:wb_settings`, `db:table:wb_splits`, `db:fn:wb_replace_splits` | no |
 | 3 | **Help for the Phase 2 screens.** The "?" component, `helpText.js` and its test. Entries for: the review reasons; the rule-health findings (entries only, A9); the subscription statuses and Keep watching; the monthly breakdown; Always do this. | none | Vercel on merge |
 | 4 | **Processing and suggestions.** 4a (database): `wb_rules.set_project_id`, `wb_splits.project_source`, `wb_planned_occurrences`, the suggestion and confirm functions, `planned_match` in the queue and `wb_transaction_list`, `wb_replace_splits`, and tests. 4b (app): the minimal Suggested match group (A18) and its help entry. | `db:fn:wb_process_transactions`, `db:fn:wb_suggest_planned_matches`, `db:fn:wb_confirm_planned_match`, `db:fn:wb_planned_occurrences`, `db:fn:wb_replace_splits`, `db:table:wb_rules`, `db:table:wb_splits`, `db:table:wb_planned_matches`, `db:table:wb_planned_items`, `db:table:wb_review_queue`, `db:table:wb_transaction_list` | no |
-| 5 | **Views and projection** (§3.7), with tests on invented data, including the monthly-equivalent test (A12). Help for free cash, true cost, burn rate, spendable cash, the reserve line and the floor. | `db:table:wb_subscription_outflows`, `db:fn:wb_free_cash`, `db:table:wb_burn_rate`, `db:table:wb_true_cost` | no |
+| 5 | **Views and projection** (§3.7), with tests on invented data, including the monthly-equivalent test (A12). Help for free cash, true cost, burn rate, spendable cash, the reserve line and the floor. | `db:fn:wb_monthly_equivalent`, `db:fn:wb_subscription_occurrences`, `db:table:wb_subscription_outflows`, `db:fn:wb_burn_rate_on`, `db:table:wb_burn_rate`, `db:table:wb_true_cost`, `db:fn:wb_cash_projection`, `db:fn:wb_free_cash` | no |
 | 6 | **MCP tools** (§4). Plain-sentence errors, schema-versus-handler tests, tool count. | `db:deploy` | mcp |
 | 7 | **Seeding in claude.ai.** Projects, premiums, inflows, one-offs, then the floor and horizon (Alex sets the floor). Confirm the first suggestions. | none | no |
 | 8 | **Plan tab UI.** Projects and planned items; the match card on Review; a project picker on splits. Help for the stages and the match card. | none | Vercel on merge |

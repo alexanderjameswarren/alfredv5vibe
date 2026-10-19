@@ -224,6 +224,56 @@ export const HELP = {
     todo: "Open an account to change its role.",
   },
 
+  // --- Free cash and true cost (Phase 3 step 5); reserved until Overview shows them in step 9 (A22) ---
+  "overview.burn_rate": {
+    reserved: true,
+    title: "Burn rate",
+    what: "What everyday spending costs you in a typical month.",
+    included: "Spending and fees, less refunds, in the last 3 full months. It is the middle month of the three (the median), with the average shown beside it.",
+    leftOut: "Transfers, investments and pending charges; spending on a project; the part of a payment matched to a planned item; and subscription charges, which are counted on their own.",
+    todo: "If a big one-off is pushing it up, give it a project or match it to a planned item.",
+  },
+  "overview.spendable_cash": {
+    reserved: true,
+    title: "Spendable cash",
+    what: "The money you can actually spend today.",
+    included: "The balances of your spending-cash accounts, minus what you owe on credit cards and on emergency credit.",
+    leftOut: "The reserve account, investments, and any credit you have not used, which is never counted as cash.",
+    todo: "If a balance looks old, check the sync status on Overview.",
+  },
+  "overview.free_cash": {
+    reserved: true,
+    title: "Free cash",
+    what: "How much you could spend now and still never drop below your safety floor over the coming months.",
+    included: "It starts from spendable cash. Each day it adds your planned income and takes off your planned bills (on their due dates, less anything already paid), your subscriptions, and everyday spending at the burn rate. An overdue planned bill counts on day one. Free cash is the lowest point reached, minus the safety floor.",
+    leftOut: "The reserve account; \"what if\" drafts, unless you switch them on; and income you have not added as a planned item.",
+    todo: "If it is low, look at the date of the lowest point and the bills due just before it.",
+  },
+  "overview.reserve_cash": {
+    reserved: true,
+    title: "Reserve",
+    what: "Money set aside in the reserve account.",
+    included: "The reserve account's latest balance.",
+    leftOut: "It is never counted in free cash. It is shown on its own so you can see it.",
+    todo: "Move money in or out of it deliberately. The app never assumes you will spend it.",
+  },
+  "overview.safety_floor": {
+    reserved: true,
+    title: "Safety floor",
+    what: "The cash you always want to keep, which free cash never counts as spendable.",
+    included: "The amount you set in settings.",
+    leftOut: "None of it ever counts towards free cash.",
+    todo: "Change it in settings. Until a floor is set, free cash is shown with a note that it has no floor.",
+  },
+  "overview.true_cost": {
+    reserved: true,
+    title: "Monthly true cost",
+    what: "What running the household really costs in an average month, compared with the income you expect.",
+    included: "The burn rate, plus subscriptions converted to a month (yearly ÷ 12, weekly × 52 ÷ 12), plus repeating planned bills such as insurance or property tax spread over the year the same way. Expected income is your repeating planned income, converted the same way.",
+    leftOut: "One-off planned items, drafts, and projects.",
+    todo: "If the cost is above the income, the gap is what your savings cover each month.",
+  },
+
   // --- Rule health: read in claude.ai and the weekly cleanup; no screen in any phase (A9) ---
   "rule_health.never_fires": {
     reserved: true,
