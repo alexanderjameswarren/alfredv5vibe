@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { CircleCheckBig } from "lucide-react";
-import StatusEventsSheet from "./StatusEventsSheet";
+import CloseDialog from "./CloseDialog";
 import { getReminderSummary } from "../utils/remindersApi";
 import { getTodayDate } from "../utils/eventDates";
 import { liveEventsFor, statusOf } from "../utils/status";
@@ -24,32 +24,44 @@ export const closeBlocked = hasOpenRun;
  * button; `sheet` is the one question, asked only when an intention being closed
  * has a live event dated today or later, or scheduled reminders.
  */
+/** What closing these intentions archives and cancels: future live events and scheduled reminders. */
+export async function loadClosePending(events, intents) {
+  const today = getTodayDate();
+  const future = intents
+    .flatMap((i) => liveEventsFor(events, i.id))
+    .filter((e) => String(e.time).slice(0, 10) >= today)
+    .sort((a, b) => String(a.time).localeCompare(String(b.time)));
+  let reminderCount = 0;
+  try {
+    for (const i of intents) reminderCount += (await getReminderSummary({ intentId: i.id })).scheduled.length;
+  } catch (err) {
+    console.error("[Reminders] count before close failed:", err);
+  }
+  return { future, reminderCount };
+}
+
+/**
+ * The Close pop-up's defaults (close reason): Closed on is the picked intention's live
+ * date, even a past one, else today; Completed is preselected when a completed
+ * execution already exists (a record's last_completed_at).
+ */
+export function closeDefaults({ item = null, intents = [], picked = null, events = [] }) {
+  const today = getTodayDate();
+  const live = picked ? liveEventsFor(events, picked.id)[0] : null;
+  const liveDay = live ? String(live.time).slice(0, 10) : null;
+  const done = [item, ...intents].some((r) => r?.lastCompletedAt);
+  return { today, defaultClosedOn: liveDay && liveDay <= today ? liveDay : today, defaultReason: done ? "done" : null };
+}
+
 export default function useRowClose({ events = [], executions = [], onCloseRecords }) {
   const [pending, setPending] = useState(null);
 
-  function close({ row, targets }) {
-    return onCloseRecords({
-      item: targets.item,
-      intentIds: targets.intents.map((i) => i.id),
-      label: row.name,
-    });
-  }
-
   async function request(row) {
     const targets = closeTargets(row);
-    const today = getTodayDate();
-    const future = targets.intents
-      .flatMap((i) => liveEventsFor(events, i.id))
-      .filter((e) => String(e.time).slice(0, 10) >= today)
-      .sort((a, b) => String(a.time).localeCompare(String(b.time)));
-    let reminderCount = 0;
-    try {
-      for (const i of targets.intents) reminderCount += (await getReminderSummary({ intentId: i.id })).scheduled.length;
-    } catch (err) {
-      console.error("[Reminders] count before close failed:", err);
-    }
-    if (future.length || reminderCount) setPending({ row, targets, future, reminderCount });
-    else await close({ row, targets });
+    const picked = row.intent && targets.intents.some((i) => i.id === row.intent.id) ? row.intent : targets.intents[0] || null;
+    setPending({ row, targets, picked, ...closeDefaults({ item: targets.item, intents: targets.intents, picked, events }), loading: true });
+    const found = await loadClosePending(events, targets.intents);
+    setPending((p) => p && p.row === row && { ...p, ...found, loading: false });
   }
 
   function closeProps(row) {
@@ -60,19 +72,27 @@ export default function useRowClose({ events = [], executions = [], onCloseRecor
   }
 
   const sheet = pending && (
-    <StatusEventsSheet
-      status="closed"
+    <CloseDialog
       title={`Close "${pending.row.name}"`}
-      event={pending.future[0]}
-      eventCount={pending.future.length}
-      reminderCount={pending.reminderCount}
-      onArchive={() => {
+      today={pending.today}
+      defaultClosedOn={pending.defaultClosedOn}
+      defaultReason={pending.defaultReason}
+      pending={pending.loading ? null : pending}
+      onCancel={() => setPending(null)}
+      onConfirm={async ({ reason, note, closedOn }) => {
         const held = pending;
         setPending(null);
-        close(held);
+        await onCloseRecords({
+          item: held.targets.item,
+          intentIds: held.targets.intents.map((i) => i.id),
+          label: held.row.name,
+          reason,
+          note,
+          closedOn,
+          pickedIntentId: held.picked?.id || null,
+        });
+        return true;
       }}
-      onKeep={() => setPending(null)}
-      onCancel={() => setPending(null)}
     />
   );
 
@@ -89,7 +109,6 @@ export function CloseRowButton({ onClose, closeBlocked: blocked }) {
         onClose();
       }}
       disabled={Boolean(blocked)}
-      title={blocked || "Close"}
       className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] whitespace-nowrap bg-secondary text-foreground rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
     >
       <CircleCheckBig className="w-4 h-4" />

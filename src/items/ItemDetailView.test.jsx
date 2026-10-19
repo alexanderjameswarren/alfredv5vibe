@@ -303,6 +303,21 @@ test("edit form: status waits for Save", async () => {
   expect(onUpdateItem.mock.calls[0][1].status).toBeUndefined();
 });
 
+test("edit form: Closed then Save opens Close; its Cancel leaves the form open with the changes", async () => {
+  const onCloseRecords = jest.fn();
+  const { onUpdateItem } = renderItem({ status: "active" }, { startInEditMode: true, onCloseRecords });
+  fireEvent.change(screen.getByDisplayValue("Water plants"), { target: { value: "Water plants twice" } });
+  fireEvent.click(screen.getByRole("radio", { name: "Closed" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  const dialog = await screen.findByRole("dialog", { name: "Close" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog", { name: "Close" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  expect(screen.getByDisplayValue("Water plants twice")).toBeTruthy();
+  expect(onUpdateItem).not.toHaveBeenCalled();
+  expect(onCloseRecords).not.toHaveBeenCalled();
+});
+
 test("a running execution sits under In progress, as on every other screen", () => {
   renderItem({ status: "active" }, { executions: [{ id: "x", intentId: "a", status: "active", itemIds: ["it1"] }] });
   expect(screen.getByText("In progress (1)")).toBeTruthy();

@@ -85,6 +85,7 @@ import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
 import WhenButton from "../shared/WhenButton";
 import { getTodayDate } from "../utils/eventDates";
 import { PAST_DATE_MESSAGE } from "../shared/recurrence/SchedulePopover";
+import ToggleButton from "../shared/ToggleButton";
 
 /**
  * This page's baseline: the shared triage baseline plus the capture's app. One
@@ -150,23 +151,8 @@ function caretOffsetFromClick(e) {
  * colour is the only other thing saying it.
  */
 // "secondary" is tan: teal is reserved for an execution in progress.
-function SectionToggle({ on, onToggle, tone, icon: Glyph, label }) {
-  const filled = tone === "primary" ? "bg-primary text-white" : "bg-secondary text-foreground";
-  const outlined = tone === "primary" ? "bg-card text-primary" : "bg-card text-foreground";
-  const edge = tone === "primary" ? "border-primary" : "border-primary/40";
-  return (
-    <button
-      type="button"
-      aria-pressed={on}
-      onClick={onToggle}
-      className={`flex-1 inline-flex items-center justify-center gap-2 min-h-[48px] px-4 py-2.5 rounded-lg border-2 transition-colors ${edge} ${
-        on ? filled : outlined
-      }`}
-    >
-      <Glyph className="w-[18px] h-[18px] shrink-0" aria-hidden="true" />
-      {label}
-    </button>
-  );
+function SectionToggle({ on, onToggle, tone, icon, label }) {
+  return <ToggleButton on={on} onClick={onToggle} icon={icon} label={label} tone={tone} />;
 }
 
 /** A section heading inside the card: glyph plus name, in the section's colour. */

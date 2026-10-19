@@ -6,7 +6,8 @@ import { PILL_CLASS } from "./StatusPill";
 // The detail-page status control: the card pill plus a caret, opening a short
 // menu. `onChoose` gets the new status and runs the page's own guard and sheet.
 // Two taps to change anything; no confirm (see Restructure P1 step 21).
-export default function StatusMenu({ row, onChoose }) {
+// `blocked`: { [status]: reason } — that choice is disabled, its reason shown under it.
+export default function StatusMenu({ row, onChoose, blocked = {} }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const current = statusOf(row);
@@ -45,13 +46,17 @@ export default function StatusMenu({ row, onChoose }) {
               type="button"
               role="menuitemradio"
               aria-checked={status === current}
+              disabled={Boolean(blocked[status])}
               onClick={() => {
                 setOpen(false);
                 if (status !== current) onChoose(status);
               }}
-              className="w-full flex items-center justify-between gap-2 px-4 min-h-[44px] text-left text-sm text-foreground hover:bg-secondary"
+              className="w-full flex items-center justify-between gap-2 px-4 min-h-[44px] text-left text-sm text-foreground hover:bg-secondary disabled:hover:bg-transparent disabled:cursor-not-allowed"
             >
-              {STATUS_LABELS[status]}
+              <span className={blocked[status] ? "py-1.5" : undefined}>
+                <span className={blocked[status] ? "opacity-50" : undefined}>{STATUS_LABELS[status]}</span>
+                {blocked[status] && <span className="block text-xs text-muted-foreground">{blocked[status]}</span>}
+              </span>
               {status === current && <Check className="w-4 h-4" />}
             </button>
           ))}
