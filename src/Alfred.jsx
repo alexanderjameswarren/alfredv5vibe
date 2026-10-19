@@ -347,6 +347,7 @@ export default function Alfred() {
     activate,
     closeExecution,
     changeCompletionDate,
+    deleteClosedExecution,
     markDone,
     completeItem,
     cancelExecutionForEvent,
@@ -1466,6 +1467,7 @@ export default function Alfred() {
             refreshCollection={refreshCollection}
             closeExecution={closeExecution}
             changeCompletionDate={changeCompletionDate}
+            deleteClosedExecution={deleteClosedExecution}
             pauseExecution={pauseExecution}
             makeExecutionActive={makeExecutionActive}
             // Back from these lands on Home (Active/Paused/Today), one tap from

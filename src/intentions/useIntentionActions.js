@@ -108,7 +108,7 @@ export function useIntentionActions({
       // record of something that never happened. Same reasoning as the
       // recurrence successor in Step 2.
       offerUndoFor(`Scheduled for ${formatEventDate(eventDate)}.`, async () => {
-        await storage.delete(`event:${event.id}`);
+        if (!(await storage.delete(`event:${event.id}`))) throw writeError("Undo");
         setEvents((prev) => prev.filter((e) => e.id !== event.id));
       });
     });
@@ -154,9 +154,9 @@ export function useIntentionActions({
       await settle();
 
       offerUndoFor(`Scheduled for ${formatEventDate(date)}.`, async () => {
-        await storage.delete(`event:${event.id}`);
+        if (!(await storage.delete(`event:${event.id}`))) throw writeError("Undo");
         setEvents((prev) => prev.filter((e) => e.id !== event.id));
-        await storage.delete(`intent:${intentId}`);
+        if (!(await storage.delete(`intent:${intentId}`))) throw writeError("Removing the intention");
         setIntents((prev) => prev.filter((i) => i.id !== intentId));
       });
     });
@@ -204,7 +204,7 @@ export function useIntentionActions({
       // archived. `relatedEvents` holds only the ones this call actually
       // touched, so an event archived earlier stays archived.
       offerUndoFor(`Archived "${intent.text || "intention"}".`, async () => {
-        await storage.set(`intent:${intentId}`, intent);
+        if (!(await storage.set(`intent:${intentId}`, intent))) throw writeError("Restoring the intention");
         setIntents((prev) => prev.map((i) => (i.id === intentId ? intent : i)));
         for (const event of relatedEvents) {
           if (!(await storage.set(`event:${event.id}`, event))) throw writeError("Restoring its event");
@@ -269,7 +269,8 @@ export function useIntentionActions({
       offerUndoFor(`Moved to ${STATUS_LABELS[status]}${what}.`, async () => {
         if (canRestore) {
           const back = await storage.patch(`intent:${intentId}`, { status: previous });
-          if (back) setIntents((prev) => prev.map((i) => (i.id === intentId ? back : i)));
+          if (!back) throw writeError("Restoring the status");
+          setIntents((prev) => prev.map((i) => (i.id === intentId ? back : i)));
         }
         for (const event of archivedEvents) {
           if (!(await storage.set(`event:${event.id}`, event))) throw writeError("Restoring its event");
@@ -341,11 +342,13 @@ export function useIntentionActions({
           };
           if (!Object.keys(fields).length) continue;
           const back = await storage.patch(`intent:${intent.id}`, fields);
-          if (back) setIntents((prev) => prev.map((i) => (i.id === intent.id ? back : i)));
+          if (!back) throw writeError("Restoring the intention");
+          setIntents((prev) => prev.map((i) => (i.id === intent.id ? back : i)));
         }
         if (itemBefore?.status && itemBefore.status !== "someday") {
           const back = await storage.patch(`item:${itemBefore.id}`, { status: itemBefore.status });
-          if (back) setItems?.((prev) => prev.map((i) => (i.id === itemBefore.id ? back : i)));
+          if (!back) throw writeError("Restoring the item");
+          setItems?.((prev) => prev.map((i) => (i.id === itemBefore.id ? back : i)));
         }
         for (const event of futureEvents) {
           if (!(await storage.set(`event:${event.id}`, event))) throw writeError("Restoring its event");

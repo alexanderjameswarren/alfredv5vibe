@@ -13,6 +13,7 @@ import { useExecutionNotes } from "../notes/useExecutionNotes";
 import RecordLinks from "../shared/RecordLinks";
 import CompleteNoteDialog from "../notes/CompleteNoteDialog";
 import CompletedOnDialog from "./CompletedOnDialog";
+import CancelButton from "../shared/CancelButton";
 import { nextForCompletion } from "../utils/recurrence";
 import { describeRepeat } from "../utils/recurrenceDisplay";
 import { NoteList, ARCHIVED_NOTICE } from "../notes/NoteTimeline";
@@ -20,6 +21,7 @@ import { useRecordNotes } from "../notes/useRecordNotes";
 
 export const DELETE_EXECUTION_CONFIRM =
   "Delete this execution? Its notes and ticked steps are deleted. The scheduled date stays.";
+export const DELETE_CLOSED_CONFIRM = "Delete this execution? It will be removed from the history.";
 
 export default function ExecutionDetailView({
   execution,
@@ -48,9 +50,12 @@ export default function ExecutionDetailView({
   onOpenExecution,
   // (date) => Promise<boolean>: a completed execution's date, its one editable field.
   onChangeCompletionDate,
+  // () => Promise<boolean>: delete a completed or skipped execution from the history.
+  onDeleteClosed,
 }) {
   const [, setTick] = useState(0);
   const [completing, setCompleting] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [editingCompletedOn, setEditingCompletedOn] = useState(false);
   // A completed execution is a record: nothing on this page writes to it, apart
   // from notes and its completion date. useExecutionActions refuses other writes.
@@ -230,7 +235,10 @@ export default function ExecutionDetailView({
         {closed && (
           <p className="flex items-center gap-2 text-sm font-medium text-foreground mt-1">
             <span>
-              Completed{completedOnDate ? ` ${formatEventDate(completedOnDate)}` : ""} · read only
+              {/* A skip is never a completion (Step 9): it reads "Skipped" and its event's date. */}
+              {execution.outcome === "skipped"
+                ? `Skipped${dateDisplay ? ` ${dateDisplay}` : ""} · read only`
+                : `Completed${completedOnDate ? ` ${formatEventDate(completedOnDate)}` : ""} · read only`}
             </span>
             {/* Only the date may change (Step 7), for cleanup and backfills. */}
             {onChangeCompletionDate && execution.outcome === "done" && (
@@ -244,6 +252,41 @@ export default function ExecutionDetailView({
               </button>
             )}
           </p>
+        )}
+        {closed && onDeleteClosed && (
+          <button
+            type="button"
+            onClick={() => setConfirmingDelete(true)}
+            className="mt-2 flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] border-2 border-destructive text-destructive hover:bg-destructive/10 rounded-lg transition-colors duration-200"
+          >
+            <Trash2 className="w-4 h-4" />
+            Delete Execution
+          </button>
+        )}
+        {confirmingDelete && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={() => setConfirmingDelete(false)}>
+            <div
+              role="dialog"
+              aria-label="Delete execution"
+              className="bg-background border border-border rounded-lg shadow-xl p-5 w-full max-w-sm mx-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="text-sm mb-4">{DELETE_CLOSED_CONFIRM}</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (await onDeleteClosed()) setConfirmingDelete(false);
+                  }}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] bg-destructive hover:bg-destructive-hover text-white rounded-lg shadow-sm"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </button>
+                <CancelButton onClick={() => setConfirmingDelete(false)} />
+              </div>
+            </div>
+          </div>
         )}
         {editingCompletedOn && (
           <CompletedOnDialog

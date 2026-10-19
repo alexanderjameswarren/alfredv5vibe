@@ -23,6 +23,7 @@ export default function ExecutionDetailScreen({
   refreshCollection,
   closeExecution,
   changeCompletionDate,
+  deleteClosedExecution,
   pauseExecution,
   makeExecutionActive,
   onViewContext,
@@ -66,6 +67,7 @@ export default function ExecutionDetailScreen({
           onRefreshCollection={refreshCollection}
           onComplete={(nextDate, completedOn) => closeExecution("done", { nextDate, completedOn })}
           onChangeCompletionDate={changeCompletionDate}
+          onDeleteClosed={deleteClosedExecution}
           onPause={pauseExecution}
           onMakeActive={makeExecutionActive}
           onCancel={() => closeExecution("cancelled")}

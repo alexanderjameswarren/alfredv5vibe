@@ -83,6 +83,48 @@ has another live event (existing guards).
   (`alfred_recent_completions` returns skipped rows with their outcome — database step).
   EventCard "Archive Event" on a recurring event becomes this same Skip. Every reader that
   treats a closed execution as done is audited in the Skip step.
+  **As built (Step 9, supersedes the history line above):** Skip is `updateEvent(id,
+  { archived: true })` on a repeating intention's live date (`useEventActions`): it checks
+  the database for an open execution (refuses with "Continue or delete it before
+  skipping"), inserts the skipped execution, archives the date, makes the next date with
+  `skipped: true`, and toasts "Skipped Monday, October 19." with Undo (successor, execution,
+  date). A one-time date's archive (Unschedule, EventCard) writes no execution. Skipped
+  executions never appear under Recent completions (rule, 2026-10-19): the history line is
+  its own "Skipped: …" line under it (`RecentSkips`, `listRecentSkips` reads `executions`
+  directly, the event's date), so `alfred_recent_completions` keeps `outcome='done'` and the
+  Step 11 change to it is dropped. EventCard's edit form shows Skip (the shared `skipAction`)
+  on a repeating date, hidden while the intention has an open execution; Archive Event stays
+  on a one-time date. A skipped execution's page reads "Skipped <event date> · read only".
+  Audit: the database's last-done and recent-completions readers already require
+  `outcome='done'`; the execution page header was the one front-end reader that said
+  "Completed" for any closed execution (fixed). Left for Alex: the recycle bin lists skipped
+  executions; the MCP history tools' descriptions; `status_activate_on_execution` fires on a
+  skipped insert (moot: a repeat with a live date is already active).
+  **Step 9 follow-ups (2026-10-19, supersede the separate "Skipped:" line):**
+  - One list, "Recent executions", on intention and item pages (`RecentCompletions`,
+    `mergeRecent`): the last five, completed and skipped mixed, newest first by the date
+    shown (completion day; a skip's event date). Completed rows keep the bordered card;
+    skipped rows have the Skip icon (CalendarX), "<date> (skipped)", grey text, no border.
+    Every row opens its execution. `RecentSkips` is gone; `listRecentSkips` stays.
+  - A completed or skipped execution's page has Delete Execution (red outline) under the
+    read-only line. It asks "Delete this execution? It will be removed from the history."
+    (red Delete, shared CancelButton); no Undo. `deleteClosedExecution` deletes it (notes
+    cascade), re-reads the intention and items, reloads Recent executions, and returns to
+    the page it came from. Events and statuses never move. The 100 trigger already
+    recomputes `last_completed_at` on DELETE, so no migration.
+  - Skip's Undo deletes the skipped execution first and stops with an error if that fails,
+    so it never restores the date beside a skip (`storage.delete` swallows errors).
+  - The recycle bin's executions tab leaves out skipped ones (null outcomes kept).
+  - "Show all (N older)" beside the Recent executions heading when there are more than
+    five (the inbox "Recently archived" control; "Last 5" folds it back). N comes from
+    `countRecentExecutions`; Show all reads up to 50 completed and 50 skipped.
+  - Undo rule: every write in an Undo is checked, and the first failure throws (an alert)
+    and stops the Undo, so it never carries on past a failed write.
+  - Open (not built): Start Now on a future date saves the event as today and keeps no
+    record of the old date; Delete Execution then leaves it on today. Recommended: record
+    the original date on the execution when Start Now moves it, and have Delete Execution
+    put it back when the event is still on the day it was moved to and the original is
+    today or later. Needs a column, so it belongs with Step 11.
 - **Done** without an execution inserts a closed `outcome='done'` execution on the live event
   (or a new event dated today), archives the event, and opens the same next-date popover.
   As built (Step 8): a brown "Complete" button on intention detail for a repeating, not-closed
@@ -351,7 +393,9 @@ apps list, not the context list, and is unchanged; no other inbox picker uses co
 
 ## Database step (one step, near the end)
 One migration, `_pending_restructure_p4-v9k_phase4.sql`, numbered after `gitsync`:
-- `alfred_recent_completions`: include `outcome in ('done','skipped')`, return `outcome`.
+- ~~`alfred_recent_completions`: include `outcome in ('done','skipped')`, return `outcome`.~~
+  Dropped 2026-10-19 (Step 9): skips never appear under Recent completions; `RecentSkips`
+  reads them directly.
 - `alter table intents drop column is_item`.
 - `alter publication supabase_realtime add table reminders`.
 - Then the mcp function deploy.

@@ -19,7 +19,7 @@ Testing notes:
 | 6 | Next-date function + `triggerRecurrence` takes a date (+ item detail duplicate fix, no "next" in repeat lines, repeat-dialog number boxes) | Done, checkpointed 858e4f5 |
 | 7 | Completion dialog: next-date field, Completed on; no past event dates; edit a completed date | Done, checkpointed d3bbf2d |
 | 8 | Log Execution (was Done/Complete) + header fix; follow-ups: rule A, one-time intentions and items, ActionBar, CopyButton, hidden while open, one Cancel, no repeated tooltips | Done, tested 2026-10-19 |
-| 9 | Skip control (+ EventCard Archive Event → Skip; audit closed-as-done readers) | |
+| 9 | Skip control (+ EventCard Archive Event → Skip; audit closed-as-done readers); follow-ups: Recent executions with skips in line and Show all, Delete Execution on closed executions, Skip Undo fix, recycle bin hides skips, Undo audit | Done, tested 2026-10-19 |
 | 10 | Stop control | |
 | 10a | Close reason, front end: one Close pop-up in all six places (choice, note, events/reminders question), execution/note creation, disabled rule | |
 | 11 | Database step (waits on warren_buffet_p2-m4t), incl. `closed_reason`, status_guard Undo exception, MCP fields, backfill list | |
@@ -73,7 +73,7 @@ open. Reuses Step 8's no-run Done execution code. `closed_reason` is held, not w
 11a. Test: each of the six places shows the pop-up; Completed on a recurring intention
 makes no next event; Won't do makes no execution; Undo removes what was created.
 
-**11. Database step.** Migration (recent completions + skipped, drop is_item, reminders in
+**11. Database step.** Migration (drop is_item, reminders in
 realtime, `closed_reason` on items and intents, status_guard exception for closed → someday
 shortly after a close, `get_intents`/`get_items` return `closed_reason`) and mcp deploy.
 The backfill list of existing closed records is proposed here for Alex to review.
@@ -97,6 +97,28 @@ Test: add a reminder on detail, go back, the card badge is there without reload.
 ## Log
 - 2026-10-13 Step 1 code done. Related tests pass (intentionRows, intentions, contexts).
   `deno check` not run: the local deno cache lacks the supabase-js npm packages.
+- 2026-10-19 Step 9 complete (follow-up testing passed). Last follow-ups: "Show all (N older)"
+  under Recent executions, the inbox "Recently archived" control (no Phase 2 view-all page
+  existed; `countRecentExecutions`, reads up to 50 of each kind, the completions function's
+  cap); Undo audit: every Undo in files this project holds now stops at a failed write
+  (Schedule, Schedule from item, Archive intention, Moved to, Close, Archive Context, Skip's
+  next date, Log Execution, which now removes the execution first). Not held, listed for
+  Alex: `useItemActions` (archive item, item status), `useCollections` (archive collection),
+  `useInboxActions` (discard). Open, for Alex: Start Now moves a future date to today and
+  Delete Execution leaves it there (recommendation in the spec, Step 9 follow-ups).
+- 2026-10-19 Step 9 tested (all three parts passed); follow-ups built (spec "Step 9
+  follow-ups"): one "Recent executions" list of five, skips in line; Delete Execution on
+  completed and skipped executions (confirm, no Undo; trigger already recomputes last done
+  on delete); Skip Undo removes the skip first and stops if it cannot; recycle bin hides
+  skips. Checked: "P4 daily test" has two skipped executions, mvfcg01hif04synncy (event
+  Oct 18, kept, from Part 1) and mvfcojrwezus2ig9kj (event Oct 19, 14:29 UTC, left by the
+  Edit Event Skip + Undo); Alex deletes it in the app.
+- 2026-10-19 Step 9 built (spec "Skip / Done / Stop", As built). Skip writes a closed
+  `skipped` execution, archives the date, next date by rule, toast "Skipped …" with Undo;
+  one-time archives write none; EventCard edit form: Skip on a repeat (hidden while open),
+  Archive Event on a one-time date; "Skipped: …" line (`RecentSkips`) apart from Recent
+  completions; execution page reads "Skipped". Step 11's recent-completions change dropped.
+  Audit left for Alex: recycle bin lists skips; MCP history tool wording.
 - 2026-10-19 Step 8 complete (all four follow-up parts passed). Last fixes: one `CancelButton`
   (X icon, light neutral, beside the main button) in Log execution, Complete, Completed on,
   Schedule/Reschedule, the close question, the repeat dialogs and Clone; no tooltip where the

@@ -77,6 +77,8 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
         case "executions":
           query = supabase.from("executions").select("id, intent_id, event_id, outcome, started_at, closed_at, updated_at")
             .eq("status", "closed")
+            // Skips are history (Restructure P4 Step 9), not deleted records. Null kept.
+            .or("outcome.is.null,outcome.neq.skipped")
             .order("updated_at", { ascending: false, nullsFirst: false })
             .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
           break;

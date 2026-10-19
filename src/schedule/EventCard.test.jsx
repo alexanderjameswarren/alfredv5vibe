@@ -44,6 +44,31 @@ test("edit form: the date is locked while its run is active, not when paused", (
   }
 });
 
+test("edit form: a repeating date offers Skip, hidden while an execution is open; a one-time date keeps Archive Event", () => {
+  const daily = { type: "fixed", frequency: "daily", interval: 1 };
+  for (const [config, executions, skip, archive] of [
+    [daily, [], true, false],
+    [daily, [{ id: "x", eventId: "e1", intentId: "i1", status: "paused" }], false, false],
+    [{ type: "once" }, [], false, true],
+  ]) {
+    const { unmount } = render(
+      <EventCard
+        event={{ id: "e1", intentId: "i1", time: "2026-10-10" }}
+        intent={{ id: "i1", text: "Water plants", status: "active", recurrenceConfig: config }}
+        contexts={[]}
+        executions={executions}
+        onActivate={jest.fn()}
+        onUpdate={jest.fn()}
+        getIntentDisplay={(i) => i.text}
+      />,
+    );
+    fireEvent.click(screen.getByText("Water plants"));
+    expect(Boolean(screen.queryByRole("button", { name: "Skip" }))).toBe(skip);
+    expect(Boolean(screen.queryByRole("button", { name: "Archive Event" }))).toBe(archive);
+    unmount();
+  }
+});
+
 test("edit form: a date moved into the past is refused; an overdue date left alone still saves", () => {
   const onUpdate = jest.fn();
   const { container } = render(

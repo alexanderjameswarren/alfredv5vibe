@@ -16,6 +16,8 @@ jest.mock("../notes/notesApi", () => ({
   currentUserId: jest.fn(),
   listNotesForTargets: jest.fn(),
   listRecentCompletions: jest.fn(),
+  listRecentSkips: jest.fn(),
+  countRecentExecutions: jest.fn(),
   listExecutionNotes: jest.fn(),
   listNotesForExecutions: jest.fn(),
   saveNote: jest.fn(),
@@ -27,6 +29,7 @@ beforeEach(() => {
   notesApi.currentUserId.mockResolvedValue("me");
   notesApi.listNotesForTargets.mockResolvedValue([]);
   notesApi.listRecentCompletions.mockResolvedValue([]);
+  notesApi.listRecentSkips.mockResolvedValue([]);
   notesApi.listExecutionNotes.mockResolvedValue([]);
   notesApi.listNotesForExecutions.mockResolvedValue([]);
   notesApi.onNotesChanged.mockReturnValue(() => {});
@@ -294,7 +297,7 @@ test("notes: timeline, recent completions and the open execution load for this i
   expect(await screen.findByText("ran well")).toBeTruthy();
   expect(await screen.findByText("so far")).toBeTruthy();
   expect(notesApi.listNotesForTargets).toHaveBeenCalledWith({ itemIds: [], intentionIds: ["i1"] });
-  expect(notesApi.listRecentCompletions).toHaveBeenCalledWith({ itemId: null, intentId: "i1", limit: 3 });
+  expect(notesApi.listRecentCompletions).toHaveBeenCalledWith({ itemId: null, intentId: "i1", limit: 5 });
   expect(screen.queryByText("Previous executions")).toBeNull();
 });
 
