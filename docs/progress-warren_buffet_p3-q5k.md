@@ -10,11 +10,11 @@ No amounts in this file. The safety floor is never written into the repo.
 | 3 | Help for Phase 2 (and Phase 1) screens | done, 2026-10-14 (app-tested by Alex; checkpointed b6e42a8) |
 | 4 | Processing and match suggestions | done, 2026-10-17 (135 applied, 136 35/35; 4b app-tested by Alex) |
 | 5 | Views and projection | done, 2026-10-19 (137 applied, 138 42/42; live batches 1–5 passed) |
-| 6 | MCP tools | not started |
+| 6 | MCP tools. **Any other thread must run gitsync before deploying mcp, or the WB Phase 3 tools disappear from live (A31)** | done, 2026-10-19: live on **mcp v155** (134 tools); fresh-thread batches 1–3, the re-check and the cleanup all passed |
 | 7 | Seeding in claude.ai. **Notes:** give every planned item a merchant wherever possible, because items with no merchant are never suggested; and **re-run processing once after seeding** (`reprocess_wb_transactions`), so suggestions are made for existing payments (A19). **Known double count until then:** a past payment for something that later becomes a planned item stays in the burn rate until it is confirmed as a match | not started |
-| 8 | Plan tab UI | not started |
+| 8 | Plan tab UI. **Also:** build `wb_project_summary`, the project spent-to-date summary (A30); and add an "unconfirm" for planned matches only if the Plan tab shows the need (A29). **Decide:** nothing stops the confirmed matches on a planned item from adding up to more than the item's own amount, and a real overpayment is possible. Should an over-matched item show a warning on the Plan tab? **Decide:** where a split's project is shown. No tool reads it today; it could go in `get_wb_transactions`, or on the Plan tab only | not started |
 | 9 | Overview numbers | not started |
-| 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those | not started |
+| 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed | not started |
 | 11 | Phase 3 review | not started |
 
 ## Log
@@ -219,6 +219,110 @@ All five live batches passed (Alex):
 - **Batch 5:** the cleanup returned every value to batch 1.
 
 **Step 5 done.** Checkpoint: 137, 138, the help and number files, and the docs, with `--release-db`.
+
+### Step 6a (2026-10-19, run tags `warren_buffet_p3-q5k-s6-j4tz` plan, `-s6-p9xe` build)
+- Plan approved, with A29–A33 in the spec.
+- **Built:**
+  - `supabase/functions/_shared/tools/warren-buffet-p3.ts`, 13 tools:
+    - get_wb_projects, get_wb_planned_items, get_wb_planned_matches, get_wb_settings, get_wb_free_cash, get_wb_true_cost (with burn months), get_wb_cash_projection (event days and the low point only);
+    - upsert_wb_project, upsert_wb_planned_item (then `wb_suggest_planned_matches`);
+    - create_wb_planned_match (**tier 3**: propose and handler share `matchPlan`, then confirm through `wb_confirm_planned_match`, and delete the row if that refuses);
+    - update_wb_planned_match (tier 2, through `wb_confirm_planned_match`);
+    - set_wb_transaction_project (at most 25, single-split only);
+    - update_wb_settings (tier 3; the proposal shows current against proposed).
+  - `warren-buffet-p2.ts`:
+    - the review queue accepts `planned_match` and returns the planned_* columns;
+    - rules take `set_project_id`, which counts as a rule action, and `get_wb_rules` names the project;
+    - `split_wb_transaction` passes `project_id` per part, but only when given;
+    - plain sentences for the Phase 3 refusals.
+  - `mcp/index.ts`: 13 registrations, plus the changed queue, rule and split schemas. The tool count goes from 121 to 134.
+- **Tests:**
+  - `warren-buffet-p3.test.mjs`, 12 tests: tiers, draft flags and remaining amounts, event days and truncation, suggestions after a write, the propose fields and every refusal, confirm-or-clean-up, single-split projects, and the settings proposal writing nothing.
+  - `index.test.mjs`: the count is 134. There is a P3 schema-versus-handler and tier test, and a description test, including no `$` amounts in any WB description.
+  - Results: functions 733/733, CLI 224/224.
+- **`deno check` not run yet:** the claims guard blocked my command, because it piped the output through `tee` into a temp file. That counts as a shell write, and the guard read it as one under the unclaimed `supabase/functions/mcp`. As the rules say, I stopped and asked Alex rather than running it another way.
+- **deno check (2026-10-19, run tag `warren_buffet_p3-q5k-s6-b2kw`):**
+  - Run from the worktree root, without `--config`, Deno picks up the root `package.json` and fails before checking anything. Every run below therefore uses `--config supabase/functions/mcp/deno.json`, with `--no-lock`.
+  - `warren-buffet-p3.ts` had 4 errors. All were `as Obj` casts of supabase results, which need `as unknown as Obj`, as P2 does. They are fixed.
+  - `warren-buffet-p3.ts` and `warren-buffet-p2.ts` now check clean.
+  - Function tests: 733/733 after the fix.
+  - The whole-of-mcp check shows errors only in other tool files, and in old `mcp/index.ts` lines below 2260 (untyped `args`, `z.record` with one argument). But the tool's output cut off the middle and the final count, so neither the total nor the full line list is confirmed yet.
+- **deno check confirmed (2026-10-19, run tag `warren_buffet_p3-q5k-s6-n5vd`):**
+  - Alex approved filtering through `grep`. It needed `NO_COLOR=1`: with colour codes, `index.ts:NNN` never matches.
+  - The total is **97 errors, the same as Phase 2's 97**, so this step adds none.
+  - None are in `warren-buffet-p2.ts` or `warren-buffet-p3.ts`.
+  - Every `mcp/index.ts` error is in the old lines 1063–2673: untyped `async (args) =>` and one-argument `z.record`. None is near the lines this step changed (116–130, about 3017–3260, about 3500–3800).
+- **6a done.** Waiting for Alex's gitsync before the drift check, the `db:deploy` claim and the deploy.
+
+### Step 6b (2026-10-19, run tag `warren_buffet_p3-q5k-s6-h8rm`)
+- gitsync was a clean fast-forward (98935e1..22b8a31), 47 files, all under `src/`.
+- **Drift check: none.** Nothing came in under `supabase/` or `src/money/`, so `mcp/index.ts` and `_shared/alfred-tools` are unchanged.
+- On the merged tree: functions 733/733; the index tests 31/31, including the 134-tool count.
+- Claimed `db:deploy`. It is held until the checkpoint.
+- **Deployed mcp v154** (was v153) from this worktree, with `verify_jwt` false. An unauthenticated POST gets the function's own `401 Unauthorized`.
+- Fresh-thread verification: batch 1 (reads) went to Alex. The cleanup SQL is given for after the last batch.
+- **Batch 1 passed** on v154 (Alex, run tag `warren_buffet_p3-q5k-s6-c3tf`):
+  - settings: exists false, floor_missing true, horizon 12;
+  - free cash identical with and without drafts, apart from the flag;
+  - true cost with 3 burn months (Jul–Sep);
+  - the projection truncated at 5 of 193 event days, all subscriptions;
+  - the queue accepts planned_match (0, 0, 0).
+- Following one of the thread's observations, the `get_wb_review_queue` description now says the counts always cover every reason, and the reason filter narrows only the items. Index tests 31/31. **Not deployed:** it goes out with any fix after batch 3.
+- Batch 2 went to Alex.
+- **Batch 2 passed** (Alex, run tag `warren_buffet_p3-q5k-s6-v4qe`):
+  - the project was created;
+  - bill A, with a merchant, got 1 suggestion, paired with a real payment;
+  - bill B, with no merchant, got none;
+  - the tier-3 proposal wrote nothing: in full, would_mark_paid true; at half, false, with the amount converted to the payment's sign;
+  - confirming half gave stage_paid false, with half remaining;
+  - the repeat was refused.
+- **One bug:** `get_wb_planned_items` returned `confirmed_total` positive for a bill. **Fixed** in `annotateItem`: `confirmed_total` now carries the item's sign, so amount = confirmed_total + remaining. One new test covers a bill, an income and a recurring item. Functions 734/734, and deno check on P3 is clean.
+  - Nothing else returns a summed amount. `get_wb_planned_matches` and `create_wb_planned_match` (both the proposal and the result) return the signed `amount_applied`.
+  - **Not deployed:** it goes out with the queue description change after batch 3.
+- **Gap found:** no tool reads a split's project. Batch 3 checks it with one read-only SELECT. Adding the project to `get_wb_transactions`, or to the Plan tab, is a step 8 decision.
+- Batch 3 went to Alex.
+- **Batch 3 passed** (Alex, run tag `warren_buffet_p3-q5k-s6-k1wy`):
+  - confirming bill A's suggestion for the whole payment was refused; half was confirmed, and the queue went to 0;
+  - `set_wb_transaction_project` set the project and then cleared it, and the clearing sticks (source claude);
+  - a rule with `set_project_id` was created with `reprocess: false`, then made inactive;
+  - settings changed notes only, and the floor stays unset;
+  - 2 confirmed matches, each half the payment with its sign.
+- **The over-amount refusal now says what is left:**
+  - The database-mapped text (used by `update_wb_planned_match`) is "That is more than what's left of this payment (part of it may already be matched to another planned item); lower the amount."
+  - `create_wb_planned_match`'s own check says "That is more than what's left of this payment; lower the amount." It adds "(part of it is already matched to another planned item)" only when part really is.
+  - Neither uses do-not-retry wording. The tests are updated.
+  - Functions 734/734. P2 and P3 check clean, and mcp stays at 97 errors with none in the changed lines.
+- **Redeployed mcp v155** with the sign fix, the queue description and the refusal text. An unauthenticated POST gets the function's 401.
+- The sign and refusal re-check, and the full cleanup SQL, went to Alex.
+
+### Step 6 done (2026-10-19, run tag `warren_buffet_p3-q5k-s6-z7gd`)
+All checks below were run by Alex in fresh claude.ai threads. No amounts are recorded.
+- **Batch 1 (v154), reads:**
+  - settings: exists false, floor_missing true, horizon 12;
+  - free cash identical with and without drafts, apart from the flag;
+  - true cost with 3 burn months (Jul–Sep);
+  - the projection truncated at 5 of 193 event days, subscriptions only;
+  - the queue accepts `planned_match` (0, 0, 0).
+- **Batch 2 (v154):**
+  - the project was created;
+  - bill A, with a merchant, got 1 suggestion against a real payment;
+  - bill B, with no merchant, got none;
+  - the tier-3 proposal wrote nothing: in full, would_mark_paid true; at half, false, with the sign converted;
+  - confirming half gave stage_paid false, with half remaining;
+  - the repeat was refused.
+  - **Bug found:** `confirmed_total` was unsigned. Fixed (see above).
+- **Batch 3 (v154):**
+  - confirming bill A for the whole payment was refused; half was confirmed, and the queue went to 0;
+  - a project was set on the payment and cleared, and the clearing sticks (source claude);
+  - a rule with `set_project_id` was created with `reprocess: false`, then made inactive;
+  - settings changed notes only, with the floor unset;
+  - 2 confirmed matches, each half the payment with its sign.
+- **Re-check (v155):**
+  - `confirmed_total` carries the item's sign, and amount = confirmed_total + remaining exactly, for both bills;
+  - the over-amount refusal on an unmatched payment reads "That is more than what's left of this payment; lower the amount. Nothing was changed.";
+  - on the fully matched payment it reads "all of that payment is already matched to other planned items. Nothing was changed.".
+- **Cleanup verified:** no ZZ TEMP S6 projects, items, rules or payment matches remain, and no settings rows. The test payment's split has project_id and project_source both null.
+- **Step 6 done.** Live: **mcp v155**, 134 tools. Checkpoint with `--release-db` (`db:deploy`).
 
 ## Later
 

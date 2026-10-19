@@ -106,6 +106,11 @@ Phase 3 answers "can we afford it?":
 | A26 | Burn subtracts only the confirmed `amount_applied` of planned matches; the rest of a mixed payment still counts. |
 | A27 | True cost uses the median burn; the mean is working. |
 | A28 | With no safety floor set, free cash uses 0 and returns `floor_missing: true`. |
+| A29 | There is no "unconfirm" of a planned match in Phase 3. It is noted under step 8: add it if the Plan tab shows the need. (Alex, 2026-10-19, run tag `warren_buffet_p3-q5k-s6-p9xe`.) |
+| A30 | The project spent-to-date summary (`wb_project_summary`) is built in step 8, not step 6. |
+| A31 | **Any other thread must run gitsync before deploying mcp**, or the Warren Buffet Phase 3 tools disappear from live. Alex tells restructure_p4-v9k himself. |
+| A32 | `create_wb_planned_match` is **tier 3 with propose**. The proposal shows the planned item's name and due date (with occurrence_on for a recurring item), the payment's date, description and amount, the amount that would be applied, and whether confirming would mark the item paid. Propose only reads, and shares its validation with the handler (`matchPlan`), so it refuses anything the write would refuse. `update_wb_planned_match` stays tier 2, because it acts on an app suggestion Alex has already seen. |
+| A33 | `get_wb_planned_items` includes drafts by default, and every item says plainly whether it is a draft (`draft: true` for stage draft, or for is_draft on a recurring item). Free cash still leaves drafts out by default. |
 | A14 | Recurring "what if" items are wanted (Alex, 2026-10-14, run tag `warren_buffet_p3-q5k-s2-m3qd`). `wb_planned_items.is_draft boolean not null default false`, for recurring items only; a one-off draft stays stage `draft`. Drafts of either kind stay out of free cash unless the drafts toggle includes them. |
 
 ---
@@ -221,7 +226,8 @@ All tools use `defineTool`, `ctx.db` only and bare-data payloads. Every list is 
 |---|---|
 | `get_wb_projects`, `get_wb_planned_items`, `get_wb_planned_matches`, `get_wb_settings`, `get_wb_free_cash`, `get_wb_true_cost` | 1 |
 | `get_wb_cash_projection` (event days and the low point only, never 365 rows) | 1 |
-| `upsert_wb_project`, `upsert_wb_planned_item`, `create_wb_planned_match`, `update_wb_planned_match`, `set_wb_transaction_project` (≤ 25 rows) | 2 |
+| `upsert_wb_project`, `upsert_wb_planned_item` (then suggests matches, A19), `update_wb_planned_match` (through `wb_confirm_planned_match`), `set_wb_transaction_project` (≤ 25 rows) | 2 |
+| `create_wb_planned_match` (propose shows the match, A32) | 3 |
 | `update_wb_settings` (its `propose` shows old vs new) | 3 |
 | changed: `create_wb_rule`, `update_wb_rule` (set_project_id); `split_wb_transaction` (project_id per split) | 2 |
 
@@ -240,7 +246,7 @@ Each step ends with verification and stops for Alex. Database claims are taken a
 | 3 | **Help for the Phase 2 screens.** The "?" component, `helpText.js` and its test. Entries for: the review reasons; the rule-health findings (entries only, A9); the subscription statuses and Keep watching; the monthly breakdown; Always do this. | none | Vercel on merge |
 | 4 | **Processing and suggestions.** 4a (database): `wb_rules.set_project_id`, `wb_splits.project_source`, `wb_planned_occurrences`, the suggestion and confirm functions, `planned_match` in the queue and `wb_transaction_list`, `wb_replace_splits`, and tests. 4b (app): the minimal Suggested match group (A18) and its help entry. | `db:fn:wb_process_transactions`, `db:fn:wb_suggest_planned_matches`, `db:fn:wb_confirm_planned_match`, `db:fn:wb_planned_occurrences`, `db:fn:wb_replace_splits`, `db:table:wb_rules`, `db:table:wb_splits`, `db:table:wb_planned_matches`, `db:table:wb_planned_items`, `db:table:wb_review_queue`, `db:table:wb_transaction_list` | no |
 | 5 | **Views and projection** (§3.7), with tests on invented data, including the monthly-equivalent test (A12). Help for free cash, true cost, burn rate, spendable cash, the reserve line and the floor. | `db:fn:wb_monthly_equivalent`, `db:fn:wb_subscription_occurrences`, `db:table:wb_subscription_outflows`, `db:fn:wb_burn_rate_on`, `db:table:wb_burn_rate`, `db:table:wb_true_cost`, `db:fn:wb_cash_projection`, `db:fn:wb_free_cash` | no |
-| 6 | **MCP tools** (§4). Plain-sentence errors, schema-versus-handler tests, tool count. | `db:deploy` | mcp |
+| 6 | **MCP tools** (§4). Plain-sentence errors, schema-versus-handler tests, tool count (121 → 134). Any other thread must gitsync before deploying mcp (A31). | `db:deploy` | mcp |
 | 7 | **Seeding in claude.ai.** Projects, premiums, inflows, one-offs, then the floor and horizon (Alex sets the floor). Confirm the first suggestions. | none | no |
 | 8 | **Plan tab UI.** Projects and planned items; the match card on Review; a project picker on splits. Help for the stages and the match card. | none | Vercel on merge |
 | 9 | **Overview.** Free cash and its low date, the reserve line, true cost against income, and the drafts toggle. Each panel shows its live working. | none | Vercel on merge |

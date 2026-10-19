@@ -114,6 +114,21 @@ import {
   bulkCreateWbTaxonomyTool,
 } from "../_shared/tools/warren-buffet-p2.ts";
 import {
+  createWbPlannedMatchTool,
+  getWbCashProjectionTool,
+  getWbFreeCashTool,
+  getWbPlannedItemsTool,
+  getWbPlannedMatchesTool,
+  getWbProjectsTool,
+  getWbSettingsTool,
+  getWbTrueCostTool,
+  setWbTransactionProjectTool,
+  updateWbPlannedMatchTool,
+  updateWbSettingsTool,
+  upsertWbPlannedItemTool,
+  upsertWbProjectTool,
+} from "../_shared/tools/warren-buffet-p3.ts";
+import {
   getDriveMixSongsTool,
   createDriveMixSongsTool,
   updateDriveMixSongsTool,
@@ -3003,10 +3018,10 @@ export function createMcpServer(token: string) {
     {
       title: "Get Money Review Queue",
       description:
-        "Transactions needing attention, newest first, each with its reason: no_kind (not processed yet), missing_required_tag (detail names the tag group, e.g. Category), transfer_candidate (looks like a transfer with no unique match), split_mismatch (splits do not add up), price_change (a charge on an active subscription that differs from its price by more than its tolerance; record_wb_subscription_price accepts it, mark_wb_reviewed dismisses a one-off), new_recurring (the newest charge of a detected, watching subscription; confirm or dismiss it with upsert_wb_subscription). Returns counts by reason over the date range, and the items with the fields needed to decide. " +
+        "Transactions needing attention, newest first, each with its reason: no_kind (not processed yet), missing_required_tag (detail names the tag group, e.g. Category), transfer_candidate (looks like a transfer with no unique match), split_mismatch (splits do not add up), price_change (a charge on an active subscription that differs from its price by more than its tolerance; record_wb_subscription_price accepts it, mark_wb_reviewed dismisses a one-off), new_recurring (the newest charge of a detected, watching subscription; confirm or dismiss it with upsert_wb_subscription), planned_match (the app suggests this payment settles a planned item; planned_match_id, planned_item_name, planned_on, planned_amount, match_amount, planned_tolerance and planned_window_days describe it; answer it with update_wb_planned_match). Returns counts by reason over the date range (always every reason: the reason filter narrows only the items, not the counts), and the items with the fields needed to decide. " +
         WB_SIGN + "Tier 1.",
       inputSchema: {
-        reason: z.enum(["no_kind", "missing_required_tag", "transfer_candidate", "split_mismatch", "price_change", "new_recurring"]).optional(),
+        reason: z.enum(["no_kind", "missing_required_tag", "transfer_candidate", "split_mismatch", "price_change", "new_recurring", "planned_match"]).optional(),
         from: wbDate("Transaction date on or after"),
         to: wbDate("Transaction date on or before"),
         limit: z.number().optional().describe("Max items, default 20, cap 50."),
@@ -3118,7 +3133,7 @@ export function createMcpServer(token: string) {
     {
       title: "Create Money Rule",
       description:
-        "Create a rule (created_by claude) that sets a kind, a merchant and/or tags on matching posted transactions, then reprocesses what it matches (reprocess: false to skip). In an exclusive group the first rule by priority wins. " +
+        "Create a rule (created_by claude) that sets a kind, a merchant, a project and/or tags on matching posted transactions, then reprocesses what it matches (reprocess: false to skip). In an exclusive group the first rule by priority wins; the first matching rule with set_project_id sets the project, on single-split transactions only, and never over a project set or removed by hand. " +
         WB_RULES + WB_MANUAL + "For a fix to one transaction use create_wb_rule_from_transaction. Tier 2.",
       inputSchema: {
         name: z.string(),
@@ -3126,6 +3141,7 @@ export function createMcpServer(token: string) {
         priority: z.number().optional().describe("Lower runs first. Default 100."),
         set_kind: wbKind.optional(),
         set_merchant_id: z.string().optional(),
+        set_project_id: z.string().optional().describe("A project id (get_wb_projects)."),
         add_tag_ids: z.array(z.string()).optional(),
         notes: z.string().optional(),
         reprocess: z.boolean().optional().describe("Default true."),
@@ -3148,6 +3164,7 @@ export function createMcpServer(token: string) {
         priority: z.number().optional(),
         set_kind: wbKind.nullable().optional(),
         set_merchant_id: z.string().nullable().optional(),
+        set_project_id: z.string().nullable().optional().describe("A project id, or null to stop setting one."),
         add_tag_ids: z.array(z.string()).optional(),
         notes: z.string().nullable().optional(),
         active: z.boolean().optional(),
@@ -3238,6 +3255,7 @@ export function createMcpServer(token: string) {
       title: "Split a Money Transaction",
       description:
         "Replace a transaction's splits, with their tags, in one step. Amounts are signed like the transaction and must add up to it exactly. tax_year is optional (default: the transaction's year). " +
+        "Existing parts are reused in order, so their project and planned matches stay; project_id on a part sets it (null takes it off its project, and that sticks), and leaving it out keeps what the part had. " +
         WB_SIGN + "Tier 2.",
       inputSchema: {
         transaction_id: z.string(),
@@ -3247,6 +3265,7 @@ export function createMcpServer(token: string) {
           tax_year: z.number().optional(),
           notes: z.string().optional(),
           tag_ids: z.array(z.string()).optional(),
+          project_id: z.string().nullable().optional().describe("A project id, or null for none."),
         })).describe("1 to 20 parts."),
         source: wbHandSource,
       },
@@ -3472,6 +3491,232 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(bulkCreateWbTaxonomyTool, args, token),
+  );
+
+  // --- Warren Buffet, Phase 3 (docs/technical-spec-warren_buffet_p3-q5k.md §4) ---
+  // Any other thread must run gitsync before deploying mcp, or these tools disappear from live (spec A31).
+  const WB_PLAN =
+    "A planned item is future money in or out: a one-off (with a stage: draft, estimate, quoted, invoiced, paid, cancelled) or recurring (interval_count + interval_unit, no stage). " +
+    "Drafts are what-ifs (stage draft, or is_draft on a recurring item); free cash leaves them out unless include_drafts is true. ";
+  const WB_FREE =
+    "Free cash is the lowest projected spending-cash balance over the horizon minus the safety floor. The projection starts from spending cash minus what is owed on cards and emergency credit (unused credit never counts), then adds planned income and bills on their dates (less what is already confirmed against them), subscriptions, and everyday spending at the burn rate. The reserve account is shown on its own line and never counted. ";
+  const wbStage = z.enum(["draft", "estimate", "quoted", "invoiced", "paid", "cancelled"]);
+
+  server.registerTool(
+    "get_wb_projects",
+    {
+      title: "Get Money Projects",
+      description: "Projects that group payments (a remodel, a trip). Splits join a project through set_wb_transaction_project or a rule's set_project_id; project-linked spending leaves the burn rate. Tier 1.",
+      inputSchema: {
+        status: z.enum(["active", "on_hold", "done", "cancelled"]).optional(),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbProjectsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_planned_items",
+    {
+      title: "Get Money Planned Items",
+      description:
+        "Planned items, earliest due first. Each says plainly whether it is a draft (draft: true), whether it repeats (recurring), how much is confirmed against it (confirmed_total) and, for a one-off, what remains. Drafts are included unless include_drafts is false. " +
+        WB_PLAN + WB_SIGN + "Tier 1.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        stage: wbStage.optional(),
+        recurring: z.boolean().optional().describe("true for recurring items only, false for one-offs only."),
+        due_from: wbDate("Due on or after"),
+        due_to: wbDate("Due on or before"),
+        include_drafts: z.boolean().optional().describe("Default true."),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbPlannedItemsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_planned_matches",
+    {
+      title: "Get Money Planned Matches",
+      description:
+        "Links between planned items and the payments that settle them, newest first, with the planned item and the payment (date, amount, description). status suggested (default; the app's suggestions, also in get_wb_review_queue as planned_match), confirmed or rejected. " +
+        WB_SIGN + "Tier 1.",
+      inputSchema: {
+        status: z.enum(["suggested", "confirmed", "rejected"]).optional(),
+        planned_item_id: z.string().optional(),
+        transaction_id: z.string().optional(),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbPlannedMatchesTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_settings",
+    {
+      title: "Get Money Settings",
+      description: "The safety floor (cash always kept back; floor_missing true until Alex sets it at seeding) and the projection horizon in months (default 12). Tier 1.",
+      inputSchema: {},
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbSettingsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_free_cash",
+    {
+      title: "Get Money Free Cash",
+      description:
+        "Free cash now: start_balance (spending_cash plus credit_owed), the low point (low_balance, low_on), safety_floor and floor_missing, free_cash, reserve_cash on its own line, the horizon, and the burn rate (median and mean). " +
+        WB_FREE + WB_SIGN + "Tier 1.",
+      inputSchema: {
+        include_drafts: z.boolean().optional().describe("Count what-if drafts too. Default false."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbFreeCashTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_true_cost",
+    {
+      title: "Get Money Monthly True Cost",
+      description:
+        "Monthly true cost = the burn rate (median of the last 3 full months of spending, fees and refunds, leaving out project spending, subscription charges and what is confirmed against planned items) + subscriptions as a monthly amount + recurring planned bills as a monthly amount; against expected_income_monthly from recurring planned income. burn_months is the working: each month and what it left out. " +
+        WB_SIGN + "Tier 1.",
+      inputSchema: {},
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbTrueCostTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_cash_projection",
+    {
+      title: "Get Money Cash Projection",
+      description:
+        "The day-by-day spending-cash projection, reduced to what matters: the start, the low point, the end, the burn per day, and only the days where something happens (planned_in, planned_out or subscriptions not zero), earliest first. Never every day. " +
+        WB_FREE + WB_SIGN + "Tier 1.",
+      inputSchema: {
+        include_drafts: z.boolean().optional().describe("Default false."),
+        from: wbDate("Event days on or after"),
+        to: wbDate("Event days on or before"),
+        limit: z.number().optional().describe("Max event days, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbCashProjectionTool, args, token),
+  );
+
+  server.registerTool(
+    "upsert_wb_project",
+    {
+      title: "Create or Edit a Money Project",
+      description: "Create a project (no id; name required) or edit one (id). A project is optional: a single future cost is just a planned item. Audited. Tier 2.",
+      inputSchema: {
+        id: z.string().optional(),
+        name: z.string().optional(),
+        status: z.enum(["active", "on_hold", "done", "cancelled"]).optional(),
+        budget: z.number().nullable().optional().describe("Optional total budget, 0 or more."),
+        starts_on: wbDate("Start"),
+        ends_on: wbDate("End"),
+        notes: z.string().nullable().optional(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(upsertWbProjectTool, args, token),
+  );
+
+  server.registerTool(
+    "upsert_wb_planned_item",
+    {
+      title: "Create or Edit a Money Planned Item",
+      description:
+        "Create a planned item (no id; name, amount and due_on required, and a stage for a one-off) or edit one (id; only the fields given change). Afterwards the app suggests matching payments (merchant + amount within amount_tolerance + date within match_window_days); they appear in get_wb_review_queue as planned_match. Give each item a merchant_id where you can: an item with no merchant is never suggested. " +
+        WB_PLAN + WB_SIGN + "Audited. Tier 2.",
+      inputSchema: {
+        id: z.string().optional(),
+        name: z.string().optional(),
+        amount: z.number().optional().describe("Signed: money out negative, money in positive. For a recurring item, each occurrence."),
+        due_on: wbDate("A one-off's date, or a recurring item's first date"),
+        interval_count: z.number().nullable().optional().describe("Recurring: 1 to 120 (with interval_unit). Null for a one-off."),
+        interval_unit: z.enum(["week", "month"]).nullable().optional(),
+        ends_on: wbDate("Recurring: the last date it can fall on"),
+        stage: wbStage.nullable().optional().describe("One-off only; null for a recurring item."),
+        is_draft: z.boolean().optional().describe("Recurring what-if. A one-off draft uses stage draft."),
+        project_id: z.string().nullable().optional(),
+        merchant_id: z.string().nullable().optional().describe("Used to suggest matching payments."),
+        counterparty: z.string().nullable().optional(),
+        tax_year: z.number().nullable().optional(),
+        amount_tolerance: z.number().optional().describe("Dollars either side of amount a payment may differ by. Default 0."),
+        match_window_days: z.number().optional().describe("Days either side of a due date a payment may fall. Default 10."),
+        notes: z.string().nullable().optional(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(upsertWbPlannedItemTool, args, token),
+  );
+
+  server.registerTool(
+    "create_wb_planned_match",
+    {
+      title: "Match a Payment to a Money Planned Item",
+      description:
+        "Match a posted payment to a planned item by hand, confirmed at once (for a part-payment, pass a lower amount). Without confirmed: true this returns a proposal: the planned item's name and due date (with occurrence_on for a recurring item), the payment's date, description and amount, the amount that would be applied, and whether the item would become paid. It refuses what the write would refuse. " +
+        "A one-off fully covered by confirmed matches becomes paid automatically, and nothing sets it back. Pass transaction_id for a single-part payment, or split_id for one part of a split payment. " +
+        WB_SIGN + "Tier 3.",
+      inputSchema: {
+        planned_item_id: z.string(),
+        transaction_id: z.string().optional(),
+        split_id: z.string().optional(),
+        occurrence_on: wbDate("Recurring items: the due date this payment settles"),
+        amount: z.number().optional().describe("How much of the payment is for this item, as a positive number. Default: the smaller of what is left of the payment and of the item."),
+        source: wbHandSource,
+        confirmed: z.boolean().optional().describe("true to match, after reviewing the proposal."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createWbPlannedMatchTool, args, token),
+  );
+
+  server.registerTool(
+    "update_wb_planned_match",
+    {
+      title: "Confirm or Turn Down a Money Match Suggestion",
+      description:
+        "Answer one of the app's suggestions (get_wb_review_queue reason planned_match, or get_wb_planned_matches): confirm it, optionally for a lower amount (a positive number) when only part of the payment is for the planned item, or reject it, and it is never suggested again. Confirming the last part of a one-off makes it paid. Only suggestions can be answered. Audited. Tier 2.",
+      inputSchema: {
+        match_id: z.string(),
+        action: z.enum(["confirm", "reject"]),
+        amount: z.number().optional().describe("confirm only: the lower amount for the planned item."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateWbPlannedMatchTool, args, token),
+  );
+
+  server.registerTool(
+    "set_wb_transaction_project",
+    {
+      title: "Put Money Transactions on a Project",
+      description:
+        "Put up to 25 transactions on a project, or take them off one (project_id null; that sticks, and no rule puts it back). Only transactions with a single part change; split ones are listed in skipped_multi_split (use split_wb_transaction for those). A project set by hand or by Claude is never changed by rules. Audited. Tier 2.",
+      inputSchema: {
+        transaction_ids: wbIds("1 to 25 transaction ids."),
+        project_id: z.string().nullable().describe("A project id, or null to take them off their project."),
+        source: wbHandSource,
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(setWbTransactionProjectTool, args, token),
+  );
+
+  server.registerTool(
+    "update_wb_settings",
+    {
+      title: "Change Money Settings",
+      description:
+        "Change the safety floor (cash always kept back; null clears it), the horizon in months (1 to 24) or the settings notes. Without confirmed: true this returns a proposal showing the current values against the proposed ones, and writes nothing. Alex sets the floor himself at seeding: never choose a floor for him. Tier 3.",
+      inputSchema: {
+        safety_floor: z.number().nullable().optional(),
+        horizon_months: z.number().optional(),
+        notes: z.string().nullable().optional(),
+        confirmed: z.boolean().optional().describe("true to save, after reviewing the proposal."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateWbSettingsTool, args, token),
   );
 
   // --- Drive Mix (docs/technical-spec-drive_mix-v7r.md §5) ---
