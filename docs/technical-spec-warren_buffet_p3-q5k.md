@@ -111,6 +111,21 @@ Phase 3 answers "can we afford it?":
 | A31 | **Any other thread must run gitsync before deploying mcp**, or the Warren Buffet Phase 3 tools disappear from live. Alex tells restructure_p4-v9k himself. |
 | A32 | `create_wb_planned_match` is **tier 3 with propose**. The proposal shows the planned item's name and due date (with occurrence_on for a recurring item), the payment's date, description and amount, the amount that would be applied, and whether confirming would mark the item paid. Propose only reads, and shares its validation with the handler (`matchPlan`), so it refuses anything the write would refuse. `update_wb_planned_match` stays tier 2, because it acts on an app suggestion Alex has already seen. |
 | A33 | `get_wb_planned_items` includes drafts by default, and every item says plainly whether it is a draft (`draft: true` for stage draft, or for is_draft on a recurring item). Free cash still leaves drafts out by default. |
+| A34 | A new repeating item with a merchant starts from the **earliest matching payment inside the burn window** (`wb_planned_start_from_history`: same merchant and sign, amount within tolerance, from the first burn month to today). The form shows it and can override it; `upsert_wb_planned_item` returns it as `backdated_from`. With no merchant, or no payment, the given date stands. (Alex, 2026-10-19, run tag `warren_buffet_p3-q5k-s8-t3bv`; A34–A41 all from this run tag.) |
+| A35 | "Planning" is derived, never stored: a project is planning when every item that is not cancelled is a draft and nothing has been paid on it. A project with no items is not planning. |
+| A36 | Project totals are spent (gross money out, negative), received (money in, positive) and net (their sum). **The budget is measured against spent**, not net: `budget_left = budget + spent`. |
+| A37 | "More than planned": a warning when an item's confirmed matches exceed its amount. Warning only, never blocking (`over_matched`, computed). |
+| A38 | A split's project shows in the transaction detail, where it can be edited, and in `get_wb_transactions` as `project_names` (from `wb_transaction_list`). |
+| A39 | Remove (unconfirm) a match: `wb_unconfirm_planned_match` sets it to rejected, so it is not suggested again, and never changes the stage (A20). If that leaves a one-off at stage paid no longer fully covered (`paid_not_covered`), the app asks "Set it back to invoiced?" with Yes or No. App only in step 8. Replaces A29. |
+| A40 | Missed dates: the `wb_planned_unmatched` view lists past due dates not fully matched, and the `wb_planned_skips` table records a date marked "Not needed", which the view then leaves out. Step 10's weekly cleanup reads the same view (A25). |
+| A41 | Step 8 is split into 8a–8d. 8a is the database. **What 8b–8d hold was replaced by A42–A44.** |
+| A42 | **Planning happens mostly in claude.ai**, so Claude must work well as the planning tool. 8b is tools first. New tools: the project summary; missed dates; mark a missed date not needed; unconfirm a match (tier 2, returning `paid_not_covered` so Claude can ask about setting the item back to invoiced). Plus the planned handler changes (`backdated_from`, `project_names`, `over_matched`) and the what-if (A43). They need `mcp/index.ts`. Before deploying, the live mcp version must still be v155; if higher, stop and ask. (Alex, 2026-10-19, run tag `warren_buffet_p3-q5k-s8-n7xr`; A42–A44 all from this run tag.) |
+| A43 | `get_wb_free_cash` takes optional hypothetical items (amount, date, optional interval). It returns free cash with and without them and writes nothing, so Claude can answer "can we afford X on date Y" in one call. Tier 1, bounded. **Amended** (Alex, 2026-10-19, run tag `warren_buffet_p3-q5k-s8-c8pk`):
+- There is **no `affordable` yes or no**. Free cash is already negative before any what-if, because the reserve is left out on purpose, so it would always say no.
+- It returns `without` and `with`, each with `free_cash`, `low_balance`, `low_on` and `first_below_floor_on`.
+- It also returns `difference`, and `days_sooner`: how many days earlier (positive) or later (negative) `first_below_floor_on` comes with the items.
+- Each item keeps `dates_counted`, and is flagged `outside_horizon` when its date is past the horizon. |
+| A44 | 8c is a planning skill, `.claude/skills/wb-planning/SKILL.md`, tested with a scripted planning conversation in a fresh thread. 8d is a slimmer app: the Plan tab overview (projects with totals, upcoming, repeating, what-ifs, missed dates with Not needed), project detail, planned item detail with matched payments and Remove (with the set-back-to-invoiced question), the full Review suggestion card, and the single-split project picker on transaction detail, all with their help. **Dropped for now:** the add and edit forms and the split-editor picker. Claude does the entry. |
 | A14 | Recurring "what if" items are wanted (Alex, 2026-10-14, run tag `warren_buffet_p3-q5k-s2-m3qd`). `wb_planned_items.is_draft boolean not null default false`, for recurring items only; a one-off draft stays stage `draft`. Drafts of either kind stay out of free cash unless the drafts toggle includes them. |
 
 ---
@@ -216,6 +231,17 @@ The rebuild reuses existing split rows by position, so their ids, project links 
 | `wb_cash_projection(include_drafts boolean, today date)` | invoker function, day by day (A2, A4, A7) | 5 |
 | `wb_free_cash(include_drafts boolean, today date)` | invoker function: low point, low date, floor, reserve line | 5 |
 
+### 3.8 Plan tab support (Step 8a)
+
+| object | kind | notes |
+|---|---|---|
+| `wb_planned_skips` (audited) | table | planned_item_id (`on delete cascade`), occurrence_on (recurring only, as in matches), reason. One row per (item, occurrence), nulls not distinct. Owner and context filled from the item by trigger (A40). |
+| `wb_planned_unmatched` | view | past due dates not fully matched: recurring dates from due_on (drafts left out) and overdue one-offs (not draft, paid or cancelled), less skips. Columns include confirmed_total, remaining, days_late, within_window, has_suggestion (A25, A40). |
+| `wb_project_summary` | view | per project: spent, received, net, budget_left (A36), planned_out_due and planned_in_due (one-offs left to pay; recurring dates over the horizon), draft_out_due and draft_in_due, item_count, draft_count, payment_count, last_payment_on, planning (A35). |
+| `wb_unconfirm_planned_match(match_id)` | invoker function | confirmed → rejected; returns stage, confirmed_total and paid_not_covered; never changes the stage (A39). |
+| `wb_planned_start_from_history(merchant_id, amount, tolerance, today)` | invoker function | earliest matching payment from the first burn month (A34). |
+| `wb_transaction_list` | view, redefined | adds `project_names` at the end (A38). |
+
 ---
 
 ## 4. MCP tools (Step 6)
@@ -248,7 +274,10 @@ Each step ends with verification and stops for Alex. Database claims are taken a
 | 5 | **Views and projection** (§3.7), with tests on invented data, including the monthly-equivalent test (A12). Help for free cash, true cost, burn rate, spendable cash, the reserve line and the floor. | `db:fn:wb_monthly_equivalent`, `db:fn:wb_subscription_occurrences`, `db:table:wb_subscription_outflows`, `db:fn:wb_burn_rate_on`, `db:table:wb_burn_rate`, `db:table:wb_true_cost`, `db:fn:wb_cash_projection`, `db:fn:wb_free_cash` | no |
 | 6 | **MCP tools** (§4). Plain-sentence errors, schema-versus-handler tests, tool count (121 → 134). Any other thread must gitsync before deploying mcp (A31). | `db:deploy` | mcp |
 | 7 | **Seeding in claude.ai.** Projects, premiums, inflows, one-offs, then the floor and horizon (Alex sets the floor). Confirm the first suggestions. | none | no |
-| 8 | **Plan tab UI.** Projects and planned items; the match card on Review; a project picker on splits. Help for the stages and the match card. | none | Vercel on merge |
+| 8a | **Plan tab database** (§3.8), with rolled-back tests. CONFORMANT. | `db:table:wb_planned_skips`, `db:table:wb_planned_unmatched`, `db:table:wb_project_summary`, `db:fn:wb_unconfirm_planned_match`, `db:fn:wb_planned_start_from_history`, `db:table:wb_transaction_list` | no |
+| 8b | **Tools first (A42, A43).** New: project summary, missed dates, mark not needed, unconfirm. Changed: the free cash what-if, `backdated_from`, `project_names`, `over_matched`. Needs `mcp/index.ts`. Before deploying, the live mcp version must still be v155; if higher, stop and ask. | `db:deploy` | mcp |
+| 8c | **Planning skill** `.claude/skills/wb-planning/SKILL.md` (A44), tested in a fresh thread. | none | no |
+| 8d | **Slimmer app (A44).** Plan tab overview, project detail, planned item detail with Remove, the full Review card, the single-split picker, and their help. No add or edit forms, and no split-editor picker. | none | Vercel on merge |
 | 9 | **Overview.** Free cash and its low date, the reserve line, true cost against income, and the drafts toggle. Each panel shows its live working. | none | Vercel on merge |
 | 10 | **Weekly cleanup prompt.** Adds the overdue and unmatched planned-items section, with a version bump. | none | no |
 | 11 | **Phase 3 review.** | none | no |

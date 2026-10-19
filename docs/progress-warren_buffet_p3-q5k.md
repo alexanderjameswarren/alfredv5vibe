@@ -11,8 +11,11 @@ No amounts in this file. The safety floor is never written into the repo.
 | 4 | Processing and match suggestions | done, 2026-10-17 (135 applied, 136 35/35; 4b app-tested by Alex) |
 | 5 | Views and projection | done, 2026-10-19 (137 applied, 138 42/42; live batches 1–5 passed) |
 | 6 | MCP tools. **Any other thread must run gitsync before deploying mcp, or the WB Phase 3 tools disappear from live (A31)** | done, 2026-10-19: live on **mcp v155** (134 tools); fresh-thread batches 1–3, the re-check and the cleanup all passed |
-| 7 | Seeding in claude.ai. **Notes:** give every planned item a merchant wherever possible, because items with no merchant are never suggested; and **re-run processing once after seeding** (`reprocess_wb_transactions`), so suggestions are made for existing payments (A19). **Known double count until then:** a past payment for something that later becomes a planned item stays in the burn rate until it is confirmed as a match | not started |
-| 8 | Plan tab UI. **Also:** build `wb_project_summary`, the project spent-to-date summary (A30); and add an "unconfirm" for planned matches only if the Plan tab shows the need (A29). **Decide:** nothing stops the confirmed matches on a planned item from adding up to more than the item's own amount, and a real overpayment is possible. Should an over-matched item show a warning on the Plan tab? **Decide:** where a split's project is shown. No tool reads it today; it could go in `get_wb_transactions`, or on the Plan tab only | not started |
+| 7 | Seeding in claude.ai. **Notes:** give every planned item a merchant wherever possible, because items with no merchant are never suggested; and **re-run processing once after seeding** (`reprocess_wb_transactions`), so suggestions are made for existing payments (A19). **Known double count until then:** a past payment for something that later becomes a planned item stays in the burn rate until it is confirmed as a match | done, 2026-10-19 (in claude.ai; see log) |
+| 8a | Plan tab database (spec §3.8; decisions A34–A41) | done, 2026-10-19 (140 applied, 141 48/48; live CONFORMANT, 68 tables) |
+| 8b | **Tools first (A42, A43).** New tools: project summary, missed dates, mark not needed, unconfirm (tier 2, `paid_not_covered`). Changed: the free cash what-if (tier 1, writes nothing), `backdated_from`, `project_names`, `over_matched`. Needs `mcp/index.ts`. **Live mcp must still be v155 before deploying; if higher, stop and ask** | not started |
+| 8c | Planning skill `.claude/skills/wb-planning/SKILL.md` (A44); scripted planning conversation in a fresh thread | not started |
+| 8d | Slimmer app (A44): Plan tab overview, project detail, planned item detail with Remove (set-back question), full Review card, single-split picker, help. **No add or edit forms, and no split-editor picker** | not started |
 | 9 | Overview numbers | not started |
 | 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed | not started |
 | 11 | Phase 3 review | not started |
@@ -323,6 +326,59 @@ All checks below were run by Alex in fresh claude.ai threads. No amounts are rec
   - on the fully matched payment it reads "all of that payment is already matched to other planned items. Nothing was changed.".
 - **Cleanup verified:** no ZZ TEMP S6 projects, items, rules or payment matches remain, and no settings rows. The test payment's split has project_id and project_source both null.
 - **Step 6 done.** Live: **mcp v155**, 134 tools. Checkpoint with `--release-db` (`db:deploy`).
+
+### Step 7 done (2026-10-19, seeding in claude.ai; recorded at run tag `warren_buffet_p3-q5k-s8-q6hn`)
+No amounts are recorded.
+- **5 projects** were created.
+- **Planned items:**
+  - recurring bills (insurance premiums, property tax);
+  - recurring income;
+  - one-off items for the insurance claim;
+  - drafts for the backyard and for a possible Japan trip.
+- **Settings:**
+  - the safety floor is set (by Alex; the value is not in the repo);
+  - the **horizon is 15 months, on purpose**, so the Japan trip in Dec 2027 falls inside it. This is noted in the settings notes.
+- **Recurring items were backdated to July 1**, so past payments match. They first started at the next due date, matched nothing, and double counted in burn until backdated by hand. That is step 8, decision 1.
+- **14 suggested matches** were confirmed, and processing was re-run.
+- Points for step 8, from seeding:
+  - default the start date from history;
+  - a "planning" state for projects whose items are all drafts;
+  - project totals, gross or net, with money coming in for the insurance claim;
+  - unmatched past dates, such as a July premium from before the sync started.
+
+### Step 6 checkpoint follow-up (2026-10-19)
+- `supabase/functions/mcp/index.ts` was **yielded** to restructure_p4-v9k. It was unchanged from main after the step 6 checkpoint. Any later mcp change in Phase 3 must claim it again once restructure-p4 releases it, and must gitsync before deploying (A31).
+
+### Step 8a drafted (2026-10-19, run tags `warren_buffet_p3-q5k-s8-q6hn` plan, `-s8-t3bv` 8a)
+- Plan approved as decisions **A34–A41** in the spec (A39 replaces A29). Step 8 is split into 8a–8d (A41).
+- Claimed: the two `_pending_…plan_tab` SQL files, `warren-buffet.ts` and its test. **Not** `mcp/index.ts` (restructure-p4's).
+- `_pending_warren_buffet_p3-q5k_plan_tab.sql` (spec §3.8): `wb_planned_skips` (registered, audited, intents-style RLS), `wb_planned_unmatched`, `wb_project_summary`, `wb_unconfirm_planned_match`, `wb_planned_start_from_history`, and `wb_transaction_list` with `project_names`. Ends with the conformance check.
+- `_pending_…plan_tab_tests.sql`: 48 rolled-back checks. PGlite: **48/48**, and every earlier test file still passes (134, 136, 138 and the eight Phase 2 files).
+- **8b deploy safety:** before deploying, the live mcp version must still be v155. If it is higher, stop and ask Alex.
+- Next: Alex runs gitsync; drift check; claim the six db: items; number the files.
+
+### Step 8a numbered (2026-10-19, run tag `warren_buffet_p3-q5k-s8-n7xr`)
+- gitsync brought 68d323d..094ab5f. **Drift check: clear.**
+  - 139 (restructure-p4) touches only intents, items, executions, `status_guard` and `platform_search_items`.
+  - The new `schema-snapshot.sql` (through 138) shows `wb_transaction_list` as in 135, and none of the 8a objects.
+- **CLAUDE.md:** gitpush regenerates the snapshot, and threads never edit it. No migration step is added for threads.
+- Claimed the 6 db: items. Numbered **140_wb_phase3_step8_plan_tab.sql** and **141_wb_phase3_step8_tests.sql**, deleted the `_pending_` files, and re-ran PGlite: 141 48/48, and every earlier test file passes.
+- **Priority change:** A42–A44 reorder 8b–8d. Tools come first, because planning happens in claude.ai.
+- Live mcp is **v155**. `mcp/index.ts` is free again: restructure-p4 checkpointed without it.
+
+### Step 8a done (2026-10-19, run tag `warren_buffet_p3-q5k-s8-c8pk`)
+- Alex ran the files. 140: conformant true, failures []. 141: rolled back with all 48 checks true.
+- Verified live:
+  - `check_platform_conformance` is **CONFORMANT, 68 tables**.
+  - `wb_planned_skips` is registered, audited and policy_mode none. It has the access policy, the unique (item, occurrence) key with nulls not distinct, and cascade from the item.
+  - A schema dump shows both triggers, both views and both functions, and `project_names` on `wb_transaction_list`.
+  - 141 ran against the live views and functions.
+- **8b what-if amended (A43):**
+  - no `affordable` flag;
+  - with and without: free_cash, low_balance, low_on and first_below_floor_on;
+  - `difference` and `days_sooner`;
+  - each item keeps `dates_counted` and `outside_horizon`.
+- Next: Alex checkpoints 8a with `--release-db` before 8b starts.
 
 ## Later
 

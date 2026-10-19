@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-19 13:23, through migration 138 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-19 14:21, through migration 139 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -5302,6 +5302,64 @@ COMMENT ON FUNCTION "public"."wb_planned_occurrences"("p_from" "date", "p_to" "d
 
 
 
+CREATE OR REPLACE FUNCTION "public"."wb_planned_skips_fill"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  p record;
+begin
+  select pi.user_id, pi.context_id, pi.interval_count into p
+  from public.wb_planned_items pi where pi.id = new.planned_item_id;
+  if not found then
+    raise exception 'wb_planned_skips: planned item % not found', new.planned_item_id using errcode = '23503';
+  end if;
+  new.user_id := p.user_id;
+  new.context_id := p.context_id;
+  if p.interval_count is not null and new.occurrence_on is null then
+    raise exception 'wb_planned_skips: a recurring planned item needs occurrence_on' using errcode = '23514';
+  end if;
+  if p.interval_count is null and new.occurrence_on is not null then
+    raise exception 'wb_planned_skips: a one-off planned item has no occurrence_on' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."wb_planned_skips_fill"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric DEFAULT 0, "p_today" "date" DEFAULT NULL::"date") RETURNS "date"
+    LANGUAGE "sql" STABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+  with t as (select coalesce(p_today, (now() at time zone 'America/Los_Angeles')::date) as d),
+  -- The first burn month, so every payment the burn rate counts is matched.
+  w as (select coalesce((select min(b.month) from t, public.wb_burn_rate_on(t.d) b), t.d) as first_day, t.d from t)
+  select min(c.d)
+  from w
+  join public.wb_transactions x on x.merchant_id = p_merchant_id and not x.pending
+  cross join lateral (select (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date as d) c
+  join public.wb_splits s on s.transaction_id = x.id
+  where p_merchant_id is not null
+    and coalesce(p_amount, 0) <> 0
+    and c.d between w.first_day and w.d
+    and sign(s.amount) = sign(p_amount)
+    and abs(abs(s.amount) - abs(p_amount)) <= coalesce(p_amount_tolerance, 0)
+    -- A split already fully confirmed against other planned items is not this item's.
+    and coalesce((select sum(abs(pm.amount_applied)) from public.wb_planned_matches pm
+                  where pm.split_id = s.id and pm.status = 'confirmed'), 0) < abs(s.amount);
+$$;
+
+
+ALTER FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric, "p_today" "date") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric, "p_today" "date") IS 'Warren Buffet: the date of the earliest posted payment at the merchant, with the amount''s sign and within the tolerance, from the first burn month (wb_burn_rate_on) to p_today, leaving out splits already fully confirmed against other planned items. Null when there is none, or no merchant. Used as the first due date of a new repeating item, so every payment the burn rate counts is matched (A34). Security invoker.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."wb_process_transactions"("ids" "uuid"[]) RETURNS "jsonb"
     LANGUAGE "plpgsql"
     SET "search_path" TO 'public', 'pg_temp'
@@ -6488,6 +6546,47 @@ $$;
 
 
 ALTER FUNCTION "public"."wb_transfer_match"("p_a_account" "uuid", "p_a_amount" numeric, "p_a_date" "date", "p_b_account" "uuid", "p_b_amount" numeric, "p_b_date" "date") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") RETURNS "jsonb"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  m      record;
+  pi     record;
+  v_paid numeric;
+begin
+  select * into m from public.wb_planned_matches where id = p_match_id for update;
+  if not found then
+    raise exception 'wb_unconfirm_planned_match: no match % that you can see', p_match_id using errcode = '23503';
+  end if;
+  if m.status <> 'confirmed' then
+    raise exception 'wb_unconfirm_planned_match: this match is %, not confirmed', m.status using errcode = '22023';
+  end if;
+  update public.wb_planned_matches set status = 'rejected', decided_at = now() where id = p_match_id;
+
+  select * into pi from public.wb_planned_items where id = m.planned_item_id;
+  select coalesce(sum(abs(x.amount_applied)), 0) into v_paid
+  from public.wb_planned_matches x
+  where x.planned_item_id = pi.id and x.status = 'confirmed';
+
+  -- The stage is never changed here (A20); the app asks whether to set it back.
+  return jsonb_build_object(
+    'status', 'rejected',
+    'planned_item_id', pi.id,
+    'stage', pi.stage,
+    'confirmed_total', sign(pi.amount) * v_paid,
+    'paid_not_covered', pi.interval_count is null and pi.stage = 'paid' and v_paid < abs(pi.amount));
+end;
+$$;
+
+
+ALTER FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") IS 'Warren Buffet: remove a confirmed planned match. The match becomes rejected, so the same pair is never suggested again. The planned item''s stage is never changed (A20); paid_not_covered is true when a paid one-off is no longer fully covered, so the app can ask whether to set it back to invoiced. Returns status, planned_item_id, stage, confirmed_total (signed) and paid_not_covered. Security invoker.';
+
 
 
 CREATE TABLE IF NOT EXISTS "platform"."audit_log" (
@@ -9762,6 +9861,33 @@ COMMENT ON COLUMN "public"."wb_planned_matches"."source" IS 'default = the sugge
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."wb_planned_skips" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "context_id" "text" NOT NULL,
+    "planned_item_id" "uuid" NOT NULL,
+    "occurrence_on" "date",
+    "reason" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."wb_planned_skips" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."wb_planned_skips" IS 'App: Warren Buffet. A past due date of a planned item marked Not needed (for example a payment from before the bank sync started), so wb_planned_unmatched and the weekly cleanup leave it out. occurrence_on is the date for a recurring item and null for a one-off, as in wb_planned_matches. user_id and context_id are filled from the planned item by trigger. Deleting the planned item deletes its skips.';
+
+
+
+COMMENT ON COLUMN "public"."wb_planned_skips"."occurrence_on" IS 'The skipped due date of a recurring item; null for a one-off.';
+
+
+
+COMMENT ON COLUMN "public"."wb_planned_skips"."reason" IS 'Optional note on why the date is not needed.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."wb_projects" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -9796,32 +9922,98 @@ COMMENT ON COLUMN "public"."wb_projects"."budget" IS 'Optional total budget, pos
 
 
 
-CREATE TABLE IF NOT EXISTS "public"."wb_split_tags" (
+CREATE OR REPLACE VIEW "public"."wb_planned_unmatched" WITH ("security_invoker"='true') AS
+ WITH "t" AS (
+         SELECT (("now"() AT TIME ZONE 'America/Los_Angeles'::"text"))::"date" AS "d"
+        ), "occ" AS (
+         SELECT "o"."planned_item_id",
+            "o"."occurrence_on" AS "due_on",
+            "o"."occurrence_on",
+            true AS "recurring"
+           FROM ("t" "t_1"
+             CROSS JOIN LATERAL "public"."wb_planned_occurrences"(COALESCE(( SELECT "min"("wb_planned_items"."due_on") AS "min"
+                   FROM "public"."wb_planned_items"
+                  WHERE ("wb_planned_items"."interval_count" IS NOT NULL)), "t_1"."d"), ("t_1"."d" - 1), false) "o"("planned_item_id", "occurrence_on", "amount", "recurring", "stage", "is_draft"))
+          WHERE "o"."recurring"
+        UNION ALL
+         SELECT "pi_1"."id",
+            "pi_1"."due_on",
+            NULL::"date" AS "date",
+            false
+           FROM "public"."wb_planned_items" "pi_1",
+            "t" "t_1"
+          WHERE (("pi_1"."interval_count" IS NULL) AND ("pi_1"."due_on" < "t_1"."d") AND ("pi_1"."stage" <> ALL (ARRAY['draft'::"text", 'paid'::"text", 'cancelled'::"text"])))
+        ), "done" AS (
+         SELECT "o"."planned_item_id",
+            "o"."due_on",
+            "o"."occurrence_on",
+            "o"."recurring",
+            COALESCE(( SELECT "sum"("abs"("pm"."amount_applied")) AS "sum"
+                   FROM "public"."wb_planned_matches" "pm"
+                  WHERE (("pm"."planned_item_id" = "o"."planned_item_id") AND ("pm"."status" = 'confirmed'::"text") AND (NOT ("pm"."occurrence_on" IS DISTINCT FROM "o"."occurrence_on")))), (0)::numeric) AS "paid"
+           FROM "occ" "o"
+        )
+ SELECT "d"."planned_item_id",
+    "pi"."name",
+    "pi"."project_id",
+    "pr"."name" AS "project_name",
+    "pi"."merchant_id",
+    "m"."name" AS "merchant_name",
+    "d"."recurring",
+    "d"."due_on",
+    "d"."occurrence_on",
+    "pi"."stage",
+    "pi"."amount",
+    "round"(("sign"("pi"."amount") * "d"."paid"), 2) AS "confirmed_total",
+    "round"(("sign"("pi"."amount") * ("abs"("pi"."amount") - "d"."paid")), 2) AS "remaining",
+    ("t"."d" - "d"."due_on") AS "days_late",
+    (("t"."d" - "d"."due_on") <= "pi"."match_window_days") AS "within_window",
+    (EXISTS ( SELECT 1
+           FROM "public"."wb_planned_matches" "pm"
+          WHERE (("pm"."planned_item_id" = "d"."planned_item_id") AND ("pm"."status" = 'suggested'::"text") AND (NOT ("pm"."occurrence_on" IS DISTINCT FROM "d"."occurrence_on"))))) AS "has_suggestion"
+   FROM (((("done" "d"
+     CROSS JOIN "t")
+     JOIN "public"."wb_planned_items" "pi" ON (("pi"."id" = "d"."planned_item_id")))
+     LEFT JOIN "public"."wb_projects" "pr" ON (("pr"."id" = "pi"."project_id")))
+     LEFT JOIN "public"."wb_merchants" "m" ON (("m"."id" = "pi"."merchant_id")))
+  WHERE (("d"."paid" < "abs"("pi"."amount")) AND (NOT (EXISTS ( SELECT 1
+           FROM "public"."wb_planned_skips" "sk"
+          WHERE (("sk"."planned_item_id" = "d"."planned_item_id") AND (NOT ("sk"."occurrence_on" IS DISTINCT FROM "d"."occurrence_on")))))));
+
+
+ALTER VIEW "public"."wb_planned_unmatched" OWNER TO "postgres";
+
+
+COMMENT ON VIEW "public"."wb_planned_unmatched" IS 'App: Warren Buffet. Missed dates: every due date before today (Pacific) whose confirmed matches do not cover the amount. Recurring items give one row per past date from due_on (occurrence_on set); a one-off gives one row once its date is past, unless it is a draft, paid or cancelled (occurrence_on null). Recurring drafts are left out. A date in wb_planned_skips (Not needed) is left out. confirmed_total and remaining carry the item''s sign; days_late counts from the due date; within_window is true while a payment may still be suggested (days_late <= match_window_days); has_suggestion when one waits in Review. The weekly cleanup reads this view (A25). security_invoker, so wb_ RLS applies.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."wb_settings" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
     "context_id" "text" NOT NULL,
-    "split_id" "uuid" NOT NULL,
-    "tag_id" "uuid" NOT NULL,
-    "group_id" "uuid" NOT NULL,
-    "group_exclusive" boolean NOT NULL,
-    "source" "text" NOT NULL,
-    "rule_id" "uuid",
+    "safety_floor" numeric(14,2),
+    "horizon_months" integer DEFAULT 12 NOT NULL,
+    "notes" "text",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "replaced_rule_id" "uuid",
-    CONSTRAINT "wb_split_tags_replaced_check" CHECK ((("replaced_rule_id" IS NULL) OR ("source" <> 'rule'::"text"))),
-    CONSTRAINT "wb_split_tags_rule_check" CHECK ((("rule_id" IS NULL) OR ("source" = 'rule'::"text"))),
-    CONSTRAINT "wb_split_tags_source_check" CHECK (("source" = ANY (ARRAY['rule'::"text", 'claude'::"text", 'manual'::"text"])))
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "wb_settings_floor_check" CHECK ((("safety_floor" IS NULL) OR ("safety_floor" >= (0)::numeric))),
+    CONSTRAINT "wb_settings_horizon_check" CHECK ((("horizon_months" >= 1) AND ("horizon_months" <= 24)))
 );
 
 
-ALTER TABLE "public"."wb_split_tags" OWNER TO "postgres";
+ALTER TABLE "public"."wb_settings" OWNER TO "postgres";
 
 
-COMMENT ON TABLE "public"."wb_split_tags" IS 'App: Warren Buffet. Tags on splits, with their source (rule, claude, manual). group_id, group_exclusive, user_id and context_id are filled by trigger, never typed. Rules replace only their own tags; claude and manual tags are never overwritten by a rule.';
+COMMENT ON TABLE "public"."wb_settings" IS 'App: Warren Buffet. One row per context of money settings. The floor value is entered by Alex at seeding and never written into a committed file.';
 
 
 
-COMMENT ON COLUMN "public"."wb_split_tags"."replaced_rule_id" IS 'For a claude or manual tag that replaced a rule''s tag in the same group, or took over a rule''s tag: that rule. Counts overrides for rule health (Step 10).';
+COMMENT ON COLUMN "public"."wb_settings"."safety_floor" IS 'Cash kept back: free cash = the lowest projected spending-cash balance over the horizon minus this. Positive.';
+
+
+
+COMMENT ON COLUMN "public"."wb_settings"."horizon_months" IS 'Months the cash projection looks ahead. Default 12.';
 
 
 
@@ -9860,6 +10052,125 @@ COMMENT ON COLUMN "public"."wb_splits"."project_id" IS 'Optional project this pa
 
 
 COMMENT ON COLUMN "public"."wb_splits"."project_source" IS 'Who set project_id: rule, claude or manual. claude and manual are never changed by processing; a null project_id with source claude or manual is a project removed by hand, which no rule puts back. A project written with no source counts as manual (trigger).';
+
+
+
+CREATE OR REPLACE VIEW "public"."wb_project_summary" WITH ("security_invoker"='true') AS
+ WITH "t" AS (
+         SELECT (("now"() AT TIME ZONE 'America/Los_Angeles'::"text"))::"date" AS "d",
+            COALESCE(( SELECT "wb_settings"."horizon_months"
+                   FROM "public"."wb_settings"
+                  ORDER BY "wb_settings"."created_at"
+                 LIMIT 1), 12) AS "h"
+        ), "pay" AS (
+         SELECT "s"."project_id",
+            COALESCE("sum"("s"."amount") FILTER (WHERE ("s"."amount" < (0)::numeric)), (0)::numeric) AS "spent",
+            COALESCE("sum"("s"."amount") FILTER (WHERE ("s"."amount" > (0)::numeric)), (0)::numeric) AS "received",
+            ("count"(*))::integer AS "payment_count",
+            "max"(((COALESCE("x"."posted_at", "x"."transacted_at") AT TIME ZONE 'America/Los_Angeles'::"text"))::"date") AS "last_payment_on"
+           FROM ("public"."wb_splits" "s"
+             JOIN "public"."wb_transactions" "x" ON (("x"."id" = "s"."transaction_id")))
+          WHERE (("s"."project_id" IS NOT NULL) AND (NOT "x"."pending"))
+          GROUP BY "s"."project_id"
+        ), "items" AS (
+         SELECT "pi"."project_id",
+            ("count"(*) FILTER (WHERE (COALESCE("pi"."stage", ''::"text") <> 'cancelled'::"text")))::integer AS "item_count",
+            ("count"(*) FILTER (WHERE (("pi"."stage" = 'draft'::"text") OR "pi"."is_draft")))::integer AS "draft_count"
+           FROM "public"."wb_planned_items" "pi"
+          WHERE ("pi"."project_id" IS NOT NULL)
+          GROUP BY "pi"."project_id"
+        ), "due" AS (
+         SELECT "q"."project_id",
+            "q"."draft",
+            "sum"("q"."left_amt") FILTER (WHERE ("q"."left_amt" < (0)::numeric)) AS "due_out",
+            "sum"("q"."left_amt") FILTER (WHERE ("q"."left_amt" > (0)::numeric)) AS "due_in"
+           FROM ( SELECT "pi"."project_id",
+                    ("pi"."stage" = 'draft'::"text") AS "draft",
+                    ("sign"("pi"."amount") * GREATEST(("abs"("pi"."amount") - COALESCE(( SELECT "sum"("abs"("pm"."amount_applied")) AS "sum"
+                           FROM "public"."wb_planned_matches" "pm"
+                          WHERE (("pm"."planned_item_id" = "pi"."id") AND ("pm"."status" = 'confirmed'::"text"))), (0)::numeric)), (0)::numeric)) AS "left_amt"
+                   FROM "public"."wb_planned_items" "pi"
+                  WHERE (("pi"."project_id" IS NOT NULL) AND ("pi"."interval_count" IS NULL) AND ("pi"."stage" <> ALL (ARRAY['paid'::"text", 'cancelled'::"text"])))
+                UNION ALL
+                 SELECT "pi"."project_id",
+                    "pi"."is_draft",
+                    ("sign"("o"."amount") * GREATEST(("abs"("o"."amount") - COALESCE(( SELECT "sum"("abs"("pm"."amount_applied")) AS "sum"
+                           FROM "public"."wb_planned_matches" "pm"
+                          WHERE (("pm"."planned_item_id" = "o"."planned_item_id") AND ("pm"."status" = 'confirmed'::"text") AND ("pm"."occurrence_on" = "o"."occurrence_on"))), (0)::numeric)), (0)::numeric))
+                   FROM (("t"
+                     CROSS JOIN LATERAL "public"."wb_planned_occurrences"("t"."d", ((("t"."d" + "make_interval"("months" => "t"."h")))::"date" - 1), true) "o"("planned_item_id", "occurrence_on", "amount", "recurring", "stage", "is_draft"))
+                     JOIN "public"."wb_planned_items" "pi" ON (("pi"."id" = "o"."planned_item_id")))
+                  WHERE ("o"."recurring" AND ("pi"."project_id" IS NOT NULL))) "q"
+          GROUP BY "q"."project_id", "q"."draft"
+        )
+ SELECT "p"."id" AS "project_id",
+    "p"."name",
+    "p"."status",
+    "p"."budget",
+    "p"."starts_on",
+    "p"."ends_on",
+    "round"(COALESCE("pay"."spent", (0)::numeric), 2) AS "spent",
+    "round"(COALESCE("pay"."received", (0)::numeric), 2) AS "received",
+    "round"((COALESCE("pay"."spent", (0)::numeric) + COALESCE("pay"."received", (0)::numeric)), 2) AS "net",
+        CASE
+            WHEN ("p"."budget" IS NOT NULL) THEN "round"(("p"."budget" + COALESCE("pay"."spent", (0)::numeric)), 2)
+            ELSE NULL::numeric
+        END AS "budget_left",
+    "round"(COALESCE(( SELECT "d"."due_out"
+           FROM "due" "d"
+          WHERE (("d"."project_id" = "p"."id") AND (NOT "d"."draft"))), (0)::numeric), 2) AS "planned_out_due",
+    "round"(COALESCE(( SELECT "d"."due_in"
+           FROM "due" "d"
+          WHERE (("d"."project_id" = "p"."id") AND (NOT "d"."draft"))), (0)::numeric), 2) AS "planned_in_due",
+    "round"(COALESCE(( SELECT "d"."due_out"
+           FROM "due" "d"
+          WHERE (("d"."project_id" = "p"."id") AND "d"."draft")), (0)::numeric), 2) AS "draft_out_due",
+    "round"(COALESCE(( SELECT "d"."due_in"
+           FROM "due" "d"
+          WHERE (("d"."project_id" = "p"."id") AND "d"."draft")), (0)::numeric), 2) AS "draft_in_due",
+    COALESCE("items"."item_count", 0) AS "item_count",
+    COALESCE("items"."draft_count", 0) AS "draft_count",
+    COALESCE("pay"."payment_count", 0) AS "payment_count",
+    "pay"."last_payment_on",
+    ((COALESCE("items"."item_count", 0) > 0) AND ("items"."draft_count" = "items"."item_count") AND (COALESCE("pay"."payment_count", 0) = 0)) AS "planning"
+   FROM (("public"."wb_projects" "p"
+     LEFT JOIN "pay" ON (("pay"."project_id" = "p"."id")))
+     LEFT JOIN "items" ON (("items"."project_id" = "p"."id")));
+
+
+ALTER VIEW "public"."wb_project_summary" OWNER TO "postgres";
+
+
+COMMENT ON VIEW "public"."wb_project_summary" IS 'App: Warren Buffet. One row per project. spent = posted money out on the project''s splits (negative); received = posted money in (positive, such as an insurer''s payment); net = spent + received. budget_left = budget + spent: the budget is measured against spent, not net (A36). planned_out_due and planned_in_due = what is still to come on its planned items, less what is confirmed: one-offs not paid or cancelled (overdue included) and recurring dates over the horizon; draft_out_due and draft_in_due are the same for drafts, kept apart. item_count leaves out cancelled items. planning is true when every item is a draft and nothing has been paid on the project (A35); it is derived, never stored. security_invoker, so wb_ RLS applies.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."wb_split_tags" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "context_id" "text" NOT NULL,
+    "split_id" "uuid" NOT NULL,
+    "tag_id" "uuid" NOT NULL,
+    "group_id" "uuid" NOT NULL,
+    "group_exclusive" boolean NOT NULL,
+    "source" "text" NOT NULL,
+    "rule_id" "uuid",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "replaced_rule_id" "uuid",
+    CONSTRAINT "wb_split_tags_replaced_check" CHECK ((("replaced_rule_id" IS NULL) OR ("source" <> 'rule'::"text"))),
+    CONSTRAINT "wb_split_tags_rule_check" CHECK ((("rule_id" IS NULL) OR ("source" = 'rule'::"text"))),
+    CONSTRAINT "wb_split_tags_source_check" CHECK (("source" = ANY (ARRAY['rule'::"text", 'claude'::"text", 'manual'::"text"])))
+);
+
+
+ALTER TABLE "public"."wb_split_tags" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."wb_split_tags" IS 'App: Warren Buffet. Tags on splits, with their source (rule, claude, manual). group_id, group_exclusive, user_id and context_id are filled by trigger, never typed. Rules replace only their own tags; claude and manual tags are never overwritten by a rule.';
+
+
+
+COMMENT ON COLUMN "public"."wb_split_tags"."replaced_rule_id" IS 'For a claude or manual tag that replaced a rule''s tag in the same group, or took over a rule''s tag: that rule. Counts overrides for rule health (Step 10).';
 
 
 
@@ -10442,35 +10753,6 @@ COMMENT ON VIEW "public"."wb_rule_health" IS 'App: Warren Buffet. One row per fi
 
 
 
-CREATE TABLE IF NOT EXISTS "public"."wb_settings" (
-    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
-    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
-    "context_id" "text" NOT NULL,
-    "safety_floor" numeric(14,2),
-    "horizon_months" integer DEFAULT 12 NOT NULL,
-    "notes" "text",
-    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    CONSTRAINT "wb_settings_floor_check" CHECK ((("safety_floor" IS NULL) OR ("safety_floor" >= (0)::numeric))),
-    CONSTRAINT "wb_settings_horizon_check" CHECK ((("horizon_months" >= 1) AND ("horizon_months" <= 24)))
-);
-
-
-ALTER TABLE "public"."wb_settings" OWNER TO "postgres";
-
-
-COMMENT ON TABLE "public"."wb_settings" IS 'App: Warren Buffet. One row per context of money settings. The floor value is entered by Alex at seeding and never written into a committed file.';
-
-
-
-COMMENT ON COLUMN "public"."wb_settings"."safety_floor" IS 'Cash kept back: free cash = the lowest projected spending-cash balance over the horizon minus this. Positive.';
-
-
-
-COMMENT ON COLUMN "public"."wb_settings"."horizon_months" IS 'Months the cash projection looks ahead. Default 12.';
-
-
-
 CREATE OR REPLACE VIEW "public"."wb_spending_by_tag" WITH ("security_invoker"='true') AS
  WITH RECURSIVE "tag_top" AS (
          SELECT "t"."id" AS "tag_id",
@@ -10713,7 +10995,11 @@ CREATE OR REPLACE VIEW "public"."wb_transaction_list" WITH ("security_invoker"='
     "x"."notes",
     "x"."subscription_id",
     "x"."subscription_source",
-    "sub"."name" AS "subscription_name"
+    "sub"."name" AS "subscription_name",
+    COALESCE(( SELECT "array_agg"(DISTINCT "p"."name" ORDER BY "p"."name") AS "array_agg"
+           FROM ("public"."wb_splits" "s"
+             JOIN "public"."wb_projects" "p" ON (("p"."id" = "s"."project_id")))
+          WHERE ("s"."transaction_id" = "x"."id")), '{}'::"text"[]) AS "project_names"
    FROM ((("public"."wb_transactions" "x"
      JOIN "public"."wb_accounts" "a" ON (("a"."id" = "x"."account_id")))
      LEFT JOIN "public"."wb_merchants" "m" ON (("m"."id" = "x"."merchant_id")))
@@ -10723,7 +11009,7 @@ CREATE OR REPLACE VIEW "public"."wb_transaction_list" WITH ("security_invoker"='
 ALTER VIEW "public"."wb_transaction_list" OWNER TO "postgres";
 
 
-COMMENT ON VIEW "public"."wb_transaction_list" IS 'App: Warren Buffet. Transactions with account label, merchant name, tag_names (text[], filter with overlaps), split_count, needs_review (true when the row is in wb_review_queue, including a suggested planned match), excluded_tags (tags removed by hand, which no rule puts back: tag_id, tag_name, rule_id, source, removed_at), notes, and the linked subscription (subscription_id, subscription_source, subscription_name). No raw jsonb. security_invoker, so wb_ RLS applies.';
+COMMENT ON VIEW "public"."wb_transaction_list" IS 'App: Warren Buffet. Transactions with account label, merchant name, tag_names (text[], filter with overlaps), split_count, needs_review (true when the row is in wb_review_queue, including a suggested planned match), excluded_tags (tags removed by hand, which no rule puts back: tag_id, tag_name, rule_id, source, removed_at), notes, the linked subscription (subscription_id, subscription_source, subscription_name), and project_names (text[], the projects on any of its splits). No raw jsonb. security_invoker, so wb_ RLS applies.';
 
 
 
@@ -11186,6 +11472,16 @@ ALTER TABLE ONLY "public"."wb_planned_matches"
 
 ALTER TABLE ONLY "public"."wb_planned_matches"
     ADD CONSTRAINT "wb_planned_matches_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."wb_planned_skips"
+    ADD CONSTRAINT "wb_planned_skips_key" UNIQUE NULLS NOT DISTINCT ("planned_item_id", "occurrence_on");
+
+
+
+ALTER TABLE ONLY "public"."wb_planned_skips"
+    ADD CONSTRAINT "wb_planned_skips_pkey" PRIMARY KEY ("id");
 
 
 
@@ -12039,6 +12335,10 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."wb_planned_skips" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."wb_projects" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -12248,6 +12548,14 @@ CREATE OR REPLACE TRIGGER "wb_planned_matches_fill" BEFORE INSERT OR UPDATE ON "
 
 
 CREATE OR REPLACE TRIGGER "wb_planned_matches_touch_updated_at" BEFORE UPDATE ON "public"."wb_planned_matches" FOR EACH ROW EXECUTE FUNCTION "public"."wb_touch_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "wb_planned_skips_fill" BEFORE INSERT OR UPDATE ON "public"."wb_planned_skips" FOR EACH ROW EXECUTE FUNCTION "public"."wb_planned_skips_fill"();
+
+
+
+CREATE OR REPLACE TRIGGER "wb_planned_skips_touch_updated_at" BEFORE UPDATE ON "public"."wb_planned_skips" FOR EACH ROW EXECUTE FUNCTION "public"."wb_touch_updated_at"();
 
 
 
@@ -12837,6 +13145,21 @@ ALTER TABLE ONLY "public"."wb_planned_matches"
 
 ALTER TABLE ONLY "public"."wb_planned_matches"
     ADD CONSTRAINT "wb_planned_matches_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."wb_planned_skips"
+    ADD CONSTRAINT "wb_planned_skips_context_id_fkey" FOREIGN KEY ("context_id") REFERENCES "public"."contexts"("id");
+
+
+
+ALTER TABLE ONLY "public"."wb_planned_skips"
+    ADD CONSTRAINT "wb_planned_skips_planned_item_id_fkey" FOREIGN KEY ("planned_item_id") REFERENCES "public"."wb_planned_items"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."wb_planned_skips"
+    ADD CONSTRAINT "wb_planned_skips_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
 
 
 
@@ -13583,6 +13906,17 @@ CREATE POLICY "wb_planned_matches_access" ON "public"."wb_planned_matches" USING
 
 
 
+ALTER TABLE "public"."wb_planned_skips" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "wb_planned_skips_access" ON "public"."wb_planned_skips" USING ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true))))) WITH CHECK ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true)))));
+
+
+
 ALTER TABLE "public"."wb_projects" ENABLE ROW LEVEL SECURITY;
 
 
@@ -14194,6 +14528,18 @@ GRANT ALL ON FUNCTION "public"."wb_planned_occurrences"("p_from" "date", "p_to" 
 
 
 
+GRANT ALL ON FUNCTION "public"."wb_planned_skips_fill"() TO "anon";
+GRANT ALL ON FUNCTION "public"."wb_planned_skips_fill"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."wb_planned_skips_fill"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric, "p_today" "date") TO "anon";
+GRANT ALL ON FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric, "p_today" "date") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric, "p_today" "date") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."wb_process_transactions"("ids" "uuid"[]) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_process_transactions"("ids" "uuid"[]) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_process_transactions"("ids" "uuid"[]) TO "service_role";
@@ -14341,6 +14687,12 @@ GRANT ALL ON FUNCTION "public"."wb_transactions_default_split"() TO "service_rol
 REVOKE ALL ON FUNCTION "public"."wb_transfer_match"("p_a_account" "uuid", "p_a_amount" numeric, "p_a_date" "date", "p_b_account" "uuid", "p_b_amount" numeric, "p_b_date" "date") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_transfer_match"("p_a_account" "uuid", "p_a_amount" numeric, "p_a_date" "date", "p_b_account" "uuid", "p_b_amount" numeric, "p_b_date" "date") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_transfer_match"("p_a_account" "uuid", "p_a_amount" numeric, "p_a_date" "date", "p_b_account" "uuid", "p_b_amount" numeric, "p_b_date" "date") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") TO "service_role";
 
 
 
@@ -14640,18 +14992,40 @@ GRANT ALL ON TABLE "public"."wb_planned_matches" TO "service_role";
 
 
 
+GRANT ALL ON TABLE "public"."wb_planned_skips" TO "authenticated";
+GRANT ALL ON TABLE "public"."wb_planned_skips" TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."wb_projects" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_projects" TO "service_role";
 
 
 
-GRANT ALL ON TABLE "public"."wb_split_tags" TO "authenticated";
-GRANT ALL ON TABLE "public"."wb_split_tags" TO "service_role";
+GRANT SELECT,MAINTAIN ON TABLE "public"."wb_planned_unmatched" TO "anon";
+GRANT ALL ON TABLE "public"."wb_planned_unmatched" TO "authenticated";
+GRANT ALL ON TABLE "public"."wb_planned_unmatched" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."wb_settings" TO "authenticated";
+GRANT ALL ON TABLE "public"."wb_settings" TO "service_role";
 
 
 
 GRANT ALL ON TABLE "public"."wb_splits" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_splits" TO "service_role";
+
+
+
+GRANT SELECT,MAINTAIN ON TABLE "public"."wb_project_summary" TO "anon";
+GRANT ALL ON TABLE "public"."wb_project_summary" TO "authenticated";
+GRANT ALL ON TABLE "public"."wb_project_summary" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."wb_split_tags" TO "authenticated";
+GRANT ALL ON TABLE "public"."wb_split_tags" TO "service_role";
 
 
 
@@ -14699,11 +15073,6 @@ GRANT ALL ON TABLE "public"."wb_rule_health_all" TO "service_role";
 GRANT SELECT,MAINTAIN ON TABLE "public"."wb_rule_health" TO "anon";
 GRANT ALL ON TABLE "public"."wb_rule_health" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_rule_health" TO "service_role";
-
-
-
-GRANT ALL ON TABLE "public"."wb_settings" TO "authenticated";
-GRANT ALL ON TABLE "public"."wb_settings" TO "service_role";
 
 
 
