@@ -1,6 +1,17 @@
 import { useState, useEffect, useCallback } from "react";
 import { getListReminders, indexReminders } from "../utils/remindersApi";
 
+// Reminder changes arriving by realtime (Restructure P4 Step 12): one signal that any
+// screen showing reminders listens to, so it re-reads without a reload.
+const reminderListeners = new Set();
+export function onRemindersChanged(listener) {
+  reminderListeners.add(listener);
+  return () => reminderListeners.delete(listener);
+}
+export function remindersChanged() {
+  for (const listener of [...reminderListeners]) listener();
+}
+
 // The reminder index, moved out of Alfred.jsx unchanged. Two hooks because the
 // state and the list-view refresh sat far apart in Alfred, and the refresh effect
 // must keep its place among Alfred's other effects: call each where it was.

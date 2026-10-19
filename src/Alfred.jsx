@@ -13,7 +13,7 @@ import {
 } from "./viewPaths";
 import RecordLinkScreen from "./records/RecordLinkScreen";
 import { archivedCaptureTarget } from "./utils/remindersApi";
-import { useReminderIndex, useReminderListRefresh } from "./reminders/useReminderIndex";
+import { remindersChanged, useReminderIndex, useReminderListRefresh } from "./reminders/useReminderIndex";
 import { useNotificationEffects } from "./reminders/useNotificationEffects";
 import SettingsScreen from "./reminders/SettingsScreen";
 import { useExecutionRoute } from "./useExecutionRoute";
@@ -171,6 +171,7 @@ export default function Alfred() {
     loadCollectionMembers: (...args) => loadCollectionMembers(...args),
   });
   // Realtime subscriptions and change handlers. No effects; the auth effect calls it.
+  const { reminderIndex, refreshReminderIndex } = useReminderIndex();
   const { setupRealtimeSubscriptions } = useRealtime({
     setRealtimeStatus,
     setAllInboxItems,
@@ -180,8 +181,12 @@ export default function Alfred() {
     setEvents,
     setActiveExecutions,
     setPausedExecutions,
+    // Step 12: card badges re-read, and open pages showing reminders hear about it.
+    onReminderChange: () => {
+      refreshReminderIndex();
+      remindersChanged();
+    },
   });
-  const { reminderIndex, refreshReminderIndex } = useReminderIndex();
   // Manual removal history, keyed by collection id — feeds the recently-removed
   // panel on the collection detail view.
   const [collectionRemovals, setCollectionRemovals] = useState({});

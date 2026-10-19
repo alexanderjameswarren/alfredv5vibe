@@ -492,6 +492,13 @@ the reminders realtime subscription (Step 12).
   re-tier. Applies to context detail and the Intentions list (shared `listRows`). The card
   already shows "last updated"; a merged row's date is the latest of its item and intentions.
 - (b) No realtime on `reminders`; the index refreshes only on view change to three lists.
+  Fix (as built, Step 12): reminders joined `supabase_realtime` in 139; `useRealtime` has a
+  user-filtered `reminders-changes` channel whose every change re-runs the index query and
+  fires `remindersChanged()`; the intention page re-reads its reminder lines on it. Also:
+  four list writes in this project's hooks became functional updates so a realtime update
+  that lands mid-action is not overwritten (`useItemActions.js` still has one; not ours).
+  Delete Execution removes an event Start Now created, known by its createdAt equalling
+  the execution's startedAt (one timestamp, written in the same call).
   Fix: reminders join the realtime publication (database step); `useRealtime` subscribes and
   refreshes the reminder index on change. A refresh after detail Add/Cancel stays only if the
   realtime event is not enough.
