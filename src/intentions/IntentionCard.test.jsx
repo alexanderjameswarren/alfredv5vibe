@@ -79,7 +79,7 @@ test("row: closed disables Start Now and Schedule with a reason", () => {
   for (const name of ["Start Now", "Schedule"]) {
     expect(screen.getByRole("button", { name }).disabled).toBe(true);
   }
-  expect(screen.getByRole("button", { name: "Start Now" }).title).toMatch(/closed/);
+  expect(screen.getByRole("button", { name: "Start Now" }).title).toMatch(/Closed/);
   // Disabled Schedule drops the brown fill, so it cannot read as live.
   expect(screen.getByRole("button", { name: "Schedule" }).className).toMatch(/disabled:bg-secondary/);
   fireEvent.click(screen.getByRole("button", { name: "Schedule" }));

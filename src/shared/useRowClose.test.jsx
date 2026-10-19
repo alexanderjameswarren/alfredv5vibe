@@ -73,7 +73,7 @@ describe("useRowClose", () => {
   it("shows what closing archives when a live event is today or later", async () => {
     render(<Harness onCloseRecords={jest.fn()} events={[{ id: "e", intentId: "a", time: today, archived: false }]} />);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(await screen.findByText(/Closing archives that date/)).toBeInTheDocument();
+    expect(await screen.findByText(/Closing archives this event/)).toBeInTheDocument();
   });
 
   it("Closed on defaults to a past live date; Completed is preselected once one is done", async () => {
@@ -84,6 +84,8 @@ describe("useRowClose", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("radio", { name: "Completed" })).toHaveAttribute("aria-checked", "true");
     expect(within(dialog).getByText(/Closed on: .*January 5/)).toBeInTheDocument();
+    // A past-due live event is named too, not only one ahead.
+    expect(await within(dialog).findByText(/Closing archives this event/)).toBeInTheDocument();
   });
 
   it("asks when reminders are pending, and Cancel closes nothing", async () => {

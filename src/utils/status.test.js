@@ -116,7 +116,7 @@ test("withTag narrows to a tag, or passes everything with none", () => {
 });
 
 test("closedBlockTitle names the kind only when closed", () => {
-  expect(closedBlockTitle({ status: "closed" }, "item")).toBe("This item is closed. Set it to Active to use it.");
+  expect(closedBlockTitle({ status: "closed" }, "item")).toBe("This item is Closed. Set it to Active to use it.");
   expect(closedBlockTitle({ status: "background" }, "item")).toBeNull();
 });
 

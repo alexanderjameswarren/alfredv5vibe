@@ -89,7 +89,7 @@ export function useIntentionActions({
       const savedEvent = await storage.set(`event:${event.id}`, event);
       if (!savedEvent) throw writeError("Scheduling");
       setEvents((prev) => [...prev, savedEvent]);
-      await settle();
+      const flip = await settle({ announce: false });
 
       // No navigation. This used to end by switching the view to the schedule
       // whenever the date was today, which is what made "Do Today" throw you
@@ -109,9 +109,11 @@ export function useIntentionActions({
       // and never seen, so an archived ghost in the recycle bin would be a
       // record of something that never happened. Same reasoning as the
       // recurrence successor in Step 2.
-      offerUndoFor(`Scheduled for ${formatEventDate(eventDate)}.`, async () => {
+      offerUndoFor(`Scheduled for ${formatEventDate(eventDate)}.${flip?.moved ? " Moved to Active." : ""}`, async () => {
         if (!(await storage.delete(`event:${event.id}`))) throw writeError("Undo");
         setEvents((prev) => prev.filter((e) => e.id !== event.id));
+        // Undo reverses everything the tap did: the status it un-parked too.
+        await flip?.restore();
       });
     });
   }
@@ -153,13 +155,14 @@ export function useIntentionActions({
       const savedEvent = await storage.set(`event:${event.id}`, event);
       if (!savedEvent) throw writeError("Scheduling");
       setEvents((prev) => [...prev, savedEvent]);
-      await settle();
+      const flip = await settle({ announce: false });
 
-      offerUndoFor(`Scheduled for ${formatEventDate(date)}.`, async () => {
+      offerUndoFor(`Scheduled for ${formatEventDate(date)}.${flip?.moved ? " Moved to Active." : ""}`, async () => {
         if (!(await storage.delete(`event:${event.id}`))) throw writeError("Undo");
         setEvents((prev) => prev.filter((e) => e.id !== event.id));
         if (!(await storage.delete(`intent:${intentId}`))) throw writeError("Removing the intention");
         setIntents((prev) => prev.filter((i) => i.id !== intentId));
+        await flip?.restore();
       });
     });
   }
@@ -276,6 +279,63 @@ export function useIntentionActions({
         }
         for (const event of archivedEvents) {
           if (!(await storage.set(`event:${event.id}`, event))) throw writeError("Restoring its event");
+          setEvents((prev) => prev.map((e) => (e.id === event.id ? event : e)));
+        }
+        if (cancelledReminders.length) {
+          await restoreRemindersAfterStatus(cancelledReminders);
+          refreshReminderIndex?.();
+        }
+      });
+    });
+  }
+
+  /**
+   * Stop (Restructure P4 Step 10): end a repeat without closing it. end_date today,
+   * recurrence_config kept (the line reads "Ended …"), and always Background.
+   * `archiveEvents`: the one question's answer when something was pending — archive
+   * the live dates and cancel the scheduled reminders, or keep them. Undo restores the
+   * end date and status, then the dates and reminders still ahead; it stops at the
+   * first failed write. (status_changed_at is the database's until Step 11.)
+   */
+  async function stopRepeat(intentId, { archiveEvents = false } = {}) {
+    const intent = intents.find((i) => i.id === intentId);
+    if (!intent) return;
+    const today = getTodayDate();
+    return withLoading("Stopping...", async () => {
+      const saved = await storage.patch(`intent:${intentId}`, { status: "background", endDate: today });
+      if (!saved) throw new Error("Stop was not saved.");
+      setIntents((prev) => prev.map((i) => (i.id === intentId ? saved : i)));
+
+      const archivedEvents = [];
+      let cancelledReminders = [];
+      if (archiveEvents) {
+        for (const event of liveEventsFor(events, intentId)) {
+          const archivedEvent = { ...event, archived: true };
+          if (!(await storage.set(`event:${event.id}`, archivedEvent))) throw writeError("Archiving its date");
+          setEvents((prev) => prev.map((e) => (e.id === event.id ? archivedEvent : e)));
+          archivedEvents.push(event);
+        }
+        try {
+          cancelledReminders = await cancelRemindersForStatus(intentId);
+        } catch (err) {
+          console.error("[Reminders] cancel on stop failed:", err);
+          window.alert("Stopped, but its reminders could not be cancelled and may still fire.");
+        }
+        refreshReminderIndex?.();
+      }
+
+      const futureEvents = archivedEvents.filter((e) => String(e.time).slice(0, 10) >= today);
+      const previous = intent.status;
+      offerUndoFor("Stopped repeating. Moved to Background.", async () => {
+        const back = await storage.patch(`intent:${intentId}`, {
+          endDate: intent.endDate || null,
+          // Never back to someday: status_guard refuses it.
+          ...(previous && previous !== "someday" ? { status: previous } : {}),
+        });
+        if (!back) throw writeError("Restoring the repeat");
+        setIntents((prev) => prev.map((i) => (i.id === intentId ? back : i)));
+        for (const event of futureEvents) {
+          if (!(await storage.set(`event:${event.id}`, event))) throw writeError("Restoring its date");
           setEvents((prev) => prev.map((e) => (e.id === event.id ? event : e)));
         }
         if (cancelledReminders.length) {
@@ -456,5 +516,5 @@ export function useIntentionActions({
     }
   }
 
-  return { moveToPlanner, scheduleFromItem, updateIntent, archiveIntention, setIntentionStatus, closeRecords };
+  return { moveToPlanner, scheduleFromItem, updateIntent, archiveIntention, setIntentionStatus, stopRepeat, closeRecords };
 }

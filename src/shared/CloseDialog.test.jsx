@@ -52,7 +52,7 @@ test("Closed on takes any past day, never the future", async () => {
 
 test("the events and reminders line, and the shared Cancel", () => {
   const { onCancel } = renderDialog({ pending: { future: [{ time: "2026-10-21" }], reminderCount: 2 } });
-  expect(screen.getByText(/Closing archives the date and cancels the reminders/)).toBeInTheDocument();
+  expect(screen.getByText(/Closing archives this event and cancels the reminders/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
   expect(onCancel).toHaveBeenCalled();
 });

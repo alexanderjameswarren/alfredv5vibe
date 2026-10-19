@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, cleanup } from "@testing-library/react";
 import IntentionDetailView from "./IntentionDetailView";
 import * as notesApi from "../notes/notesApi";
 import { storage } from "../utils/storage";
@@ -100,10 +100,10 @@ describe("Log Execution (Step 8)", () => {
     expect(onUpdateEvent).toHaveBeenCalledWith("e1", { archived: true });
   });
 
-  test("the row keeps its order: Start Now, Reschedule, Skip, Log Execution, Edit, Archive", () => {
-    renderDetail({ intention: daily, onMarkDone: jest.fn(), onUpdateEvent: jest.fn() });
+  test("the row keeps its order: Start Now, Reschedule, Skip, Log Execution, Stop repeating, Edit, Archive", () => {
+    renderDetail({ intention: daily, onMarkDone: jest.fn(), onUpdateEvent: jest.fn(), onStopRepeat: jest.fn() });
     const names = screen.getAllByRole("button").map((b) => b.textContent.trim());
-    const order = ["Start Now", "Reschedule", "Skip", "Log Execution", "Edit", "Archive"].map((n) => names.indexOf(n));
+    const order = ["Start Now", "Reschedule", "Skip", "Log Execution", "Stop repeating", "Edit", "Archive"].map((n) => names.indexOf(n));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
@@ -113,11 +113,21 @@ describe("Log Execution (Step 8)", () => {
       intention: daily,
       onMarkDone: jest.fn(),
       onUpdateEvent: jest.fn(),
+      onStopRepeat: jest.fn(),
       executions: [{ id: "x", intentId: "i1", eventId: "e1", status: "paused" }],
     });
     expect(screen.getByRole("button", { name: "Continue" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Log Execution" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop repeating" })).toBeNull();
+  });
+
+  test("Stop repeating: not on a one-off, not once the repeat has ended", () => {
+    renderDetail({ intention: { ...daily, endDate: "2000-01-01" }, onStopRepeat: jest.fn() });
+    expect(screen.queryByRole("button", { name: "Stop repeating" })).toBeNull();
+    cleanup();
+    renderDetail({ onStopRepeat: jest.fn() });
+    expect(screen.queryByRole("button", { name: "Stop repeating" })).toBeNull();
   });
 });
 
@@ -132,7 +142,7 @@ test("edit: Save with Closed and live events asks first, saving nothing", () => 
 test("edit: closing saves the fields, then the status with its date archived", async () => {
   const { onUpdateIntention, onSetStatus } = renderDetail();
   editToClosedAndSave();
-  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close and archive the date" }));
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close and archive this event" }));
   await waitFor(() => expect(onSetStatus).toHaveBeenCalledWith("i1", "closed", { archiveEvents: true }));
   expect(onUpdateIntention.mock.calls[0][1].status).toBeUndefined();
 });
@@ -344,7 +354,7 @@ describe("pending reminders and the status sheet (P3)", () => {
     const { onSetStatus } = renderDetail();
     fireEvent.click(screen.getByRole("button", { name: /^Status:/ }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Background" }));
-    fireEvent.click(screen.getByRole("button", { name: "Archive the date and cancel the reminders" }));
+    fireEvent.click(screen.getByRole("button", { name: "Archive this event and cancel the reminders" }));
     await waitFor(() => expect(onSetStatus).toHaveBeenCalledWith("i1", "background", { archiveEvents: true }));
     expect(mockReload).toHaveBeenCalled();
   });

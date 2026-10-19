@@ -261,7 +261,7 @@ test("closed: Start Now, Schedule and the Create Intention row are disabled; Clo
   fireEvent.click(screen.getByRole("button", { name: "More actions" }));
   expect(screen.getByRole("menuitem", { name: "Create Intention" }).disabled).toBe(true);
   expect(screen.getByRole("button", { name: "Clone" }).disabled).toBe(false);
-  expect(screen.getByText("This item is closed. Set it to Active to use it.")).toBeTruthy();
+  expect(screen.getByText("This item is Closed. Set it to Active to use it.")).toBeTruthy();
 });
 
 test("an intention mid-run wins: the item reads Continue and opens that run", () => {

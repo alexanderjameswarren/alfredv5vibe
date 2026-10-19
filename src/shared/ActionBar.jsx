@@ -1,5 +1,5 @@
 import React, { useLayoutEffect, useRef, useState } from "react";
-import { Archive, CalendarX, NotebookPen } from "lucide-react";
+import { Archive, CalendarX, CircleStop, NotebookPen } from "lucide-react";
 import OverflowMenu from "./OverflowMenu";
 import { ACTION_BUTTON } from "./actionButton";
 
@@ -36,6 +36,19 @@ export function logAction(onClick) {
       >
         <NotebookPen className="w-4 h-4" />
         Log Execution
+      </button>
+    ),
+  };
+}
+
+/** Stop (Step 10): end the repeat, keep the intention. Neutral, not destructive. */
+export function stopAction(onClick) {
+  return {
+    menu: { label: "Stop repeating", icon: CircleStop, onClick },
+    button: (
+      <button onClick={onClick} className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}>
+        <CircleStop className="w-4 h-4" />
+        Stop repeating
       </button>
     ),
   };

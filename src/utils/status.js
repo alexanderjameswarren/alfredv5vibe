@@ -20,7 +20,7 @@ export function statusOf(row) {
 // Nothing pulls a row out of closed (status_guard), so Start Now, Schedule and
 // Create Intention are disabled until it is set back to Active by hand.
 export function closedBlockTitle(row, kind) {
-  return statusOf(row) === "closed" ? `This ${kind} is closed. Set it to Active to use it.` : null;
+  return statusOf(row) === "closed" ? `This ${kind} is Closed. Set it to Active to use it.` : null;
 }
 
 export function statusCounts(rows) {

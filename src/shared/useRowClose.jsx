@@ -24,12 +24,13 @@ export const closeBlocked = hasOpenRun;
  * button; `sheet` is the one question, asked only when an intention being closed
  * has a live event dated today or later, or scheduled reminders.
  */
-/** What closing these intentions archives and cancels: future live events and scheduled reminders. */
+/**
+ * What closing or stopping these intentions archives and cancels: every live event,
+ * past-due ones too (parked, one would sit overdue forever), and scheduled reminders.
+ */
 export async function loadClosePending(events, intents) {
-  const today = getTodayDate();
   const future = intents
     .flatMap((i) => liveEventsFor(events, i.id))
-    .filter((e) => String(e.time).slice(0, 10) >= today)
     .sort((a, b) => String(a.time).localeCompare(String(b.time)));
   let reminderCount = 0;
   try {

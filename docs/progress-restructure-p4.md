@@ -20,7 +20,7 @@ Testing notes:
 | 7 | Completion dialog: next-date field, Completed on; no past event dates; edit a completed date | Done, checkpointed d3bbf2d |
 | 8 | Log Execution (was Done/Complete) + header fix; follow-ups: rule A, one-time intentions and items, ActionBar, CopyButton, hidden while open, one Cancel, no repeated tooltips | Done, tested 2026-10-19 |
 | 9 | Skip control (+ EventCard Archive Event → Skip; audit closed-as-done readers); follow-ups: Recent executions with skips in line and Show all, Delete Execution on closed executions, Skip Undo fix, recycle bin hides skips, Undo audit | Done, tested 2026-10-19 |
-| 10 | Stop control | |
+| 10 | Stop control ("Stop repeating"); follow-ups: past-due events ask, "this event" wording, one merged toast | Done, tested 2026-10-19 |
 | 10a | Close reason, front end: one Close pop-up in all six places (choice, note, events/reminders question), execution/note creation, disabled rule; follow-ups: shared toggles with icons, pop-up at the page root | Done, tested 2026-10-19 (reason and Closed on saved from Step 11) |
 | 11 | Database step (waits on warren_buffet_p2-m4t), incl. `closed_reason`, status_guard Undo exception, MCP fields, backfill list | |
 | 11a | Close reason, finish: write `closed_reason`, Undo back to Someday, review and apply the backfill | |
@@ -97,6 +97,20 @@ Test: add a reminder on detail, go back, the card badge is there without reload.
 ## Log
 - 2026-10-13 Step 1 code done. Related tests pass (intentionRows, intentions, contexts).
   `deno check` not run: the local deno cache lacks the supabase-js npm packages.
+- 2026-10-19 Step 10 follow-up tested (labels, merged toast). Fix: Undo reverses the
+  status too. `useStatusSync` settle returns `{ moved, restore }`; Schedule, Schedule
+  from an item and Log Execution restore flipped statuses in their Undo (new
+  useStatusSync.test.js). No Undo exists on Start Now or inbox Process, so no gap there.
+- 2026-10-19 Step 10 complete (all four parts passed). Alex decided: Reschedule does not
+  un-park; past-due events ask, in Stop and Close; Step 11 restores status_changed_at on
+  Stop's Undo. Follow-ups built: "Stop repeating"; "Archive this event" / "Keep this
+  event" / "Closing archives this event."; Schedule's two toasts merged into one ("…
+  Moved to Active."); status names capitalised in messages ("is Closed").
+- 2026-10-19 Step 10 (Stop) built (spec "Stop, as built"): CircleStop button after Log
+  Execution on intention and item pages, hidden while open and once ended; the one
+  question when something is pending; Background + end date today; Undo stops at a
+  failed write. Open: Undo cannot restore status_changed_at until Step 11; a kept live
+  date rescheduled is an update, so it does not flip Background back to Active.
 - 2026-10-19 Step 10a follow-up tested (icons; Cancel keeps both edit forms). Then the
   toggles took the inbox's style: `ToggleButton` has one style by `tone`, filled when
   chosen; the inbox is unchanged, only the Close pop-up's toggles changed. New
