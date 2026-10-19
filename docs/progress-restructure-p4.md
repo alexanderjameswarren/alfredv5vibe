@@ -3,6 +3,13 @@
 Spec: `docs/technical-spec-restructure-p4.md`. Owner: `restructure_p4-v9k`.
 Test every step in desktop Chrome's mobile view against the local dev server.
 
+**Phase 4 complete (2026-10-19).** Every step is done and tested. Left over, and waiting on
+warren_buffet_p3-q5k: the mcp deploy, the ai-enrich redeploy (or retirement), then the
+`intents.is_item` drop. All three are in Alfred inbox item
+b5afa9d0-0499-4501-b68f-eecf5b2e0e16 ("Phase 4 follow-up: redeploy mcp and ai-enrich, then
+drop intents.is_item"), with the drop SQL; the pending file is deleted. Test data: removed by
+migration 142, run by Alex.
+
 Testing notes:
 - Each part: what it tests and why, "Set up", then "Testing", numbered continuously, one app
   action per step with its expected result. Reuse the named test records.
