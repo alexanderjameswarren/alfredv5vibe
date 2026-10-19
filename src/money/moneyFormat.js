@@ -340,7 +340,10 @@ export function intervalLabel(sub) {
   return `Every ${n} ${sub.interval_unit}s`;
 }
 
-/** Today's price as a monthly cost: months ÷ count, weeks × 52 ÷ 12 ÷ count; null when it cannot be known. */
+/**
+ * Today's price as a monthly cost: months ÷ count, weeks × 52 ÷ 12 ÷ count; null when it cannot be known.
+ * The SQL wb_monthly_equivalent must do the same (spec A12); helpText.test.js checks its source.
+ */
 export function monthlyEquivalent(sub) {
   const price = toNumber(sub?.current_price);
   const n = sub?.interval_count;

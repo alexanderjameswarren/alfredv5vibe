@@ -60,6 +60,8 @@ test("numbers in the wording match the code", () => {
   expect(N.OVERRIDDEN_SHARE_DIVISOR).toBe(4); // "a quarter"
   says("rule_health.duplicate_rules", `${N.DUPLICATE_RULES_MIN} or more active rules`);
   says("rule_health.rule_missing", `${N.RULE_MISSING_MIN} or more settled transactions`);
+  says("overview.burn_rate", `last ${N.BURN_MONTHS} full months`);
+  says("overview.true_cost", `yearly ÷ ${MONTHS_PER_YEAR}, weekly × ${WEEKS_PER_YEAR} ÷ ${MONTHS_PER_YEAR}`);
 });
 
 test("the yearly and weekly conversions are what monthlyEquivalent does", () => {
@@ -70,7 +72,8 @@ test("the yearly and weekly conversions are what monthlyEquivalent does", () => 
 /** The newest migration defining an object, cut to that definition. */
 function latestDefinition(name) {
   const def = new RegExp(`create or replace (function|view) public\\.${name}\\b`, "i");
-  const files = readdirSync(MIGRATIONS).filter((f) => /^\d+_.*\.sql$/.test(f)).sort();
+  // A _pending_ file sorts after the numbered ones, so a draft counts as the newest.
+  const files = readdirSync(MIGRATIONS).filter((f) => /^(\d+_|_pending_).*\.sql$/.test(f) && !/tests?\.sql$/.test(f)).sort();
   for (const f of files.reverse()) {
     const sql = readFileSync(join(MIGRATIONS, f), "utf-8");
     const at = sql.search(def);
@@ -105,4 +108,17 @@ test("the JS mirrors match the SQL that really runs", () => {
   expect(num(health, /o\.n >= (\d+) and o\.n \* (\d+) >= o\.of_n/)).toEqual([N.OVERRIDDEN_MIN, N.OVERRIDDEN_SHARE_DIVISOR]);
   expect(num(health, /having count\(\*\) >= (\d+)/)).toEqual([N.DUPLICATE_RULES_MIN]);
   expect(num(health, /where t\.n >= (\d+)/)).toEqual([N.RULE_MISSING_MIN]);
+
+  expect(num(latestDefinition("wb_burn_rate_on"), /v_months constant int := (\d+)/)).toEqual([N.BURN_MONTHS]);
+});
+
+test("the SQL monthly equivalent is the JS rule (A12)", () => {
+  const sql = latestDefinition("wb_monthly_equivalent");
+  expect(sql).toMatch(/when p_interval_unit = 'month' then p_amount \/ p_interval_count/);
+  expect(num(sql, /when p_interval_unit = 'week'\s+then p_amount \* (\d+) \/ (\d+) \/ p_interval_count/))
+    .toEqual([WEEKS_PER_YEAR, MONTHS_PER_YEAR]);
+  // The same cases the SQL tests check (me_* in the step 5 tests file).
+  const me = (price, n, unit) => monthlyEquivalent({ current_price: price, interval_count: n, interval_unit: unit });
+  expect([me(120, 12, "month"), me(15, 1, "month"), me(12, 1, "week"), me(30, 2, "week"), me(30, null, null)])
+    .toEqual([10, 15, 52, 65, null]);
 });

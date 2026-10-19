@@ -7,14 +7,14 @@ No amounts in this file. The safety floor is never written into the repo.
 |---|---|---|
 | 1 | Read-only plan | done, 2026-10-14 |
 | 2 | Migration C: tables, `wb_splits.project_id`, `wb_replace_splits` | done, 2026-10-14 (133 applied, 134 41/41) |
-| 3 | Help for Phase 2 (and Phase 1) screens | built; tests and build pass; awaiting Alex's app test |
+| 3 | Help for Phase 2 (and Phase 1) screens | done, 2026-10-14 (app-tested by Alex; checkpointed b6e42a8) |
 | 4 | Processing and match suggestions | done, 2026-10-17 (135 applied, 136 35/35; 4b app-tested by Alex) |
-| 5 | Views and projection | not started |
+| 5 | Views and projection | done, 2026-10-19 (137 applied, 138 42/42; live batches 1–5 passed) |
 | 6 | MCP tools | not started |
-| 7 | Seeding in claude.ai. **Notes:** give every planned item a merchant wherever possible, because items with no merchant are never suggested; and **re-run processing once after seeding** (`reprocess_wb_transactions`), so suggestions are made for existing payments (A19) | not started |
+| 7 | Seeding in claude.ai. **Notes:** give every planned item a merchant wherever possible, because items with no merchant are never suggested; and **re-run processing once after seeding** (`reprocess_wb_transactions`), so suggestions are made for existing payments (A19). **Known double count until then:** a past payment for something that later becomes a planned item stays in the burn rate until it is confirmed as a match | not started |
 | 8 | Plan tab UI | not started |
 | 9 | Overview numbers | not started |
-| 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments) | not started |
+| 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those | not started |
 | 11 | Phase 3 review | not started |
 
 ## Log
@@ -165,3 +165,77 @@ No amounts in this file. The safety floor is never written into the repo.
 - Wording: under "What's left out" in `review.planned_match`, the text is now "payments for less than the planned amount, beyond its tolerance (match those by hand once the planning tools arrive)".
 - Money tests 102/102; the build compiled successfully.
 - **Step 4 done.** Checkpoint: 135, 136, the app files and the docs, with `--release-db`.
+
+### Step 5 (2026-10-17, run tags `warren_buffet_p3-q5k-s5-k7mf` plan, `-s5-c4wr` 5a)
+- Plan approved with A22–A28 in the spec. Step 3 is marked done.
+- **5a drafted** as `supabase/migrations/_pending_warren_buffet_p3-q5k_projection.sql`. Everything in it is new; nothing is redefined:
+  - `wb_monthly_equivalent`;
+  - `wb_subscription_occurrences` and the `wb_subscription_outflows` view;
+  - `wb_burn_rate_on` and the `wb_burn_rate` view;
+  - the `wb_true_cost` view;
+  - `wb_cash_projection` and `wb_free_cash`.
+- A15 comments at birth: the 52 and 12 in `wb_monthly_equivalent`, and the 3 months in `wb_burn_rate_on`.
+- **Tests:** `_pending_…_projection_tests.sql`, 42 checks. The dates are in 2031, so real data stays out of the burn months, and everything else is measured as a change caused by the fixtures.
+- **PGlite:** 42/42. All earlier test files still pass: 115, 118, 121, 123, 125, 128, 130, 132, 134 and 136.
+- **App:**
+  - Six reserved help entries (A22). The burn rate wording has Alex's fix: "Spending and fees, less refunds…".
+  - `BURN_MONTHS` in `ruleNumbers.js`.
+  - `helpText.test.js` checks the new numbers against the SQL, and has an A12 test. That test checks the source of `wb_monthly_equivalent` against `WEEKS_PER_YEAR` and `MONTHS_PER_YEAR`, and runs the same five cases the SQL tests run. The SQL lookup now includes `_pending_` files, which count as the newest.
+  - Money tests 103/103; the build compiled successfully.
+- **One choice to confirm:** a subscription charge 0–7 days late also counts on day 1 (A24).
+- Waiting for Alex's gitsync.
+
+### Step 5a numbered (2026-10-17, run tag `warren_buffet_p3-q5k-s5-y8kd`)
+- gitsync was a clean fast-forward (0e2fd0c..714fd23), 23 restructure-p4 files.
+- **Drift check: none.**
+  - Nothing came in under `supabase/` or `src/money/`, and no wb_ objects.
+  - `EditCard` and `UnderlineTabs`, the only shared files Money imports, are unchanged.
+  - The folder still ended at 136.
+- A24 confirmed by Alex: a charge 0–7 days late counts on day 1.
+- Claimed the 8 db: items and the two numbered paths.
+- Numbered the files `137_wb_phase3_step5_projection.sql` and `138_wb_phase3_step5_tests.sql`. The diff against `_pending_` shows only header changes. Both `_pending_` files are deleted.
+- PGlite: 138 passes 42/42, and all 10 earlier test files still pass. `helpText.test.js` passes 7/7 against the numbered SQL.
+- Waiting for Alex to run 137, then 138.
+
+### Step 5a verified (2026-10-17, run tag `warren_buffet_p3-q5k-s5-f3nb`)
+- Alex ran 137 (conformant true, failures []) and 138 (42/42, rolled back; `precondition_no_real_2031_spending` true).
+- `check_platform_conformance`: CONFORMANT, 67 tables.
+- The live 138 run exercised every new function and `wb_true_cost`. The live read check (batch 1) exercises `wb_burn_rate` and `wb_subscription_outflows`.
+- **5a done.** 137 and 138 are marked applied.
+- The live tests (batches 1–5: read check, a temporary bill, the same bill as a draft, a temporary recurring income, then cleanup) went to Alex.
+
+### Step 5 done (2026-10-19, run tag `warren_buffet_p3-q5k-s5-w6pa`)
+All five live batches passed (Alex):
+- **Batch 1, read check:**
+  - The burn median and mean are correct for Jul–Sep 2026.
+  - The start balance is spending cash minus credit owed.
+  - The daily burn is the median × 12 ÷ 365.
+  - The subscription monthly figure matches the Subscriptions tab.
+  - The low point is on the last day, and equals the start minus 365 days of burn minus a year of subscriptions.
+  - `floor_missing` is true.
+- **Batch 2:** a one-off bill 14 days out lowered free cash by exactly its amount, on its due date.
+- **Batch 3:** as a draft, the bill dropped out of free cash and stayed in free cash with drafts.
+- **Batch 4:** a monthly income gave 12 dates, each on the same day of the month. Free cash rose by exactly 12 times the amount. `expected_income_monthly` equalled the amount, and `net_monthly` moved by it.
+- **Batch 5:** the cleanup returned every value to batch 1.
+
+**Step 5 done.** Checkpoint: 137, 138, the help and number files, and the docs, with `--release-db`.
+
+## Later
+
+### Phase 3b (or later): Wells Fargo CSV history import
+- **Goal:** import about 25 months of Wells Fargo history from CSV downloads. SimpleFIN only ever returns the last 90 days.
+- **Files:** 6 in all.
+  - 4 bank accounts, back to Sep 2024.
+  - 2 credit cards, back to Nov 2024.
+  - Columns: DATE, DESCRIPTION, AMOUNT (signed), CHECK #, STATUS.
+  - There is no account column and no transaction ID, so **the file name identifies the account**.
+- **The design must cover:**
+  - **A source marker on imported rows**, so they are never confused with synced ones and can be found, re-run or removed as a set.
+  - **A per-account cutoff:** only rows dated **before that account's first synced transaction** are imported, so nothing overlaps or doubles with the sync.
+  - **Each account's earliest history date** is recorded, so reports know how far back each account's data goes.
+  - **Imported rows run through the normal processing and rules**, so known merchants are tagged and new merchants land in Review.
+- **Open questions for the design:**
+  - Each row needs a stable external id. One option is a hash of account, date, amount, description and the occurrence number within the file.
+  - How STATUS values map to pending and posted.
+  - CHECK # goes into memo or notes.
+- No amounts belong in this note or in the import code's tests.
