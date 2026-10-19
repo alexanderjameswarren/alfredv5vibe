@@ -1,6 +1,6 @@
 ---
 name: cli-workflow
-description: 'Runs both halves of the CLI loop for Alex''s personal projects. Use it to write CLI prompts (each starts with a "Run tag:" line and a "Window:" line) whenever he asks for CLI instructions or is ready to implement, in React or Python projects, including worktree work (gitnewtree, gitcom, gitsync, gitpush, file and database claims). Use it, more often, whenever CLI output comes back: he sends just "cli", says the CLI responded in any wording (fetch the report with get_recent_clips by run tag or project code), or pastes CLI output. Assume he has not read it. Use it whenever he asks how to commit, sync, push, checkpoint or finish — every git instruction is a short table then a one-line command. Every command, path, setting value and paste-in prompt in to-dos and testing goes in its own copy box, never inline.'
+description: 'Runs both halves of the CLI loop for Alex''s personal projects. Use it to write CLI prompts (each starts with a "Run tag:" line and a "Window:" line) whenever he asks for CLI instructions or is ready to implement, in React or Python projects, including worktree work (gitnewtree, gitcom, gitsync, gitpush, file and database claims). Use it, more often, whenever CLI output comes back: he sends just "cli", says the CLI responded in any wording (fetch the report with get_recent_clips by run tag or project code), or pastes CLI output. Assume he has not read it. Use it whenever he asks how to commit, sync, push, checkpoint or finish — every git instruction is a numbered step naming where to run it, then the one-line command. Every command, path, setting value and paste-in prompt in to-dos and testing goes in its own copy box, never inline.'
 ---
 
 # CLI Workflow
@@ -28,6 +28,68 @@ answers to questions, and anywhere else. The prose around a block says what to
 do with it; the block holds only the literal text. Expected results go on a
 separate line after the block, never inside it. See Rule 3b and the
 before-sending check for the details.
+
+## The step format
+
+Every instruction this skill gives Alex — to-dos, set up, testing, git
+commands, closeout — uses this one format, so no action gets buried in prose or
+in a table. It sits on top of the copy-box rule; it does not replace it.
+
+- **Every action he takes is a numbered step.** Nothing he must do sits in
+  prose above, between or after the steps.
+- **The step line** is the number in bold (**1.**), then the location, a colon,
+  then the action. Only the number is bold.
+- **The location is always stated and exact.** Use one of: "Worktree
+  terminal", "Worktree CLI", "Worktree VS Code window", "**MAIN** terminal",
+  "**MAIN** CLI", "**MAIN** VS Code window", "**NEW CLAUDE AI THREAD**", "This
+  chat", "Supabase SQL editor", "Chrome", "Switchboard", "Text editor". MAIN and NEW
+  CLAUDE AI THREAD are always in bold capitals, because they are the locations
+  that differ from where he would normally be. Every other location is plain
+  text. For a worktree, name it when more than one is open.
+- **Under the step line comes the copy box**, if there is one.
+- **Then an "Expected:" line**, only when there is something specific to see.
+- **Then a "Feedback:" line**, only when he must send something back. Use
+  "screenshot" when the result is visual, "pass or fail" when it is a behavior,
+  and "paste the result cell here" for SQL. Leave the line off entirely when
+  nothing is needed.
+- **A "Why:" line** only for an unusual or risky step, such as a checkpoint
+  that merges specific files into main. Never for routine steps: finish, push,
+  sync, running a migration, renaming the chat.
+- **A horizontal rule (---) between steps.**
+- **No checkboxes** (they are static and misleading), **no tables**, no closing
+  line telling him to reply with results, and no preview of what comes next.
+  The reply ends at the last step.
+- **Instructions must be accurate about what actually happens.** Never add a
+  step out of caution. Example: closing a worktree's VS Code window ends the
+  Claude session running in its terminal, so there is no separate "exit the
+  Claude session" step.
+- **Timed actions stay in one step.** When an action brings up something that
+  disappears after a few seconds, such as an Undo button, the follow-up goes in
+  the same step as the action that triggered it: "remove the Elise tag, then
+  tap Undo before it disappears". The Expected line covers both. Split into
+  separate steps, the Undo is gone before he reaches the second step. This is
+  the one exception to one action per step.
+
+Example:
+
+````
+**1.** Worktree VS Code window: close the email_capture_fix-r2w VS Code window.
+
+---
+
+**2.** **MAIN** terminal: run
+```
+gitpush email_capture_fix-r2w finish
+```
+Expected: the worktree is removed. If it reports uncommitted changes, paste the output here before answering y.
+
+---
+
+**3.** This chat: rename it to
+```
+email_capture_fix-r2w Email capture follow-up
+```
+````
 
 ## When to Use This Skill
 
@@ -162,15 +224,42 @@ sitting unread in the Alfred inbox, because the thread never asked for it.
 
 Closeout comes only **after the final CLI report has been fetched, read and
 its inbox item archived**, in its own reply with no prompt in it. That reply
-gives, in this order:
+is a list of steps in the step format, in this order:
 
-1. the `gitpush` Finish table and command (for a worktree, first: close its
-   VS Code window and exit its Claude session),
-2. what to rename this claude.ai chat to: the same name with "Not done"
-   removed,
-3. a check that Switchboard is clear: the project's tile is gone, and for
-   main, the bar reads `main: free`, with no claims left under the project
-   code.
+1. Worktree only: close the worktree's VS Code window.
+2. **MAIN** terminal: the `gitpush` Finish command.
+3. This chat: rename it — the same name with "Not done" removed.
+4. Switchboard: check it is clear — the project's tile is gone, and for main,
+   the bar reads `main: free`, with no claims left under the project code.
+
+For a worktree it looks like this:
+
+````
+**1.** Worktree VS Code window: close the rem-j7p VS Code window.
+
+---
+
+**2.** **MAIN** terminal: run
+```
+gitpush rem-j7p finish --message "rem-j7p: reminders"
+```
+Expected: the worktree is removed. If it reports uncommitted changes, paste the output here before answering y.
+
+---
+
+**3.** This chat: rename it to
+```
+rem-j7p Reminders
+```
+
+---
+
+**4.** Switchboard: check the rem-j7p tile is gone.
+Expected: no tile and no claims under rem-j7p.
+````
+
+For main, drop step 1, use `gitpush main finish`, and step 4 checks the bar
+reads `main: free`.
 
 If the last report raised anything, deal with it first. Closeout waits.
 
@@ -311,7 +400,7 @@ The CLI never runs these. A prompt asks Alex to run one and then waits.
 | `gitnewtree <project-code>` | Starting work that needs its own worktree. Refuses until main is committed and pushed, so `gitpush` main → Push comes first. Say yes to `npm install` when the thread will run tests or a build; skip it for docs-only work. |
 | `gitcom` | A local commit, part-way through. Commits only what this thread has claimed and has changed; asks about anything unclaimed. Releases nothing. |
 | `gitsync` | Inside a worktree, to bring main in. **Always before a database step**, so the thread is looking at everything already live. |
-| `gitpush` | From the main checkout's terminal (it always acts on the main checkout; Finish on a worktree must not run from inside it). Modes by checkout are in the next section. For **main**: Push (commit and push, keep the claims) / Finish (and release them) / Skip. For a **worktree**: Checkpoint (merge only named files, release the `db:` claims, worktree carries on) / Finish (merge everything, release every claim, remove the worktree) / Skip. |
+| `gitpush` | From the main checkout's terminal (it always acts on the main checkout; Finish on a worktree must not run from inside it, so close that worktree's VS Code window first). Modes by checkout are in the next section. For **main**: Push (commit and push, keep the claims) / Finish (and release them) / Skip. For a **worktree**: Checkpoint (merge only named files, release the `db:` claims, worktree carries on) / Finish (merge everything, release every claim, remove the worktree) / Skip. |
 
 ### Which gitpush mode belongs to which checkout
 
@@ -332,9 +421,10 @@ cost three sessions of work in one day.
   worktree commits mid-project. The database step uses it because that is the
   mid-project moment that most needs a commit, not because it is a database mode.
 - **Finish on a worktree runs from main, with that worktree's VS Code window
-  closed and its Claude session exited first.** It cannot remove a worktree that
-  a terminal, window or session is still inside — the merge and push succeed,
-  the removal fails, and he is left running recovery commands.
+  closed first.** Closing the window also ends the Claude session in its
+  terminal. Finish cannot remove a worktree that a window is still open on —
+  the merge and push succeed, the removal fails, and he is left running
+  recovery commands.
 
 gitpush always acts on the main checkout whichever terminal it starts in, so
 "run it from" is about not sitting inside a worktree that Finish is removing.
@@ -346,35 +436,23 @@ touches a claim. They are the answer when main is still bound to a finished
 project and a prompt for the next one is being blocked as the wrong window —
 the guard's own message names them now.
 
-### The layout for a git instruction
+### Git commands are steps
 
-**Every git instruction is a short table, then one command in a code block.**
-Nothing else. He is reading this through Alfred, deciding whether to run
-something that can merge, push and trigger a deploy; the table is what he checks
-it against, and the command is what he pastes.
+**Every git instruction is a step in the step format** (top of this skill): the
+location — which terminal — then the one-line command in its own copy box. No
+tables. He is reading this through Alfred, deciding whether to run something
+that can merge, push and trigger a deploy, so the location has to be exact.
 
-| checkout | mode | files | database claims |
-|---|---|---|---|
-| the `rem-j7p` worktree | Checkpoint | the migration and the function | released |
-
-Why: one line.
-
-```powershell
-gitpush rem-j7p checkpoint --paths supabase/migrations/084_reminders.sql --release-db
-```
-
-Rules for the table: four columns, always in that order, and a cell that does
-not apply is `—`. "Why" is one line under it, not a paragraph. **Say whether
-claims are kept or released and why**, because that is the part he cannot see
-from the command and the part that bites weeks later.
+**Database claims are mentioned only in a Why line, and only when they are not
+the default for that mode.** Push and gitcom keep them; Checkpoint and Finish
+release them. A Checkpoint run with `--keep-db` gets a Why line saying so; one
+that releases them does not need one for that reason.
 
 **The mode must match the checkout** (see "Which gitpush mode belongs to which
-checkout" above). A worktree row can only say Checkpoint or Finish. A main row
-can only say Push, or Finish when main's project is done. **Check the checkout
-and mode cells against each other before writing the command**, and check the
-command says the same: a worktree code followed by `push` is refused by gitpush
-and does nothing. For a gitpush row, the "Why" line also says which terminal to
-run it in.
+checkout" above). A worktree code takes only `checkpoint` or `finish`. `main`
+takes only `push`, or `finish` when main's project is done. **Check the code and
+the mode in the command against each other before writing it**: a worktree code
+followed by `push` is refused by gitpush and does nothing.
 
 Rules for the command: **one line, every answer given as a parameter**, so there
 is nothing to type. A parameter answers a question the command would have asked;
@@ -384,103 +462,93 @@ command's options.
 
 #### The six shapes
 
-**Starting a worktree.**
+**Starting a worktree.** It branches from `origin/main`, so main must be
+committed and pushed first.
 
-| checkout | mode | files | database claims |
-|---|---|---|---|
-| main → new `parallel_threads` worktree | — | — | — |
-
-Why: it branches from `origin/main`, so main must be committed and pushed first.
-
-```powershell
+````
+**1.** **MAIN** terminal: run
+```
 gitnewtree parallel_threads --install
 ```
+Expected: a new VS Code window opens on the parallel_threads worktree.
+````
 
 `--install` when the thread will run tests or a build, `--no-install` for
 docs-only work. Either way it runs `scripts/prebuild.js`, so the generated
 schema files exist.
 
-**A local commit, part-way through.**
+**A local commit, part-way through.** A commit of the thread's own work;
+nothing leaves the worktree.
 
-| checkout | mode | files | database claims |
-|---|---|---|---|
-| the `rem-j7p` worktree | — | its claimed changes, none of yours | kept |
-
-Why: a checkpoint of the thread's own work; nothing leaves the worktree.
-
-```powershell
+````
+**1.** Worktree terminal: run
+```
 gitcom --include-unclaimed none --message "rem-j7p: reminder rows and the list view"
 ```
+````
 
 `--include-unclaimed` decides what happens to changes nobody has claimed —
 usually Alex's own edits sitting in the tree. `none` leaves them alone; `all`
 sweeps them in; naming paths takes just those.
 
-**Bringing main into a worktree.**
+**Bringing main into a worktree.** The database step must run against
+everything already live.
 
-| checkout | mode | files | database claims |
-|---|---|---|---|
-| the `rem-j7p` worktree | — | — | — |
-
-Why: the database step must run against everything already live.
-
-```powershell
+````
+**1.** Worktree terminal: run
+```
 gitsync
 ```
+````
 
 It takes no parameters. The one question it asks is the final yes/no, and that
 one is always asked.
 
-**Pushing main, project still going.**
+**Pushing main, project still going.** Push keeps main's claims, so the work
+can carry on.
 
-| checkout | mode | files | database claims |
-|---|---|---|---|
-| main | Push | everything main has claimed and changed | **kept** |
-
-Why: the work continues here, so the claims stay held.
-
-```powershell
+````
+**1.** **MAIN** terminal: run
+```
 gitpush main push --message "claims-followup: step 6, parameters"
 ```
+````
 
 **Checkpointing a worktree's database step.**
 
-| checkout | mode | files | database claims |
-|---|---|---|---|
-| the `rem-j7p` worktree | Checkpoint | only the migration and the function | **released** |
-
-Why: the deploy is live and belongs in main; the half-finished front end does
-not, and a `db:` claim belongs to one step.
-
-```powershell
+````
+**1.** **MAIN** terminal: run
+```
 gitpush rem-j7p checkpoint --paths supabase/migrations/084_reminders.sql supabase/functions/mcp/index.ts --release-db
 ```
+Why: this merges only the migration and the function into main, which goes live; the half-finished front end stays in the worktree.
+````
 
 The same mode, without a migration in `--paths`, is how a worktree commits any
 other mid-project work; Checkpoint is not a database mode.
 
 `--keep-db` instead, only when the very next step deploys again and he has said
-so. `--all` commits every uncommitted path, which is rarely what Checkpoint is
-for.
+so — and then the Why line says the database claims are kept, and why. `--all`
+commits every uncommitted path, which is rarely what Checkpoint is for.
 
-**Finishing a worktree.**
+**Finishing a worktree.** The claims, the branch and the worktree all go.
 
-| checkout | mode | files | database claims |
-|---|---|---|---|
-| the `rem-j7p` worktree | Finish | everything it claimed and changed | **all released** |
+````
+**1.** Worktree VS Code window: close the rem-j7p VS Code window.
 
-Why: the work is done, so the claims, the branch and the worktree all go.
+---
 
-```powershell
+**2.** **MAIN** terminal: run
+```
 gitpush rem-j7p finish --message "rem-j7p: reminders"
 ```
-
-Close that worktree's VS Code window and exit its Claude session first, then run
-it from the main checkout's terminal.
+Expected: the worktree is removed. If it reports uncommitted changes, paste the output here before answering y.
+````
 
 For main, `gitpush main finish` is the same ending for work that never used a
 worktree: it pushes, releases every claim main holds, and clears main's project
-code so the next tagged prompt can set a new one.
+code so the next tagged prompt can set a new one. It is one step, in the
+**MAIN** terminal, with no window to close.
 
 ### One conversation per project
 
@@ -636,19 +704,76 @@ left open that needs a decision. Each one gets: the question restated in full,
 what is actually being asked, the recommendation, and one line of why.
 
 **3. Your to-dos.** Everything the user must do by hand — run SQL, edit a file,
-set a variable, deploy, install. Numbered, one action per step. Full paths,
-always (Rule 4). **Every command, path, setting value, SQL statement and
-find-and-replace string is in its own fenced code block** (Rule 3b) — never
+set a variable, deploy, install. Steps in the step format, one action per step.
+Full paths, always (Rule 4). **Every command, path, setting value, SQL statement
+and find-and-replace string is in its own fenced code block** (Rule 3b) — never
 inline in the sentence, never in backticks. If the to-dos include more than one
 read-only SQL check, combine them into one query (see Rule 5).
 
-**4. Testing.** Numbered, explicit, doable without reading the CLI output and
-without DevTools. Each step is one app action or one copy box (Rule 3). **Every
-command he runs, every file he opens, every value he sets, and every prompt he
-pastes into a CLI session or a new thread is in its own fenced code block**
-(Rule 3b). Expected results go on their own line after the block. A recovery
-command ("if the file got deleted, run …") is its own numbered step with its
-own block. SQL checks here follow Rule 5 too.
+**If he has nothing to do by hand, the section says only "None."** Never fill
+it with steps like "run the testing below" or "tell me the results".
+
+**4. Testing.** Steps in the step format, explicit, doable without reading the
+CLI output and without DevTools. Each step is one app action or one copy box
+(Rule 3). **Every command he runs, every file he opens, every value he sets, and
+every prompt he pastes into a CLI session or a new thread is in its own fenced
+code block** (Rule 3b). Expected results go on their own line after the block. A
+recovery command ("if the file got deleted, run …") is its own numbered step
+with its own block. SQL checks here follow Rule 5 too.
+
+- **Break testing into parts of about four to six steps**, each headed
+  "Testing, Part N of M: <what this part tests>", followed by one line saying
+  what we're testing and why, and where it runs (for example "Chrome, against
+  the worktree's local dev server").
+- **Give only Part 1.** Stop after its last step. Give the next part only after
+  he sends results.
+- **Inside a part, steps that prepare for the test go under a "Set up"
+  subheading**: starting servers, navigating to the screen, creating test
+  records. The steps that check something go under a "Testing" subheading.
+  Numbering runs straight through both.
+- **Every step names exactly what to touch**: the screen, the heading, the
+  button label, the record. Never "any group" or "for example". Before writing
+  the steps, look up live data with the MCP tools so the step names a group or
+  record that really exists.
+- **When a test changes data, the Set up creates a named test record first**,
+  with a name that says it is a test, such as: Create an intention called "P4
+  Test Interval no end date" that repeats daily with no end date. Later steps
+  and SQL checks refer to that record by name, and cleanup only touches test
+  records.
+- **Ask for a screenshot whenever the result is visual.** Screenshots work well.
+- **Timed actions stay in one step** (see "The step format"): an action and the
+  Undo it brings up are one step.
+
+A part looks like this:
+
+````
+### Testing, Part 1 of 2: stopping a repeat
+That "Stop repeating" ends an interval intention without deleting its history. Chrome, against the worktree's local dev server.
+
+#### Set up
+
+**1.** Worktree terminal: run
+```
+npm start
+```
+Expected: the app opens at localhost:3000.
+
+---
+
+**2.** Chrome: on Intentions, tap + and create an intention called
+```
+P4 Test Interval no end date
+```
+that repeats daily with no end date.
+
+---
+
+#### Testing
+
+**3.** Chrome: open "P4 Test Interval no end date", tap "Stop repeating", then tap Undo before it disappears.
+Expected: the repeat line shows "Daily" again.
+Feedback: screenshot
+````
 
 **Where UI testing happens.** Alex tests UI changes in desktop Chrome's mobile
 view, against the worktree's local dev server. Never tell him to checkpoint or
@@ -657,10 +782,10 @@ deploy just so he can test.
   phone itself, such as push notifications or reminders that fire.
 - It is also needed when the work must reach main for another reason, such as a
   database step that another thread depends on.
-- Every test step, or every group of them, opens by saying which mode it needs:
-  "Chrome mobile view, local dev server" or "on the phone, after checkpoint".
-  The label is something he reads, not types, so it stays inline. It is the one
-  exception to the copy-box rule.
+- Every testing part's opening line says which mode it needs: "Chrome mobile
+  view, local dev server" or "on the phone, after checkpoint". The label is
+  something he reads, not types, so it stays inline. It is the one exception to
+  the copy-box rule.
 
 **5. Stop — or reply to the CLI, but only if there is no testing.** If part 4
 has any testing steps, end the message there. Do not write anything for Alex to
@@ -741,7 +866,11 @@ mixed into the block, where he'd paste them into Claude.
 **Split sequences.** If a sentence in a test contains "then", "and ask",
 "press", or more than one verb aimed at different places (the app and
 Claude), it is several steps. Split it until each step is one action or one
-paste.
+paste. **The one exception is a timed action**: an action and the Undo it
+brings up stay in one step ("remove the Elise tag, then tap Undo before it
+disappears"), because split in two the Undo is gone before he reaches the
+second step. An Undo that stays on screen, such as the one in the inbox's
+Recently archived list, is a step of its own.
 
 **Each block tells the fresh thread what to report back**, so he can paste
 the reply here without reading it.
@@ -755,26 +884,44 @@ Example, from a bad instruction ("Make another reminder, discard its item,
 and ask Claude for get_reminders with state all: it should be cancelled.
 Press Undo: it's scheduled again."):
 
-1. Paste into a new thread:
+````
+**1.** **NEW CLAUDE AI THREAD**: paste
 ```
-   Use create_reminder to remind me "Test R3: discard" 30 minutes from now.
-   Report only the reminder id and the inbox item id.
+Use create_reminder to remind me "Test R3: discard" 30 minutes from now.
+Report only the reminder id and the inbox item id.
 ```
-2. In the app, open the inbox item "Test R3: discard" and discard it.
-3. Paste into the same thread:
+Feedback: paste the reply here.
+
+---
+
+**2.** Chrome: in the inbox, open "Test R3: discard" and discard it.
+
+---
+
+**3.** **NEW CLAUDE AI THREAD**: in the same thread, paste
 ```
-   Call get_reminders with state "all". Report the state and cancel reason
-   of "Test R3: discard", verbatim.
+Call get_reminders with state "all". Report the state and cancel reason
+of "Test R3: discard", verbatim.
 ```
-   Expected: state cancelled, reason inbox_discarded.
-4. In the app, tap Undo on the discard.
-5. Paste into the same thread:
+Expected: state cancelled, reason inbox_discarded.
+Feedback: paste the reply here.
+
+---
+
+**4.** Chrome: in the inbox's Recently archived list, tap Undo on "Test R3: discard".
+Expected: the item is back in the inbox.
+
+---
+
+**5.** **NEW CLAUDE AI THREAD**: in the same thread, paste
 ```
-   Call get_reminders with state "all" again. Report the state of
-   "Test R3: discard", verbatim.
+Call get_reminders with state "all" again. Report the state of
+"Test R3: discard", verbatim.
 ```
-   Expected: state scheduled, and the item is back in the inbox.
-   
+Expected: state scheduled.
+Feedback: paste the reply here.
+````
+
 ### Rule 3b: every literal string gets its own copy box
 
 Anything Alex must type, paste, search for, or replace goes in its own fenced
@@ -791,18 +938,25 @@ Bad:
   ctx = resolveRepo(entry.cwd);
 
 Good:
-  Open C:\Users\Alex\projects\alfred-v5\.claude\hooks\claims-guard.mjs
-  (Ctrl+P, paste the path). Press Ctrl+H, then:
 
-  Find:
+````
+**1.** **MAIN** VS Code window: press Ctrl+P and paste
 ```
-  ctx = resolveCheckout(process.env.CLAUDE_PROJECT_DIR, entry.cwd);
+C:\Users\Alex\projects\alfred-v5\.claude\hooks\claims-guard.mjs
 ```
-  Replace with:
+
+---
+
+**2.** **MAIN** VS Code window: press Ctrl+H, then find
 ```
-  ctx = resolveRepo(entry.cwd);
+ctx = resolveCheckout(process.env.CLAUDE_PROJECT_DIR, entry.cwd);
 ```
-  Save. No restart needed.
+and replace it with
+```
+ctx = resolveRepo(entry.cwd);
+```
+then save. No restart needed.
+````
 
 Prefer find-and-replace over "go to line N": line numbers drift, and the
 search box confirms he's in the right place.
@@ -818,33 +972,56 @@ Bad:
      deleted, run `git restore src/App.js` to bring it back.
 
 Good:
-  1. Open this file in a text editor:
+
+````
+#### Set up
+
+**1.** Text editor: open
 ```
-  %APPDATA%\claude-sessions\settings.ini
+%APPDATA%\claude-sessions\settings.ini
 ```
-     Under [panel], set the touchmode line to the value below, then save.
+and under [panel], set the touchmode line to
 ```
-  touchmode=main
+touchmode=main
 ```
-  2. In PowerShell at the repo root, run:
+then save.
+
+---
+
+#### Testing
+
+**2.** **MAIN** terminal: run
 ```
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/claude-sessions/run-tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/claude-sessions/run-tests.ps1
 ```
-     Expected: "all Switchboard tests passed."
-  3. In a CLI session in main, paste:
+Expected: "all Switchboard tests passed."
+Feedback: pass or fail
+
+---
+
+**3.** **MAIN** CLI: paste
 ```
-  Run this command and report only whether it was blocked: git archive HEAD tools/claude-sessions | tar -x -C "$TEMP/sb"
+Run this command and report only whether it was blocked: git archive HEAD tools/claude-sessions | tar -x -C "$TEMP/sb"
 ```
-     Expected: not blocked.
-  4. In the same CLI session, paste:
+Expected: not blocked.
+Feedback: pass or fail
+
+---
+
+**4.** **MAIN** CLI: paste
 ```
-  Run this command and report only whether it was blocked, and the block message verbatim if so: rm src/App.js
+Run this command and report only whether it was blocked, and the block message verbatim if so: rm src/App.js
 ```
-     Expected: blocked, and the message names src/App.js.
-  5. Only if the file actually got deleted, run this to restore it:
+Expected: blocked, and the message names src/App.js.
+Feedback: pass or fail
+
+---
+
+**5.** **MAIN** terminal: only if src/App.js actually got deleted, run
 ```
-  git restore src/App.js
+git restore src/App.js
 ```
+````
 
 Before sending, run the copy-box check under the response format.
 
@@ -857,18 +1034,25 @@ thing you mean.
 - ✗ "Run the migration, then update your .env."
 - ✗ "Run `docs/migrations/2026-09-11-ken-areas.sql` in the Supabase SQL editor."
   (Full path, but inline — breaks the copy-box rule.)
-- ✓ Open this file and run its contents in the Supabase SQL editor:
+- ✓
+
+````
+**1.** Supabase SQL editor: open this file, paste its contents into the editor and run it.
 ```
-  docs/migrations/2026-09-11-ken-areas.sql
+docs/migrations/2026-09-11-ken-areas.sql
 ```
-  Then open this file:
+
+---
+
+**2.** Worktree VS Code window: open
 ```
-  /home/alex/projects/ken/.env.local
+/home/alex/projects/ken/.env.local
 ```
-  and add this line:
+and add this line, then save.
 ```
-  KEN_API_URL=https://...
+KEN_API_URL=https://...
 ```
+````
 
 If a file must be created, give the full path it should be created at (in its
 own block) and its complete contents (in its own block).
@@ -965,11 +1149,33 @@ Before generating CLI instructions, identify any manual steps the user must comp
 - Configuring environment variables
 
 **If manual steps exist:**
-1. Walk the user through these steps FIRST, numbered, one action per step,
-   with every command, path, value and SQL statement in its own fenced code
-   block (the copy-box rule at the top of this skill)
+1. Walk the user through these steps FIRST, in the step format (top of this
+   skill), one action per step, with every command, path, value and SQL
+   statement in its own fenced code block (the copy-box rule)
 2. Wait for confirmation they're complete
 3. THEN generate the CLI instructions
+
+For example:
+
+````
+**1.** Supabase SQL editor: open this file, paste its contents into the editor and run it.
+```
+supabase/migrations/084_reminders.sql
+```
+Expected: "Success. No rows returned."
+
+---
+
+**2.** Supabase SQL editor: run
+```
+select json_build_object(
+  'reminders_table', (select coalesce(json_agg(t), '[]'::json) from (
+    select column_name from information_schema.columns where table_name = 'reminders'
+  ) t)
+) as result;
+```
+Feedback: paste the result cell here.
+````
 
 **SQL checks:** any read-only queries he needs to run to confirm a manual step
 worked are combined into one JSON query, per Rule 5. The steps that change the
