@@ -54,6 +54,48 @@ export async function listRecentCompletions({ itemId = null, intentId = null, li
   return toCamelCase(data || []);
 }
 
+/**
+ * How many completed and skipped executions an intention (`intentIds`) or an item (its
+ * intentions, or `item_ids`) has: what "Show all (N older)" counts (Step 9).
+ */
+export async function countRecentExecutions({ itemId = null, intentIds = [] }) {
+  const ors = [];
+  if (intentIds.length) ors.push(`intent_id.in.(${intentIds.join(",")})`);
+  if (itemId) ors.push(`item_ids.cs.["${itemId}"]`);
+  if (ors.length === 0) return 0;
+  const { count, error } = await supabase
+    .from("executions")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "closed")
+    .in("outcome", ["done", "skipped"])
+    .or(ors.join(","));
+  if (error) throw error;
+  return count || 0;
+}
+
+/** The latest skipped executions of these intentions, newest first (Step 9). Never completions. */
+export async function listRecentSkips(intentIds, limit = 3) {
+  if (intentIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from("executions")
+    .select("id, intent_id, event_id, closed_at")
+    .in("intent_id", intentIds)
+    .eq("status", "closed")
+    .eq("outcome", "skipped")
+    .order("closed_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  const rows = toCamelCase(data || []);
+  // The date skipped is the event's, not the moment of the skip.
+  const eventIds = rows.map((r) => r.eventId).filter(Boolean);
+  const { data: evs, error: evError } = eventIds.length
+    ? await supabase.from("events").select("id, time").in("id", eventIds)
+    : { data: [], error: null };
+  if (evError) throw evError;
+  const timeOf = Object.fromEntries((evs || []).map((e) => [e.id, e.time]));
+  return rows.map((r) => ({ ...r, skippedOn: timeOf[r.eventId] ? String(timeOf[r.eventId]).slice(0, 10) : null }));
+}
+
 export async function deleteNote(id) {
   const { error } = await supabase.from("notes").delete().eq("id", id);
   if (error) throw error;

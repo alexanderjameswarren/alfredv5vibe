@@ -645,7 +645,13 @@ export default function ItemDetailView({
 
       <div className="mt-6">
         {/* Across every intention of this item. */}
-        <RecentCompletions itemId={item.id} showIntention onOpenExecution={onOpenExecution} />
+        <RecentCompletions
+          itemId={item.id}
+          intentIds={itemIntentions.map((i) => i.id)}
+          intentNames={Object.fromEntries(itemIntentions.map((i) => [i.id, i.text]))}
+          showIntention
+          onOpenExecution={onOpenExecution}
+        />
         <NoteTimeline
           notesState={notesState}
           archived={Boolean(item.archived)}

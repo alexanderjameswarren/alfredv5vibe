@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import { Archive, Play } from "lucide-react";
+import { getRecurrenceConfig } from "../utils/recurrence";
+import { skipAction } from "../shared/ActionBar";
 import { supabase } from "../supabaseClient";
 import ObjectIcon from "../shared/ObjectIcon";
 import { formatEventDate, getTodayDate } from "../utils/eventDates";
@@ -88,6 +90,7 @@ export default function EventCard({
   const closedTitle = intent ? closedBlockTitle(intent, "intention") : null;
   // The edit form's Start Now: one open run per intention, nothing on a closed one.
   const openRun = executions.find((ex) => ex.intentId === event.intentId);
+  const repeating = Boolean(intent) && getRecurrenceConfig(intent).type !== "once";
   const startBlocked = closedTitle || (openRun ? "This intention already has an open execution. Continue it instead." : null);
 
   // The title, hoisted out of the JSX because the two links below compare
@@ -287,14 +290,20 @@ export default function EventCard({
             >
               Cancel
             </button>
-            <button
-              onClick={handleCancelEvent}
-              disabled={hasActiveExecution}
-              className={`px-4 py-2.5 min-h-[44px] rounded-lg transition-colors duration-200 ml-auto ${hasActiveExecution ? 'bg-secondary text-muted-foreground cursor-not-allowed' : 'border-2 border-destructive text-destructive hover:bg-destructive/10'}`}
-              title={hasActiveExecution ? 'Cannot archive: active execution in progress' : 'Archive this event'}
-            >
-              Archive Event
-            </button>
+            {/* A repeating date is skipped, not archived (Step 9), and Skip is hidden
+                while the intention has an open execution. */}
+            {repeating ? (
+              !openRun && <span className="ml-auto">{skipAction(handleCancelEvent).button}</span>
+            ) : (
+              <button
+                onClick={handleCancelEvent}
+                disabled={hasActiveExecution}
+                className={`px-4 py-2.5 min-h-[44px] rounded-lg transition-colors duration-200 ml-auto ${hasActiveExecution ? 'bg-secondary text-muted-foreground cursor-not-allowed' : 'border-2 border-destructive text-destructive hover:bg-destructive/10'}`}
+                title={hasActiveExecution ? 'Cannot archive: active execution in progress' : 'Archive this event'}
+              >
+                Archive Event
+              </button>
+            )}
           </div>
         </div>
       </div>

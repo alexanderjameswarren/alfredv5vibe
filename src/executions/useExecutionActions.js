@@ -718,6 +718,27 @@ export function useExecutionActions({
     return ok;
   }
 
+  /**
+   * Delete a completed or skipped execution from the history (Step 9). Asked first, no
+   * Undo. Its notes cascade; the 100 trigger recomputes last_completed_at on delete,
+   * and the records are re-read. Events and statuses do not move. Back to the page it
+   * was opened from.
+   */
+  async function deleteClosedExecution() {
+    const execution = activeExecution;
+    if (!execution || execution.status !== "closed") return false;
+    let ok = false;
+    await withLoading("Deleting...", async () => {
+      if (!(await storage.delete(`execution:${execution.id}`))) throw writeError("Deleting it");
+      await refreshCompletedRecords(execution);
+      completionsChanged();
+      setActiveExecution(null);
+      setView(previousView);
+      ok = true;
+    });
+    return ok;
+  }
+
   const hasOpen = (intentId) =>
     [...activeExecutions, ...pausedExecutions].some((x) => x.intentId === intentId);
 
@@ -793,25 +814,27 @@ export function useExecutionActions({
 
     completionsChanged();
     offerUndoFor?.(`Logged an execution on ${longDate(day, getTodayDate())}.`, async () => {
+      // The execution goes first (its note cascades); each write that fails stops the
+      // Undo there, so it never carries on past a half-undone state.
+      if (!(await storage.delete(`execution:${execution.id}`))) throw writeError("Removing the execution");
       if (successor) {
-        await storage.delete(`event:${successor.id}`);
+        if (!(await storage.delete(`event:${successor.id}`))) throw writeError("Removing the next date");
         setEvents((prev) => prev.filter((e) => e.id !== successor.id));
       }
-      // Its note goes with it (notes.execution_id cascades).
-      await storage.delete(`execution:${execution.id}`);
       if (live) {
         if (!(await storage.set(`event:${live.id}`, live))) throw writeError("Restoring its date");
         setEvents((prev) => prev.map((e) => (e.id === live.id ? live : e)));
       } else {
-        await storage.delete(`event:${createdEvent.id}`);
+        if (!(await storage.delete(`event:${createdEvent.id}`))) throw writeError("Removing its date");
         setEvents((prev) => prev.filter((e) => e.id !== createdEvent.id));
       }
       if (createdIntent) {
-        await storage.delete(`intent:${createdIntent.id}`);
+        if (!(await storage.delete(`intent:${createdIntent.id}`))) throw writeError("Removing the intention");
         setIntents((prev) => prev.filter((i) => i.id !== createdIntent.id));
       } else if (oneTime && previousStatus && previousStatus !== "someday") {
         const back = await storage.patch(`intent:${intentId}`, { status: previousStatus });
-        if (back) setIntents((prev) => prev.map((i) => (i.id === intentId ? back : i)));
+        if (!back) throw writeError("Restoring the status");
+        setIntents((prev) => prev.map((i) => (i.id === intentId ? back : i)));
       }
       await refreshCompletedRecords(execution, intent);
       completionsChanged();
@@ -865,6 +888,7 @@ export function useExecutionActions({
     activate,
     closeExecution,
     changeCompletionDate,
+    deleteClosedExecution,
     markDone,
     completeItem,
     cancelExecutionForEvent,

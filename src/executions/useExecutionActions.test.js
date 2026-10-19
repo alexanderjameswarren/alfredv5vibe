@@ -1,6 +1,6 @@
 // A completed (closed) execution is read only: no writer touches it.
 import { useExecutionActions, withActive, closedAtFor } from "./useExecutionActions";
-import { storage } from "../utils/storage";
+import { storage, writeError } from "../utils/storage";
 import * as chainApi from "../utils/notificationStepsApi";
 import * as notesApi from "../notes/notesApi";
 
@@ -129,6 +129,31 @@ test("changeCompletionDate: only a done execution's date, then the rows refresh 
   expect(storage.patch).not.toHaveBeenCalled();
 });
 
+test("deleteClosedExecution: deletes, re-reads last done, goes back; events and status untouched", async () => {
+  storage.delete.mockResolvedValue(true);
+  storage.get.mockResolvedValue({ id: "i1", status: "closed", lastCompletedAt: null });
+  const setView = jest.fn();
+  const setActiveExecution = jest.fn();
+  let intents = [{ id: "i1", status: "closed", lastCompletedAt: "2026-10-09T12:00:00Z" }];
+  const a = actionsFor(closedRun, {
+    intents,
+    setView,
+    setActiveExecution,
+    previousView: "intention-detail",
+    setIntents: (f) => { intents = typeof f === "function" ? f(intents) : f; },
+  });
+  expect(await a.deleteClosedExecution()).toBe(true);
+  expect(storage.delete).toHaveBeenCalledWith("execution:x");
+  expect(intents[0]).toMatchObject({ status: "closed", lastCompletedAt: null });
+  expect(setActiveExecution).toHaveBeenCalledWith(null);
+  expect(setView).toHaveBeenCalledWith("intention-detail");
+  expect(storage.set).not.toHaveBeenCalled();
+  expect(storage.patch).not.toHaveBeenCalled();
+  storage.delete.mockClear();
+  expect(await actionsFor({ ...closedRun, status: "active" }).deleteClosedExecution()).toBe(false);
+  expect(storage.delete).not.toHaveBeenCalled();
+});
+
 describe("markDone: complete a repeating intention without an execution", () => {
   const live = { id: "e1", intentId: "i1", time: "2026-10-20", archived: false, itemIds: ["it1"] };
 
@@ -165,6 +190,17 @@ describe("markDone: complete a repeating intention without an execution", () => 
     expect(notesApi.saveNote).toHaveBeenCalledWith(expect.objectContaining({ body: "felt good", executionId: execution.id }));
     expect(events().find((e) => e.id === "e1").archived).toBe(true);
     expect(triggerRecurrence).toHaveBeenCalledWith("i1", live, { nextDate: "2026-10-21" });
+  });
+
+  test("Undo stops at a failed delete and restores nothing else", async () => {
+    const { a, undo } = setup();
+    await a.markDone("i1", { completedOn: "2026-10-15" });
+    storage.delete.mockResolvedValueOnce(false);
+    storage.set.mockClear();
+    writeError.mockImplementation((what) => new Error(what));
+    await expect(undo().restore()).rejects.toThrow(/Removing the execution/);
+    expect(storage.delete).toHaveBeenCalledTimes(1);
+    expect(storage.set).not.toHaveBeenCalled();
   });
 
   test("says 'Logged an execution on …' and tells Recent completions to reload, on log and on Undo", async () => {

@@ -1,4 +1,4 @@
-import { storage } from "../utils/storage";
+import { storage, writeError } from "../utils/storage";
 import { uid } from "../utils/flattenElements";
 
 // Context writers and the archive guard, moved out of Alfred.jsx unchanged. Holds no
@@ -228,7 +228,7 @@ export function useContextActions({
       setContexts((prev) => prev.map((c) => (c.id === contextId ? archived : c)));
 
       offerUndoFor(`Archived "${context.name}".`, async () => {
-        await storage.set(`context:${contextId}`, context, context.shared);
+        if (!(await storage.set(`context:${contextId}`, context, context.shared))) throw writeError("Restoring the context");
         setContexts((prev) => prev.map((c) => (c.id === contextId ? context : c)));
       });
     });

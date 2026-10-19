@@ -1,6 +1,6 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor, within, cleanup } from "@testing-library/react";
-import ExecutionDetailView, { DELETE_EXECUTION_CONFIRM } from "./ExecutionDetailView";
+import ExecutionDetailView, { DELETE_CLOSED_CONFIRM, DELETE_EXECUTION_CONFIRM } from "./ExecutionDetailView";
 import * as api from "../notes/notesApi";
 import { formatEventDate, getTodayDate } from "../utils/eventDates";
 import { longDate } from "../utils/recurrenceDisplay";
@@ -222,6 +222,31 @@ test("the header's scheduled date shows on an open execution, not on a completed
   });
   await screen.findByText(/Completed .* · read only/);
   expect(screen.queryByText(formatEventDate("2026-10-08"))).toBeNull();
+});
+
+test("a closed execution's Delete Execution asks first, then deletes; Cancel keeps it", async () => {
+  const onDeleteClosed = jest.fn().mockResolvedValue(true);
+  renderRun("closed", {
+    execution: { id: "x", status: "closed", outcome: "skipped", closedAt: "2026-10-09T12:00:00Z", intentId: "i1", itemIds: [], elements: [] },
+    onDeleteClosed,
+  });
+  const del = screen.getByRole("button", { name: "Delete Execution" });
+  expect(del.className).toMatch(/border-destructive/);
+  fireEvent.click(del);
+  expect(screen.getByText(DELETE_CLOSED_CONFIRM)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(onDeleteClosed).not.toHaveBeenCalled();
+  fireEvent.click(del);
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(onDeleteClosed).toHaveBeenCalled());
+});
+
+test("a skipped execution reads Skipped with its date, never Completed", async () => {
+  renderRun("closed", {
+    execution: { id: "x", status: "closed", outcome: "skipped", closedAt: "2026-10-09T12:00:00Z", intentId: "i1", eventId: "e1", itemIds: [], elements: [] },
+  });
+  await screen.findByText(`Skipped ${formatEventDate("2026-10-08")} · read only`);
+  expect(screen.queryByText(/Completed/)).toBeNull();
 });
 
 test("a completed execution's date has a Change link opening the date pop-up", async () => {

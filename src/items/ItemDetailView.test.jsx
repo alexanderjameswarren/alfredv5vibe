@@ -10,6 +10,8 @@ jest.mock("../notes/notesApi", () => ({
   currentUserId: jest.fn(),
   listNotesForTargets: jest.fn(),
   listRecentCompletions: jest.fn(),
+  listRecentSkips: jest.fn(),
+  countRecentExecutions: jest.fn(),
   listExecutionNotes: jest.fn(),
   listNotesForExecutions: jest.fn(),
   saveNote: jest.fn(),
@@ -21,6 +23,7 @@ beforeEach(() => {
   notesApi.currentUserId.mockResolvedValue("me");
   notesApi.listNotesForTargets.mockResolvedValue([]);
   notesApi.listRecentCompletions.mockResolvedValue([]);
+  notesApi.listRecentSkips.mockResolvedValue([]);
   notesApi.listExecutionNotes.mockResolvedValue([]);
   notesApi.listNotesForExecutions.mockResolvedValue([]);
   notesApi.onNotesChanged.mockReturnValue(() => {});
@@ -92,7 +95,7 @@ test("notes: one timeline across the item and both its intentions, recent comple
   expect(get).toHaveBeenCalledWith("execution:x");
   get.mockRestore();
   expect(notesApi.listNotesForTargets).toHaveBeenCalledWith({ itemIds: ["it1"], intentionIds: ["i1", "i2"] });
-  expect(notesApi.listRecentCompletions).toHaveBeenCalledWith({ itemId: "it1", intentId: null, limit: 3 });
+  expect(notesApi.listRecentCompletions).toHaveBeenCalledWith({ itemId: "it1", intentId: null, limit: 5 });
 });
 
 test("open execution card picks up a note saved after the page opened", async () => {

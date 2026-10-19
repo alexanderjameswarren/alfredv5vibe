@@ -4,6 +4,25 @@ import { getTodayDate } from "../utils/eventDates";
 import { getRecurrenceConfig, nextOccurrence } from "../utils/recurrence";
 import { liveEventsFor, statusOf } from "../utils/status";
 import { assertNoActiveRun } from "../utils/runGuard";
+import { supabase } from "../supabaseClient";
+import { longDate } from "../utils/recurrenceDisplay";
+import { completionsChanged } from "../notes/notesApi";
+
+export const SKIP_BLOCKED = "An execution is in progress. Continue or delete it before skipping.";
+
+const isRepeating = (intent) => Boolean(intent) && getRecurrenceConfig(intent).type !== "once";
+
+/** Asked at the moment of the write: a skip never lands beside an open execution. */
+async function assertNoOpenExecution(intentId) {
+  const { data, error } = await supabase
+    .from("executions")
+    .select("id")
+    .eq("intent_id", intentId)
+    .is("closed_at", null)
+    .limit(1);
+  if (error) throw new Error("Could not check for an open execution.");
+  if (data?.length) throw new Error(SKIP_BLOCKED);
+}
 
 // Event writers, moved out of Alfred.jsx unchanged. Holds no state: everything it
 // reads or sets is Alfred's, passed in.
@@ -20,6 +39,31 @@ export function useEventActions({
     if (!event) return;
     return withLoading('Saving...', async () => {
       if (updates.time && updates.time !== event.time) await assertNoActiveRun(event.id);
+      const intent = intents.find((i) => i.id === event.intentId);
+      // Archiving a repeating intention's live date is a Skip (Step 9): it writes a
+      // closed execution with outcome "skipped", which never counts as a completion.
+      const skipping = updates.archived === true && !event.archived && isRepeating(intent);
+      let skipped = null;
+      if (skipping) {
+        await assertNoOpenExecution(intent.id);
+        const now = new Date().toISOString();
+        skipped = {
+          id: uid(),
+          user_id: user.id,
+          eventId: event.id,
+          intentId: intent.id,
+          contextId: intent.contextId || null,
+          collectionId: intent.collectionId || null,
+          itemIds: event.itemIds || [],
+          startedAt: now,
+          closedAt: now,
+          status: "closed",
+          outcome: "skipped",
+          elements: [],
+          progress: [],
+        };
+        if (!(await storage.set(`execution:${skipped.id}`, skipped))) throw writeError("Skipping it");
+      }
       const updated = { ...event, ...updates };
       const savedEvent = await storage.set(`event:${event.id}`, updated);
       if (!savedEvent) throw writeError("The event");
@@ -31,22 +75,28 @@ export function useEventActions({
         // Archiving a live event is skipping it: an interval counts from its date.
         successor = await triggerRecurrence(event.intentId, event, { skipped: true });
       }
+      if (skipped) completionsChanged();
 
       if (updates.archived === true) {
-        const intent = intents.find((i) => i.id === event.intentId);
         const label = event.text || intent?.text || "event";
-        offerUndoFor(`Archived "${label}".`, async () => {
+        const day = String(event.time || "").slice(0, 10);
+        const message = skipped ? `Skipped ${longDate(day, getTodayDate())}.` : `Archived "${label}".`;
+        offerUndoFor(message, async () => {
+          // The skip goes first, and a failed delete stops the Undo: restoring the
+          // date while the skip stays would leave a skip of a date that is live again.
+          if (skipped && !(await storage.delete(`execution:${skipped.id}`))) throw writeError("Removing the skip");
           // The successor only exists because of the archive being undone, so
           // it goes with it. Deleting rather than archiving: it was never a
           // real event the user saw, and an archived ghost would surface in the
           // recycle bin as something they never scheduled. Deleted FIRST: one
           // live event per intention, so the original cannot return beside it.
           if (successor) {
-            await storage.delete(`event:${successor.id}`);
+            if (!(await storage.delete(`event:${successor.id}`))) throw writeError("Removing the next date");
             setEvents((prev) => prev.filter((e) => e.id !== successor.id));
           }
           if (!(await storage.set(`event:${event.id}`, event))) throw writeError("Restoring the event");
           setEvents((prev) => prev.map((e) => (e.id === eventId ? event : e)));
+          if (skipped) completionsChanged();
         });
       }
     });
