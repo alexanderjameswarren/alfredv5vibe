@@ -65,6 +65,7 @@ test("tiers", () => {
     get_wb_projects: 1, get_wb_planned_items: 1, get_wb_planned_matches: 1, get_wb_settings: 1, get_wb_free_cash: 1,
     get_wb_true_cost: 1, get_wb_cash_projection: 1, upsert_wb_project: 2, upsert_wb_planned_item: 2,
     create_wb_planned_match: 3, update_wb_planned_match: 2, set_wb_transaction_project: 2, update_wb_settings: 3,
+    get_wb_project_summary: 1, get_wb_missed_dates: 1, mark_wb_missed_dates_not_needed: 2, unconfirm_wb_planned_match: 2,
   });
   assert.equal(typeof m.createWbPlannedMatchTool.propose, "function");
   assert.equal(typeof m.updateWbSettingsTool.propose, "function");
@@ -263,4 +264,179 @@ test("projects: a new one needs a name and goes in the Money context", async () 
   assert.deepEqual(db.op("wb_projects", "insert")[0][1], { name: "ZZ P", context_id: MONEY });
   const dup = fakeDb(() => ({ data: null, error: { message: 'duplicate key value violates unique constraint "wb_projects_name_key"' } }));
   await assert.rejects(run(m.upsertWbProjectTool, { name: "ZZ P" }, dup), /A project with that name already exists\. Nothing was changed\./);
+});
+
+// ------------------------------------------------------------------ Step 8b
+
+test("over_matched: a one-off in total, a recurring item per date", () => {
+  const one = { id: id(1), amount: -100, interval_count: null };
+  assert.equal(m.annotateItem(one, [{ planned_item_id: id(1), amount_applied: -100 }]).over_matched, false);
+  assert.equal(m.annotateItem(one, [{ planned_item_id: id(1), amount_applied: -60 }, { planned_item_id: id(1), amount_applied: -50 }]).over_matched, true);
+  const rec = { id: id(2), amount: -50, interval_count: 1, interval_unit: "month" };
+  const two = [{ planned_item_id: id(2), occurrence_on: "2031-01-05", amount_applied: -50 },
+               { planned_item_id: id(2), occurrence_on: "2031-02-05", amount_applied: -50 }];
+  assert.equal(m.annotateItem(rec, two).over_matched, false);
+  assert.equal(m.annotateItem(rec, [...two, { planned_item_id: id(2), occurrence_on: "2031-02-05", amount_applied: -1 }]).over_matched, true);
+});
+
+test("tolerance (A45): remaining is 0 and over_matched false within it, for a bill and for income", () => {
+  const a = (amount, paid, tol = 1) => m.annotateItem({ id: id(1), amount, interval_count: null, amount_tolerance: tol },
+    [{ planned_item_id: id(1), amount_applied: paid }]);
+  assert.equal(a(-100, -99.5).remaining, 0);
+  assert.equal(a(-100, -99).remaining, 0);
+  assert.equal(a(-100, -98.99).remaining, -1.01);
+  assert.equal(a(100, 99.01).remaining, 0);
+  assert.equal(a(100, 98.99).remaining, 1.01);
+  assert.equal(a(-100, -100.99).over_matched, false);
+  assert.equal(a(-100, -101.01).over_matched, true);
+  assert.equal(a(100, 101).over_matched, false);
+  assert.equal(a(100, 101.5).over_matched, true);
+  assert.equal(a(100, 99.99, 0).remaining, 0.01);
+  const rec = { id: id(2), amount: 200, interval_count: 1, amount_tolerance: 2 };
+  assert.equal(m.annotateItem(rec, [{ planned_item_id: id(2), occurrence_on: "2031-01-01", amount_applied: 201.99 }]).over_matched, false);
+  assert.equal(m.annotateItem(rec, [{ planned_item_id: id(2), occurrence_on: "2031-01-01", amount_applied: 202.01 }]).over_matched, true);
+});
+
+test("create_wb_planned_match: an item covered within tolerance is already paid in full", async () => {
+  const it = { ...item, amount_tolerance: 1 };
+  const pay = { ...payment, amount: -5 };
+  const db = matchDb({ item: it, splits: [{ id: id(6), transaction_id: id(5), amount: -5 }], payment: pay,
+    matches: [{ id: id(70), planned_item_id: id(1), split_id: id(60), occurrence_on: null, amount_applied: -99.5, status: "confirmed" }] });
+  await assert.rejects(m.createWbPlannedMatchTool.propose({ planned_item_id: id(1), transaction_id: id(5) }, { db }), /already paid in full/);
+  const near = matchDb({ item: it, splits: [{ id: id(6), transaction_id: id(5), amount: -5 }], payment: pay,
+    matches: [{ id: id(70), planned_item_id: id(1), split_id: id(60), occurrence_on: null, amount_applied: -97, status: "confirmed" }] });
+  const p = await m.createWbPlannedMatchTool.propose({ planned_item_id: id(1), transaction_id: id(5), amount: 2.5 }, { db: near });
+  assert.equal(p.would_mark_paid, true);
+});
+
+test("addMonths clamps to the month end, as Postgres does", () => {
+  assert.equal(m.addMonths("2031-01-31", 1), "2031-02-28");
+  assert.equal(m.addMonths("2031-01-31", 2), "2031-03-31");
+  assert.equal(m.addMonths("2031-11-15", 3), "2032-02-15");
+});
+
+/** Projection rows: closing falls by 10 a day from 100. */
+const projRows = (n, from = "2031-06-01") => Array.from({ length: n }, (_, i) => {
+  const day = new Date(Date.parse(from + "T00:00:00Z") + i * 86400000).toISOString().slice(0, 10);
+  return { day, closing: 100 - 10 * i };
+});
+
+test("what-if: with and without, difference, days_sooner, dates counted; writes nothing", async () => {
+  const db = fakeDb(undefined, (fn) => fn === "wb_free_cash"
+    ? { data: [{ free_cash: -20, safety_floor: 20, floor_missing: false }], error: null }
+    : { data: projRows(10), error: null });
+  const r = await run(m.getWbFreeCashTool, { what_if: [
+    { name: "ZZ trip", amount: -30, date: "2031-06-03" },
+    { amount: 5, date: "2031-05-20", interval_count: 1, interval_unit: "week" },
+    { amount: -1, date: "2031-09-01" },
+  ] }, db);
+  assert.equal(writes(db).length, 0);
+  assert.deepEqual(db.rpcs.map((x) => x[0]), ["wb_free_cash", "wb_cash_projection"]);
+  const w = r.what_if;
+  // Without: low 10 on the last day; first below 20 on day 10 (closing 10).
+  assert.deepEqual(w.without, { free_cash: -10, low_balance: 10, low_on: "2031-06-10", first_below_floor_on: "2031-06-10" });
+  // With: -30 from Jun 3, +5 on Jun 3 and Jun 10 (weekly from May 20, past dates not counted).
+  assert.equal(w.with.low_balance, -10);
+  assert.equal(w.with.first_below_floor_on, "2031-06-07");
+  assert.equal(w.difference, -20);
+  assert.equal(w.days_sooner, 3);
+  assert.deepEqual(w.items.map((i) => [i.dates_counted, i.first_on, i.outside_horizon]),
+    [[1, "2031-06-03", false], [2, "2031-06-03", false], [0, null, true]]);
+  assert.equal(r.free_cash, -20);
+  assert.equal("affordable" in w, false);
+});
+
+test("what-if: a past one-off counts today; inputs checked", async () => {
+  const db = fakeDb(undefined, (fn) => fn === "wb_free_cash"
+    ? { data: [{ free_cash: 0, safety_floor: 0 }], error: null } : { data: projRows(3), error: null });
+  const r = await run(m.getWbFreeCashTool, { what_if: [{ amount: -5, date: "2031-01-01" }] }, db);
+  assert.equal(r.what_if.items[0].first_on, "2031-06-01");
+  assert.equal(r.what_if.with.low_balance, 75);
+  const T = (a) => run(m.getWbFreeCashTool, { what_if: a }, fakeDb());
+  await assert.rejects(T([]), /1 to 10/);
+  await assert.rejects(T(Array(11).fill({ amount: -1, date: "2031-01-01" })), /at most 10/);
+  await assert.rejects(T([{ amount: 0, date: "2031-01-01" }]), /non-zero/);
+  await assert.rejects(T([{ amount: -1 }]), /date is required/);
+  await assert.rejects(T([{ amount: -1, date: "2031-01-01", interval_count: 1 }]), /both interval_count and interval_unit/);
+});
+
+test("upsert_wb_planned_item backdates a new repeating item with a merchant, unless backdate: false", async () => {
+  const mk = (first) => fakeDb((t, ops) => has(ops, "insert")
+    ? { data: { id: id(9), ...ops.find((o) => o[0] === "insert")[1] }, error: null } : { data: [], error: null },
+  (fn) => fn === "wb_planned_start_from_history" ? { data: first, error: null } : { data: {}, error: null });
+  const args = { name: "ZZ premium", amount: -50, due_on: "2031-06-05", interval_count: 1, interval_unit: "month", merchant_id: id(3) };
+  const db = mk("2031-03-05");
+  const r = await run(m.upsertWbPlannedItemTool, args, db);
+  assert.deepEqual(db.rpcs[0], ["wb_planned_start_from_history", { p_merchant_id: id(3), p_amount: -50, p_amount_tolerance: 0 }]);
+  assert.equal(db.op("wb_planned_items", "insert")[0][1].due_on, "2031-03-05");
+  assert.equal(r.backdated_from, "2031-06-05");
+  const later = await run(m.upsertWbPlannedItemTool, args, mk("2031-07-01"));
+  assert.equal(later.backdated_from, null);
+  const off = mk("2031-03-05");
+  const o = await run(m.upsertWbPlannedItemTool, { ...args, backdate: false }, off);
+  assert.equal(o.backdated_from, null);
+  assert.equal(off.rpcs.some((x) => x[0] === "wb_planned_start_from_history"), false);
+  const noMerchant = mk("2031-03-05");
+  await run(m.upsertWbPlannedItemTool, { ...args, merchant_id: undefined }, noMerchant);
+  assert.equal(noMerchant.rpcs.some((x) => x[0] === "wb_planned_start_from_history"), false);
+});
+
+test("project summary and missed dates read their views, bounded", async () => {
+  const db = fakeDb(() => ({ data: [{ project_id: id(1) }], error: null, count: 1 }));
+  const s = await run(m.getWbProjectSummaryTool, { status: "active", limit: 99 }, db);
+  assert.equal(db.log[0].table, "wb_project_summary");
+  assert.deepEqual(db.op("wb_project_summary", "limit")[0], ["limit", 50]);
+  assert.equal(s.data.length, 1);
+  const d = fakeDb(() => ({ data: [], error: null, count: 0 }));
+  await run(m.getWbMissedDatesTool, { include_within_window: false }, d);
+  assert.equal(d.log[0].table, "wb_planned_unmatched");
+  assert.deepEqual(d.op("wb_planned_unmatched", "eq")[0], ["eq", "within_window", false]);
+});
+
+test("mark not needed: checked first, all or nothing; undo deletes", async () => {
+  const items = [{ id: id(1), name: "ZZ premium", interval_count: 1 }, { id: id(2), name: "ZZ bill", interval_count: null }];
+  const mk = (skips = [], missed = []) => fakeDb((t, ops) => {
+    if (t === "wb_planned_items") return { data: items, error: null };
+    if (t === "wb_planned_skips") return has(ops, "insert") || has(ops, "delete") ? { data: null, error: null } : { data: skips, error: null };
+    if (t === "wb_planned_unmatched") return { data: missed, error: null };
+    return { data: [], error: null };
+  });
+  const T = m.markWbMissedDatesNotNeededTool;
+  await assert.rejects(run(T, { dates: [{ planned_item_id: id(1) }] }, mk()), /repeats, so pass occurrence_on/);
+  await assert.rejects(run(T, { dates: [{ planned_item_id: id(2), occurrence_on: "2031-01-01" }] }, mk()), /one-off/);
+  await assert.rejects(run(T, { dates: Array(26).fill({ planned_item_id: id(2) }) }, mk()), /at most 25/);
+  const notMissed = mk([], [{ planned_item_id: id(2), occurrence_on: null }]);
+  await assert.rejects(run(T, { dates: [{ planned_item_id: id(2) }, { planned_item_id: id(1), occurrence_on: "2031-02-05" }] }, notMissed),
+    /ZZ premium on 2031-02-05 is not a missed date/);
+  assert.equal(writes(notMissed).length, 0);
+
+  const ok = mk([{ id: id(8), planned_item_id: id(2), occurrence_on: null }],
+    [{ planned_item_id: id(1), occurrence_on: "2031-02-05" }]);
+  const r = await run(T, { dates: [{ planned_item_id: id(2) }, { planned_item_id: id(1), occurrence_on: "2031-02-05", reason: "ZZ before sync" }] }, ok);
+  assert.deepEqual(ok.op("wb_planned_skips", "insert")[0][1],
+    [{ planned_item_id: id(1), occurrence_on: "2031-02-05", reason: "ZZ before sync", context_id: MONEY }]);
+  assert.equal(r.marked.length, 1);
+  assert.equal(r.already_marked[0].name, "ZZ bill");
+
+  const u = mk([{ id: id(8), planned_item_id: id(2), occurrence_on: null }]);
+  const ur = await run(T, { undo: true, dates: [{ planned_item_id: id(2) }, { planned_item_id: id(1), occurrence_on: "2031-02-05" }] }, u);
+  assert.deepEqual(u.op("wb_planned_skips", "delete").length, 1);
+  assert.deepEqual(u.op("wb_planned_skips", "in").at(-1), ["in", "id", [id(8)]]);
+  assert.equal(ur.undone.length, 1);
+  assert.equal(ur.not_marked.length, 1);
+});
+
+test("unconfirm: confirmed only; the hint when paid_not_covered; never writes the stage", async () => {
+  const mk = (status, res) => fakeDb(() => ({ data: { id: id(5), status, planned_item: { name: "ZZ invoice" } }, error: null }),
+    () => ({ data: res, error: null }));
+  await assert.rejects(run(m.unconfirmWbPlannedMatchTool, { match_id: id(5) }, mk("suggested")), /is suggested, not confirmed.*Nothing was changed/);
+  const db = mk("confirmed", { status: "rejected", stage: "paid", confirmed_total: 0, paid_not_covered: true });
+  const r = await run(m.unconfirmWbPlannedMatchTool, { match_id: id(5) }, db);
+  assert.deepEqual(db.rpcs[0], ["wb_unconfirm_planned_match", { p_match_id: id(5) }]);
+  assert.equal(writes(db).length, 0);
+  assert.match(r.hint, /set it back to invoiced/);
+  assert.equal(r.planned_item_name, "ZZ invoice");
+  const rec = await run(m.unconfirmWbPlannedMatchTool, { match_id: id(5) },
+    mk("confirmed", { status: "rejected", stage: null, paid_not_covered: false }));
+  assert.equal("hint" in rec, false);
 });

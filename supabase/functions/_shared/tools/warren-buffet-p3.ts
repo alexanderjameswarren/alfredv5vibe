@@ -16,6 +16,13 @@
 //   update_wb_planned_match     tier 2 — confirm (optionally lower) or turn down a suggestion
 //   set_wb_transaction_project  tier 2 — put up to 25 single-split transactions on a project, or clear it
 //   update_wb_settings          tier 3 — safety floor, horizon, notes; the proposal shows old against new
+//   get_wb_project_summary      tier 1 — per project: spent, received, net, budget left, still due, planning
+//   get_wb_missed_dates         tier 1 — past due dates not fully matched
+//   mark_wb_missed_dates_not_needed tier 2 — up to 25 missed dates marked Not needed, or undone
+//   unconfirm_wb_planned_match  tier 2 — remove a confirmed match; never changes the stage
+//
+// get_wb_free_cash takes an optional what_if list (A43): free cash with and without
+// hypothetical items, writing nothing.
 //
 // Confirming always goes through wb_confirm_planned_match, so its rules apply (a
 // fully covered one-off becomes paid; over-amount and already-decided refusals).
@@ -69,17 +76,32 @@ export const isDraft = (it: Obj) => it.stage === "draft" || it.is_draft === true
  * An item with plain flags and, from its confirmed matches, what is paid and what
  * remains. Both carry the item's sign, so amount = confirmed_total + remaining for a one-off.
  */
+/** What is still due, as a positive number: 0 when what is left is within the tolerance (A45), as wb_planned_left. */
+export const leftOf = (full: number, paid: number, tolerance: number) =>
+  cents(full - paid) <= cents(tolerance) ? 0 : cents(full - paid);
+
 export function annotateItem(it: Obj, confirmed: Obj[]): Obj {
   const recurring = it.interval_count !== null && it.interval_count !== undefined;
   const s = sign(num(it.amount));
+  const full = Math.abs(num(it.amount));
+  const tol = num(it.amount_tolerance);
   const mine = confirmed.filter((m) => m.planned_item_id === it.id);
   const paid = mine.reduce((t, m) => t + Math.abs(num(m.amount_applied)), 0);
+  // More than planned (A37): a one-off in total, a recurring item on any one date, beyond
+  // the tolerance (A45). A warning only.
+  const perDate = new Map<string, number>();
+  for (const m of mine) {
+    const k = String(m.occurrence_on ?? "");
+    perDate.set(k, (perDate.get(k) ?? 0) + Math.abs(num(m.amount_applied)));
+  }
+  const over = recurring ? [...perDate.values()].some((v) => cents(v - full) > cents(tol)) : cents(paid - full) > cents(tol);
   return {
     ...it,
     recurring,
     draft: isDraft(it),
     confirmed_total: cents(s * paid),
-    ...(recurring ? {} : { remaining: cents(s * Math.max(Math.abs(num(it.amount)) - paid, 0)) }),
+    ...(recurring ? {} : { remaining: leftOf(full, paid, tol) === 0 ? 0 : cents(s * leftOf(full, paid, tol)) }),
+    over_matched: over,
   };
 }
 
@@ -210,16 +232,118 @@ export const getWbSettingsTool = defineTool({
 // get_wb_free_cash — tier 1
 // ---------------------------------------------------------------------------
 
+export const MAX_WHAT_IF = 10;
+
+/** ISO date plus n months, clamped to the month's last day, as Postgres date + interval does. */
+export function addMonths(iso: string, n: number): string {
+  const [y, mo, d] = iso.split("-").map(Number);
+  const t = y * 12 + (mo - 1) + n;
+  const ny = Math.floor(t / 12), nm = t % 12;
+  const last = new Date(Date.UTC(ny, nm + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(ny, nm, Math.min(d, last))).toISOString().slice(0, 10);
+}
+const addDays = (iso: string, n: number) => new Date(Date.parse(iso + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10);
+const daysBetween = (a: string, b: string) => Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
+
+/** The hypothetical items of a what-if, checked. Writes nothing. */
+export function whatIfItems(T: string, raw: unknown): Obj[] {
+  if (!Array.isArray(raw) || !raw.length) throw new Error(`${T}: what_if must be a list of 1 to ${MAX_WHAT_IF} items.`);
+  if (raw.length > MAX_WHAT_IF) throw new Error(`${T}: at most ${MAX_WHAT_IF} what_if items per call; got ${raw.length}.`);
+  return raw.map((r, i) => {
+    const o = (r ?? {}) as Obj;
+    const at = `what_if[${i}]`;
+    const amount = parseMoney(T, `${at}.amount`, o.amount);
+    if (amount === null || amount === 0) throw new Error(`${T}: ${at}.amount must be a non-zero number, signed: money out negative, money in positive.`);
+    const date = parseDate(T, `${at}.date`, o.date);
+    if (!date) throw new Error(`${T}: ${at}.date is required.`);
+    const count = optInt(T, `${at}.interval_count`, o.interval_count, 1, 120);
+    const unit = oneOf(T, `${at}.interval_unit`, o.interval_unit, INTERVAL_UNITS);
+    if ((count === null) !== (unit === null)) throw new Error(`${T}: ${at} needs both interval_count and interval_unit to repeat, or neither.`);
+    const ends = parseDate(T, `${at}.ends_on`, o.ends_on);
+    if (ends && count === null) throw new Error(`${T}: ${at}.ends_on only goes with a repeating item.`);
+    if (ends && ends < date) throw new Error(`${T}: ${at}.ends_on is before its date.`);
+    return { name: optText(T, `${at}.name`, o.name) ?? `item ${i + 1}`, amount, date, interval_count: count, interval_unit: unit, ends_on: ends };
+  });
+}
+
+/** The dates a hypothetical item lands on between today and end. A past one-off counts today (A7); past repeats do not (A25). */
+export function whatIfDates(it: Obj, today: string, end: string): string[] {
+  const count = it.interval_count as number | null;
+  if (count === null) {
+    const d = (it.date as string) < today ? today : (it.date as string);
+    return d <= end ? [d] : [];
+  }
+  const out: string[] = [];
+  for (let k = 0; k < 2000; k++) {
+    const d = it.interval_unit === "month" ? addMonths(it.date as string, k * count) : addDays(it.date as string, 7 * k * count);
+    if (d > end || (it.ends_on && d > (it.ends_on as string))) break;
+    if (d >= today) out.push(d);
+  }
+  return out;
+}
+
+/** Free cash, the low point and the first day under the floor, from projection rows plus extra amounts by day. */
+export function lowPoint(rows: Obj[], floor: number, extra: Map<string, number> = new Map()) {
+  let add = 0;
+  let low: { day: string; bal: number } | null = null;
+  let below: string | null = null;
+  for (const r of rows) {
+    add += extra.get(String(r.day)) ?? 0;
+    const bal = cents(num(r.closing) + add);
+    if (!low || bal < low.bal) low = { day: String(r.day), bal };
+    if (below === null && bal < floor) below = String(r.day);
+  }
+  return {
+    free_cash: low ? cents(low.bal - floor) : null,
+    low_balance: low?.bal ?? null,
+    low_on: low?.day ?? null,
+    first_below_floor_on: below,
+  };
+}
+
 export const getWbFreeCashTool = defineTool({
   name: "get_wb_free_cash",
   tier: 1,
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_free_cash";
     const includeDrafts = optBool(T, "include_drafts", args.include_drafts) ?? false;
+    const items = absent(args.what_if) ? null : whatIfItems(T, args.what_if);
     const { data, error } = await ctx.db.rpc("wb_free_cash", { p_include_drafts: includeDrafts });
     if (error) throw new Error(dbError(T, error));
-    const row = (Array.isArray(data) ? data[0] : data) ?? null;
-    return { ...(row ?? {}), include_drafts: includeDrafts };
+    const row = ((Array.isArray(data) ? data[0] : data) ?? null) as Obj | null;
+    const base = { ...(row ?? {}), include_drafts: includeDrafts };
+    if (!items) return base;
+
+    // The what-if (A43): the same projection, with the hypothetical amounts added on their dates.
+    const { data: proj, error: pe } = await ctx.db.rpc("wb_cash_projection", { p_include_drafts: includeDrafts });
+    if (pe) throw new Error(dbError(T, pe));
+    const rows = ((proj ?? []) as Obj[]).slice().sort((a, b) => String(a.day).localeCompare(String(b.day)));
+    if (!rows.length) throw new Error(`${T}: there is no projection to test against (no balances yet).`);
+    const today = String(rows[0].day), end = String(rows[rows.length - 1].day);
+    const floor = num(row?.safety_floor);
+    const extra = new Map<string, number>();
+    const counted = items.map((it) => {
+      const dates = whatIfDates(it, today, end);
+      for (const d of dates) extra.set(d, (extra.get(d) ?? 0) + (it.amount as number));
+      return {
+        ...it, dates_counted: dates.length, first_on: dates[0] ?? null, last_on: dates[dates.length - 1] ?? null,
+        outside_horizon: !dates.length && (it.date as string) > end,
+      };
+    });
+    const without = lowPoint(rows, floor);
+    const withItems = lowPoint(rows, floor, extra);
+    const sooner = without.first_below_floor_on && withItems.first_below_floor_on
+      ? daysBetween(withItems.first_below_floor_on, without.first_below_floor_on) : null;
+    return {
+      ...base,
+      what_if: {
+        without, with: withItems,
+        difference: without.free_cash === null || withItems.free_cash === null ? null : cents(withItems.free_cash - without.free_cash),
+        days_sooner: sooner,
+        horizon_end: end,
+        items: counted,
+      },
+    };
   },
 });
 
@@ -364,7 +488,9 @@ export const upsertWbPlannedItemTool = defineTool({
     const T = "upsert_wb_planned_item";
     const id = optUuid(T, "id", args.id);
     const fields = itemFields(T, args);
+    const backdate = optBool(T, "backdate", args.backdate) ?? true;
     let item: Obj;
+    let backdatedFrom: string | null = null;
     if (!id) {
       for (const k of ["name", "amount", "due_on"]) {
         if (fields[k] === undefined) throw new Error(`${T}: ${k} is required for a new planned item.`);
@@ -372,6 +498,18 @@ export const upsertWbPlannedItemTool = defineTool({
       const recurring = fields.interval_count !== undefined && fields.interval_count !== null;
       if (!recurring && !fields.stage) {
         throw new Error(`${T}: a one-off planned item needs a stage (draft, estimate, quoted, invoiced, paid or cancelled).`);
+      }
+      // A34: a new repeating item starts from its first matching payment in the burn window,
+      // so the payments the burn rate already counts get matched.
+      if (recurring && backdate && fields.merchant_id) {
+        const { data: first, error: he } = await ctx.db.rpc("wb_planned_start_from_history", {
+          p_merchant_id: fields.merchant_id, p_amount: fields.amount, p_amount_tolerance: fields.amount_tolerance ?? 0,
+        });
+        if (he) throw new Error(dbError(T, he));
+        if (typeof first === "string" && first < (fields.due_on as string)) {
+          backdatedFrom = fields.due_on as string;
+          fields.due_on = first;
+        }
       }
       const { data, error } = await ctx.db.from("wb_planned_items").insert({ ...fields, context_id: MONEY_CONTEXT_ID })
         .select(ITEM_COLUMNS).single();
@@ -387,7 +525,7 @@ export const upsertWbPlannedItemTool = defineTool({
     }
     const suggestions = await suggestFor(T, ctx.db, item.id as string);
     const confirmed = await confirmedFor(T, ctx.db, [item.id as string]);
-    return { item: annotateItem(item, confirmed), created: !id, suggestions };
+    return { item: annotateItem(item, confirmed), created: !id, backdated_from: backdatedFrom, suggestions };
   },
 });
 
@@ -409,7 +547,7 @@ export async function matchPlan(T: string, db: Db, args: Obj): Promise<Obj> {
   if (amountArg !== null && amountArg === 0) throw new Error(`${T}: amount cannot be zero.`);
 
   const { data: item, error: ie } = await db.from("wb_planned_items")
-    .select("id, name, amount, due_on, interval_count, stage, is_draft").eq("id", itemId).maybeSingle();
+    .select("id, name, amount, due_on, interval_count, stage, is_draft, amount_tolerance").eq("id", itemId).maybeSingle();
   if (ie) throw new Error(dbError(T, ie));
   if (!item) throw new Error(`${T}: no planned item ${itemId} that you can see. Nothing was changed.`);
   const it = item as Obj;
@@ -451,7 +589,10 @@ export async function matchPlan(T: string, db: Db, args: Obj): Promise<Obj> {
     .reduce((t, m) => t + Math.abs(num(m.amount_applied)), 0);
   const splitLeft = cents(Math.abs(num(split.amount)) - usedOnSplit);
   const itemLeft = cents(Math.abs(num(it.amount)) - paidOnItem);
-  if (itemLeft <= 0) throw new Error(`${T}: ${it.name}${occurrence ? ` on ${occurrence}` : ""} is already paid in full. Nothing was changed.`);
+  const tol = num(it.amount_tolerance);
+  if (leftOf(Math.abs(num(it.amount)), paidOnItem, tol) === 0) {
+    throw new Error(`${T}: ${it.name}${occurrence ? ` on ${occurrence}` : ""} is already paid in full. Nothing was changed.`);
+  }
   if (splitLeft <= 0) throw new Error(`${T}: all of that payment is already matched to other planned items. Nothing was changed.`);
   const magnitude = amountArg === null ? Math.min(splitLeft, itemLeft) : Math.abs(amountArg);
   if (magnitude > splitLeft) {
@@ -461,7 +602,7 @@ export async function matchPlan(T: string, db: Db, args: Obj): Promise<Obj> {
   const applied = cents(sign(num(it.amount)) * magnitude);
   return {
     item: it, split, payment, occurrence, applied,
-    wouldMarkPaid: !recurring && it.stage !== "paid" && paidOnItem + magnitude >= Math.abs(num(it.amount)),
+    wouldMarkPaid: !recurring && it.stage !== "paid" && leftOf(Math.abs(num(it.amount)), paidOnItem + magnitude, tol) === 0,
   };
 }
 
@@ -599,5 +740,169 @@ export const updateWbSettingsTool = defineTool({
     if (error) throw new Error(dbError(T, error));
     const s = data as Obj;
     return { ...s, floor_missing: s.safety_floor === null || s.safety_floor === undefined };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// get_wb_project_summary — tier 1 (Step 8b, A35, A36)
+// ---------------------------------------------------------------------------
+
+const SUMMARY_COLUMNS =
+  "project_id, name, status, budget, starts_on, ends_on, spent, received, net, budget_left, planned_out_due, " +
+  "planned_in_due, draft_out_due, draft_in_due, item_count, draft_count, payment_count, last_payment_on, planning";
+
+export const getWbProjectSummaryTool = defineTool({
+  name: "get_wb_project_summary",
+  tier: 1,
+  handler: async (args: Obj, ctx) => {
+    const T = "get_wb_project_summary";
+    const projectId = optUuid(T, "project_id", args.project_id);
+    const status = oneOf(T, "status", args.status, PROJECT_STATUSES);
+    const LIMIT = limitOf(T, args.limit);
+    let q = ctx.db.from("wb_project_summary").select(SUMMARY_COLUMNS, { count: "exact" });
+    if (projectId) q = q.eq("project_id", projectId);
+    if (status) q = q.eq("status", status);
+    const { data, error, count } = await q.order("name").limit(LIMIT);
+    if (error) throw new Error(dbError(T, error));
+    return listResult(data ?? [], count, LIMIT);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// get_wb_missed_dates — tier 1 (Step 8b, A25, A40)
+// ---------------------------------------------------------------------------
+
+const MISSED_COLUMNS =
+  "planned_item_id, name, project_id, project_name, merchant_id, merchant_name, recurring, due_on, occurrence_on, " +
+  "stage, amount, confirmed_total, remaining, days_late, within_window, has_suggestion";
+
+export const getWbMissedDatesTool = defineTool({
+  name: "get_wb_missed_dates",
+  tier: 1,
+  handler: async (args: Obj, ctx) => {
+    const T = "get_wb_missed_dates";
+    const projectId = optUuid(T, "project_id", args.project_id);
+    const itemId = optUuid(T, "planned_item_id", args.planned_item_id);
+    const withinWindow = optBool(T, "include_within_window", args.include_within_window) ?? true;
+    const LIMIT = limitOf(T, args.limit);
+    let q = ctx.db.from("wb_planned_unmatched").select(MISSED_COLUMNS, { count: "exact" });
+    if (projectId) q = q.eq("project_id", projectId);
+    if (itemId) q = q.eq("planned_item_id", itemId);
+    if (!withinWindow) q = q.eq("within_window", false);
+    const { data, error, count } = await q.order("due_on").order("name").limit(LIMIT);
+    if (error) throw new Error(dbError(T, error));
+    return listResult(data ?? [], count, LIMIT);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// mark_wb_missed_dates_not_needed — tier 2 (Step 8b, A40; up to 25, with undo)
+// ---------------------------------------------------------------------------
+
+export const MAX_SKIPS = 25;
+
+/** The dates to mark, checked against the items: a repeating item needs occurrence_on, a one-off has none. */
+export function skipDates(T: string, raw: unknown): Obj[] {
+  if (!Array.isArray(raw) || !raw.length) throw new Error(`${T}: dates must be a list of 1 to ${MAX_SKIPS} entries.`);
+  if (raw.length > MAX_SKIPS) throw new Error(`${T}: at most ${MAX_SKIPS} dates per call; got ${raw.length}. Nothing was changed.`);
+  return raw.map((r, i) => {
+    const o = (r ?? {}) as Obj;
+    return {
+      planned_item_id: uuidOf(T, `dates[${i}].planned_item_id`, o.planned_item_id),
+      occurrence_on: parseDate(T, `dates[${i}].occurrence_on`, o.occurrence_on),
+      reason: optText(T, `dates[${i}].reason`, o.reason),
+    };
+  });
+}
+
+const dateKey = (itemId: unknown, occ: unknown) => `${itemId}|${occ ?? ""}`;
+
+export const markWbMissedDatesNotNeededTool = defineTool({
+  name: "mark_wb_missed_dates_not_needed",
+  tier: 2,
+  handler: async (args: Obj, ctx) => {
+    const T = "mark_wb_missed_dates_not_needed";
+    const dates = skipDates(T, args.dates);
+    const undo = optBool(T, "undo", args.undo) ?? false;
+    const itemIds = [...new Set(dates.map((d) => d.planned_item_id as string))];
+
+    const { data: items, error: ie } = await ctx.db.from("wb_planned_items").select("id, name, interval_count")
+      .in("id", itemIds).limit(MAX_SKIPS);
+    if (ie) throw new Error(dbError(T, ie));
+    const byId = new Map(((items ?? []) as Obj[]).map((it) => [it.id as string, it]));
+    for (const d of dates) {
+      const it = byId.get(d.planned_item_id as string);
+      if (!it) throw new Error(`${T}: no planned item ${d.planned_item_id} that you can see. Nothing was changed.`);
+      const recurring = it.interval_count !== null && it.interval_count !== undefined;
+      if (recurring && !d.occurrence_on) throw new Error(`${T}: ${it.name} repeats, so pass occurrence_on: the missed due date. Nothing was changed.`);
+      if (!recurring && d.occurrence_on) throw new Error(`${T}: ${it.name} is a one-off, so it takes no occurrence_on. Nothing was changed.`);
+    }
+    const { data: skips, error: se } = await ctx.db.from("wb_planned_skips").select("id, planned_item_id, occurrence_on")
+      .in("planned_item_id", itemIds).limit(1000);
+    if (se) throw new Error(dbError(T, se));
+    const existing = new Map(((skips ?? []) as Obj[]).map((s) => [dateKey(s.planned_item_id, s.occurrence_on), s.id as string]));
+    const label = (d: Obj) => ({ planned_item_id: d.planned_item_id, name: byId.get(d.planned_item_id as string)?.name, occurrence_on: d.occurrence_on });
+
+    if (undo) {
+      const found = dates.filter((d) => existing.has(dateKey(d.planned_item_id, d.occurrence_on)));
+      const notMarked = dates.filter((d) => !existing.has(dateKey(d.planned_item_id, d.occurrence_on)));
+      if (found.length) {
+        const ids = found.map((d) => existing.get(dateKey(d.planned_item_id, d.occurrence_on)) as string);
+        const { error } = await ctx.db.from("wb_planned_skips").delete().in("id", ids);
+        if (error) throw new Error(dbError(T, error));
+      }
+      return { undone: found.map(label), not_marked: notMarked.map(label) };
+    }
+
+    // Only a date that is missed now can be marked, so a typo cannot hide a real due date.
+    const { data: missed, error: me } = await ctx.db.from("wb_planned_unmatched").select("planned_item_id, occurrence_on")
+      .in("planned_item_id", itemIds).limit(1000);
+    if (me) throw new Error(dbError(T, me));
+    const missedKeys = new Set(((missed ?? []) as Obj[]).map((r) => dateKey(r.planned_item_id, r.occurrence_on)));
+    const already = dates.filter((d) => existing.has(dateKey(d.planned_item_id, d.occurrence_on)));
+    const todo = dates.filter((d) => !existing.has(dateKey(d.planned_item_id, d.occurrence_on)));
+    for (const d of todo) {
+      if (!missedKeys.has(dateKey(d.planned_item_id, d.occurrence_on))) {
+        const it = byId.get(d.planned_item_id as string) as Obj;
+        throw new Error(`${T}: ${it.name}${d.occurrence_on ? ` on ${d.occurrence_on}` : ""} is not a missed date (get_wb_missed_dates lists them). Nothing was changed.`);
+      }
+    }
+    if (todo.length) {
+      const { error } = await ctx.db.from("wb_planned_skips").insert(todo.map((d) => ({
+        planned_item_id: d.planned_item_id, occurrence_on: d.occurrence_on ?? null, reason: d.reason ?? null, context_id: MONEY_CONTEXT_ID,
+      })));
+      if (error) throw new Error(dbError(T, error));
+    }
+    return { marked: todo.map(label), already_marked: already.map(label) };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// unconfirm_wb_planned_match — tier 2 (Step 8b, A39; never changes the stage)
+// ---------------------------------------------------------------------------
+
+export const SET_BACK_HINT =
+  "This one-off is still at stage paid but is no longer fully covered. Ask Alex whether to set it back to invoiced " +
+  "(upsert_wb_planned_item with stage invoiced). Do not change the stage without asking.";
+
+export const unconfirmWbPlannedMatchTool = defineTool({
+  name: "unconfirm_wb_planned_match",
+  tier: 2,
+  handler: async (args: Obj, ctx) => {
+    const T = "unconfirm_wb_planned_match";
+    const id = uuidOf(T, "match_id", args.match_id);
+    const { data: cur, error: ce } = await ctx.db.from("wb_planned_matches")
+      .select("id, status, planned_item:wb_planned_items(name)").eq("id", id).maybeSingle();
+    if (ce) throw new Error(dbError(T, ce));
+    if (!cur) throw new Error(`${T}: no match ${id} that you can see. Nothing was changed.`);
+    const m = cur as Obj;
+    const name = ((m.planned_item ?? {}) as Obj).name ?? "the planned item";
+    if (m.status !== "confirmed") {
+      throw new Error(`${T}: that match to ${name} is ${m.status}, not confirmed; only a confirmed match can be removed. Nothing was changed.`);
+    }
+    const { data, error } = await ctx.db.rpc("wb_unconfirm_planned_match", { p_match_id: id });
+    if (error) throw new Error(dbError(T, error));
+    const res = (data ?? {}) as Obj;
+    return { match_id: id, planned_item_name: name, ...res, ...(res.paid_not_covered ? { hint: SET_BACK_HINT } : {}) };
   },
 });

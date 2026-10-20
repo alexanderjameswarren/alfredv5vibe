@@ -1,6 +1,8 @@
 -- Purpose: Warren Buffet Phase 3 Step 4a tests, run after 135_wb_phase3_step4_match_suggestions.sql: wb_planned_occurrences, rule projects and project_source in processing and wb_replace_splits, wb_suggest_planned_matches (merchant, sign, tolerance, window, drafts, pending, one per split, recurring occurrences, stale removal), wb_confirm_planned_match (confirm, partial, paid, reject), and planned_match in wb_review_queue and wb_transaction_list.
 -- Kind: test (writes invented fixtures, then rolls everything back: nothing persists, not even audit rows)
 -- Applied: YES — run 2026-10-17 by Alex after 135: 35/35 checks passed, rolled back by design. Safe to re-run any time.
+-- Edited 2026-10-20 for A45 (spec): partial_not_paid became within_tolerance_paid. A confirmed amount short of the
+-- planned one by no more than amount_tolerance now covers it, so the item is paid. Expects 143 to be applied.
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md).
 -- Every name and amount below is invented ("ZZ test" fixtures). No real financial data.
@@ -175,11 +177,11 @@ begin
   select id into v_mid from public.wb_planned_matches where planned_item_id = pi1;
   checks := checks || jsonb_build_object('resuggested', v_mid is not null);
 
-  -- Confirm: partial is not paid; full is paid; the row leaves the queue.
+  -- Confirm: short by less than the tolerance is paid (A45); full is paid; the row leaves the queue.
   v_res := public.wb_confirm_planned_match(v_mid, 'confirm', null);
   checks := checks || jsonb_build_object(
     'confirmed', (select status = 'confirmed' and decided_at is not null from public.wb_planned_matches where id = v_mid),
-    'partial_not_paid', (select stage = 'invoiced' from public.wb_planned_items where id = pi1) and not (v_res ->> 'stage_paid')::boolean,
+    'within_tolerance_paid', (select stage = 'paid' from public.wb_planned_items where id = pi1) and (v_res ->> 'stage_paid')::boolean,
     'confirmed_leaves_queue', not exists (select 1 from public.wb_review_queue where reason = 'planned_match' and transaction_id = s1),
     'list_clear_after_confirm', (select not needs_review from public.wb_transaction_list where id = s1));
   select id into v_mid from public.wb_planned_matches where planned_item_id = pi6;

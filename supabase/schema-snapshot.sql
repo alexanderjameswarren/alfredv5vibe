@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-19 14:36, through migration 141 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-20 15:44, through migration 142 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -4668,21 +4668,23 @@ begin
   return query
   with days as (select generate_series(v_today, v_end, interval '1 day')::date as d),
   planned as (
-    -- Due dates in the horizon, less what is already confirmed against each (A5).
+    -- Due dates in the horizon, less what is already confirmed against each (A5), 0 within tolerance (A45).
     select o.occurrence_on as d,
-           sign(o.amount) * greatest(abs(o.amount) - coalesce((
+           public.wb_planned_left(o.amount, (
              select sum(abs(pm.amount_applied)) from public.wb_planned_matches pm
              where pm.planned_item_id = o.planned_item_id and pm.status = 'confirmed'
-               and pm.occurrence_on is not distinct from case when o.recurring then o.occurrence_on end), 0), 0) as amt
+               and pm.occurrence_on is not distinct from case when o.recurring then o.occurrence_on end),
+             pi.amount_tolerance) as amt
     from public.wb_planned_occurrences(v_today, v_end, p_include_drafts) o
+    join public.wb_planned_items pi on pi.id = o.planned_item_id
     where o.recurring or o.stage <> 'paid'
     union all
     -- An overdue one-off with something still unpaid counts on day 1 (A7). Missed dates of
     -- recurring items do not (A25); the weekly cleanup lists them as unmatched.
     select v_today,
-           sign(pi.amount) * greatest(abs(pi.amount) - coalesce((
+           public.wb_planned_left(pi.amount, (
              select sum(abs(pm.amount_applied)) from public.wb_planned_matches pm
-             where pm.planned_item_id = pi.id and pm.status = 'confirmed'), 0), 0)
+             where pm.planned_item_id = pi.id and pm.status = 'confirmed'), pi.amount_tolerance)
     from public.wb_planned_items pi
     where pi.interval_count is null
       and pi.due_on < v_today
@@ -4715,7 +4717,7 @@ $$;
 ALTER FUNCTION "public"."wb_cash_projection"("p_include_drafts" boolean, "p_today" "date") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."wb_cash_projection"("p_include_drafts" boolean, "p_today" "date") IS 'Warren Buffet: spending cash day by day from p_today across the horizon (wb_settings.horizon_months, else 12). Starts from spending_cash balances minus what is owed on credit_card and emergency_credit accounts (unused credit never counts; balances as of p_today). Each day adds planned income and bills on their due dates less what is confirmed against them, subscription charges, and the burn rate spread evenly (median x 12 / 365). An overdue one-off with something unpaid counts on day 1; a missed recurring date does not. Drafts (stage draft, or is_draft) only when p_include_drafts. Security invoker.';
+COMMENT ON FUNCTION "public"."wb_cash_projection"("p_include_drafts" boolean, "p_today" "date") IS 'Warren Buffet: spending cash day by day from p_today across the horizon (wb_settings.horizon_months, else 12). Starts from spending_cash balances minus what is owed on credit_card and emergency_credit accounts (unused credit never counts; balances as of p_today). Each day adds planned income and bills on their due dates less what is confirmed against them (nothing when what is left is within the item''s amount_tolerance, A45), subscription charges, and the burn rate spread evenly (median x 12 / 365). An overdue one-off with something unpaid counts on day 1; a missed recurring date does not. Drafts (stage draft, or is_draft) only when p_include_drafts. Security invoker.';
 
 
 
@@ -4829,10 +4831,10 @@ begin
       amount_applied = case when p_amount is null then amount_applied else sign(pi.amount) * abs(p_amount) end
   where id = p_match_id;
 
-  -- A one-off fully covered by confirmed matches is paid. Never set back automatically.
+  -- A one-off covered by confirmed matches (within its tolerance, A45) is paid. Never set back automatically.
   if pi.interval_count is null and pi.stage <> 'paid'
-     and (select coalesce(sum(abs(x.amount_applied)), 0) from public.wb_planned_matches x
-          where x.planned_item_id = pi.id and x.status = 'confirmed') >= abs(pi.amount)
+     and public.wb_planned_left(pi.amount, (select sum(abs(x.amount_applied)) from public.wb_planned_matches x
+          where x.planned_item_id = pi.id and x.status = 'confirmed'), pi.amount_tolerance) = 0
   then
     update public.wb_planned_items set stage = 'paid' where id = pi.id;
     v_paid := true;
@@ -4845,7 +4847,7 @@ $$;
 ALTER FUNCTION "public"."wb_confirm_planned_match"("p_match_id" "uuid", "p_action" "text", "p_amount" numeric) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."wb_confirm_planned_match"("p_match_id" "uuid", "p_action" "text", "p_amount" numeric) IS 'Warren Buffet: confirm or reject one suggested planned match. confirm may lower the amount for a part-payment (p_amount, taken with the planned item''s sign); the trigger refuses more than the split. Confirming the last part of a one-off sets its stage to paid; nothing sets it back automatically. A rejected match is never suggested again. Security invoker.';
+COMMENT ON FUNCTION "public"."wb_confirm_planned_match"("p_match_id" "uuid", "p_action" "text", "p_amount" numeric) IS 'Warren Buffet: confirm or reject one suggested planned match. confirm may lower the amount for a part-payment (p_amount, taken with the planned item''s sign); the trigger refuses more than the split. Confirming the last part of a one-off (covered within its amount_tolerance) sets its stage to paid; nothing sets it back automatically. A rejected match is never suggested again. Security invoker.';
 
 
 
@@ -5211,6 +5213,22 @@ $$;
 
 
 ALTER FUNCTION "public"."wb_pair_decision"("p_forward" integer, "p_reverse" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."wb_planned_left"("p_amount" numeric, "p_paid" numeric, "p_tolerance" numeric) RETURNS numeric
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+  select sign(p_amount) * case when abs(p_amount) - coalesce(p_paid, 0) <= coalesce(p_tolerance, 0) then 0
+                               else abs(p_amount) - coalesce(p_paid, 0) end;
+$$;
+
+
+ALTER FUNCTION "public"."wb_planned_left"("p_amount" numeric, "p_paid" numeric, "p_tolerance" numeric) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."wb_planned_left"("p_amount" numeric, "p_paid" numeric, "p_tolerance" numeric) IS 'Warren Buffet: the amount still due on a planned amount (signed like p_amount), given p_paid (the confirmed amount_applied, as a positive number) and the item''s amount_tolerance. 0 when what is left is within the tolerance, so a payment a cent short still covers it (A45); never negative in magnitude.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."wb_planned_matches_fill"() RETURNS "trigger"
@@ -6356,9 +6374,9 @@ begin
         and p.occ is not distinct from m.occurrence_on);
   get diagnostics n_removed = row_count;
 
-  -- New ones: not already decided or suggested, the occurrence and the split not
-  -- already fully confirmed or suggested elsewhere; the closest date wins, one per
-  -- occurrence and one per split.
+  -- New ones: not already decided or suggested, the occurrence (within its tolerance, A45)
+  -- and the split not already fully confirmed or suggested elsewhere; the closest date
+  -- wins, one per occurrence and one per split.
   with cands as (
     select p.*
     from jsonb_to_recordset(v_pairs) as p(planned_item_id uuid, occ date, split_id uuid, transaction_id uuid,
@@ -6372,9 +6390,9 @@ begin
                       where m.status = 'suggested'
                         and (m.split_id = p.split_id
                              or (m.planned_item_id = p.planned_item_id and m.occurrence_on is not distinct from p.occ)))
-      and coalesce((select sum(abs(m.amount_applied)) from public.wb_planned_matches m
+      and public.wb_planned_left(pi.amount, (select sum(abs(m.amount_applied)) from public.wb_planned_matches m
                     where m.status = 'confirmed' and m.planned_item_id = p.planned_item_id
-                      and m.occurrence_on is not distinct from p.occ), 0) < abs(pi.amount)
+                      and m.occurrence_on is not distinct from p.occ), pi.amount_tolerance) <> 0
       and coalesce((select sum(abs(m.amount_applied)) from public.wb_planned_matches m
                     where m.status = 'confirmed' and m.split_id = p.split_id), 0) < abs(s.amount)
   ),
@@ -6403,7 +6421,7 @@ $$;
 ALTER FUNCTION "public"."wb_suggest_planned_matches"("p_transaction_ids" "uuid"[], "p_planned_item_ids" "uuid"[]) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."wb_suggest_planned_matches"("p_transaction_ids" "uuid"[], "p_planned_item_ids" "uuid"[]) IS 'Warren Buffet: suggests planned matches for the given transactions and/or planned items (null = all). A posted split qualifies for a planned item''s due date when it is at the item''s merchant, has the same sign, its amount is within the item''s amount_tolerance and its date within match_window_days. Drafts, cancelled and paid one-offs, and items with no merchant never qualify. A pair already suggested, confirmed or rejected is not suggested again; an occurrence or split already fully confirmed, or already holding a suggestion, gets none; otherwise the closest date wins, one per occurrence and one per split. amount_applied is the smaller of the two amounts. Suggestions in scope that no longer qualify are deleted. Called by wb_process_transactions and after planned-item writes. Security invoker. Returns suggested and removed counts.';
+COMMENT ON FUNCTION "public"."wb_suggest_planned_matches"("p_transaction_ids" "uuid"[], "p_planned_item_ids" "uuid"[]) IS 'Warren Buffet: suggests planned matches for the given transactions and/or planned items (null = all). A posted split qualifies for a planned item''s due date when it is at the item''s merchant, has the same sign, its amount is within the item''s amount_tolerance and its date within match_window_days. Drafts, cancelled and paid one-offs, and items with no merchant never qualify. A pair already suggested, confirmed or rejected is not suggested again; an occurrence already covered by confirmed matches (within its amount_tolerance, wb_planned_left), a split already fully confirmed, or either one already holding a suggestion, gets none; otherwise the closest date wins, one per occurrence and one per split. amount_applied is the smaller of the two amounts. Suggestions in scope that no longer qualify are deleted. Called by wb_process_transactions and after planned-item writes. Security invoker. Returns suggested and removed counts.';
 
 
 
@@ -6577,7 +6595,8 @@ begin
     'planned_item_id', pi.id,
     'stage', pi.stage,
     'confirmed_total', sign(pi.amount) * v_paid,
-    'paid_not_covered', pi.interval_count is null and pi.stage = 'paid' and v_paid < abs(pi.amount));
+    'paid_not_covered', pi.interval_count is null and pi.stage = 'paid'
+                        and public.wb_planned_left(pi.amount, v_paid, pi.amount_tolerance) <> 0);
 end;
 $$;
 
@@ -6585,7 +6604,7 @@ $$;
 ALTER FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") IS 'Warren Buffet: remove a confirmed planned match. The match becomes rejected, so the same pair is never suggested again. The planned item''s stage is never changed (A20); paid_not_covered is true when a paid one-off is no longer fully covered, so the app can ask whether to set it back to invoiced. Returns status, planned_item_id, stage, confirmed_total (signed) and paid_not_covered. Security invoker.';
+COMMENT ON FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") IS 'Warren Buffet: remove a confirmed planned match. The match becomes rejected, so the same pair is never suggested again. The planned item''s stage is never changed (A20); paid_not_covered is true when a paid one-off is no longer covered (more than its amount_tolerance left, A45), so the app can ask whether to set it back to invoiced. Returns status, planned_item_id, stage, confirmed_total (signed) and paid_not_covered. Security invoker.';
 
 
 
@@ -9965,7 +9984,7 @@ CREATE OR REPLACE VIEW "public"."wb_planned_unmatched" WITH ("security_invoker"=
     "pi"."stage",
     "pi"."amount",
     "round"(("sign"("pi"."amount") * "d"."paid"), 2) AS "confirmed_total",
-    "round"(("sign"("pi"."amount") * ("abs"("pi"."amount") - "d"."paid")), 2) AS "remaining",
+    "round"("public"."wb_planned_left"("pi"."amount", "d"."paid", "pi"."amount_tolerance"), 2) AS "remaining",
     ("t"."d" - "d"."due_on") AS "days_late",
     (("t"."d" - "d"."due_on") <= "pi"."match_window_days") AS "within_window",
     (EXISTS ( SELECT 1
@@ -9976,7 +9995,7 @@ CREATE OR REPLACE VIEW "public"."wb_planned_unmatched" WITH ("security_invoker"=
      JOIN "public"."wb_planned_items" "pi" ON (("pi"."id" = "d"."planned_item_id")))
      LEFT JOIN "public"."wb_projects" "pr" ON (("pr"."id" = "pi"."project_id")))
      LEFT JOIN "public"."wb_merchants" "m" ON (("m"."id" = "pi"."merchant_id")))
-  WHERE (("d"."paid" < "abs"("pi"."amount")) AND (NOT (EXISTS ( SELECT 1
+  WHERE (("public"."wb_planned_left"("pi"."amount", "d"."paid", "pi"."amount_tolerance") <> (0)::numeric) AND (NOT (EXISTS ( SELECT 1
            FROM "public"."wb_planned_skips" "sk"
           WHERE (("sk"."planned_item_id" = "d"."planned_item_id") AND (NOT ("sk"."occurrence_on" IS DISTINCT FROM "d"."occurrence_on")))))));
 
@@ -9984,7 +10003,7 @@ CREATE OR REPLACE VIEW "public"."wb_planned_unmatched" WITH ("security_invoker"=
 ALTER VIEW "public"."wb_planned_unmatched" OWNER TO "postgres";
 
 
-COMMENT ON VIEW "public"."wb_planned_unmatched" IS 'App: Warren Buffet. Missed dates: every due date before today (Pacific) whose confirmed matches do not cover the amount. Recurring items give one row per past date from due_on (occurrence_on set); a one-off gives one row once its date is past, unless it is a draft, paid or cancelled (occurrence_on null). Recurring drafts are left out. A date in wb_planned_skips (Not needed) is left out. confirmed_total and remaining carry the item''s sign; days_late counts from the due date; within_window is true while a payment may still be suggested (days_late <= match_window_days); has_suggestion when one waits in Review. The weekly cleanup reads this view (A25). security_invoker, so wb_ RLS applies.';
+COMMENT ON VIEW "public"."wb_planned_unmatched" IS 'App: Warren Buffet. Missed dates: every due date before today (Pacific) that its confirmed matches do not cover (more than the item''s amount_tolerance left, A45). Recurring items give one row per past date from due_on (occurrence_on set); a one-off gives one row once its date is past, unless it is a draft, paid or cancelled (occurrence_on null). Recurring drafts are left out. A date in wb_planned_skips (Not needed) is left out. confirmed_total and remaining carry the item''s sign; days_late counts from the due date; within_window is true while a payment may still be suggested (days_late <= match_window_days); has_suggestion when one waits in Review. The weekly cleanup reads this view (A25). security_invoker, so wb_ RLS applies.';
 
 
 
@@ -10086,17 +10105,17 @@ CREATE OR REPLACE VIEW "public"."wb_project_summary" WITH ("security_invoker"='t
             "sum"("q"."left_amt") FILTER (WHERE ("q"."left_amt" > (0)::numeric)) AS "due_in"
            FROM ( SELECT "pi"."project_id",
                     ("pi"."stage" = 'draft'::"text") AS "draft",
-                    ("sign"("pi"."amount") * GREATEST(("abs"("pi"."amount") - COALESCE(( SELECT "sum"("abs"("pm"."amount_applied")) AS "sum"
+                    "public"."wb_planned_left"("pi"."amount", ( SELECT "sum"("abs"("pm"."amount_applied")) AS "sum"
                            FROM "public"."wb_planned_matches" "pm"
-                          WHERE (("pm"."planned_item_id" = "pi"."id") AND ("pm"."status" = 'confirmed'::"text"))), (0)::numeric)), (0)::numeric)) AS "left_amt"
+                          WHERE (("pm"."planned_item_id" = "pi"."id") AND ("pm"."status" = 'confirmed'::"text"))), "pi"."amount_tolerance") AS "left_amt"
                    FROM "public"."wb_planned_items" "pi"
                   WHERE (("pi"."project_id" IS NOT NULL) AND ("pi"."interval_count" IS NULL) AND ("pi"."stage" <> ALL (ARRAY['paid'::"text", 'cancelled'::"text"])))
                 UNION ALL
                  SELECT "pi"."project_id",
                     "pi"."is_draft",
-                    ("sign"("o"."amount") * GREATEST(("abs"("o"."amount") - COALESCE(( SELECT "sum"("abs"("pm"."amount_applied")) AS "sum"
+                    "public"."wb_planned_left"("o"."amount", ( SELECT "sum"("abs"("pm"."amount_applied")) AS "sum"
                            FROM "public"."wb_planned_matches" "pm"
-                          WHERE (("pm"."planned_item_id" = "o"."planned_item_id") AND ("pm"."status" = 'confirmed'::"text") AND ("pm"."occurrence_on" = "o"."occurrence_on"))), (0)::numeric)), (0)::numeric))
+                          WHERE (("pm"."planned_item_id" = "o"."planned_item_id") AND ("pm"."status" = 'confirmed'::"text") AND ("pm"."occurrence_on" = "o"."occurrence_on"))), "pi"."amount_tolerance") AS "wb_planned_left"
                    FROM (("t"
                      CROSS JOIN LATERAL "public"."wb_planned_occurrences"("t"."d", ((("t"."d" + "make_interval"("months" => "t"."h")))::"date" - 1), true) "o"("planned_item_id", "occurrence_on", "amount", "recurring", "stage", "is_draft"))
                      JOIN "public"."wb_planned_items" "pi" ON (("pi"."id" = "o"."planned_item_id")))
@@ -10141,7 +10160,7 @@ CREATE OR REPLACE VIEW "public"."wb_project_summary" WITH ("security_invoker"='t
 ALTER VIEW "public"."wb_project_summary" OWNER TO "postgres";
 
 
-COMMENT ON VIEW "public"."wb_project_summary" IS 'App: Warren Buffet. One row per project. spent = posted money out on the project''s splits (negative); received = posted money in (positive, such as an insurer''s payment); net = spent + received. budget_left = budget + spent: the budget is measured against spent, not net (A36). planned_out_due and planned_in_due = what is still to come on its planned items, less what is confirmed: one-offs not paid or cancelled (overdue included) and recurring dates over the horizon; draft_out_due and draft_in_due are the same for drafts, kept apart. item_count leaves out cancelled items. planning is true when every item is a draft and nothing has been paid on the project (A35); it is derived, never stored. security_invoker, so wb_ RLS applies.';
+COMMENT ON VIEW "public"."wb_project_summary" IS 'App: Warren Buffet. One row per project. spent = posted money out on the project''s splits (negative); received = posted money in (positive, such as an insurer''s payment); net = spent + received. budget_left = budget + spent: the budget is measured against spent, not net (A36). planned_out_due and planned_in_due = what is still to come on its planned items, less what is confirmed (0 when within the item''s amount_tolerance, A45): one-offs not paid or cancelled (overdue included) and recurring dates over the horizon; draft_out_due and draft_in_due are the same for drafts, kept apart. item_count leaves out cancelled items. planning is true when every item is a draft and nothing has been paid on the project (A35); it is derived, never stored. security_invoker, so wb_ RLS applies.';
 
 
 
@@ -14513,6 +14532,12 @@ GRANT ALL ON FUNCTION "public"."wb_monthly_equivalent"("p_amount" numeric, "p_in
 REVOKE ALL ON FUNCTION "public"."wb_pair_decision"("p_forward" integer, "p_reverse" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_pair_decision"("p_forward" integer, "p_reverse" integer) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_pair_decision"("p_forward" integer, "p_reverse" integer) TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."wb_planned_left"("p_amount" numeric, "p_paid" numeric, "p_tolerance" numeric) TO "anon";
+GRANT ALL ON FUNCTION "public"."wb_planned_left"("p_amount" numeric, "p_paid" numeric, "p_tolerance" numeric) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."wb_planned_left"("p_amount" numeric, "p_paid" numeric, "p_tolerance" numeric) TO "service_role";
 
 
 

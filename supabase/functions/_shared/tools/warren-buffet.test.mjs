@@ -132,6 +132,7 @@ test("get_wb_transactions never selects raw, and builds its filters", async () =
   const ops = db.log[0].ops;
   assert.ok(!/\braw\b/.test(ops[0][1]), "raw must not be selected");
   assert.ok(/\bexcluded_tags\b/.test(ops[0][1]), "tags removed by hand are shown");
+  assert.ok(/\bproject_names\b/.test(ops[0][1]), "a split's project is shown");
   assert.deepEqual(ops.find((o) => o[0] === "gte"), ["gte", "posted_at", "2026-07-01T00:00:00-07:00"]);
   assert.deepEqual(ops.find((o) => o[0] === "lt"), ["lt", "posted_at", "2026-08-01T00:00:00-07:00"]);
   assert.deepEqual(ops.find((o) => o[0] === "or"),

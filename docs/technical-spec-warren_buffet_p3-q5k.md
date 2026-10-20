@@ -92,7 +92,7 @@ Phase 3 answers "can we afford it?":
 | A11 | Out of scope: `set_project_id` in `wb_rule_preview`, `wb_bulk_create` and `wb_fix_plan`. |
 | A12 | A test keeps the SQL monthly-equivalent rule in step with `moneyFormat.monthlyEquivalent`. |
 | A13 | The platform spec is `docs/history/technical-spec-platform-layer.md`. |
-| A15 | Help numbers in SQL (Alex, 2026-10-14, run tag `warren_buffet_p3-q5k-s3-h6tz`). Applied migrations are never edited. The next time a migration redefines `wb_transfer_match`, `wb_detect_subscriptions`, `wb_subscription_overview` or `wb_rule_health_all` (or any object whose number the help states), that migration adds a comment next to each such number saying "if you change this value, update help entry <key> in src/money/helpText.js and its test". The JS mirrors live in `src/money/ruleNumbers.js`, and `helpText.test.js` checks them against the newest SQL definition. |
+| A15 | Help numbers in SQL (Alex, 2026-10-14, run tag `warren_buffet_p3-q5k-s3-h6tz`). Applied migrations are never edited. The next time a migration redefines `wb_transfer_match`, `wb_detect_subscriptions`, `wb_subscription_overview` or `wb_rule_health_all` (or any object whose number the help states), that migration adds a comment next to each such number saying "if you change this value, update help entry <key> in src/money/helpText.js and its test". The JS mirrors live in `src/money/ruleNumbers.js`, and `helpText.test.js` checks them against the newest SQL definition. **Exception (Alex, 2026-10-20, run tag `warren_buffet_p3-q5k-s8-h1zc`):** a rolled-back test file may be edited after it was run, because it changes nothing in the database. The edit adds a header note naming the reason. The first case was 136, for A45. |
 | A16 | `never_fires` is fixed in step 10, the weekly cleanup step (Alex, same run tag). The new rule: flag a rule when its last match is older than about 1.5 times its expected interval, and give a brand-new rule that long before its first match is due. Step 3 does not change the check. |
 | A17 | `wb_splits.project_source` (`rule`, `claude`, `manual`). Rules never overwrite claude or manual. A hand removal (project_id null with source claude or manual) sticks, as tag exclusions do. A project written with no source counts as manual. (Alex, 2026-10-16, run tag `warren_buffet_p3-q5k-s4-n8rc`.) |
 | A18 | Step 4 adds a minimal "Suggested match" group to Review: the planned item's name and date beside the payment, with Confirm, "Not this one" and the "?" (no longer reserved). Step 8 builds the full card. |
@@ -126,6 +126,7 @@ Phase 3 answers "can we afford it?":
 - It also returns `difference`, and `days_sooner`: how many days earlier (positive) or later (negative) `first_below_floor_on` comes with the items.
 - Each item keeps `dates_counted`, and is flagged `outside_horizon` when its date is past the horizon. |
 | A44 | 8c is a planning skill, `.claude/skills/wb-planning/SKILL.md`, tested with a scripted planning conversation in a fresh thread. 8d is a slimmer app: the Plan tab overview (projects with totals, upcoming, repeating, what-ifs, missed dates with Not needed), project detail, planned item detail with matched payments and Remove (with the set-back-to-invoiced question), the full Review suggestion card, and the single-split project picker on transaction detail, all with their help. **Dropped for now:** the add and edit forms and the split-editor picker. Claude does the entry. |
+| A45 | **Covered within tolerance.** A planned date, or a one-off, counts as covered when what its confirmed matches leave unpaid is no more than the item's `amount_tolerance`. This applies to bills and to income. One rule, `wb_planned_left(amount, paid, tolerance)` (and `leftOf` in the handlers), decides it everywhere: missed dates, auto-paid (A20), `paid_not_covered`, new suggestions, project amounts still due, the projection, `remaining`, `over_matched` (only beyond the tolerance), and `create_wb_planned_match`'s "already paid in full" and `would_mark_paid`. Found in 8b batch 1: a salary date 0.01 short was listed as missed. (Alex, 2026-10-19, run tag `warren_buffet_p3-q5k-s8-x9tr`.) |
 | A14 | Recurring "what if" items are wanted (Alex, 2026-10-14, run tag `warren_buffet_p3-q5k-s2-m3qd`). `wb_planned_items.is_draft boolean not null default false`, for recurring items only; a one-off draft stays stage `draft`. Drafts of either kind stay out of free cash unless the drafts toggle includes them. |
 
 ---
@@ -259,6 +260,19 @@ All tools use `defineTool`, `ctx.db` only and bare-data payloads. Every list is 
 
 New tools go in `_shared/tools/warren-buffet-p3.ts`.
 
+**Step 8b additions (A42, A43).** 134 → 138 tools.
+
+| tool | tier | notes |
+|---|---|---|
+| `get_wb_project_summary` | 1 | `wb_project_summary` rows; filters project_id and status; bounded |
+| `get_wb_missed_dates` | 1 | `wb_planned_unmatched` rows; filters project_id, planned_item_id and include_within_window (default true); bounded |
+| `mark_wb_missed_dates_not_needed` | 2 | up to 25 `{planned_item_id, occurrence_on?, reason?}`. All checked before any write: the item exists; occurrence_on is required for a repeating item and refused for a one-off; the date must be missed now. Already-marked dates are reported. `undo: true` deletes the marks. |
+| `unconfirm_wb_planned_match` | 2 | confirmed only (plain refusal otherwise), through `wb_unconfirm_planned_match`. Returns `paid_not_covered`, and a `hint` to ask about setting the item back to invoiced when it is true. Never writes the stage. |
+| `get_wb_free_cash` + `what_if` | 1 | up to 10 items `{name?, amount, date, interval_count?, interval_unit?, ends_on?}`. Computed in the handler from `wb_cash_projection` and writes nothing. A past one-off counts today; repeating dates count from today; a date past the horizon is `outside_horizon`. Returns `without` and `with` (free_cash, low_balance, low_on, first_below_floor_on), `difference`, `days_sooner`, `horizon_end`, and per item `dates_counted`, `first_on` and `last_on`. |
+| `upsert_wb_planned_item` | 2 | a new repeating item with a merchant is backdated through `wb_planned_start_from_history`, only to an earlier date; returns `backdated_from`; `backdate: false` opts out |
+| `get_wb_planned_items` | 1 | `over_matched` per item (a one-off in total, a repeating item on any one date) |
+| `get_wb_transactions` | 1 | `project_names` |
+
 ---
 
 ## 5. Build steps
@@ -275,7 +289,7 @@ Each step ends with verification and stops for Alex. Database claims are taken a
 | 6 | **MCP tools** (§4). Plain-sentence errors, schema-versus-handler tests, tool count (121 → 134). Any other thread must gitsync before deploying mcp (A31). | `db:deploy` | mcp |
 | 7 | **Seeding in claude.ai.** Projects, premiums, inflows, one-offs, then the floor and horizon (Alex sets the floor). Confirm the first suggestions. | none | no |
 | 8a | **Plan tab database** (§3.8), with rolled-back tests. CONFORMANT. | `db:table:wb_planned_skips`, `db:table:wb_planned_unmatched`, `db:table:wb_project_summary`, `db:fn:wb_unconfirm_planned_match`, `db:fn:wb_planned_start_from_history`, `db:table:wb_transaction_list` | no |
-| 8b | **Tools first (A42, A43).** New: project summary, missed dates, mark not needed, unconfirm. Changed: the free cash what-if, `backdated_from`, `project_names`, `over_matched`. Needs `mcp/index.ts`. Before deploying, the live mcp version must still be v155; if higher, stop and ask. | `db:deploy` | mcp |
+| 8b | **Tools first (A42, A43).** New: project summary, missed dates, mark not needed, unconfirm. Changed: the free cash what-if, `backdated_from`, `project_names`, `over_matched`. Needs `mcp/index.ts`. Before deploying, the live mcp version must still be v155; if higher, stop and ask. **Done 2026-10-20:** live on mcp v157, 138 tools, with the tolerance fix (A45, migrations 143–144); fresh-thread verification passed. | `db:deploy` | mcp |
 | 8c | **Planning skill** `.claude/skills/wb-planning/SKILL.md` (A44), tested in a fresh thread. | none | no |
 | 8d | **Slimmer app (A44).** Plan tab overview, project detail, planned item detail with Remove, the full Review card, the single-split picker, and their help. No add or edit forms, and no split-editor picker. | none | Vercel on merge |
 | 9 | **Overview.** Free cash and its low date, the reserve line, true cost against income, and the drafts toggle. Each panel shows its live working. | none | Vercel on merge |

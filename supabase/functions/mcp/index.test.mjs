@@ -312,14 +312,17 @@ test("the tool count is 72 after the job-search tools", () => {
     "get_wb_settings", "get_wb_free_cash", "get_wb_true_cost", "get_wb_cash_projection", "upsert_wb_project",
     "upsert_wb_planned_item", "create_wb_planned_match", "update_wb_planned_match", "set_wb_transaction_project",
     "update_wb_settings"];
+  // 2026-10-19, +4 for Warren Buffet Phase 3 Step 8b: planning in claude.ai.
+  const EXPECTED_ADDED_WB_8B = ["get_wb_project_summary", "get_wb_missed_dates", "mark_wb_missed_dates_not_needed",
+    "unconfirm_wb_planned_match"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
-                      ...EXPECTED_ADDED_WB_PHASE3]) {
+                      ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 134,
-    `expected 134 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 138,
+    `expected 138 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -443,7 +446,7 @@ test("Warren Buffet Phase 3 schemas advertise exactly the args their handlers re
     rest = rest.replace(body, "");
   }
   const blocks = rest.split("defineTool({").slice(1);
-  assert.equal(blocks.length, 13, `expected 13 tools in warren-buffet-p3.ts, found ${blocks.length}`);
+  assert.equal(blocks.length, 17, `expected 17 tools in warren-buffet-p3.ts, found ${blocks.length}`);
   const tiers = {};
   for (const b of blocks) {
     const name = /name:\s*"([^"]+)"/.exec(b)[1];
@@ -459,7 +462,29 @@ test("Warren Buffet Phase 3 schemas advertise exactly the args their handlers re
     get_wb_projects: 1, get_wb_planned_items: 1, get_wb_planned_matches: 1, get_wb_settings: 1, get_wb_free_cash: 1,
     get_wb_true_cost: 1, get_wb_cash_projection: 1, upsert_wb_project: 2, upsert_wb_planned_item: 2,
     create_wb_planned_match: 3, update_wb_planned_match: 2, set_wb_transaction_project: 2, update_wb_settings: 3,
+    get_wb_project_summary: 1, get_wb_missed_dates: 1, mark_wb_missed_dates_not_needed: 2, unconfirm_wb_planned_match: 2,
   });
+});
+
+test("Warren Buffet Step 8b descriptions say when to use each tool and its key rule", () => {
+  const desc = (n) => registered.find((r) => r.name === n).cfg.description;
+  assert.match(desc("get_wb_free_cash"), /can we afford X/);
+  assert.match(desc("get_wb_free_cash"), /This writes nothing/);
+  assert.match(desc("get_wb_free_cash"), /days_sooner/);
+  assert.doesNotMatch(desc("get_wb_free_cash"), /affordable/);
+  assert.match(desc("unconfirm_wb_planned_match"), /never changes the planned item's stage by itself/);
+  assert.match(desc("unconfirm_wb_planned_match"), /paid_not_covered/);
+  assert.match(desc("unconfirm_wb_planned_match"), /invoiced/);
+  assert.match(desc("upsert_wb_planned_item"), /backdated_from/);
+  assert.match(desc("upsert_wb_planned_item"), /backdate: false/);
+  assert.match(desc("get_wb_missed_dates"), /within_window/);
+  assert.match(desc("mark_wb_missed_dates_not_needed"), /undo: true/);
+  assert.match(desc("get_wb_project_summary"), /measured against spent, not net/);
+  assert.match(desc("get_wb_planned_items"), /over_matched/);
+  assert.match(desc("get_wb_transactions"), /project_names/);
+  for (const n of ["get_wb_project_summary", "get_wb_missed_dates", "unconfirm_wb_planned_match"]) {
+    assert.match(desc(n), /money in is positive, money out is negative/, n);
+  }
 });
 
 test("Warren Buffet Phase 3 descriptions", () => {
