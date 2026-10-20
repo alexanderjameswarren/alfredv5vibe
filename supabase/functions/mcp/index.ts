@@ -117,12 +117,16 @@ import {
   createWbPlannedMatchTool,
   getWbCashProjectionTool,
   getWbFreeCashTool,
+  getWbMissedDatesTool,
   getWbPlannedItemsTool,
   getWbPlannedMatchesTool,
+  getWbProjectSummaryTool,
   getWbProjectsTool,
   getWbSettingsTool,
   getWbTrueCostTool,
+  markWbMissedDatesNotNeededTool,
   setWbTransactionProjectTool,
+  unconfirmWbPlannedMatchTool,
   updateWbPlannedMatchTool,
   updateWbSettingsTool,
   upsertWbPlannedItemTool,
@@ -2886,7 +2890,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get Money Transactions",
       description:
-        "Bank transactions, newest first (pending ones without a posted date come first): amount, dates, the raw description and payee as SimpleFIN reported them, plus the Phase 2 fields: clean_description, merchant_name, kind (spend, income, transfer, refund, investment, interest, fee) with kind_source, transfer_pair_id, reviewed, tag_names, split_count, needs_review, excluded_tags (tags removed by hand or by Claude, which rules never put back) and the account_label. " +
+        "Bank transactions, newest first (pending ones without a posted date come first): amount, dates, the raw description and payee as SimpleFIN reported them, plus the Phase 2 fields: clean_description, merchant_name, kind (spend, income, transfer, refund, investment, interest, fee) with kind_source, transfer_pair_id, reviewed, tag_names, split_count, needs_review, excluded_tags (tags removed by hand or by Claude, which rules never put back), project_names (the projects on any of its parts) and the account_label. " +
         WB_SIGN + "from/to filter the posted date in Pacific time, so a pending charge with no posted date only appears when no date range is given. Tier 1.",
       inputSchema: {
         account_id: z.string().optional().describe("Only this account (get_wb_accounts, field account_id)."),
@@ -3520,7 +3524,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get Money Planned Items",
       description:
-        "Planned items, earliest due first. Each says plainly whether it is a draft (draft: true), whether it repeats (recurring), how much is confirmed against it (confirmed_total) and, for a one-off, what remains. Drafts are included unless include_drafts is false. " +
+        "Planned items, earliest due first. Each says plainly whether it is a draft (draft: true), whether it repeats (recurring), how much is confirmed against it (confirmed_total) and, for a one-off, what remains. over_matched: true means the confirmed payments add up to more than planned (for a repeating item, on one date): a warning to check for a wrong match, never a block. Drafts are included unless include_drafts is false. " +
         WB_PLAN + WB_SIGN + "Tier 1.",
       inputSchema: {
         project_id: z.string().optional(),
@@ -3568,9 +3572,20 @@ export function createMcpServer(token: string) {
       title: "Get Money Free Cash",
       description:
         "Free cash now: start_balance (spending_cash plus credit_owed), the low point (low_balance, low_on), safety_floor and floor_missing, free_cash, reserve_cash on its own line, the horizon, and the burn rate (median and mean). " +
-        WB_FREE + WB_SIGN + "Tier 1.",
+        WB_FREE +
+        "WHAT IF: to answer \"can we afford X on date Y\", pass what_if with up to 10 hypothetical items. This writes nothing: nothing is saved as a planned item. The result adds what_if.without and what_if.with (each: free_cash, low_balance, low_on, first_below_floor_on), difference (with minus without), days_sooner (how many days earlier the balance first drops below the floor with the items; negative is later), horizon_end, and per item dates_counted, first_on, last_on and outside_horizon (its date is past the horizon, so it was not counted). " +
+        "A past one-off date counts today; a repeating item counts its dates from today. Free cash can already be negative because the reserve is left out on purpose, so compare with and without rather than reading a yes or no. To save one of them afterwards, ask first, then use upsert_wb_planned_item. " +
+        WB_SIGN + "Tier 1.",
       inputSchema: {
         include_drafts: z.boolean().optional().describe("Count what-if drafts too. Default false."),
+        what_if: z.array(z.object({
+          name: z.string().optional(),
+          amount: z.number().describe("Signed: money out negative, money in positive. For a repeating item, each time."),
+          date: z.string().describe("YYYY-MM-DD: the date, or a repeating item's first date."),
+          interval_count: z.number().optional().describe("Repeating: 1 to 120, with interval_unit."),
+          interval_unit: z.enum(["week", "month"]).optional(),
+          ends_on: z.string().optional().describe("Repeating: YYYY-MM-DD, the last date it can fall on."),
+        })).optional().describe("1 to 10 hypothetical items. Writes nothing."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(getWbFreeCashTool, args, token),
@@ -3629,6 +3644,7 @@ export function createMcpServer(token: string) {
       title: "Create or Edit a Money Planned Item",
       description:
         "Create a planned item (no id; name, amount and due_on required, and a stage for a one-off) or edit one (id; only the fields given change). Afterwards the app suggests matching payments (merchant + amount within amount_tolerance + date within match_window_days); they appear in get_wb_review_queue as planned_match. Give each item a merchant_id where you can: an item with no merchant is never suggested. " +
+        "A NEW repeating item with a merchant is backdated: its first date moves back to the earliest matching payment in the burn-rate months (the last 3 full months, up to today), so payments the burn rate already counts get matched, not counted twice. The result says backdated_from (the date you gave) when that happened; tell Alex. Pass backdate: false to keep the date given. " +
         WB_PLAN + WB_SIGN + "Audited. Tier 2.",
       inputSchema: {
         id: z.string().optional(),
@@ -3647,6 +3663,7 @@ export function createMcpServer(token: string) {
         amount_tolerance: z.number().optional().describe("Dollars either side of amount a payment may differ by. Default 0."),
         match_window_days: z.number().optional().describe("Days either side of a due date a payment may fall. Default 10."),
         notes: z.string().nullable().optional(),
+        backdate: z.boolean().optional().describe("New repeating items only. Default true; false keeps due_on as given."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(upsertWbPlannedItemTool, args, token),
@@ -3717,6 +3734,73 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(updateWbSettingsTool, args, token),
+  );
+
+  // --- Warren Buffet, Phase 3 Step 8b: planning in claude.ai (spec A42, A43) ---
+  server.registerTool(
+    "get_wb_project_summary",
+    {
+      title: "Get Money Project Totals",
+      description:
+        "Use this for \"how is the project doing\". One row per project: spent (posted money out on its payments, negative), received (posted money in, such as an insurer's payment, positive), net (spent + received), budget and budget_left (budget + spent: the budget is measured against spent, not net), what is still to come on its planned items less what is confirmed (planned_out_due, planned_in_due; drafts apart in draft_out_due, draft_in_due), item_count (cancelled left out), draft_count, payment_count, last_payment_on, and planning (true when every item is a draft and nothing is paid yet). Pending charges are left out. " +
+        WB_SIGN + "Tier 1.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        status: z.enum(["active", "on_hold", "done", "cancelled"]).optional(),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbProjectSummaryTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_missed_dates",
+    {
+      title: "Get Money Missed Dates",
+      description:
+        "Due dates already past that no confirmed payment covers: every past date of a repeating item (occurrence_on set) and overdue one-offs (occurrence_on null; drafts, paid and cancelled left out). Each row: the item, due_on, amount, confirmed_total and remaining (part-paid dates show what is left), days_late, within_window (true while the payment may still post and be suggested; usually just wait), and has_suggestion (a suggestion is waiting: answer it with update_wb_planned_match). " +
+        "The free-cash projection does not count a missed repeating date, so work through them: match the payment (create_wb_planned_match), or, when the date was never going to be paid here (for example before the bank sync started), mark it with mark_wb_missed_dates_not_needed after asking Alex. Dates marked Not needed are left out. " +
+        WB_SIGN + "Tier 1.",
+      inputSchema: {
+        project_id: z.string().optional(),
+        planned_item_id: z.string().optional(),
+        include_within_window: z.boolean().optional().describe("Default true. false lists only dates past their match window."),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbMissedDatesTool, args, token),
+  );
+
+  server.registerTool(
+    "mark_wb_missed_dates_not_needed",
+    {
+      title: "Mark Money Missed Dates Not Needed",
+      description:
+        "Mark up to 25 missed dates (from get_wb_missed_dates) as Not needed, so they stop being listed: for a payment made before the bank sync started, or a date that was never going to be paid. A repeating item needs occurrence_on (the missed date); a one-off takes none. Only a date that is missed now can be marked, and nothing is written if any entry is refused. undo: true takes the marks off the given dates. Ask Alex before marking. Audited. Tier 2.",
+      inputSchema: {
+        dates: z.array(z.object({
+          planned_item_id: z.string(),
+          occurrence_on: z.string().optional().describe("YYYY-MM-DD; repeating items only."),
+          reason: z.string().optional(),
+        })).describe("1 to 25 missed dates."),
+        undo: z.boolean().optional().describe("true to take the Not needed mark off these dates."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(markWbMissedDatesNotNeededTool, args, token),
+  );
+
+  server.registerTool(
+    "unconfirm_wb_planned_match",
+    {
+      title: "Remove a Confirmed Money Match",
+      description:
+        "Remove a confirmed match (get_wb_planned_matches with status confirmed) that was wrong. It becomes rejected, so the same payment is never suggested for that item again. It never changes the planned item's stage by itself. When paid_not_covered is true, a one-off is still at stage paid but no longer fully covered: ask Alex whether to set it back to invoiced, and only then use upsert_wb_planned_item. Only confirmed matches can be removed; a suggestion is turned down with update_wb_planned_match. " +
+        WB_SIGN + "Audited. Tier 2.",
+      inputSchema: {
+        match_id: z.string(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(unconfirmWbPlannedMatchTool, args, token),
   );
 
   // --- Drive Mix (docs/technical-spec-drive_mix-v7r.md §5) ---

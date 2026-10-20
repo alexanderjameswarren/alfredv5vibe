@@ -13,8 +13,8 @@ No amounts in this file. The safety floor is never written into the repo.
 | 6 | MCP tools. **Any other thread must run gitsync before deploying mcp, or the WB Phase 3 tools disappear from live (A31)** | done, 2026-10-19: live on **mcp v155** (134 tools); fresh-thread batches 1–3, the re-check and the cleanup all passed |
 | 7 | Seeding in claude.ai. **Notes:** give every planned item a merchant wherever possible, because items with no merchant are never suggested; and **re-run processing once after seeding** (`reprocess_wb_transactions`), so suggestions are made for existing payments (A19). **Known double count until then:** a past payment for something that later becomes a planned item stays in the burn rate until it is confirmed as a match | done, 2026-10-19 (in claude.ai; see log) |
 | 8a | Plan tab database (spec §3.8; decisions A34–A41) | done, 2026-10-19 (140 applied, 141 48/48; live CONFORMANT, 68 tables) |
-| 8b | **Tools first (A42, A43).** New tools: project summary, missed dates, mark not needed, unconfirm (tier 2, `paid_not_covered`). Changed: the free cash what-if (tier 1, writes nothing), `backdated_from`, `project_names`, `over_matched`. Needs `mcp/index.ts`. **Live mcp must still be v155 before deploying; if higher, stop and ask** | not started |
-| 8c | Planning skill `.claude/skills/wb-planning/SKILL.md` (A44); scripted planning conversation in a fresh thread | not started |
+| 8b | **Tools first (A42, A43).** New tools: project summary, missed dates, mark not needed, unconfirm (tier 2, `paid_not_covered`). Changed: the free cash what-if (tier 1, writes nothing), `backdated_from`, `project_names`, `over_matched`. Needs `mcp/index.ts`. **Live mcp must still be v155 before deploying; if higher, stop and ask** | done, 2026-10-20: live on **mcp v157** (138 tools), with the tolerance fix (A45; 143 applied, 144 24/24); re-check and fresh-thread batches passed |
+| 8c | Planning skill `.claude/skills/wb-planning/SKILL.md` (A44); scripted planning conversation in a fresh thread. **Notes from 8b:** (a) for bills whose amount varies (fuel, utilities), suggest a wider amount_tolerance before backdating, or only some payments qualify; (b) when backdating moves the due day, tell Alex the new day | not started |
 | 8d | Slimmer app (A44): Plan tab overview, project detail, planned item detail with Remove (set-back question), full Review card, single-split picker, help. **No add or edit forms, and no split-editor picker** | not started |
 | 9 | Overview numbers | not started |
 | 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed | not started |
@@ -379,6 +379,63 @@ No amounts are recorded.
   - `difference` and `days_sooner`;
   - each item keeps `dates_counted` and `outside_horizon`.
 - Next: Alex checkpoints 8a with `--release-db` before 8b starts.
+
+### Step 8b built (2026-10-19, run tag `warren_buffet_p3-q5k-s8-g2vm`)
+- 8a was checkpointed on main (2531411). Claimed `mcp/index.ts`, which was free; `index.test.mjs` and the tools files were already this thread's.
+- **New tools:** `get_wb_project_summary` (tier 1), `get_wb_missed_dates` (tier 1), `mark_wb_missed_dates_not_needed` (tier 2, up to 25, all or nothing, undo), `unconfirm_wb_planned_match` (tier 2, `paid_not_covered` plus a hint).
+- **Changed:**
+  - the `get_wb_free_cash` what-if (A43; written in TS over `wb_cash_projection`, no SQL, writes nothing);
+  - `upsert_wb_planned_item` backdating (`backdated_from`, `backdate: false`);
+  - `over_matched` in `annotateItem`;
+  - `project_names` in `get_wb_transactions`.
+- Each description says when to use the tool and its key rule.
+- **Tests:**
+  - functions 743/743, including the index tests at 138 tools and a new Step 8b descriptions test;
+  - CLI 235/235;
+  - deno check: 97 errors, the Phase 2 baseline, all in old lines (now 1067–2677), none in changed code.
+- Next: Alex runs gitsync; drift check; claim `db:deploy`; check the live version is still v155; deploy.
+
+### Step 8b deployed, batch 1, tolerance fix drafted (2026-10-19, run tags `warren_buffet_p3-q5k-s8-d4fu`, `-s8-x9tr`)
+- Deployed **mcp v156** (from v155), and the 401 check passed. `db:deploy` is held until the checkpoint.
+- **Batch 1 passed:** the tools and tiers; the project summary checks; the trip and gym what-ifs; nothing saved.
+- **Bug (A45):** a salary date whose confirmed match was 0.01 short was listed as missed.
+  - The fix, `_pending_…_tolerance_cover.sql`, adds `wb_planned_left`.
+  - It redefines `wb_suggest_planned_matches`, `wb_confirm_planned_match`, `wb_unconfirm_planned_match`, `wb_planned_unmatched`, `wb_project_summary` and `wb_cash_projection`.
+  - The handlers use `leftOf` in `annotateItem` and `matchPlan`.
+- **Tests:**
+  - the new SQL tests pass 24/24 in PGlite, covering a bill and income just within and just outside tolerance;
+  - every earlier file passes except 136 `partial_not_paid`, which encodes the old rule: −198 against −200 with tolerance 5 is now covered, so the item becomes paid. Waiting for Alex's decision;
+  - functions 745/745; deno check at the 97 baseline.
+
+### Tolerance fix numbered (2026-10-20, run tag `warren_buffet_p3-q5k-s8-h1zc`)
+- gitsync brought 2531411..9785698, including 142 (restructure-p4 test-data delete). **Drift check: clear.** 142 deletes only items, intents, contexts and their attachments in three test contexts; it touches no `wb_` table and none of the objects changed here.
+- Alex approved editing **136**: `partial_not_paid` became `within_tolerance_paid`, with a header note pointing to A45. The test-file exception is recorded next to A15.
+- Claimed the 7 db: items. Numbered **143_wb_phase3_step8_tolerance_cover.sql** and **144_wb_phase3_step8_tolerance_cover_tests.sql**, and deleted the `_pending_` files.
+- PGlite: 144 24/24, 136 35/35, and every other test file passes.
+- Waiting for Alex to run them. After that: check live is still v156, redeploy, the Elise re-check, then batch 2.
+
+### Tolerance fix applied and deployed (2026-10-20, run tag `warren_buffet_p3-q5k-s8-e6kq`)
+- Alex ran the files. 143: conformant true. 144: 24/24. The edited 136: 35/35, including `within_tolerance_paid`.
+- Verified live: CONFORMANT, 68 tables; the live schema uses `wb_planned_left`.
+- Live was v156. I redeployed mcp with the `leftOf` handler fix: **v157**, and the 401 check passed.
+- Next: the fresh-thread re-check (the Sep 30 salary date and `over_matched`), then batch 2 (Not needed with undo, unconfirm, backdating) and the cleanup.
+
+### Step 8b done (2026-10-20, run tag `warren_buffet_p3-q5k-s8-r4bw`; fresh thread on mcp v157)
+- **Re-check passed:** no Sep 30 missed row for Elise's salary; the over_matched list is empty.
+- **Batch A passed:**
+  - mark_wb_missed_dates_not_needed marks a date and undoes it;
+  - the day-after date is refused with "is not a missed date".
+- **Batch B passed:**
+  - the match proposal said would_mark_paid true, and the item went to paid with over_matched false;
+  - unconfirm returned paid_not_covered true with the hint, and the thread asked before changing the stage;
+  - setting it back to invoiced worked;
+  - a second unconfirm was refused ("rejected, not confirmed").
+- **Backdate passed:**
+  - the backdate item moved due_on from 2026-11-01 to 2026-10-13, with backdated_from 2026-11-01 and one suggestion;
+  - the nobackdate item kept 2026-11-01, with backdated_from null.
+- **Note, not a bug:** the test merchant was Chevron (fuel). With a 1% tolerance only two payments qualified. The Oct 17 exact-amount payment got no suggestion, because Oct 13 had already claimed that month's date. This goes into the 8c skill notes.
+- Cleanup run; the final check returned 0, 0, 0.
+- Checkpoint: the six 8b function files, 143, 144, the edited 136, the spec and the progress file, with `--release-db`.
 
 ## Later
 
