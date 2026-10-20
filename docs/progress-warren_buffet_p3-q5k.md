@@ -14,7 +14,7 @@ No amounts in this file. The safety floor is never written into the repo.
 | 7 | Seeding in claude.ai. **Notes:** give every planned item a merchant wherever possible, because items with no merchant are never suggested; and **re-run processing once after seeding** (`reprocess_wb_transactions`), so suggestions are made for existing payments (A19). **Known double count until then:** a past payment for something that later becomes a planned item stays in the burn rate until it is confirmed as a match | done, 2026-10-19 (in claude.ai; see log) |
 | 8a | Plan tab database (spec §3.8; decisions A34–A41) | done, 2026-10-19 (140 applied, 141 48/48; live CONFORMANT, 68 tables) |
 | 8b | **Tools first (A42, A43).** New tools: project summary, missed dates, mark not needed, unconfirm (tier 2, `paid_not_covered`). Changed: the free cash what-if (tier 1, writes nothing), `backdated_from`, `project_names`, `over_matched`. Needs `mcp/index.ts`. **Live mcp must still be v155 before deploying; if higher, stop and ask** | done, 2026-10-20: live on **mcp v157** (138 tools), with the tolerance fix (A45; 143 applied, 144 24/24); re-check and fresh-thread batches passed |
-| 8c | Planning skill `.claude/skills/wb-planning/SKILL.md` (A44); scripted planning conversation in a fresh thread. **Notes from 8b:** (a) for bills whose amount varies (fuel, utilities), suggest a wider amount_tolerance before backdating, or only some payments qualify; (b) when backdating moves the due day, tell Alex the new day | not started |
+| 8c | Planning skill `.claude/skills/wb-planning/SKILL.md` (A44); scripted planning conversation in a fresh thread. **Notes from 8b:** (a) for bills whose amount varies (fuel, utilities), suggest a wider amount_tolerance before backdating, or only some payments qualify; (b) when backdating moves the due day, tell Alex the new day | done, 2026-10-20 (all six fresh-thread tests passed; two fixes to the skill, see log) |
 | 8d | Slimmer app (A44): Plan tab overview, project detail, planned item detail with Remove (set-back question), full Review card, single-split picker, help. **No add or edit forms, and no split-editor picker** | not started |
 | 9 | Overview numbers | not started |
 | 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed | not started |
@@ -436,6 +436,109 @@ No amounts are recorded.
 - **Note, not a bug:** the test merchant was Chevron (fuel). With a 1% tolerance only two payments qualified. The Oct 17 exact-amount payment got no suggestion, because Oct 13 had already claimed that month's date. This goes into the 8c skill notes.
 - Cleanup run; the final check returned 0, 0, 0.
 - Checkpoint: the six 8b function files, 143, 144, the edited 136, the spec and the progress file, with `--release-db`.
+
+### Step 8c: planning skill written (2026-10-20, run tag `warren_buffet_p3-q5k-s9-w3hk`)
+- New: `.claude/skills/wb-planning/SKILL.md`. It covers:
+  - show a table before any write;
+  - no reminders;
+  - the duplicate check (subscriptions and planned items);
+  - backdating, a wider tolerance for varying bills, and telling Alex the new day;
+  - drafts and stages;
+  - tax_year;
+  - merchants, and generic bill-pay;
+  - the what-if (never "affordable");
+  - missed dates and Not needed;
+  - matches and the unconfirm set-back question;
+  - within tolerance counts as covered (A45);
+  - projects.
+- No QuickBooks note exists in the repo. The skill uses the double count that follows from the spec: an active subscription added as a planned bill counts twice.
+
+#### 8c test script (a fresh claude.ai thread, with the skill loaded)
+Each record is named ZZ TEMP S9. Approve writes only where the step says so.
+
+1. **Duplicate.** "Add a monthly planned bill called ZZ TEMP S9 dup for our QuickBooks subscription." (If there is no QuickBooks subscription, name any active one.)
+   *Correct:*
+   - checks `get_wb_subscriptions` and `get_wb_planned_items`;
+   - finds the subscription;
+   - explains that it is already counted, so adding it would count it twice;
+   - writes nothing, and offers no workaround that adds it anyway.
+2. **Draft, table, OK.** "We might put in a hot tub next spring. Add it as ZZ TEMP S9 hot tub, a one-off about the size of one month of our burn rate, in April 2027."
+   *Correct:*
+   - reads `get_wb_true_cost` for the amount;
+   - shows a table: negative amount, a date in April 2027, `stage: draft`, no merchant;
+   - waits, and offers no reminder.
+
+   Reply "OK". *Correct:* it creates the item and reports it as a draft that free cash leaves out.
+3. **Varying bill, backdate.** "Add our electricity bill as a repeating monthly item called ZZ TEMP S9 power."
+   *Correct:*
+   - finds the utility merchant, and is careful if the payments go through a generic bill-pay merchant;
+   - says the amount varies, and suggests a wider `amount_tolerance` with its reasoning;
+   - shows the table and waits.
+
+   Reply "OK". *Correct:* it reports `backdated_from` and the new day of the month the item repeats on.
+4. **Afford.** "Can we afford a ZZ TEMP S9 trip costing twice our monthly burn rate on February 1st?"
+   *Correct:*
+   - one `get_wb_free_cash` call with `what_if`;
+   - reports without and with: free cash, the low balance and its date, and the first date below the floor;
+   - reports `difference` and `days_sooner`;
+   - never says "affordable" and gives no yes or no;
+   - says nothing was saved, and offers to save it as a draft.
+5. **Existing yearly item.** "Add next August's property tax as a one-off called ZZ TEMP S9 property tax, the same amount as last time."
+   *Correct:*
+   - it finds the existing yearly Property tax item (due Aug 10);
+   - it writes nothing;
+   - it offers to edit that item, and offers no copy, not even a draft.
+
+   (The property tax here is one yearly payment in August, not installments.)
+6. **Missed dates and matches.** "Go through our missed dates and suggested matches. Don't change anything without asking."
+   *Correct:*
+   - groups the rows: `within_window` (wait), `has_suggestion` (offer to confirm or reject), and the rest (offer to match, or Not needed after asking);
+   - explains that a date within tolerance is already covered;
+   - makes no write without an OK.
+
+**Report back:** pass or fail for each step, and the exact wording of any reply that broke a rule.
+
+**Cleanup** (each statement separately, in this order):
+```sql
+delete from public.wb_planned_matches where planned_item_id in (select id from public.wb_planned_items where name like 'ZZ TEMP S9%');
+```
+```sql
+delete from public.wb_planned_skips where planned_item_id in (select id from public.wb_planned_items where name like 'ZZ TEMP S9%');
+```
+```sql
+delete from public.wb_planned_items where name like 'ZZ TEMP S9%';
+```
+**Final check** (expect 0, 0, 0):
+```sql
+select json_build_object(
+  'items_left', (select coalesce(json_agg(t), '[]'::json) from (select count(*) as n from public.wb_planned_items where name like 'ZZ TEMP S9%') t),
+  'reminders_by_claude_today', (select coalesce(json_agg(t), '[]'::json) from (select count(*) as n from public.reminders where created_by = 'claude' and created_at > now() - interval '1 day') t),
+  'orphan_matches', (select coalesce(json_agg(t), '[]'::json) from (select count(*) as n from public.wb_planned_matches m where not exists (select 1 from public.wb_planned_items i where i.id = m.planned_item_id)) t)
+) as result;
+```
+
+### Step 8c done (2026-10-20, run tag `warren_buffet_p3-q5k-s9-k7pe`)
+All six tests passed in a fresh claude.ai thread with the skill loaded. No amounts are recorded.
+1. **QuickBooks:** refused; explained the double count; noticed it is yearly, not monthly. *Slip:* offered a draft copy.
+2. **Hot tub:** a table, a draft, waited for OK, no reminder. It noticed the Backyard renovation placeholder draft on its own.
+3. **Power:**
+   - found NV Energy, and suggested a wider tolerance with its reasoning;
+   - backdated to Jul 22, and named the new day;
+   - three suggestions, and it asked before confirming;
+   - it questioned an unusually low payment amount.
+4. **What-if:**
+   - without and with, and no yes or no;
+   - the floor is already crossed on Nov 9, so there was no days-sooner figure;
+   - it flagged that the power payments are counted twice until their matches are confirmed.
+5. **Property tax** (new test 5): found the existing yearly item, and wrote nothing. *Slip:* the same draft-copy offer.
+6. **Missed dates:** grouped correctly, and wrote nothing.
+- **Afterwards, for real:** both Anthem July 1 dates were marked Not needed, with the reason "July 1 not paid from a connected account".
+- Cleanup returned 0, 0, 0.
+- **Fixes to the skill:**
+  - §1: when the item already exists, offer to edit it, and never offer a copy, not even a draft;
+  - new §9, Removing things: there is no delete tool; cancel a one-off, set `ends_on` on a repeating item, or delete in the app;
+  - §4: the tax_year example is now general, because property tax here is one yearly payment.
+- Test 5 was replaced, as above.
 
 ## Later
 
