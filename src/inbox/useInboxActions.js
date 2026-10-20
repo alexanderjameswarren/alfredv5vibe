@@ -1,7 +1,8 @@
+import { supabase } from "../supabaseClient";
 import { storage } from "../utils/storage";
+import { toCamelCase } from "../utils/caseConvert";
 import { uid } from "../utils/flattenElements";
 import {
-  moveRemindersToIntention,
   cancelRemindersForDiscard,
   restoreRemindersAfterDiscard,
 } from "../utils/remindersApi";
@@ -11,8 +12,8 @@ import { intentionRowFromTriage } from "../utils/intentionRows";
 import { carriedItems } from "../utils/status";
 
 // Inbox writers, moved out of Alfred.jsx unchanged. Holds no state: everything it
-// reads or sets is Alfred's, passed in — including `addItemsToCollection` and
-// `refreshReminderIndex`, which belong to other features.
+// reads or sets is Alfred's, passed in — including `refreshReminderIndex`, which
+// belongs to another feature.
 export function useInboxActions({
   user,
   inboxItems,
@@ -22,7 +23,6 @@ export function useInboxActions({
   setCaptureText,
   captureRef,
   setView,
-  contexts,
   items,
   setItems,
   intents,
@@ -30,7 +30,6 @@ export function useInboxActions({
   events,
   setEvents,
   refreshReminderIndex,
-  addItemsToCollection,
   withLoading,
   offerUndoFor,
   watchStatus,
@@ -291,217 +290,44 @@ export function useInboxActions({
   }
 
   /**
-   * Process a capture. `options.sourceApp` is the detail page's App picker
-   * ("" or null = no app); left out (one tap), the capture keeps its current app.
-   * Not atomic: each record saves on its own, then the archive below writes
-   * archive_reason, source_app and outcome in one update.
+   * Process a capture: one call to `process_inbox_item`, which writes the item, the
+   * intention (taking the capture's reminders), the event and any collection member,
+   * then archives the capture — all or nothing. `options.sourceApp` is the detail
+   * page's App picker ("" or null = no app); left out (one tap), the capture keeps
+   * its current app. Nothing on screen changes until the call succeeds.
+   *
+   * Still no Undo: un-archiving could not remove the records the capture became.
    */
   async function handleInboxSave(inboxItemId, triageData, options = {}) {
     const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
     if (!inboxItem) return;
     return withLoading('Saving...', async () => {
-      let createdItemId = null;
-      let createdItem = null;
-      // inbox.outcome: one {table, id} per record created here (migration 116).
-      const created = [];
-
-      // "Delete only on success" needs an explicit check, because none of the
-      // writers below throw. `storage.set` catches its own errors and returns
-      // false; `addItemsToCollection` alerts and returns false. Nothing read
-      // either until now, which was survivable while disposal merely set a
-      // flag — the row stayed in the table and could be recovered. A hard
-      // delete on a failed triage would destroy the capture AND leave nothing
-      // downstream to show for it.
-      let allWritesSucceeded = true;
-      // Returns the result unchanged rather than a boolean, so a caller can
-      // both record the failure and use the saved row — `storage.set` returns
-      // the row it wrote as of Step 12.3. `false` is still the only falsy
-      // result, which is what the check above and the `saved || local`
-      // fallbacks below both rely on.
-      const wrote = (result) => {
-        if (result === false) allWritesSucceeded = false;
-        return result;
-      };
-
-      // Create item if Item section was open
-      if (triageData.createItem && triageData.itemData) {
-        const newItem = {
-          id: uid(),
-          user_id: user.id,
-          name: triageData.itemData.name,
-          description: triageData.itemData.description || "",
-          contextId: triageData.itemData.contextId,
-          elements: triageData.itemData.elements || [],
-          tags: triageData.itemData.tags || [],
-          isCaptureTarget: false,
-          // Chosen at triage (088); sent on INSERT, which storage.set keeps.
-          status: triageData.itemData.status === "active" ? "active" : "someday",
-          createdAt: new Date().toISOString(),
-          // Where this came from — Clipboard Step 14. Only meaningful because
-          // the inbox row below is now archived rather than deleted; the FK is
-          // ON DELETE SET NULL, so a deleted capture would take the link with it.
-          sourceInboxId: inboxItem.id,
-        };
-
-        const context = contexts.find((c) => c.id === newItem.contextId);
-        const isShared = context?.shared || false;
-        const savedItem = wrote(await storage.set(`item:${newItem.id}`, newItem, isShared));
-        setItems((prev) => [...prev, savedItem || newItem]);
-        createdItemId = newItem.id;
-        createdItem = savedItem || newItem;
-        if (savedItem) created.push({ table: "items", id: newItem.id });
-
-        // "Attach this Item" — appending the new item as a bullet element of an
-        // existing one — used to happen here, driven by `triageData.itemItemLinks`.
-        // Alex dropped the control in Step 17b and Step 18 deleted the form that
-        // was its only source, so nothing could reach this branch again. Removed
-        // rather than left looking live.
-      }
-
-      // Create intention if Intention section was open
-      if (triageData.createIntention && triageData.intentionData) {
-        // The row itself is built by a pure function in utils/intentionRows.js, so
-        // that the mapping — `description` in particular — is reachable by a test.
-        // It was not, which is why "is Details being saved?" could only be
-        // answered by reading code. See that file's header.
-        const newIntent = intentionRowFromTriage({
-          id: uid(),
-          userId: user.id,
-          intentionData: triageData.intentionData,
-          createdItemId,
-          sourceInboxId: inboxItem.id,
-          createdAt: new Date().toISOString(),
-        });
-        // Read back off the row rather than recomputed, so the event below and the
-        // intention cannot disagree about which item this is.
-        const intentionItemId = newIntent.itemId;
-        const savedIntent = wrote(await storage.set(`intent:${newIntent.id}`, newIntent));
-        setIntents((prev) => [...prev, savedIntent || newIntent]);
-        if (savedIntent) created.push({ table: "intents", id: newIntent.id });
-
-        // The capture's reminders follow it to the intention. Not a triage failure if
-        // this fails: they stay on the archived capture and still fire.
-        if (savedIntent) {
-          try {
-            await moveRemindersToIntention(inboxItem.id, newIntent.id);
-          } catch (err) {
-            console.error("[Reminders] move to intention failed:", err);
-            window.alert("Saved, but this capture's reminder could not be moved to the new intention. It will still fire, and opens the capture.");
-          }
-          refreshReminderIndex();
-        }
-
-        // Create event if scheduled. A date makes a someday intention and its item
-        // active (088 trigger); the watch re-reads them and says so.
-        if (triageData.intentionData.createEvent && triageData.intentionData.eventDate) {
-          const settle = watchStatus({
-            intents: [savedIntent || newIntent],
-            items: carriedItems(newIntent, [], [createdItem, ...items]),
-          });
-          const newEvent = {
-            id: uid(),
-            user_id: user.id,
-            intentId: newIntent.id,
-            contextId: triageData.intentionData.contextId,
-            time: triageData.intentionData.eventDate,
-            itemIds: intentionItemId ? [intentionItemId] : [],
-            archived: false,
-            createdAt: new Date().toISOString(),
-            text: triageData.intentionData.text,
-            // Redundant with the intention's, which carries the same value. Kept
-            // so an event reached from the calendar answers "where did this come
-            // from" without a join back through intents.
-            sourceInboxId: inboxItem.id,
-          };
-          const savedEvent = wrote(await storage.set(`event:${newEvent.id}`, newEvent));
-          setEvents((prev) => [...prev, savedEvent || newEvent]);
-          if (savedEvent) created.push({ table: "events", id: newEvent.id });
-          await settle();
-        }
-      }
-
-      // Add to collection if Collection section was open.
-      //
-      // ⚠️ DORMANT, NOT DEAD. The inbox detail page always sends
-      // `addToCollection: false`, because the approved design hides collections
-      // "for now" — docs/inbox-detail-mockups/README.md. This is kept, unlike the
-      // itemItemLinks branch above, precisely because that "for now" is a plan and
-      // not a removal: when the section comes back it sends the same shape and this
-      // works unchanged.
-      if (triageData.addToCollection && triageData.collectionData) {
-        const targetItemId = triageData.collectionData.itemId || createdItemId;
-        const targetCollectionId = triageData.collectionData.collectionId;
-        if (targetItemId && targetCollectionId) {
-          wrote(
-            await addItemsToCollection(targetCollectionId, [
-              {
-                itemId: targetItemId,
-                quantity: triageData.collectionData.quantity || '1',
-              },
-            ]),
-          );
-        }
-      }
-
-      // On failure the row stays put. Partial success is possible — the item
-      // may have been created and the intention not — so this says "check what
-      // was created" rather than "try again", which could duplicate the half
-      // that worked.
-      if (!allWritesSucceeded) {
-        window.alert(
-          "Some of that capture could not be saved, so it has been left in your inbox. Check what was created before filing it again.",
-        );
+      const { data, error } = await supabase.rpc("process_inbox_item", {
+        p_inbox_id: inboxItem.id,
+        p_payload: processInboxPayload(triageData, options),
+      });
+      if (error) {
+        console.error("[Inbox] process failed:", error);
+        window.alert(processFailedMessage(error));
         return;
       }
 
-      // -------------------------------------------------------------------
-      // TRIAGE ARCHIVES. IT USED TO DELETE — Clipboard Step 14.
-      // -------------------------------------------------------------------
-      //
-      // The capture has become an item, an intention, an event or a collection
-      // member, so it has no further job ON THE INBOX SCREEN. It does still have
-      // a job: the records above now carry `sourceInboxId` pointing back here,
-      // and the FK is ON DELETE SET NULL, so deleting this row would silently
-      // cut every one of those links a moment after they were written.
-      //
-      // That is why the archive and the links are ONE change. Either half alone
-      // is useless or actively misleading: links to a row that is about to
-      // vanish, or an archived row nothing points at.
-      //
-      // This was the LAST hard delete on the inbox — Step 5b turned the trash
-      // can into an archive with reason 'discarded' and deliberately left this
-      // path alone until there was a reason to keep the row. Now there is.
-      //
-      // Still no Undo, and for the unchanged reason: undo would un-archive the
-      // capture but could not remove the records it turned into, so it would
-      // restore something already filed. A button labelled Undo that half-undoes
-      // is worse than none. Discard has no such problem, which is why it offers
-      // one.
-      const processed = {
-        ...inboxItem,
-        archived: true,
-        triagedAt: new Date().toISOString(),
-        archiveReason: 'processed',
-        sourceApp:
-          "sourceApp" in options ? options.sourceApp || null : inboxItem.sourceApp || null,
-        // Appended, so a capture put back and processed again keeps both outcomes.
-        outcome: [...(Array.isArray(inboxItem.outcome) ? inboxItem.outcome : []), ...created],
-      };
-      const disposed = await storage.set(`inbox:${inboxItem.id}`, processed);
-      if (disposed === false) {
-        window.alert(
-          "Everything was saved, but the capture could not be filed away. It is still in your inbox — archive it by hand, and do not save it again or you will get a second copy of everything.",
-        );
-        return;
-      }
-      // Flips the flag rather than dropping the row — Step 22, same change as in
-      // `discardInboxItem` and for the same reason: the live list is derived now, and
-      // "Recently archived" is what this capture goes on to appear in.
-      setAllInboxItems((prev) =>
-        prev.map((i) => (i.id === inboxItemId ? disposed || processed : i)),
-      );
-      // An item filed from this capture shows the capture's reminder on its card.
+      const saved = toCamelCase(data);
+      if (saved.item) setItems((prev) => [...prev, saved.item]);
+      if (saved.intent) setIntents((prev) => [...prev, saved.intent]);
+      if (saved.event) setEvents((prev) => [...prev, saved.event]);
+      // Flipped, not dropped: "Recently archived" is where it goes next (Step 22).
+      setAllInboxItems((prev) => prev.map((i) => (i.id === inboxItemId ? saved.inbox : i)));
       refreshReminderIndex();
+
+      // The returned rows predate the 088 trigger the event fires, so they are the
+      // before-state; the watch re-reads them and says "Moved to Active".
+      if (saved.event && saved.intent) {
+        await watchStatus({
+          intents: [saved.intent],
+          items: carriedItems(saved.intent, [], [saved.item, ...items]),
+        })();
+      }
     });
   }
 
@@ -568,6 +394,67 @@ export function useInboxActions({
     unarchiveInboxItem,
     setInboxSuggestedStatus,
   };
+}
+
+/**
+ * process_inbox_item's payload from the detail page's triage shape (and one tap's).
+ * Ids are made here so the outcome and the screen agree; the database stamps
+ * user_id and source_inbox_id. The collection branch is dormant: the page always
+ * sends `addToCollection: false` for now (docs/inbox-detail-mockups/README.md).
+ */
+export function processInboxPayload(triageData, options = {}) {
+  const payload = {};
+  if ("sourceApp" in options) payload.source_app = options.sourceApp || null;
+
+  let itemId = null;
+  if (triageData.createItem && triageData.itemData) {
+    const d = triageData.itemData;
+    itemId = uid();
+    payload.item = {
+      id: itemId,
+      name: d.name,
+      description: d.description || "",
+      context_id: d.contextId || null,
+      elements: d.elements || [],
+      tags: d.tags || [],
+      status: d.status === "active" ? "active" : "someday",
+    };
+  }
+
+  if (triageData.createIntention && triageData.intentionData) {
+    const d = triageData.intentionData;
+    const row = intentionRowFromTriage({ id: uid(), intentionData: d, createdItemId: itemId });
+    payload.intent = {
+      id: row.id,
+      text: row.text,
+      description: row.description,
+      item_id: row.itemId || null,
+      context_id: row.contextId || null,
+      recurrence_config: row.recurrenceConfig,
+      target_start_date: row.targetStartDate,
+      end_date: row.endDate,
+      tags: row.tags,
+      status: row.status,
+    };
+    if (d.createEvent && d.eventDate) {
+      payload.event = { id: uid(), time: d.eventDate, context_id: d.contextId || null, text: d.text };
+    }
+  }
+
+  if (triageData.addToCollection && triageData.collectionData) {
+    const c = triageData.collectionData;
+    const target = c.itemId || itemId;
+    if (target && c.collectionId) {
+      payload.collection = { collection_id: c.collectionId, item_id: target, quantity: c.quantity || "1" };
+    }
+  }
+  return payload;
+}
+
+/** The alert for a failed Process. Nothing was written, so it is safe to try again. */
+export function processFailedMessage(error) {
+  if (error?.code === "55000") return "That capture has already been filed. Nothing was changed.";
+  return `Could not process that capture. Nothing was saved, and it is still in your inbox.\n\n${error?.message || ""}`.trim();
 }
 
 // Helper functions for the inbox screens

@@ -584,10 +584,9 @@ export const getClipSlicesTool = defineTool({
 // Nothing deletes inbox rows: the app's Process and discard archive too, with
 // 'processed' and 'discarded'. Restructure P3 adds `outcome` (the records this
 // capture became, appended to any already recorded) and `source_app`, written in
-// the same update, and stamps source_inbox_id on outcome records that lack one.
-
-/** Tables whose rows carry source_inbox_id back to the capture (068, 116). */
-const LINKED_TABLES = ["items", "intents", "events", "job_applications"];
+// the same update, and stamps source_inbox_id on the caller's own outcome records
+// (items, intents, events, job_applications) that lack one. All of it is one call
+// to public.archive_inbox_item, so it is all or nothing.
 
 /** outcome as given: a non-empty list of { table, id } with non-empty strings. */
 export function parseOutcome(T: string, value: unknown): { table: string; id: string }[] | undefined {
@@ -645,65 +644,25 @@ export const archiveInboxItemTool = defineTool({
       throw new Error(`${T}: outcome is recorded when archiving; it cannot go with archived: false.`);
     }
 
-    const notFound = () =>
+    // One call, one transaction: the archive, the appended outcome and every
+    // link-back land together or not at all (migration 145).
+    const p_args: Record<string, unknown> = { archived, reason };
+    if (outcome) p_args.outcome = outcome;
+    if (sourceApp !== undefined) p_args.source_app = sourceApp;
+
+    const { data, error } = await ctx.db.rpc("archive_inbox_item", { p_inbox_id: inboxId, p_args });
+    if (error) {
       // RLS makes "not yours" and "not there" indistinguishable, and saying so
       // is better than implying the row definitely does not exist.
-      new Error(`${T}: no inbox item ${inboxId} that you can write to — it may not be yours. Nothing was changed.`);
-
-    // Appended, so an outcome the app already recorded is kept.
-    let mergedOutcome: { table: string; id: string }[] | undefined;
-    if (outcome) {
-      const { data: row, error: readErr } = await ctx.db
-        .from("inbox")
-        .select("outcome")
-        .eq("id", inboxId)
-        .maybeSingle();
-      if (readErr) throw new Error(`${T}: ${readErr.message}`);
-      if (!row) throw notFound();
-      const existing = Array.isArray(row.outcome) ? row.outcome : [];
-      const seen = new Set(existing.map((e: { table: string; id: string }) => `${e.table}:${e.id}`));
-      mergedOutcome = [...existing, ...outcome.filter((e) => !seen.has(`${e.table}:${e.id}`))];
-    }
-
-    // All three move together: stamped when hiding, cleared when putting back.
-    // Leaving a stale timestamp or reason on an un-archived row would make it
-    // look dispositioned while it sat in the inbox, and
-    // inbox_archive_reason_needs_archived refuses that pairing anyway.
-    const update: Record<string, unknown> = {
-      archived,
-      triaged_at: archived ? new Date().toISOString() : null,
-      archive_reason: archived ? reason : null,
-    };
-    if (mergedOutcome) update.outcome = mergedOutcome;
-    if (sourceApp !== undefined) update.source_app = sourceApp;
-
-    const { data, error } = await ctx.db
-      .from("inbox")
-      .update(update)
-      .eq("id", inboxId)
-      .select("id, source_type, captured_text, archived, triaged_at, archive_reason, source_app, outcome")
-      .maybeSingle();
-
-    if (error) throw new Error(`${T}: ${error.message}`);
-    if (!data) throw notFound();
-
-    // The reverse link: each outcome record that can point back, and does not yet.
-    const linked: string[] = [];
-    for (const e of outcome ?? []) {
-      if (!LINKED_TABLES.includes(e.table)) continue;
-      const { data: rows, error: linkErr } = await ctx.db
-        .from(e.table)
-        .update({ source_inbox_id: inboxId })
-        .eq("id", e.id)
-        .is("source_inbox_id", null)
-        .select("id");
-      if (linkErr) throw new Error(`${T}: archived, but linking ${e.table} ${e.id} back failed: ${linkErr.message}`);
-      if ((rows ?? []).length) linked.push(`${e.table}:${e.id}`);
+      if (error.code === "P0002") {
+        throw new Error(`${T}: no inbox item ${inboxId} that you can write to — it may not be yours. Nothing was changed.`);
+      }
+      const message = String(error.message ?? "");
+      throw new Error(message.startsWith(`${T}:`) ? message : `${T}: ${message}`);
     }
 
     return {
       ...data,
-      linked_back: linked,
       result: archived
         ? `Archived with reason '${reason}'. It has left the Alfred inbox screen ` +
           "immediately. Nothing was deleted — un-archive with archived: false."

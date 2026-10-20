@@ -301,12 +301,20 @@ substitutions, say — say so and ask Alex first. Do not just do it.
 
 ## All SQL lives in supabase/migrations/
 
-ALL SQL goes in supabase/migrations/, numbered in sequence, no exceptions. That
-includes schema changes, backfills, data repairs and one-off diagnostic queries.
-Never create SQL under docs/. Name the file so its purpose is obvious from the
-list, e.g. 031_backfill_sam_session_events.sql. Alex runs every migration himself
+ALL SQL goes in supabase/migrations/, numbered in sequence, with one exception
+below. That includes schema changes, backfills, data repairs and one-off diagnostic
+queries. Never create SQL under docs/. Name the file so its purpose is obvious from
+the list, e.g. 031_backfill_sam_session_events.sql. Alex runs every migration himself
 in the Supabase SQL editor — never apply one, and never assume one has been
 applied.
+
+**The exception: scripts run by hand live in `supabase/tests/<project>/`, never in
+`supabase/migrations/`.** That means verification queries, test scripts and test
+cleanups, and above all anything that ends in a deliberate error to roll itself back.
+Such a file in migrations would break any replay of the folder, and gitpush's snapshot
+check would count it as a migration that never changes the schema. Number them in
+run order (`1_verify.sql`, `2_failure_test.sql`), make each one runnable whole (no
+"select this part"), and claim them like any other file.
 
 ### Do not pick the number until the last moment
 
