@@ -148,6 +148,30 @@ describe("Show all", () => {
   });
 });
 
+describe("Load more", () => {
+  it("shows under Show all while older rows remain, and asks for them", () => {
+    const onLoadMore = jest.fn();
+    setup({ olderCount: 120, showAll: true, hasMore: true, onLoadMore });
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    expect(onLoadMore).toHaveBeenCalled();
+  });
+
+  it("is absent inside the window and once everything is loaded", () => {
+    setup({ olderCount: 120, showAll: false, hasMore: true });
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+  });
+
+  it("is absent once everything is loaded", () => {
+    setup({ olderCount: 120, showAll: true, hasMore: false });
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+  });
+
+  it("is disabled while a page loads", () => {
+    setup({ olderCount: 120, showAll: true, hasMore: true, loadingMore: true });
+    expect(screen.getByRole("button", { name: "Loading…" })).toBeDisabled();
+  });
+});
+
 describe("Undo", () => {
   it("reports the row's id", () => {
     const { onUndo } = setup();
