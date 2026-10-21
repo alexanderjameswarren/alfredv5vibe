@@ -13,7 +13,7 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 2. Confirm and claim
 - [x] 3. Housekeeping: move Phase 4 docs to docs/history/; Finish finds docs by their "Project code:" line
 - [x] 4. Undo fix in src/items/useItemActions.js
-- [ ] 5. Retire ai-enrich: remove callers and code; delete the deployed function (db:deploy)
+- [x] 5. Retire ai-enrich: remove callers and code; delete the deployed function (db:deploy)
 - [ ] 6. Database: drop intents.is_item + is_intention comment; conformance
 - [ ] 7. Database: group_types (seeded, with icons and execution_mode), contexts.default_group_type_id, item_groups, item_group_members, intents.group_id (+ one live intention per group), events.group_id, executions.group_id (+ intent_id and event_id nullable), notes target 'group', last_completed_at / status triggers (status_guard on item_groups); register_table (policy 'none' + shared-context policy); conformance
 - [ ] 8. Data layer: group queries, derived names, realtime
@@ -40,3 +40,18 @@ Each step stops for Alex's verification before the next. Database steps follow t
   - The archive Undo checks its write (`writeError("Restoring the item")`) and puts the saved row back.
   - `setItemStatus`'s Undo throws on a failed write instead of silently doing nothing.
   - New `useItemActions.test.js` (6 tests). App suite 2769/2769, CLI 239/239. Awaiting Alex's phone and Chrome test.
+- 2026-10-21 Step 4 verified by Alex (three Chrome tests) and committed.
+- 2026-10-21 Step 5, code mostly done; two things are pending.
+  - Removed the `[functions.ai-enrich]` block from config.toml and the ai-enrich prompt tests from `elementOffsets.test.js` (6 tests).
+  - Removed dead code: `createUserClient`, `getContexts`, `getItems`, and mcp's unused `getItems` import.
+  - Stale comments updated in platform.ts, tags.ts, tool-handlers.ts, tool-definitions.ts, supabase-client.ts, notify-dispatch, mcp, and the mcp-platform skill. The get_inbox `in_progress` wording changes with the step 16 deploy.
+  - The `src/` comments are history and stay.
+  - App suite 2763/2763, CLI 239/239.
+  - **Pending:** deleting the `supabase/functions/ai-enrich/` folder. The claims guard blocked `rm` (false positive on the chained `git grep` pathspecs), so it waits for Alex.
+  - **Pending:** the deployed delete. `db:deploy` is claimed; the function is live (v18, ACTIVE); Alex runs the delete.
+  - Found: the alfred-enrich skill does not carry the `offsetMinutes` prompt rules that the removed test guarded.
+- 2026-10-21 Step 5 done.
+  - Alex deleted the deployed function; `functions list` no longer shows it.
+  - `supabase/functions/ai-enrich/` deleted with a single `rm` (index.ts, deno.json, .npmrc).
+  - App 2763/2763, CLI 239/239. `db:deploy` released.
+  - Still to do: close Alfred intention muh9uyjx8wdg02kck5d at step 17.

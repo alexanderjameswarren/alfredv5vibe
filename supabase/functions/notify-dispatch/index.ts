@@ -39,7 +39,7 @@ import {
 //
 // Unlike push-send, this runs with the SERVICE ROLE: cron has no user token, so
 // there is no JWT to build a request-scoped client from and RLS cannot do the
-// scoping. That is the ai-enrich precedent, and it puts the burden here: every
+// scoping. That is the retired ai-enrich precedent, and it puts the burden here: every
 // query below MUST filter by the step's own user_id, because nothing else will.
 
 const STEPS_TABLE = "notification_steps";

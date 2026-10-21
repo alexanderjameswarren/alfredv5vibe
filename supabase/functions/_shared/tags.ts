@@ -23,8 +23,9 @@
  *
  * ─── Why this exists at all ──────────────────────────────────────────────────
  *
- * `ai-enrich` asks a model for suggested tags and used to write whatever came
- * back straight to `inbox.suggested_tags`. Those values flow into `items.tags`
+ * Enrichment (the `ai-enrich` function, retired in Restructure P5; the
+ * alfred-enrich skill now) asks a model for suggested tags, and used to write
+ * whatever came back straight to `inbox.suggested_tags`. Those values flow into `items.tags`
  * and `intents.tags` verbatim on triage if the user never opens the tag box —
  * so the model was the one write path that could put a NON-CANONICAL tag into
  * the database, with nothing validating it.
