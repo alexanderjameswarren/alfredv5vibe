@@ -1,4 +1,4 @@
-import { storage } from "../utils/storage";
+import { storage, writeError } from "../utils/storage";
 import { uid } from "../utils/flattenElements";
 import { STATUS_LABELS } from "../utils/status";
 
@@ -47,15 +47,17 @@ export function useItemActions({
       const isShared = context?.shared || false;
 
       const savedItem = await storage.set(`item:${item.id}`, updated, isShared);
-      setItems(items.map((i) => (i.id === itemId ? savedItem || updated : i)));
+      // Functional: a realtime update that landed meanwhile must not be overwritten.
+      setItems((prev) => prev.map((i) => (i.id === itemId ? savedItem || updated : i)));
 
       // `item` is the pre-archive snapshot, so restoring is a straight rewrite
       // rather than a flag flip — it also puts back anything the archiving edit
       // happened to change alongside `archived`.
       if (updates.archived === true) {
         offerUndoFor(`Archived "${item.name}".`, async () => {
-          await storage.set(`item:${item.id}`, item, isShared);
-          setItems((prev) => prev.map((i) => (i.id === itemId ? item : i)));
+          const restored = await storage.set(`item:${item.id}`, item, isShared);
+          if (!restored) throw writeError("Restoring the item");
+          setItems((prev) => prev.map((i) => (i.id === itemId ? restored : i)));
         });
       }
     });
@@ -128,7 +130,8 @@ export function useItemActions({
       if (!previous || previous === "someday") return;
       offerUndoFor(`Moved to ${STATUS_LABELS[status]}.`, async () => {
         const back = await storage.patch(`item:${itemId}`, { status: previous });
-        if (back) setItems((prev) => prev.map((i) => (i.id === itemId ? back : i)));
+        if (!back) throw writeError("Restoring the status");
+        setItems((prev) => prev.map((i) => (i.id === itemId ? back : i)));
       });
     });
   }

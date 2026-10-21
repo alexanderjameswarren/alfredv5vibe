@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-21 13:22, through migration 145 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-21 14:44, through migration 146 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -8149,7 +8149,6 @@ CREATE TABLE IF NOT EXISTS "public"."intents" (
     "id" "text" NOT NULL,
     "text" "text" NOT NULL,
     "is_intention" boolean DEFAULT false,
-    "is_item" boolean DEFAULT false,
     "archived" boolean DEFAULT false,
     "item_id" "text",
     "context_id" "text",
@@ -8183,11 +8182,7 @@ short-circuiting, because consistency is what makes recurrence and sharing work 
 
 
 
-COMMENT ON COLUMN "public"."intents"."is_intention" IS 'True = a thing to do. Mutually meaningful with is_item.';
-
-
-
-COMMENT ON COLUMN "public"."intents"."is_item" IS 'True = this intent is anchored to a reusable item (item_id).';
+COMMENT ON COLUMN "public"."intents"."is_intention" IS 'True = a thing to do. An intention''s link to an item is item_id being set (is_item was dropped in migration 147).';
 
 
 

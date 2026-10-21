@@ -396,6 +396,53 @@ test("planDocsMove: a same-named history file in main or the worktree is a clash
   ]);
 });
 
+/** A worktree whose docs are named for people, not after the code. */
+function taggedCloseout(code = "restructure_p5-h7m") {
+  const { main, tree } = closeout({ spec: false, progress: false });
+  writeFileSync(path.join(tree, "docs", "technical-spec-restructure-p5.md"), `# Spec\n\nProject code: ${code}\n`);
+  writeFileSync(path.join(tree, "docs", "progress-restructure-p5.md"), `# Progress\r\n\r\n**Project code:** \`${code}\`\r\n`);
+  writeFileSync(path.join(tree, "docs", "notes.md"), "Project code: restructure_p5-h7m-old\nmentions restructure_p5-h7m\n");
+  writeFileSync(path.join(tree, "docs", "history", "old.md"), `Project code: ${code}\n`);
+  return { main, tree };
+}
+
+test("planDocsMove: finds docs by their Project code line when names differ", () => {
+  const { main, tree } = taggedCloseout();
+  assert.deepEqual(planDocsMove("restructure_p5-h7m", tree, main), {
+    moves: [
+      { from: "docs/progress-restructure-p5.md", to: "docs/history/progress-restructure-p5.md" },
+      { from: "docs/technical-spec-restructure-p5.md", to: "docs/history/technical-spec-restructure-p5.md" },
+    ],
+    missing: [],
+    clashes: [],
+  });
+});
+
+test("planDocsMove: a tagged doc and a name-based doc both move", () => {
+  const { main, tree } = taggedCloseout("proj-x1y");
+  writeFileSync(path.join(tree, "docs", "progress-proj-x1y.md"), "untagged");
+  const plan = planDocsMove("proj-x1y", tree, main);
+  assert.deepEqual(plan.moves.map((m) => m.from), [
+    "docs/progress-restructure-p5.md",
+    "docs/technical-spec-restructure-p5.md",
+    "docs/progress-proj-x1y.md",
+  ]);
+  assert.deepEqual(plan.missing, []);
+});
+
+test("planDocsMove: no tagged doc falls back to names, reporting the missing", () => {
+  const { main, tree } = taggedCloseout();
+  const plan = planDocsMove("other-a1b", tree, main);
+  assert.deepEqual(plan.moves, []);
+  assert.deepEqual(plan.missing, ["docs/technical-spec-other-a1b.md", "docs/progress-other-a1b.md"]);
+});
+
+test("planDocsMove: a tagged doc clashes with a same-named history file", () => {
+  const { main, tree } = taggedCloseout();
+  writeFileSync(path.join(main, "docs", "history", "progress-restructure-p5.md"), "old");
+  assert.deepEqual(planDocsMove("restructure_p5-h7m", tree, main).clashes, ["docs/history/progress-restructure-p5.md"]);
+});
+
 test("applyDocsMove moves the files, making docs/history/ if needed", () => {
   const { main, tree } = closeout();
   rmSync(path.join(tree, "docs", "history"), { recursive: true });

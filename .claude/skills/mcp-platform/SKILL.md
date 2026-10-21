@@ -30,7 +30,7 @@ The **only** path to the database from an MCP tool is `ctx.db`, handed to your h
 
 If a tool file needs `ctx.db`, it gets it from the `handler(args, ctx)` signature. Nothing else. Bypassing is a review failure, not a discipline preference — the pattern exists so `x-actor` tagging, budget enforcement, tier gating, and the response envelope are impossible to skip.
 
-The service-role client is **not** for tools. It bypasses RLS. It exists only for internal server-to-server work like `ai-enrich`. If your tool wants it, your tool is asking the wrong question.
+The service-role client is **not** for tools. It bypasses RLS. It exists only for internal server-to-server work like `wb-sync` or `email-capture`. If your tool wants it, your tool is asking the wrong question.
 
 ---
 

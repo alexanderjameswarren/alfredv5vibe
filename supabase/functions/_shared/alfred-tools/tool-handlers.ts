@@ -2,80 +2,6 @@ import { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { ToolResult } from "./types.ts";
 import { normaliseTags } from "../tags.ts";
 
-export async function getContexts(
-  client: SupabaseClient,
-  params: { shared?: boolean }
-): Promise<ToolResult> {
-  try {
-    let query = client
-      .from("contexts")
-      // No `tags`. The column is dropped by the tags project's Migration A —
-      // it had a GIN index, two rows of data and no user interface, and was
-      // never reachable from the app. `keywords` is the field that actually
-      // does work during inbox triage. Selecting a dropped column is a hard
-      // PostgREST error, so this had to stop before the migration ran.
-      .select("id, name, description, keywords, shared, pinned, created_at")
-      .order("pinned", { ascending: false })
-      .order("name");
-
-    if (params.shared !== undefined) {
-      query = query.eq("shared", params.shared);
-    }
-
-    const { data, error } = await query;
-    if (error) return { error: error.message };
-    return { data };
-  } catch (e) {
-    return { error: String(e) };
-  }
-}
-
-export async function getItems(
-  client: SupabaseClient,
-  params: { context_id?: string; tags?: string[]; search_text?: string }
-): Promise<ToolResult> {
-  try {
-    let query = client
-      .from("items")
-      .select("id, name, description, context_id, elements, tags, is_capture_target, created_at")
-      .eq("archived", false)
-      .order("name");
-
-    if (params.context_id) {
-      query = query.eq("context_id", params.context_id);
-    }
-
-    if (params.search_text) {
-      query = query.or(
-        `name.ilike.%${params.search_text}%,description.ilike.%${params.search_text}%`
-      );
-    }
-
-    // Tag filtering, client-side. `items.tags` has been text[] since migration
-    // 039 — this comment used to say jsonb, which stopped being true then — so
-    // the array `.includes` below is correct rather than accidentally correct.
-    //
-    // This is the LEGACY reader, still live: ai-enrich calls it. The MCP
-    // get_items tool does not — it goes through platform_search_items, which
-    // filters in Postgres with `tags && p_tags`. Unlike getIntents below, this
-    // query has no `.limit()`, so filtering after the fetch sees every row and
-    // the page-not-table trap documented there does not apply here.
-    const { data, error } = await query;
-    if (error) return { error: error.message };
-
-    let results = data || [];
-    if (params.tags && params.tags.length > 0) {
-      results = results.filter((item: { tags: string[] }) =>
-        params.tags!.some((tag) => item.tags.includes(tag))
-      );
-    }
-
-    return { data: results };
-  } catch (e) {
-    return { error: String(e) };
-  }
-}
-
 export async function searchItems(
   client: SupabaseClient,
   params: { query: string }
@@ -373,7 +299,7 @@ export async function getEvents(
  * nothing downstream presents an opaque id as though it were a product name.
  *
  * `client` is always a user-scoped client supplied by the caller (`ctx.db` from
- * defineTool, `createUserClient` from ai-enrich). RLS is the access gate here;
+ * defineTool). RLS is the access gate here;
  * the service role must never be passed in.
  */
 export async function getCollections(

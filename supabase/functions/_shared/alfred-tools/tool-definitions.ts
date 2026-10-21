@@ -1,6 +1,6 @@
 /**
  * Tool definitions for Alfred MCP server.
- * Used by both the MCP Edge Function and ai-enrich.
+ * Used by the MCP Edge Function.
  * Each tool has: name, description, inputSchema (JSON Schema).
  */
 

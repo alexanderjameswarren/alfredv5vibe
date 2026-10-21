@@ -204,7 +204,7 @@ interface BudgetResponse {
 //      `app.all("/")` reads the header per request and hands it straight to
 //      createClient, so a rejection here is a rejection of the caller's token —
 //      not of the function's own credentials, which it does not have.
-//   3. The service-role key, used ONLY by ai-enrich. Not in this path at all.
+//   3. The service-role key, used only by server-to-server functions. Not in this path at all.
 //
 // 🛑 SO A 401 HERE MEANS THE CALLER'S TOKEN WAS ALREADY EXPIRED WHEN IT ARRIVED,
 //    AND THAT IS A STATEMENT ABOUT THE CLIENT'S REFRESH, NOT ABOUT THIS FUNCTION.

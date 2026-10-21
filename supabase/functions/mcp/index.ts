@@ -158,7 +158,6 @@ import {
   proposeKenFactUpdateTool,
 } from "../_shared/tools/ken.ts";
 import {
-  getItems,
   searchItems,
   getExecutionHistory,
   getIntents,
@@ -455,7 +454,7 @@ const createInboxItemTool = defineTool({
 // ---------------------------------------------------------------------------
 // Block 6 — remaining Alfred + SAM tools routed through defineTool.
 // Reads are tier 1, writes are tier 2. Most handlers thin-delegate to the
-// existing tool-handlers.ts implementations (still exported for ai-enrich).
+// existing tool-handlers.ts implementations.
 // get_items and get_inbox rewrite inline to add exposed `limit` + real
 // truncation via a count query — the "N of M" NOTE relies on that count.
 // ---------------------------------------------------------------------------
@@ -1188,7 +1187,7 @@ export function createMcpServer(token: string) {
           .string()
           .optional()
           .describe(
-            "Filter by AI enrichment status: 'not_started' (nothing has enriched it), 'in_progress' (ai-enrich is running), 'enriched' (first pass, Sonnet), or 're_enriched' (second pass, Opus).",
+            "Filter by AI enrichment status: 'not_started' (nothing has enriched it), 'in_progress' (an enrichment pass is running), 'enriched' (first pass, Sonnet), or 're_enriched' (second pass, Opus).",
           ),
         source_type: z
           .string()
