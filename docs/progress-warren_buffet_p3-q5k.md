@@ -15,7 +15,7 @@ No amounts in this file. The safety floor is never written into the repo.
 | 8a | Plan tab database (spec §3.8; decisions A34–A41) | done, 2026-10-19 (140 applied, 141 48/48; live CONFORMANT, 68 tables) |
 | 8b | **Tools first (A42, A43).** New tools: project summary, missed dates, mark not needed, unconfirm (tier 2, `paid_not_covered`). Changed: the free cash what-if (tier 1, writes nothing), `backdated_from`, `project_names`, `over_matched`. Needs `mcp/index.ts`. **Live mcp must still be v155 before deploying; if higher, stop and ask** | done, 2026-10-20: live on **mcp v157** (138 tools), with the tolerance fix (A45; 143 applied, 144 24/24); re-check and fresh-thread batches passed |
 | 8c | Planning skill `.claude/skills/wb-planning/SKILL.md` (A44); scripted planning conversation in a fresh thread. **Notes from 8b:** (a) for bills whose amount varies (fuel, utilities), suggest a wider amount_tolerance before backdating, or only some payments qualify; (b) when backdating moves the due day, tell Alex the new day | done, 2026-10-20 (all six fresh-thread tests passed; two fixes to the skill, see log) |
-| 8d | Slimmer app (A44): Plan tab overview, project detail, planned item detail with Remove (set-back question), full Review card, single-split picker, help. **No add or edit forms, and no split-editor picker** | not started |
+| 8d | Slimmer app (A44, A46, A47): 8d-1 the delete function; 8d-2 the Plan overview (read-only missed dates); 8d-3 project detail; 8d-4 item detail (Remove match, Delete item); 8d-5 the full Review card; 8d-6 the single-part project picker; help. **No add or edit forms, and no split-editor picker** | 8d-1 done 2026-10-21 (146 applied, tests 12/12); 8d-2 to 8d-6 not started |
 | 9 | Overview numbers | not started |
 | 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed | not started |
 | 11 | Phase 3 review | not started |
@@ -539,6 +539,34 @@ All six tests passed in a fresh claude.ai thread with the skill loaded. No amoun
   - new §9, Removing things: there is no delete tool; cancel a one-off, set `ends_on` on a repeating item, or delete in the app;
   - §4: the tax_year example is now general, because property tax here is one yearly payment.
 - Test 5 was replaced, as above.
+
+### Step 8d-1 drafted (2026-10-21, run tags `warren_buffet_p3-q5k-s10-t8fn` plan, `-s10-c4vj` 8d-1)
+- The plan was approved; decisions A46 (delete through one function, app only) and A47 (both actions, read-only missed dates, 8 tabs) are in the spec.
+- **Yielded** `src/viewPaths.js` and `src/viewPaths.test.js` to restructure_p5-h7m; both were unchanged from main. 8d-2 needs them back: claim them again once restructure-p5 releases them, after a gitsync.
+- `_pending_…_delete_planned_item.sql`: `wb_delete_planned_item`, security invoker, execute for authenticated only; it ends with the conformance check.
+- `_pending_…_delete_planned_item_tests.sql`: 12 rolled-back checks:
+  - every match status and a skip removed, with the right counts;
+  - the transactions, splits, project and other items stay;
+  - the project's amounts still due drop;
+  - a missing id is refused;
+  - another user's item is refused (`set local role authenticated` with a random sub).
+- PGlite: 12/12, and every earlier test file passes. In PGlite the other-user refusal comes from missing grants, not RLS, so the live run is the real check. The result prints `other_user_error`.
+- Next: Alex runs gitsync; drift check; claim `db:fn:wb_delete_planned_item`; number the files.
+
+### Step 8d-1 numbered (2026-10-21, run tag `warren_buffet_p3-q5k-s10-n6qa`)
+- gitsync brought the fast-forward to 1b0f781. **Drift check: clear.** 145 redefines only `process_inbox_item` and `archive_inbox_item`; nothing that came in touches the planned tables, `wb_project_summary` or anything `wb_delete_planned_item` uses.
+- **CLAUDE.md change:** scripts run by hand (tests, verifications, cleanups) now live in `supabase/tests/<project>/`, never in migrations. So only the function was numbered, **146**. The tests went to **`supabase/tests/warren_buffet_p3/1_delete_planned_item_tests.sql`**, not 147. The earlier test files (134–144) stay where they are; moving them was not asked for.
+- Claimed `db:fn:wb_delete_planned_item`, and deleted the `_pending_` files.
+- PGlite: the new tests pass, and so does every earlier test file.
+- Waiting for Alex to run them.
+
+### Step 8d-1 done (2026-10-21, run tag `warren_buffet_p3-q5k-s10-v2rb`)
+- Alex ran the files. 146: conformant true, failures []. The tests: 12/12, with `other_user_error` "no planned item … that you can see", which means RLS refused the other user.
+- **Verified live:**
+  - CONFORMANT, 68 tables;
+  - `wb_delete_planned_item` exists and is security invoker, with its comment;
+  - execute is revoked from public and anon, and granted to authenticated **and service_role**. Supabase's default privileges add service_role to every new function. service_role bypasses RLS and is not reachable from the app or from any MCP tool. Alex decides whether to revoke it in a follow-up.
+- Checkpoint: 146, the tests file, the spec and the progress file, with `--release-db`.
 
 ## Later
 
