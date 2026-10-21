@@ -14,7 +14,7 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 3. Housekeeping: move Phase 4 docs to docs/history/; Finish finds docs by their "Project code:" line
 - [x] 4. Undo fix in src/items/useItemActions.js
 - [x] 5. Retire ai-enrich: remove callers and code; delete the deployed function (db:deploy)
-- [ ] 6. Database: drop intents.is_item + is_intention comment; conformance
+- [x] 6. Database: drop intents.is_item + is_intention comment; conformance
 - [ ] 7. Database: group_types (seeded, with icons and execution_mode), contexts.default_group_type_id, item_groups, item_group_members, intents.group_id (+ one live intention per group), events.group_id, executions.group_id (+ intent_id and event_id nullable), notes target 'group', last_completed_at / status triggers (status_guard on item_groups); register_table (policy 'none' + shared-context policy); conformance
 - [ ] 8. Data layer: group queries, derived names, realtime
 - [ ] 9. Group create/edit page (search-and-add, drag reorder, type picker, pin, archive)
@@ -55,3 +55,14 @@ Each step stops for Alex's verification before the next. Database steps follow t
   - `supabase/functions/ai-enrich/` deleted with a single `rm` (index.ts, deno.json, .npmrc).
   - App 2763/2763, CLI 239/239. `db:deploy` released.
   - Still to do: close Alfred intention muh9uyjx8wdg02kck5d at step 17.
+- 2026-10-21 Step 6, written and waiting on Alex.
+  - After gitsync, the highest migration is 146 (a WB function, nothing on intents), so there is no drift. The snapshot header says "through 145" but its content already has 146: the same header lag Phase 4 recorded.
+  - `db:table:intents` claimed.
+  - No code reads or writes is_item. `withoutDbOwned` keeps stripping it on purpose, as the stale-tab guard; the intentionRows test guards against isItem returning.
+  - SQL written as `_pending_restructure_p5-h7m_drop_is_item.sql`, to be numbered 147. Waiting on Alex's OK to claim the numbered path.
+  - Yielded `src/viewPaths.js` and `src/viewPaths.test.js` to warren_buffet_p3-q5k (unchanged). Step 9 must re-claim them.
+- 2026-10-21 Step 6 done.
+  - Alex ran the SQL: conformant true, failures []; only is_intention is left on intents; the new comment is in place; the app reloads fine.
+  - Numbered as `147_restructure_p5_drop_is_item.sql` (Applied: YES); the pending file is deleted.
+  - `db:table:intents` released.
+  - Alfred intention mvhawlfa9s9xlsnv069 stays open until the step 16 skip-wording deploy.
