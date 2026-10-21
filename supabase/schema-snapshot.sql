@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-20 16:12, through migration 145 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-21 13:22, through migration 145 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -5180,6 +5180,46 @@ $$;
 
 
 ALTER FUNCTION "public"."wb_default_kind"("p_account_role" "text", "p_amount" numeric, "p_description" "text", "p_payee" "text", "p_merchant_kind" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."wb_delete_planned_item"("p_id" "uuid") RETURNS "jsonb"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_name      text;
+  n_confirmed int;
+  n_suggested int;
+  n_rejected  int;
+  n_skips     int;
+begin
+  -- Invoker, so RLS decides what is visible: another user's private item is "not found".
+  select name into v_name from public.wb_planned_items where id = p_id for update;
+  if not found then
+    raise exception 'wb_delete_planned_item: no planned item % that you can see', p_id using errcode = '23503';
+  end if;
+
+  select count(*) filter (where status = 'confirmed'), count(*) filter (where status = 'suggested'),
+         count(*) filter (where status = 'rejected')
+  into n_confirmed, n_suggested, n_rejected
+  from public.wb_planned_matches where planned_item_id = p_id;
+  select count(*) into n_skips from public.wb_planned_skips where planned_item_id = p_id;
+
+  -- Matches first (the item's foreign key is on delete restrict); skips cascade with the item.
+  delete from public.wb_planned_matches where planned_item_id = p_id;
+  delete from public.wb_planned_items where id = p_id;
+
+  return jsonb_build_object('planned_item_id', p_id, 'name', v_name,
+    'confirmed', n_confirmed, 'suggested', n_suggested, 'rejected', n_rejected, 'skips', n_skips);
+end;
+$$;
+
+
+ALTER FUNCTION "public"."wb_delete_planned_item"("p_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."wb_delete_planned_item"("p_id" "uuid") IS 'Warren Buffet: delete one planned item and, in the same transaction, all its matches (confirmed, suggested and rejected); its Not-needed skips go by cascade. Returns planned_item_id, name and the counts removed (confirmed, suggested, rejected, skips). Confirmed matches removed send those payments back into the burn rate. Transactions, splits and projects are never touched. Security invoker, so RLS applies: an item the caller cannot see is refused and nothing changes. Called only by the Money app; there is no MCP delete tool (A46). The rows are audited.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."wb_detect_subscriptions"("p_today" "date" DEFAULT NULL::"date") RETURNS "jsonb"
@@ -14794,6 +14834,12 @@ GRANT ALL ON FUNCTION "public"."wb_confirm_planned_match"("p_match_id" "uuid", "
 REVOKE ALL ON FUNCTION "public"."wb_default_kind"("p_account_role" "text", "p_amount" numeric, "p_description" "text", "p_payee" "text", "p_merchant_kind" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_default_kind"("p_account_role" "text", "p_amount" numeric, "p_description" "text", "p_payee" "text", "p_merchant_kind" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_default_kind"("p_account_role" "text", "p_amount" numeric, "p_description" "text", "p_payee" "text", "p_merchant_kind" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."wb_delete_planned_item"("p_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."wb_delete_planned_item"("p_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."wb_delete_planned_item"("p_id" "uuid") TO "service_role";
 
 
 
