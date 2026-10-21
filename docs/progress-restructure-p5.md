@@ -12,7 +12,7 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 1. Plan (read-only): files, db items per step, claims check, answers to the spec's "plan step must confirm" questions
 - [x] 2. Confirm and claim
 - [x] 3. Housekeeping: move Phase 4 docs to docs/history/; Finish finds docs by their "Project code:" line
-- [ ] 4. Undo fix in src/items/useItemActions.js
+- [x] 4. Undo fix in src/items/useItemActions.js
 - [ ] 5. Retire ai-enrich: remove callers and code; delete the deployed function (db:deploy)
 - [ ] 6. Database: drop intents.is_item + is_intention comment; conformance
 - [ ] 7. Database: group_types (seeded, with icons and execution_mode), contexts.default_group_type_id, item_groups, item_group_members, intents.group_id (+ one live intention per group), events.group_id, executions.group_id (+ intent_id and event_id nullable), notes target 'group', last_completed_at / status triggers (status_guard on item_groups); register_table (policy 'none' + shared-context policy); conformance
@@ -35,3 +35,8 @@ Each step stops for Alex's verification before the next. Database steps follow t
   - Moved the Phase 4 spec and progress files to `docs/history/` as Write copies, byte-identical by `cmp`, then deleted the originals.
   - Finish (`planDocsMove` in `scripts/lib/git-flow.mjs`) now moves every `docs/*.md` with a `Project code: <code>` line (bold or backticks allowed; `docs/history/` excluded), plus any doc named after the code. `missing` is reported only when no doc carries the line.
   - Four new tests in `git-flow.test.mjs`. A dry run on this worktree finds both P5 docs. CLI suite passes 239/239.
+- 2026-10-21 Step 4 built: `useItemActions.js`, three changes, as Phase 4 did elsewhere.
+  - `updateItem`'s list write is now functional (`setItems((prev) => …)`), so an update that lands meanwhile is kept.
+  - The archive Undo checks its write (`writeError("Restoring the item")`) and puts the saved row back.
+  - `setItemStatus`'s Undo throws on a failed write instead of silently doing nothing.
+  - New `useItemActions.test.js` (6 tests). App suite 2769/2769, CLI 239/239. Awaiting Alex's phone and Chrome test.
