@@ -22,7 +22,7 @@
 // the reason the claims system exists.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readSync, renameSync, rmdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync } from "node:fs";
 import path from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -778,18 +778,40 @@ export function finishFromInside(w, { cwd, mainPath }) {
 /** The two docs a project keeps in docs/ while it runs, named by its code. */
 export const projectDocs = (code) => [`docs/technical-spec-${code}.md`, `docs/progress-${code}.md`];
 
+/** The line a doc carries to say whose it is, e.g. "Project code: restructure_p5-h7m". */
+const PROJECT_CODE_LINE = /^[\s>*-]*project code:[\s*]*`?([^`\s*]+)`?[\s*]*$/i;
+
+/** docs/*.md (not docs/history/) whose text has a "Project code: <code>" line, sorted. */
+export function docsByProjectCode(code, root) {
+  const dir = path.join(root, "docs");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith(".md"))
+    .filter((e) =>
+      readFileSync(path.join(dir, e.name), "utf8")
+        .split(/\r?\n/)
+        .some((line) => line.match(PROJECT_CODE_LINE)?.[1] === code)
+    )
+    .map((e) => `docs/${e.name}`)
+    .sort();
+}
+
 /**
- * What Finish would move: { moves: [{from, to}], missing, clashes }. A clash is
- * a docs/history/ file of the same name, in the worktree or in main, which
- * Finish refuses rather than overwrite.
+ * What Finish would move: { moves: [{from, to}], missing, clashes }. Docs are
+ * found by their "Project code:" line, plus any named after the code; `missing`
+ * lists the name-based ones only when no doc carries the line. A clash is a
+ * docs/history/ file of the same name, in the worktree or in main, which Finish
+ * refuses rather than overwrite.
  */
 export function planDocsMove(code, treeRoot, mainRoot) {
   const moves = [];
   const missing = [];
   const clashes = [];
-  for (const from of projectDocs(code)) {
+  const tagged = docsByProjectCode(code, treeRoot);
+  const named = projectDocs(code).filter((f) => !tagged.includes(f));
+  for (const from of [...tagged, ...named]) {
     if (!existsSync(path.join(treeRoot, from))) {
-      missing.push(from);
+      if (!tagged.length) missing.push(from);
       continue;
     }
     const to = `docs/history/${path.basename(from)}`;
