@@ -13,6 +13,10 @@ export function useRealtime({
   setEvents,
   setActiveExecutions,
   setPausedExecutions,
+  // Restructure P5: the three group tables (in supabase_realtime since migration 148).
+  setGroupTypes,
+  setItemGroups,
+  setGroupMembers,
   // Step 12: any reminder change (added, cancelled, fired, restored). No payload is
   // needed: the badges come from one indexed query, re-run.
   onReminderChange,
@@ -153,6 +157,23 @@ export function useRealtime({
       )
       .subscribe();
 
+    // Groups: shared-context RLS like items, so unfiltered like items.
+    const groupChannels = [
+      ['group-types-changes', 'group_types', setGroupTypes],
+      ['item-groups-changes', 'item_groups', setItemGroups],
+      ['item-group-members-changes', 'item_group_members', setGroupMembers],
+    ]
+      .filter(([, , setRows]) => setRows)
+      .map(([name, table, setRows]) =>
+        supabase
+          .channel(name)
+          .on('postgres_changes', { event: '*', schema: 'public', table }, (payload) => {
+            console.log(`[Realtime] ${table} change:`, payload.eventType);
+            applyRowChange(payload, toCamelCase, setRows);
+          })
+          .subscribe()
+      );
+
     // Return cleanup function
     return () => {
       console.log('[Realtime] Unsubscribing all channels');
@@ -164,7 +185,23 @@ export function useRealtime({
       eventsChannel.unsubscribe();
       executionsChannel.unsubscribe();
       remindersChannel.unsubscribe();
+      groupChannels.forEach((channel) => channel.unsubscribe());
     };
+  }
+
+  // Mirror one table's rows: insert once, upsert on update (a row may arrive before
+  // it was ever loaded), drop on delete.
+  function applyRowChange(payload, toCamelCase, setRows) {
+    const { eventType, new: newRecord, old: oldRecord } = payload;
+    if (eventType === 'INSERT' || eventType === 'UPDATE') {
+      const record = toCamelCase(newRecord);
+      setRows(prev => {
+        if (eventType === 'INSERT' && prev.find(row => row.id === record.id)) return prev;
+        return [...prev.filter(row => row.id !== record.id), record];
+      });
+    } else if (eventType === 'DELETE') {
+      setRows(prev => prev.filter(row => row.id !== oldRecord.id));
+    }
   }
 
   /**

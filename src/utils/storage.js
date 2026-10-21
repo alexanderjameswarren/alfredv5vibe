@@ -4,7 +4,8 @@ import { toCamelCase, toSnakeCase } from "./caseConvert";
 // Status on items and intents is moved by database triggers (088) as well as by
 // hand, so a whole-record UPDATE from stale browser state must not carry it.
 // It is still sent on INSERT; storage.patch is how it changes afterwards.
-const STATUS_TABLES = new Set(["items", "intents"]);
+// item_groups follows the same rules (Restructure P5: status_guard, last_completed triggers).
+const STATUS_TABLES = new Set(["items", "intents", "item_groups"]);
 // closed_reason travels with status (Restructure P4), so it is patched, never set.
 export function withoutStatus(table, dbValue) {
   if (!STATUS_TABLES.has(table)) return dbValue;
@@ -54,6 +55,9 @@ export const storage = {
     execution: "executions",
     inbox: "inbox",
     item_collections: "item_collections",
+    group_type: "group_types",
+    group: "item_groups",
+    group_member: "item_group_members",
   },
 
   // Key-case conversion between camelCase React state and snake_case Postgres.

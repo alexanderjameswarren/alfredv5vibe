@@ -42,6 +42,13 @@ test("withoutDbOwned drops is_item, status_written_at and last_completed_at on i
   expect(withoutDbOwned("items", row)).toEqual({ id: "a", text: "x" });
 });
 
+test("groups: status and database-owned columns follow the items rules", () => {
+  const row = { id: "g", status: "active", status_changed_at: "t", closed_reason: "done", name: null };
+  expect(withoutStatus("item_groups", row)).toEqual({ id: "g", name: null });
+  expect(withoutDbOwned("item_groups", { id: "g", last_completed_at: "t", status_written_at: "t" })).toEqual({ id: "g" });
+  expect(storage.tableMap).toMatchObject({ group_type: "group_types", group: "item_groups", group_member: "item_group_members" });
+});
+
 test("withoutStatus also keeps closed_reason out of a whole-record write", () => {
   expect(withoutStatus("intents", { id: "a", closed_reason: "done" })).toEqual({ id: "a" });
 });

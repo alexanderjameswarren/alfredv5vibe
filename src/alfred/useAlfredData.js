@@ -59,6 +59,10 @@ export function useAlfredData({ withLoading, loadCollectionMembers }) {
   const inboxItems = useMemo(() => allInboxItems.filter((i) => !i.archived), [allInboxItems]);
 
   const [collections, setCollections] = useState([]);
+  // Restructure P5 groups: the three tables whole; src/groups/groupModel.js derives the rest.
+  const [groupTypes, setGroupTypes] = useState([]);
+  const [itemGroups, setItemGroups] = useState([]);
+  const [groupMembers, setGroupMembers] = useState([]);
   // Step 3b: collection membership is READ from the collection_items table,
   // keyed by collection id. Writes still land in the item_collections.items
   // jsonb until Step 3c, so the two sources can diverge in between.
@@ -91,6 +95,7 @@ export function useAlfredData({ withLoading, loadCollectionMembers }) {
         { data: collectionsData },
         { data: activeExecData },
         { data: pausedExecData },
+        ...groupData
       ] = await Promise.all([
         supabase.from("contexts").select("*"),
         supabase.from("items").select("*"),
@@ -100,6 +105,7 @@ export function useAlfredData({ withLoading, loadCollectionMembers }) {
         supabase.from("item_collections").select("*"),
         supabase.from("executions").select("*").eq("status", "active").order("started_at", { ascending: false }),
         supabase.from("executions").select("*").eq("status", "paused").order("started_at", { ascending: false }),
+        ...groupQueries(),
       ]);
 
       setContexts((contextsData || []).map(d => storage.toCamelCase(d)));
@@ -117,6 +123,7 @@ export function useAlfredData({ withLoading, loadCollectionMembers }) {
           .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
       );
       setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
+      setGroupData(groupData);
       await loadCollectionMembers((collectionsData || []).map(d => d.id));
       setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
       setPausedExecutions((pausedExecData || []).map(d => storage.toCamelCase(d)));
@@ -134,6 +141,22 @@ export function useAlfredData({ withLoading, loadCollectionMembers }) {
     });
   }
 
+  // The three group tables, in the order setGroupData reads them.
+  function groupQueries() {
+    return [
+      supabase.from("group_types").select("*"),
+      supabase.from("item_groups").select("*"),
+      supabase.from("item_group_members").select("*"),
+    ];
+  }
+
+  function setGroupData([typesResult, groupsResult, membersResult] = []) {
+    const rows = (result) => (result?.data || []).map(d => storage.toCamelCase(d));
+    setGroupTypes(rows(typesResult));
+    setItemGroups(rows(groupsResult));
+    setGroupMembers(rows(membersResult));
+  }
+
   async function refreshData() {
     try {
       console.log('[Refresh] Silent background refresh...');
@@ -146,6 +169,7 @@ export function useAlfredData({ withLoading, loadCollectionMembers }) {
         { data: collectionsData },
         { data: activeExecData },
         { data: pausedExecData },
+        ...groupData
       ] = await Promise.all([
         supabase.from("contexts").select("*"),
         supabase.from("items").select("*"),
@@ -155,6 +179,7 @@ export function useAlfredData({ withLoading, loadCollectionMembers }) {
         supabase.from("item_collections").select("*"),
         supabase.from("executions").select("*").eq("status", "active").order("started_at", { ascending: false }),
         supabase.from("executions").select("*").eq("status", "paused").order("started_at", { ascending: false }),
+        ...groupQueries(),
       ]);
 
       setContexts((contextsData || []).map(d => storage.toCamelCase(d)));
@@ -172,6 +197,7 @@ export function useAlfredData({ withLoading, loadCollectionMembers }) {
           .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
       );
       setCollections((collectionsData || []).map(d => storage.toCamelCase(d)));
+      setGroupData(groupData);
       await loadCollectionMembers((collectionsData || []).map(d => d.id));
       setActiveExecutions((activeExecData || []).map(d => storage.toCamelCase(d)));
       setPausedExecutions((pausedExecData || []).map(d => storage.toCamelCase(d)));
@@ -218,6 +244,12 @@ export function useAlfredData({ withLoading, loadCollectionMembers }) {
     inboxItems,
     collections,
     setCollections,
+    groupTypes,
+    setGroupTypes,
+    itemGroups,
+    setItemGroups,
+    groupMembers,
+    setGroupMembers,
     collectionMembers,
     setCollectionMembers,
     collectionMembersError,

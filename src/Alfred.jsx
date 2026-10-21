@@ -143,6 +143,9 @@ export default function Alfred() {
     inboxItems,
     collections,
     setCollections,
+    setGroupTypes,
+    setItemGroups,
+    setGroupMembers,
     collectionMembers,
     setCollectionMembers,
     collectionMembersError,
@@ -181,6 +184,9 @@ export default function Alfred() {
     setEvents,
     setActiveExecutions,
     setPausedExecutions,
+    setGroupTypes,
+    setItemGroups,
+    setGroupMembers,
     // Step 12: card badges re-read, and open pages showing reminders hear about it.
     onReminderChange: () => {
       refreshReminderIndex();

@@ -15,7 +15,7 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 4. Undo fix in src/items/useItemActions.js
 - [x] 5. Retire ai-enrich: remove callers and code; delete the deployed function (db:deploy)
 - [x] 6. Database: drop intents.is_item + is_intention comment; conformance
-- [ ] 7. Database: group_types (seeded, with icons and execution_mode), contexts.default_group_type_id, item_groups, item_group_members, intents.group_id (+ one live intention per group), events.group_id, executions.group_id (+ intent_id and event_id nullable), notes target 'group', last_completed_at / status triggers (status_guard on item_groups); register_table (policy 'none' + shared-context policy); conformance
+- [x] 7. Database: group_types (seeded, with icons and execution_mode), contexts.default_group_type_id, item_groups, item_group_members, intents.group_id (+ one live intention per group), events.group_id, executions.group_id (+ intent_id and event_id nullable), notes target 'group', last_completed_at / status triggers (status_guard on item_groups); register_table (policy 'none' + shared-context policy); conformance
 - [ ] 8. Data layer: group queries, derived names, realtime
 - [ ] 9. Group create/edit page (search-and-add, drag reorder, type picker, pin, archive)
 - [ ] 10. Group detail page (header, buttons, members, notes, recent executions)
@@ -66,3 +66,20 @@ Each step stops for Alex's verification before the next. Database steps follow t
   - Numbered as `147_restructure_p5_drop_is_item.sql` (Applied: YES); the pending file is deleted.
   - `db:table:intents` released.
   - Alfred intention mvhawlfa9s9xlsnv069 stays open until the step 16 skip-wording deploy.
+- 2026-10-21 Step 7 written, not applied.
+  - Drift: after gitsync the highest migration is 147; the sync brought only the regenerated snapshot. Nothing touches the step's tables or triggers.
+  - Claimed 16 db items: 8 tables (group_types, contexts, item_groups, item_group_members, intents, events, executions, notes) and 8 functions (executions_last_completed, recalc_last_completed_group, status_activate_on_execution, status_activate_on_event, status_guard, events_group_freeze, executions_group_tag, item_group_members_last_completed).
+  - Migration `148_restructure_p5_groups.sql` (pending file deleted) and `supabase/tests/restructure_p5-h7m/step7_verify.sql`.
+  - Choices beyond the prompt list:
+    - `executions_has_subject` check: an execution has an intention, a group, or item_ids.
+    - `executions_group_tag` copies the intention's group_id onto an execution.
+    - Member changes recompute a group's last_completed_at (`item_group_members_last_completed`).
+    - Groups move someday → active on their own event only; member events do not move them.
+    - The three new tables join `supabase_realtime` (needed in step 8).
+    - Icon names: UtensilsCrossed, SquareKanban, ListOrdered; Boxes is the fallback.
+  - Not syntax-checked against a database (no local Postgres): Alex's run is the first.
+- 2026-10-21 Step 7 done.
+  - Alex ran 148 whole with no errors. `step7_verify.sql` passed every check: conformant true, failures []; seeds and defaults; nullable intent_id and event_id; 8 indexes; triggers; checks; policies; 3 realtime tables; 7 functions. The five additions were accepted.
+  - Checked: `last_completed_guard` lets the group recalc through, because it runs at trigger depth 2, as for items.
+  - Checked: the two "is_item" hits (`sam_create_practice_plan`, `wb_planned_start_from_history`) are "this item" in comments, matched by LIKE's `_` wildcard. Neither touches intents, so nothing to fix.
+  - db: claims are released by Checkpoint.
