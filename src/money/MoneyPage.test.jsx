@@ -19,6 +19,10 @@ jest.mock("./moneyApi", () => ({
   getCashFlow: jest.fn(),
   getSubscriptions: jest.fn(),
   getSubscriptionDetail: jest.fn(),
+  getPlanOverview: jest.fn(),
+  getProjectDetail: jest.fn(),
+  getPlannedItemDetail: jest.fn(),
+  getProjectChoices: jest.fn(),
   PAGE_SIZE: 50,
 }));
 const api = require("./moneyApi");
@@ -39,6 +43,55 @@ beforeEach(() => {
   api.getCashFlow.mockResolvedValue([]);
   api.getSubscriptions.mockResolvedValue([]);
   api.getSubscriptionDetail.mockResolvedValue(null);
+  api.getPlanOverview.mockResolvedValue({ projects: [], items: [], confirmed: [], missed: [] });
+  api.getProjectChoices.mockResolvedValue([]);
+});
+
+it("routes the Plan tab, and a project or item link never lands on a blank screen", async () => {
+  at("/money/spending");
+  fireEvent.click(await screen.findByRole("tab", { name: "Plan" }));
+  expect(screen.getByTestId("where")).toHaveTextContent("/money/plan");
+  expect(await screen.findByText("No projects yet.")).toBeInTheDocument();
+});
+
+it("opens item detail by URL; Back goes to the Plan list, or to the project it was opened from", async () => {
+  api.getPlannedItemDetail.mockResolvedValue(null);
+  at("/money/plan/items/i-1");
+  expect(await screen.findByText(/planned item no longer exists/)).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Plan" })).toHaveAttribute("aria-selected", "true");
+  fireEvent.click(screen.getByRole("button", { name: /Back/ }));
+  expect(screen.getByTestId("where")).toHaveTextContent(/^\/money\/plan$/);
+});
+
+it("goes back from an item opened in Review to Review", async () => {
+  api.getPlannedItemDetail.mockResolvedValue(null);
+  render(
+    <MemoryRouter initialEntries={[{ pathname: "/money/plan/items/i-1", state: { from: "review" } }]}>
+      <Routes><Route path="*" element={<><MoneyPage /><Where /></>} /></Routes>
+    </MemoryRouter>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: /Back/ }));
+  expect(screen.getByTestId("where")).toHaveTextContent(/^\/money\/review$/);
+});
+
+it("goes back from an item to the project it came from", async () => {
+  api.getPlannedItemDetail.mockResolvedValue(null);
+  render(
+    <MemoryRouter initialEntries={[{ pathname: "/money/plan/items/i-1", state: { projectId: "p-7" } }]}>
+      <Routes><Route path="*" element={<><MoneyPage /><Where /></>} /></Routes>
+    </MemoryRouter>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: /Back/ }));
+  expect(screen.getByTestId("where")).toHaveTextContent("/money/plan/projects/p-7");
+});
+
+it("opens project detail by URL, and a project nobody can see says so with a way back", async () => {
+  api.getProjectDetail.mockResolvedValue(null);
+  at("/money/plan/projects/p-1");
+  expect(await screen.findByText(/no longer exists, or you can't see it/)).toBeInTheDocument();
+  expect(api.getProjectDetail).toHaveBeenCalledWith("p-1");
+  fireEvent.click(screen.getByRole("button", { name: /Plan/ }));
+  expect(screen.getByTestId("where")).toHaveTextContent(/^\/money\/plan$/);
 });
 
 it("routes the Subscriptions tab and a subscription by URL", async () => {

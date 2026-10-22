@@ -15,7 +15,7 @@ No amounts in this file. The safety floor is never written into the repo.
 | 8a | Plan tab database (spec §3.8; decisions A34–A41) | done, 2026-10-19 (140 applied, 141 48/48; live CONFORMANT, 68 tables) |
 | 8b | **Tools first (A42, A43).** New tools: project summary, missed dates, mark not needed, unconfirm (tier 2, `paid_not_covered`). Changed: the free cash what-if (tier 1, writes nothing), `backdated_from`, `project_names`, `over_matched`. Needs `mcp/index.ts`. **Live mcp must still be v155 before deploying; if higher, stop and ask** | done, 2026-10-20: live on **mcp v157** (138 tools), with the tolerance fix (A45; 143 applied, 144 24/24); re-check and fresh-thread batches passed |
 | 8c | Planning skill `.claude/skills/wb-planning/SKILL.md` (A44); scripted planning conversation in a fresh thread. **Notes from 8b:** (a) for bills whose amount varies (fuel, utilities), suggest a wider amount_tolerance before backdating, or only some payments qualify; (b) when backdating moves the due day, tell Alex the new day | done, 2026-10-20 (all six fresh-thread tests passed; two fixes to the skill, see log) |
-| 8d | Slimmer app (A44, A46, A47): 8d-1 the delete function; 8d-2 the Plan overview (read-only missed dates); 8d-3 project detail; 8d-4 item detail (Remove match, Delete item); 8d-5 the full Review card; 8d-6 the single-part project picker; help. **No add or edit forms, and no split-editor picker** | 8d-1 done 2026-10-21 (146 applied, tests 12/12); 8d-2 to 8d-6 not started |
+| 8d | Slimmer app (A44, A46, A47): 8d-1 the delete function; 8d-2 the Plan overview (read-only missed dates); 8d-3 project detail; 8d-4 item detail (Remove match, Delete item); 8d-5 the full Review card; 8d-6 the single-part project picker; help. **No add or edit forms, and no split-editor picker** | 8d-1 done 2026-10-21 (146 applied, tests 12/12); 8d-2 and 8d-3 tested 2026-10-21; 8d-4 done 2026-10-22 (fixes re-tested); 8d-5 and 8d-6 tested 2026-10-22. **8d done 2026-10-22** |
 | 9 | Overview numbers | not started |
 | 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed | not started |
 | 11 | Phase 3 review | not started |
@@ -568,7 +568,112 @@ All six tests passed in a fresh claude.ai thread with the skill loaded. No amoun
   - execute is revoked from public and anon, and granted to authenticated **and service_role**. Supabase's default privileges add service_role to every new function. service_role bypasses RLS and is not reachable from the app or from any MCP tool. Alex decides whether to revoke it in a follow-up.
 - Checkpoint: 146, the tests file, the spec and the progress file, with `--release-db`.
 
+### Step 8d-2 built (2026-10-21, run tags `warren_buffet_p3-q5k-s11-h5zt`, `-s11-p9wd`)
+- `viewPaths.js` and its test were held by restructure_p5-h7m. Alex asked it to yield. My single claim attempt then went through, and main had not changed either file, so no gitsync was needed.
+- **Routes:** `/money/plan`, `/money/plan/projects/:id` and `/money/plan/items/:id`. The route gains `projectId` and `plannedItemId`.
+- **Plan tab** (CalendarClock icon; icons only below lg), via `PlanScreen.jsx`:
+  - projects, active first: spent, budget left or over budget, Planning and status badges;
+  - Upcoming: one-offs not paid or cancelled, dated today or later, with what is left and the stage, and drafts marked "What if";
+  - Repeating: items still running, with their schedule;
+  - Missed dates: read-only, from `wb_planned_unmatched`, each row opening its item. It shows "May still post" and "Suggestion in Review", and has no Not needed button.
+- **Project and item links** open `PlanDetailPending`, which has a Back link, until 8d-3 and 8d-4. They never show a blank screen.
+- **Supporting code:**
+  - `moneyApi.getPlanOverview`: four bounded reads;
+  - `moneyFormat`: `leftOf` (mirrors `wb_planned_left`, A45), `annotatePlannedItem` (mirrors the handlers' `annotateItem`) and `STAGE_LABELS`;
+  - help: `plan.projects`, `plan.planning`, `plan.upcoming`, `plan.repeating`, `plan.drafts` and `plan.missed_dates`. None states a number.
+- **Tests and build:** the app suite 2774/2774 (171 suites); CLI 235/235; the build compiled.
+
+### Step 8d-2 tested; sync banner; 8d-3 built (2026-10-21, run tag `warren_buffet_p3-q5k-s12-f3ky`)
+- **8d-2 passed in Chrome mobile view:**
+  - icons only at phone width;
+  - 5 projects, 12 upcoming, 11 repeating, and 0 missed dates, matching `get_wb_missed_dates`;
+  - the pending pages have Back;
+  - the help panels work.
+- **Sync banner:** when the last run is `auth_expired`, or its message says a connection needs attention, signing in or similar, the Overview warning keeps the bank and the reason, and adds "Fix it in SimpleFIN Bridge", linking to `https://beta-bridge.simplefin.org/`. There was no Bridge URL in the repo before. Help `overview.sync_status` "What to do" is updated. Tests: `syncStatus.needsBridge` and the new `OverviewScreen.test.jsx`.
+- **SimpleFIN re-add question (answered, no code changed):**
+  - wb-sync matches accounts by SimpleFIN account id (`wb_accounts.external_id`, upsert on `source,external_id`), and transactions by `(account_id, external_id)`.
+  - A deleted and re-added connection that returns new ids would make new accounts, and duplicate the overlapping history under them.
+- **8d-3 project detail** (`ProjectDetailView.jsx`, `moneyApi.getProjectDetail`):
+  - the totals from `wb_project_summary`: spent, received, net, budget and budget left (or over budget), still to pay and still to receive, and what-ifs shown apart;
+  - status, Planning, dates and notes;
+  - planned items with what is left, What if and More than planned, each opening item detail (still the pending page);
+  - settled payments with any part on the project, newest first, a split one showing its part, each opening the payment, whose Back returns to the project.
+  - Help: `plan.project_totals` and `plan.project_payments`. No numbers.
+- **Tests and build:** app 2785/2785 (173 suites); CLI 235/235; the build compiled.
+
+### Step 8d-3 tested; 8d-4 built (2026-10-21, run tag `warren_buffet_p3-q5k-s13-b6mx`)
+- **8d-3 passed in Chrome.** Both project pages match `get_wb_project_summary` to the cent. Back from a payment returns to the project. Japan Trip shows Planning, with its what-if apart. The Overview banner shows the SimpleFIN Bridge link, and Alex confirmed the URL. No amounts are recorded.
+- **8d-4 item detail** (`PlannedItemDetailView.jsx`):
+  - **Facts:** the amount; Left to pay, using `leftOf` so it is 0 within tolerance (A45), and what is matched; the due date, or the schedule with its end date; the stage or What if; More than planned; the tolerance; a project link; the merchant; tax year and notes.
+  - **Matches:** confirmed first, then suggestions and turned-down ones. Each shows its payment, date, occurrence, amount applied and status, and opens the payment, whose Back returns to the item.
+  - **Remove match** (confirmed only) calls `wb_unconfirm_planned_match`. When `paid_not_covered` is true it asks "Set it back to invoiced?". Only Yes calls `setPlannedItemBackToInvoiced`, which updates only a paid one-off and then re-suggests (A19).
+  - **Not needed marks** are listed, read-only.
+  - **Delete item:** `getDeletePreview` reads the counts fresh. The confirmation then says what goes: confirmed matches (whose payments count in spending again), suggestions, turned-down matches, Not needed marks, and the project's amounts still due. "Delete it" calls `wb_delete_planned_item`, then goes back.
+  - **Back:** returns to the project when the item was opened from one, otherwise to the Plan list, and that is kept through a payment and back. The interim pending page is gone.
+  - **Help:** `plan.item_left`, `plan.matches`, `plan.over_matched`, `plan.not_needed` and `plan.delete_item`, with no numbers.
+- **Tests and build:** app 2799/2799 (174 suites); CLI 235/235; the build compiled.
+
+### Step 8d-4 tested; three fixes (2026-10-22, run tag `warren_buffet_p3-q5k-s13-q8rn`)
+- **8d-4 passed in Chrome** with ZZ TEMP S10 records:
+  - nothing left to pay on the paid invoice;
+  - payment and back, twice over;
+  - Remove match, then "Set it back to invoiced?", then Yes;
+  - the Not needed list;
+  - Delete with Keep it, then Delete it, returning to the right place;
+  - cleanup 0, 0, 0.
+- **Fix 1 (A48):** both confirmations are now pop-ups in Alfred's confirmation pattern. That is the overlay and card from ExecutionDetailView's "Delete execution" and from StatusEventsSheet, put at the page root as CloseDialog does, with the main button styled as CloseDialog's and the other as CancelButton. The wording and buttons are unchanged, and Delete item uses the "Delete Execution" button style. No shared generic confirm component exists, so the pattern is copied; extracting one needs Alex's OK.
+- **Fix 2:** a new `plan.stages` entry (all six stages, and paid set by itself) on the item's Stage "?". A new `plan.project_items` entry on the project's "Planned items", which had wrongly opened Upcoming. A test on each of the three Plan pages checks that every "?" opens its own entry.
+- **Fix 3:** "Payments matched" became **Matches**, and the help title too.
+- **Tests and build:** app 2802/2802; CLI 235/235; the build compiled.
+
+### Step 8d-4 done; 8d-5 built (2026-10-22, run tag `warren_buffet_p3-q5k-s14-r5dk`)
+- **The 8d-4 fixes passed in Chrome** with ZZ TEMP S11 records (cleanup 0, 0, 0):
+  - the Stage "?" explains all six stages;
+  - both confirmations are centred pop-ups in the Delete execution style;
+  - the heading reads Matches;
+  - delete returns to the project.
+- **8d-5, the full Review card for suggested matches** (A18, A48). It uses the existing Review row, with the same list, actions and button styles:
+  - **Planned** and **Paid** sit side by side (stacked below sm). Planned shows the item, the due date or occurrence date, the project and the amount. Paid shows the merchant, date, account and amount, and the amount for this item when lowered.
+  - Planned opens the item page, and Back returns to Review. Paid opens the payment, and Back returns to Review. An item opened from Review keeps that origin through one of its payments and back.
+  - **A plain line under the boxes** says what is left after this payment, worked out with `leftOf` (A45): "Confirming marks it paid", or "covers that date" for a repeating item, adding "within its tolerance, so it counts as covered" where that applies; otherwise "After this payment, X is still left". Confirm, Lower amount… and Not this one are unchanged.
+  - **Data:** `getReviewQueue` now gives planned-match rows the item's project, whether it repeats, and what is already confirmed for that due date. A one-off counts all of its matches; a repeating item counts only that date's.
+  - **Help:** `review.match_card` ("What confirming does"), with no numbers.
+- **Tests and build:** app 2807/2807; CLI 235/235; the build compiled.
+
+### Step 8d-5 tested; viewPaths checkpoint explained (2026-10-22, run tag `warren_buffet_p3-q5k-s14-x3jw`)
+- **8d-5 passed in Chrome mobile view** with a ZZ TEMP S12 item:
+  - Planned stacks above Paid;
+  - "Confirming covers that date" shows;
+  - Planned and Paid each open, and Back returns to Review;
+  - Lower amount opens, and Cancel closes it;
+  - the help works.
+- **The viewPaths checkpoint** went through on the first run, as commit 345b487 (14:58), merged into main as 7e60582. It carried only `src/viewPaths.js` and `src/viewPaths.test.js`, as intended. The second run therefore found nothing changed and stopped, which is correct.
+- Both files matched main, so I **yielded** them to restructure_p5-h7m.
+- Nothing else of ours went to main: the rest of 8d is still uncommitted in this worktree.
+
+### Step 8d-6 built (2026-10-22, run tag `warren_buffet_p3-q5k-s15-g7tc`)
+- **The project picker on transaction detail** follows the Kind section's pattern (A48): a label, the "?", a select with the screen's FIELD class, and a "who set it" line.
+  - **Options:** "No project", the active projects, and the payment's own project whatever its status.
+  - **The who-set-it line:** set by hand, by Claude or by a rule; "Taken off by hand; no rule puts one back"; or "No project".
+- **Writes:** `setTransactionProject` updates the one part, with `project_source manual` both ways (A17), so a removal sticks. It refuses a split payment. The project's totals come from `wb_project_summary`, so they follow at once.
+- **A split payment** shows "Split payment: ask Claude to put each part on a project" in place of the picker.
+- **Data:** `getTransactionDetail` gives each part its project_id and project_source, and `getProjectChoices` lists the projects.
+- **Help:** `transaction.project`, with no numbers.
+- **Tests and build:** app 2812/2812; CLI 235/235; the build compiled.
+
+### Step 8d-6 tested; 8d done (2026-10-22, run tag `warren_buffet_p3-q5k-s15-j2pv`)
+- **8d-6 passed in Chrome:**
+  - choosing Bathroom insurance claim showed "Set by hand", and the project's spent and budget left moved by the payment;
+  - No project showed "Taken off by hand; no rule puts one back", and the project returned to where it was;
+  - the Project help works.
+  - Afterwards Alex reset the test payment's `project_source` to null, and checked that both values are null.
+  - The split-payment message is covered by tests; it was not checked by hand.
+- **Step 8d is done.** Checkpoint: every 8d path in the working tree, with no `--release-db`, because no db: claims are held.
+
 ## Later
+
+### Shared confirm component (outside this project)
+- Extract one shared confirm component into `src/shared/`, and use it in Money and in the execution delete. Today the Money item page copies the pattern from ExecutionDetailView's "Delete execution" (A48).
 
 ### Phase 3b (or later): Wells Fargo CSV history import
 - **Goal:** import about 25 months of Wells Fargo history from CSV downloads. SimpleFIN only ever returns the last 90 days.

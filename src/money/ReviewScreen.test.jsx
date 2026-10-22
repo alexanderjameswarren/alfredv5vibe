@@ -102,13 +102,49 @@ it("suggested match: the planned item beside the payment, Confirm and Not this o
   render(<ReviewScreen onOpen={() => {}} />);
   expect(await screen.findByText("Suggested match")).toBeInTheDocument();
   expect(screen.getByText("ZZ invoice")).toBeInTheDocument();
-  expect(screen.getByText(/The app suggests this pays/)).toHaveTextContent("due Mar 10, 2026");
+  expect(screen.getByText("ZZ invoice").closest("button")).toHaveTextContent(/Planned.*Due Mar 10, 2026.*-\$200\.00/);
   expect(screen.queryByRole("button", { name: "Mark reviewed" })).toBeNull();
 
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   await waitFor(() => expect(api.confirmPlannedMatch).toHaveBeenCalledWith("m1"));
   fireEvent.click(await screen.findByRole("button", { name: "Not this one" }));
   await waitFor(() => expect(api.rejectPlannedMatch).toHaveBeenCalledWith("m1"));
+});
+
+it("suggested match card: planned beside paid, each opening its page", async () => {
+  api.getReviewQueue.mockResolvedValue([{ ...suggestion, merchant_name: "ZZ Builder", account_label: "ZZ Card",
+    planned_project_name: "ZZ Claim", planned_already: 0, planned_repeating: false }]);
+  const onOpen = jest.fn();
+  const onOpenItem = jest.fn();
+  render(<ReviewScreen onOpen={onOpen} onOpenItem={onOpenItem} />);
+  const planned = (await screen.findByText("ZZ invoice")).closest("button");
+  expect(planned).toHaveTextContent("ZZ Claim");
+  const paid = screen.getByText("ZZ Builder").closest("button");
+  expect(paid).toHaveTextContent(/Paid.*Mar 14, 2026 · ZZ Card.*-\$198\.00/);
+  fireEvent.click(planned);
+  expect(onOpenItem).toHaveBeenCalledWith("p1");
+  fireEvent.click(paid);
+  expect(onOpen).toHaveBeenCalledWith("t5");
+});
+
+it("suggested match card: what is left, and when confirming would mark it paid (A45)", () => {
+  const { matchOutcome } = require("./ReviewScreen");
+  expect(matchOutcome({ ...suggestion, planned_already: 0 })).toEqual({ left: 0, covered: true, withinTolerance: true });
+  expect(matchOutcome({ ...suggestion, planned_tolerance: 0, planned_already: 0 })).toEqual({ left: -2, covered: false, withinTolerance: false });
+  expect(matchOutcome({ ...suggestion, planned_tolerance: 0, planned_already: 2 })).toEqual({ left: 0, covered: true, withinTolerance: false });
+  expect(matchOutcome({ ...suggestion, planned_amount: 200, match_amount: 150, planned_tolerance: 0, planned_already: 0 }).left).toBe(50);
+});
+
+it("suggested match card: the plain line says it", async () => {
+  api.getReviewQueue.mockResolvedValue([
+    { ...suggestion, planned_already: 0 },
+    { ...suggestion, planned_match_id: "m2", transaction_id: "t6", planned_tolerance: 0, planned_already: 0, planned_repeating: true },
+  ]);
+  render(<ReviewScreen onOpen={() => {}} />);
+  expect(await screen.findByText(/Confirming marks it paid\. What is left is within its tolerance/)).toBeInTheDocument();
+  expect(screen.getByText(/After this payment, -\$2\.00 is still left for that date\./)).toBeInTheDocument();
+  fireEvent.click(screen.getAllByRole("button", { name: "About What confirming does" })[0]);
+  expect(screen.getByRole("dialog", { name: "What confirming does" })).toBeInTheDocument();
 });
 
 it("suggested match: confirm for a lower amount", async () => {

@@ -4,7 +4,7 @@ import { getAccounts, getLatestNetWorth, getLatestSyncRun } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
 import HelpButton, { HelpTitle } from "./HelpButton";
 import {
-  NET_WORTH_GROUPS, formatDateTime, formatDay, formatMoney, syncStatus, toNumber,
+  NET_WORTH_GROUPS, SIMPLEFIN_BRIDGE_URL, formatDateTime, formatDay, formatMoney, syncStatus, toNumber,
 } from "./moneyFormat";
 
 export function SyncLine({ status }) {
@@ -26,6 +26,15 @@ export function SyncLine({ status }) {
         <ul className="mt-1 space-y-0.5">
           {status.problems.map((p) => <li key={p}>{p}</li>)}
         </ul>
+        {status.needsBridge && (
+          <p className="mt-2">
+            Fix it in{" "}
+            <a href={SIMPLEFIN_BRIDGE_URL} target="_blank" rel="noopener noreferrer" className="underline font-medium">
+              SimpleFIN Bridge
+            </a>
+            : sign in, open that bank's connection and sign in to the bank again. The next daily sync picks it up.
+          </p>
+        )}
       </div>
     </div>
   );
