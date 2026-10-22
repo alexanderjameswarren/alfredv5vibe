@@ -16,7 +16,7 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 5. Retire ai-enrich: remove callers and code; delete the deployed function (db:deploy)
 - [x] 6. Database: drop intents.is_item + is_intention comment; conformance
 - [x] 7. Database: group_types (seeded, with icons and execution_mode), contexts.default_group_type_id, item_groups, item_group_members, intents.group_id (+ one live intention per group), events.group_id, executions.group_id (+ intent_id and event_id nullable), notes target 'group', last_completed_at / status triggers (status_guard on item_groups); register_table (policy 'none' + shared-context policy); conformance
-- [ ] 8. Data layer: group queries, derived names, realtime
+- [x] 8. Data layer: group queries, derived names, realtime
 - [ ] 9. Group create/edit page (search-and-add, drag reorder, type picker, pin, archive)
 - [ ] 10. Group detail page (header, buttons, members, notes, recent executions)
 - [ ] 11. Context page: create button, browse tabs, group rows, sort
@@ -83,3 +83,20 @@ Each step stops for Alex's verification before the next. Database steps follow t
   - Checked: `last_completed_guard` lets the group recalc through, because it runs at trigger depth 2, as for items.
   - Checked: the two "is_item" hits (`sam_create_practice_plan`, `wb_planned_start_from_history`) are "this item" in comments, matched by LIKE's `_` wildcard. Neither touches intents, so nothing to fix.
   - db: claims are released by Checkpoint.
+- 2026-10-21 Step 8 built; awaiting Alex's Chrome check.
+  - No db: claims are held (checked).
+  - Yielded `src/inbox/useInboxActions.js` and `src/records/recordRoutes.js` to inbox_rowcap-x7k (unchanged). Step 12 must re-claim recordRoutes.js.
+  - Kept, because this step changed them: `useAlfredData.js`, `useRealtime.js`, `Alfred.jsx`.
+  - `useAlfredData`: `groupTypes`, `itemGroups` and `groupMembers` are loaded in loadData and refreshData (`groupQueries`, `setGroupData`).
+  - `useRealtime`: three unfiltered channels with one upsert handler (`applyRowChange`); `Alfred.jsx` passes the three setters.
+  - `storage`: `group_type`, `group` and `group_member` key prefixes; item_groups follows the items rules (status patched only; last_completed_at and status_written_at never sent). Case conversion is generic (`caseConvert.js`), so it needs no entries.
+  - New `src/groups/groupModel.js`: `liveMembers` (position order; deleted and archived out), `derivedGroupName`, `groupDisplayName`, `groupsForRecord`, `groupIntention`, `groupTypeOf` and `groupIcon` (Boxes fallback), `hasRunningMember` (separately groups; active only).
+  - Tests: `groupModel.test.js` (14), plus additions to `storage.test.js` and `useRealtime.test.js`. App 2779/2779, CLI 239/239.
+  - `src/groups/` is not yet in `ALFRED_FOLDERS` (`testing/alfredSources.js`); add it in step 9, with the first screen.
+- 2026-10-21 Step 8 verified in Chrome by Alex and checkpointed.
+  - Yielded `src/alfred/useAlfredData.js`, `src/alfred/useRealtime.js` and `src/Alfred.jsx` to inbox_rowcap-x7k (all unchanged from main).
+  - Given up so far:
+    - to warren_buffet_p3-q5k: `src/viewPaths.js` and `src/viewPaths.test.js`
+    - to inbox_rowcap-x7k: `src/inbox/useInboxActions.js`, `src/records/recordRoutes.js`, `useAlfredData.js`, `useRealtime.js` and `Alfred.jsx`
+  - 73 file claims are still held; no db: claims.
+  - **Step 9 waits until inbox_rowcap-x7k has checkpointed.** Then: gitsync, and re-claim `src/Alfred.jsx` and `src/viewPaths.js` (+ test), plus `useAlfredData.js`, `useRealtime.js` or `recordRoutes.js` if needed (recordRoutes by step 12 at the latest).

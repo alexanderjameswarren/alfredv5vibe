@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-21 15:06, through migration 147 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-22 16:19, through migration 148 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -2211,6 +2211,7 @@ begin
       join public.items i on i.id = m.member_id
      where m.group_id = v_group
        and m.member_type = 'item'
+       and m.removed_at is null
        and coalesce(i.archived, false) = false;
     new.item_ids := v_ids;
   end if;
@@ -2308,6 +2309,7 @@ begin
       join public.item_groups ig on ig.id = m.group_id
       join public.group_types t on t.id = ig.group_type_id
      where t.execution_mode = 'separately'
+       and m.removed_at is null
        and ((m.member_type = 'intention' and m.member_id = any(v_intents))
             or (m.member_type = 'item' and m.member_id = any(v_items)))
   ) s;
@@ -2549,7 +2551,8 @@ begin
   end if;
   if tg_op <> 'DELETE' and (tg_op = 'INSERT' or new.group_id is distinct from old.group_id
                             or new.member_type is distinct from old.member_type
-                            or new.member_id is distinct from old.member_id) then
+                            or new.member_id is distinct from old.member_id
+                            or new.removed_at is distinct from old.removed_at) then
     perform public.recalc_last_completed_group(new.group_id);
   end if;
   return null;
@@ -2561,6 +2564,30 @@ ALTER FUNCTION "public"."item_group_members_last_completed"() OWNER TO "postgres
 
 
 COMMENT ON FUNCTION "public"."item_group_members_last_completed"() IS 'Restructure P5. A member added, removed or changed recomputes its group''s last_completed_at (matters for separately groups).';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."item_group_members_stamp_removal"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if new.removed_at is null then
+    new.removed_by := null;
+  elsif tg_op = 'INSERT' or old.removed_at is null then
+    new.removed_by := auth.uid();
+  else
+    new.removed_by := old.removed_by;
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."item_group_members_stamp_removal"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."item_group_members_stamp_removal"() IS 'Restructure P5. BEFORE INSERT OR UPDATE on item_group_members: stamps removed_by with auth.uid() when a member is removed, clears it when put back.';
 
 
 
@@ -3227,6 +3254,7 @@ CREATE OR REPLACE FUNCTION "public"."recalc_last_completed_group"("p_group_id" "
                       join public.item_group_members m on m.group_id = g2.id
                      where g2.id = p_group_id
                        and t.execution_mode = 'separately'
+                       and m.removed_at is null
                        and ((m.member_type = 'intention' and m.member_id = x.intent_id)
                             or (m.member_type = 'item'
                                 and (x.item_ids ? m.member_id
@@ -4510,6 +4538,7 @@ begin
               join public.item_groups g2 on g2.id = m.group_id
               join public.group_types t on t.id = g2.group_type_id
              where t.execution_mode = 'separately'
+               and m.removed_at is null
                and ((m.member_type = 'intention' and m.member_id = new.intent_id)
                     or (m.member_type = 'item' and m.member_id in (
                           select i.item_id from public.intents i
@@ -8517,6 +8546,8 @@ CREATE TABLE IF NOT EXISTS "public"."item_group_members" (
     "position" integer NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "removed_at" timestamp with time zone,
+    "removed_by" "uuid",
     CONSTRAINT "item_group_members_member_type_check" CHECK (("member_type" = ANY (ARRAY['item'::"text", 'intention'::"text"])))
 );
 
@@ -8524,7 +8555,7 @@ CREATE TABLE IF NOT EXISTS "public"."item_group_members" (
 ALTER TABLE "public"."item_group_members" OWNER TO "postgres";
 
 
-COMMENT ON TABLE "public"."item_group_members" IS 'ALFRED. Restructure P5. The items and intentions in a group, in position order. member_id is items.id or intents.id by member_type, with no FK: reads leave out members that are deleted or archived. No context rule: a member may sit in another context. No user_id: access follows the parent group (item_groups RLS).';
+COMMENT ON TABLE "public"."item_group_members" IS 'ALFRED. Restructure P5. The items and intentions in a group, in position order. member_id is items.id or intents.id by member_type, with no FK: reads leave out members that are deleted or archived. Removing a member sets removed_at (history; Put back clears it). One live row per member (item_group_members_live_unique). No context rule: a member may sit in another context. No user_id: access follows the parent group (item_groups RLS).';
 
 
 
@@ -8537,6 +8568,14 @@ COMMENT ON COLUMN "public"."item_group_members"."member_id" IS 'items.id or inte
 
 
 COMMENT ON COLUMN "public"."item_group_members"."position" IS 'Order in the group, ascending; set by drag reorder. The derived name follows it.';
+
+
+
+COMMENT ON COLUMN "public"."item_group_members"."removed_at" IS 'Restructure P5. When the member was removed from the group; null = a live member. Removed rows are the group''s removal history and are left out of every read, the derived name, last_completed_at, status activation and frozen event item_ids.';
+
+
+
+COMMENT ON COLUMN "public"."item_group_members"."removed_by" IS 'auth.uid() of the person who removed it, stamped by item_group_members_stamp_removal; null while live.';
 
 
 
@@ -11962,11 +12001,6 @@ ALTER TABLE ONLY "public"."item_collections"
 
 
 ALTER TABLE ONLY "public"."item_group_members"
-    ADD CONSTRAINT "item_group_members_group_id_member_type_member_id_key" UNIQUE ("group_id", "member_type", "member_id");
-
-
-
-ALTER TABLE ONLY "public"."item_group_members"
     ADD CONSTRAINT "item_group_members_pkey" PRIMARY KEY ("id");
 
 
@@ -12531,6 +12565,10 @@ CREATE INDEX "idx_item_group_members_member" ON "public"."item_group_members" US
 
 
 
+CREATE INDEX "idx_item_group_members_removed" ON "public"."item_group_members" USING "btree" ("group_id", "removed_at" DESC) WHERE ("removed_at" IS NOT NULL);
+
+
+
 CREATE INDEX "idx_item_groups_context" ON "public"."item_groups" USING "btree" ("context_id");
 
 
@@ -12644,6 +12682,10 @@ CREATE UNIQUE INDEX "intents_one_per_group" ON "public"."intents" USING "btree" 
 
 
 CREATE INDEX "intents_source_inbox_idx" ON "public"."intents" USING "btree" ("source_inbox_id") WHERE ("source_inbox_id" IS NOT NULL);
+
+
+
+CREATE UNIQUE INDEX "item_group_members_live_unique" ON "public"."item_group_members" USING "btree" ("group_id", "member_type", "member_id") WHERE ("removed_at" IS NULL);
 
 
 
@@ -13183,6 +13225,10 @@ CREATE OR REPLACE TRIGGER "item_group_members_last_completed" AFTER INSERT OR DE
 
 
 
+CREATE OR REPLACE TRIGGER "item_group_members_stamp_removal" BEFORE INSERT OR UPDATE ON "public"."item_group_members" FOR EACH ROW EXECUTE FUNCTION "public"."item_group_members_stamp_removal"();
+
+
+
 CREATE OR REPLACE TRIGGER "item_groups_delete_notes" AFTER DELETE ON "public"."item_groups" FOR EACH ROW EXECUTE FUNCTION "public"."notes_delete_for_target"('group');
 
 
@@ -13639,6 +13685,11 @@ ALTER TABLE ONLY "public"."item_collections"
 
 ALTER TABLE ONLY "public"."item_group_members"
     ADD CONSTRAINT "item_group_members_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."item_groups"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."item_group_members"
+    ADD CONSTRAINT "item_group_members_removed_by_fkey" FOREIGN KEY ("removed_by") REFERENCES "auth"."users"("id") ON DELETE SET NULL;
 
 
 
@@ -15084,6 +15135,12 @@ GRANT ALL ON FUNCTION "public"."intents_last_completed"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."item_group_members_last_completed"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."item_group_members_last_completed"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."item_group_members_last_completed"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."item_group_members_stamp_removal"() TO "anon";
+GRANT ALL ON FUNCTION "public"."item_group_members_stamp_removal"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."item_group_members_stamp_removal"() TO "service_role";
 
 
 
