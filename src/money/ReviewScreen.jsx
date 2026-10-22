@@ -6,7 +6,7 @@ import {
   recordSubscriptionPrice, rejectPlannedMatch, reprocess, setKind, setReviewed,
 } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
-import { formatDay, formatMoney, groupQueue, parseAmountInput, tagOptions, toNumber } from "./moneyFormat";
+import { formatDay, formatMoney, groupQueue, leftOf, parseAmountInput, tagOptions, toNumber } from "./moneyFormat";
 
 const SMALL = "min-h-[44px] px-3 rounded-lg border border-border text-sm";
 
@@ -75,6 +75,59 @@ export function PlannedMatchWorking({ rows }) {
 
 const WORKING = { price_change: PriceChangeWorking, new_recurring: NewRecurringWorking, planned_match: PlannedMatchWorking };
 
+/**
+ * What confirming this suggestion leaves on the planned item (or, for a repeating item,
+ * on that due date), with the item's sign, and whether it is then covered. Within the
+ * tolerance counts as covered (A45), the same rule as the database.
+ */
+export function matchOutcome(row) {
+  const full = Math.abs(toNumber(row.planned_amount) ?? 0);
+  const paid = (toNumber(row.planned_already) ?? 0) + Math.abs(toNumber(row.match_amount) ?? 0);
+  const left = leftOf(full, paid, toNumber(row.planned_tolerance) ?? 0);
+  const sign = Math.sign(toNumber(row.planned_amount) ?? 0);
+  return { left: left === 0 ? 0 : Math.round(sign * left * 100) / 100, covered: left === 0, withinTolerance: left === 0 && paid < full };
+}
+
+function outcomeLine(row) {
+  const o = matchOutcome(row);
+  if (!o.covered) return `After this payment, ${formatMoney(o.left)} is still left${row.planned_repeating ? " for that date" : ""}.`;
+  const why = o.withinTolerance ? " What is left is within its tolerance, so it counts as covered." : "";
+  return row.planned_repeating ? `Confirming covers that date.${why}` : `Confirming marks it paid.${why}`;
+}
+
+/** The full card for a suggested match (spec A18): planned against paid, side by side. */
+function PlannedMatchCard({ row, onOpen, onOpenItem }) {
+  const box = "w-full text-left rounded-lg border border-border p-3 min-h-[44px] flex flex-col gap-0.5";
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <button type="button" className={box} onClick={() => onOpenItem(row.planned_item_id)}>
+          <span className="text-xs text-muted-foreground">Planned</span>
+          <span className="break-words font-medium">{row.planned_item_name}</span>
+          <span className="text-xs text-muted-foreground break-words">
+            Due {formatDay(row.planned_on)}{row.planned_project_name ? ` · ${row.planned_project_name}` : ""}
+          </span>
+          <span className="tabular-nums">{formatMoney(row.planned_amount)}</span>
+        </button>
+        <button type="button" className={box} onClick={() => onOpen(row.transaction_id)}>
+          <span className="text-xs text-muted-foreground">Paid</span>
+          <span className="break-words font-medium">{row.merchant_name || row.clean_description || row.payee || "—"}</span>
+          <span className="text-xs text-muted-foreground break-words">{formatDay(row.txn_date)} · {row.account_label}</span>
+          <span className="tabular-nums">
+            {formatMoney(row.amount)}
+            {toNumber(row.match_amount) !== toNumber(row.amount) && (
+              <span className="text-xs text-muted-foreground"> · {formatMoney(row.match_amount)} for this item</span>
+            )}
+          </span>
+        </button>
+      </div>
+      <p className="text-sm break-words">
+        <HelpAfter helpKey="review.match_card">{outcomeLine(row)}</HelpAfter>
+      </p>
+    </div>
+  );
+}
+
 /** Confirm (optionally for a lower amount) or turn down one suggested planned match. */
 function PlannedMatchActions({ row, busy, act }) {
   const [lowering, setLowering] = useState(false);
@@ -125,7 +178,7 @@ function PlannedMatchActions({ row, busy, act }) {
  * editor; or mark it reviewed. Subscription rows: record a changed price, or
  * say whether a detected subscription is one ("Keep watching") or not.
  */
-export default function ReviewScreen({ onOpen }) {
+export default function ReviewScreen({ onOpen, onOpenItem = () => {} }) {
   const { data, error, loading, reload } = useLoad(async () => {
     const [rows, tree] = await Promise.all([getReviewQueue(), getTagTree()]);
     return { rows, tree };
@@ -181,6 +234,7 @@ export default function ReviewScreen({ onOpen }) {
               const busy = busyId === r.transaction_id;
               return (
                 <li key={`${r.reason}-${r.transaction_id}-${r.planned_match_id || r.detail || ""}`} className="py-3">
+                  {r.reason === "planned_match" ? <PlannedMatchCard row={r} onOpen={onOpen} onOpenItem={onOpenItem} /> : (
                   <button type="button" onClick={() => onOpen(r.transaction_id)}
                     className="w-full text-left flex items-start justify-between gap-3 min-h-[44px]">
                     <span className="min-w-0">
@@ -190,15 +244,10 @@ export default function ReviewScreen({ onOpen }) {
                         {r.detail && r.reason === "missing_required_tag" ? ` · needs ${r.detail}` : ""}
                         {r.detail && (r.reason === "price_change" || r.reason === "new_recurring") ? ` · ${r.detail}` : ""}
                       </span>
-                      {r.reason === "planned_match" && (
-                        <span className="block text-sm mt-1 break-words">
-                          The app suggests this pays: <span className="font-medium">{r.planned_item_name}</span>,
-                          {" "}due {formatDay(r.planned_on)}, planned {formatMoney(r.planned_amount)}
-                        </span>
-                      )}
                     </span>
                     <span className="tabular-nums shrink-0">{formatMoney(r.amount)}</span>
                   </button>
+                  )}
                   <div className="flex flex-wrap gap-2 mt-2">
                     {r.reason === "no_kind" && (
                       <button type="button" disabled={busy} onClick={() => act(r.transaction_id, () => reprocess([r.transaction_id]))} className={SMALL}>

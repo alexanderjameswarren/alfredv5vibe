@@ -61,6 +61,13 @@ export const HELP = {
     leftOut: "Pending charges; planned items with no merchant, drafts, and cancelled or paid items; payments you already turned down; and payments for less than the planned amount, beyond its tolerance (match those by hand once the planning tools arrive).",
     todo: "Confirm it to count the payment against the planned item. If only part of this payment is for the planned item, lower the amount before confirming. Or tap \"Not this one\", and it will not be suggested again.",
   },
+  "review.match_card": {
+    title: "What confirming does",
+    what: "What would be left on the planned item after this payment, so you can see the result before you confirm.",
+    included: "The planned amount less what is already confirmed and this payment's amount for the item. For a repeating item, only that due date counts. When what is left is within the item's tolerance it counts as covered, and a one-off becomes paid by itself.",
+    leftOut: "Other suggestions still waiting, which only count once confirmed.",
+    todo: "Tap Planned to open the item, or Paid to open the payment. Lower the amount if only part of the payment is for this item.",
+  },
 
   // --- Subscriptions ---
   "subscriptions.monthly_total": {
@@ -149,6 +156,13 @@ export const HELP = {
     leftOut: "A kind set by you or by Claude, which no rule ever changes.",
     todo: "Change it here. To make it stick for this merchant, use \"Always do this\".",
   },
+  "transaction.project": {
+    title: "Project",
+    what: "The project this payment belongs to, such as a remodel or a trip. A payment on a project counts in the project's totals instead of everyday spending.",
+    included: "A choice here, or taking it off, is a change by hand: no rule ever changes it, and a payment you take off stays off. The project's spent, received, net and budget left follow at once.",
+    leftOut: "A split payment, whose parts can each be on a different project.",
+    todo: "Pick a project, or \"No project\" to take it off. For a split payment, ask Claude to put each part on its project.",
+  },
   "transaction.removed_tags": {
     title: "Removed by you",
     what: "A tag someone took off this transaction by hand.",
@@ -214,7 +228,7 @@ export const HELP = {
     what: "Whether the daily bank sync is up to date.",
     included: "A warning when the last sync is over 36 hours old, when an account has had no new balance for 2 days or more, or when the last sync failed.",
     leftOut: "Hidden and closed accounts, and accounts you enter by hand.",
-    todo: "If a warning stays for more than a day, reconnect the bank in SimpleFIN.",
+    todo: "When a bank's connection needs attention, use the SimpleFIN Bridge link on the warning: sign in there and sign in to that bank again. If another warning stays for more than a day, check the bank's connection in SimpleFIN Bridge too.",
   },
   "accounts.roles": {
     title: "Account roles",
@@ -222,6 +236,115 @@ export const HELP = {
     included: "Spending cash, reserve cash, credit card, emergency credit, loan, retirement, taxable investment, rewards, history and closed.",
     leftOut: "Accounts with no role, which are left out of net worth.",
     todo: "Open an account to change its role.",
+  },
+
+  // --- Plan tab (Phase 3 step 8d, A44, A47). No numbers here: backdating says "recent months". ---
+  "plan.projects": {
+    title: "Projects",
+    what: "Groups of planned payments and real payments that belong together, such as a remodel, a trip or an insurance claim.",
+    included: "Spent is money out on the project's payments, so far. Budget left is the budget minus what has been spent; money received, such as an insurer's payment, does not count against it.",
+    leftOut: "Payments not put on the project, and planned items that are not paid yet.",
+    todo: "Ask Claude to put the project's payments on it, or to add a rule that does. A single future cost needs no project, only a planned item.",
+  },
+  "plan.planning": {
+    title: "Planning",
+    what: "A project with only what-ifs so far.",
+    included: "Projects where every item is a what-if and nothing has been paid yet.",
+    leftOut: "It is not counted in free cash, because what-ifs are left out.",
+    todo: "When you commit, ask Claude to turn the what-if into a real item.",
+  },
+  "plan.upcoming": {
+    title: "Upcoming",
+    what: "One-off payments and income still to come, earliest first, with how firm each one is.",
+    included: "Every one-off not yet paid or cancelled, dated today or later, with what is left to pay or receive and its stage.",
+    leftOut: "Repeating items, which have their own list, and one-offs already past their date, which are under Missed dates.",
+    todo: "Tell Claude when a quote or invoice arrives so it can move the stage on.",
+  },
+  "plan.stages": {
+    title: "Stage",
+    what: "How firm a one-off payment or income is.",
+    included: "What if: an idea, not committed. Estimate: committed, with a rough amount. Quoted: a written quote is in hand. Invoiced: the bill has arrived and is owed. Paid: set by itself once matched payments cover the amount, counting what is left within the item's tolerance as covered. Cancelled: not happening, kept for the record.",
+    leftOut: "Repeating items, which have no stage.",
+    todo: "Tell Claude when a quote or invoice arrives so it can move the stage on. Removing a match never changes the stage by itself; you are asked first.",
+  },
+  "plan.project_items": {
+    title: "Planned items",
+    what: "Every planned payment and income on this project.",
+    included: "One-offs at every stage, with what is left of each, and repeating items with their schedule. What-ifs are marked.",
+    leftOut: "Planned items on other projects, or on none.",
+    todo: "Open one to see its matches. To add one or move it to this project, ask Claude.",
+  },
+  "plan.repeating": {
+    title: "Repeating",
+    what: "Bills and income that come back on a schedule, such as premiums or a salary.",
+    included: "Every due date from the start date to the end date. A new one starts from its first matching payment in recent months, so those payments get matched.",
+    leftOut: "Subscriptions, which have their own tab and are counted from there.",
+    todo: "To stop one, ask Claude to give it an end date. Its past dates stay matched.",
+  },
+  "plan.drafts": {
+    title: "What if",
+    what: "An idea, not a commitment.",
+    included: "It shows here so you can see it next to everything else.",
+    leftOut: "What-ifs are left out of free cash unless you include them on purpose.",
+    todo: "Ask Claude \"can we afford it?\" to see what it would do to free cash, without saving anything.",
+  },
+  "plan.missed_dates": {
+    title: "Missed dates",
+    what: "Due dates already past that no confirmed payment covers.",
+    included: "Past dates of repeating items, and one-offs past their date that are not paid. A date counts as covered when what is left is within the item's tolerance.",
+    leftOut: "Dates marked Not needed, and what-ifs.",
+    todo: "\"May still post\" usually just needs a wait. For the rest, ask Claude to match the payment, or to mark the date Not needed, for example a payment from before the bank sync started.",
+  },
+
+  "plan.project_totals": {
+    title: "Spent, received and net",
+    what: "What the project has cost so far, and what is still to come.",
+    included: "Spent is settled money out on the project's payments. Received is money in, such as an insurer's payment. Net is the two together. Budget left is the budget minus spent, not net. Still due is what its planned items have left to pay or receive, counting a date as covered once what is left is within the item's tolerance.",
+    leftOut: "Pending charges, until they settle. What-ifs, which are shown apart and not counted as still due.",
+    todo: "If a payment is missing, ask Claude to put it on the project. If the budget changes, ask Claude to update it.",
+  },
+  "plan.project_payments": {
+    title: "Payments",
+    what: "The settled payments with any part on this project, newest first.",
+    included: "A payment split across projects shows only the part on this one, with the payment's full amount beside it.",
+    leftOut: "Pending charges, and payments not put on the project.",
+    todo: "Open a payment to see it in full. To move one on or off the project, ask Claude.",
+  },
+
+  "plan.item_left": {
+    title: "Left to pay",
+    what: "How much of this one-off no confirmed payment covers yet.",
+    included: "The amount less every confirmed match. When what is left is within the item's tolerance it counts as covered, shows nothing left, and the item becomes paid by itself.",
+    leftOut: "Suggestions still waiting in Review, and turned-down matches.",
+    todo: "If a payment is missing, ask Claude to match it. A repeating item has no single amount left: each date is matched on its own.",
+  },
+  "plan.matches": {
+    title: "Matches",
+    what: "The payments linked to this item, and the app's suggestions.",
+    included: "Confirmed matches, which count against the item, with the amount each one covers; suggestions waiting in Review; and matches turned down, which are never suggested again.",
+    leftOut: "Payments nobody has linked yet.",
+    todo: "Remove a wrong confirmed match here. It becomes turned down, its payment goes back into spending, and the stage is only changed if you say so.",
+  },
+  "plan.over_matched": {
+    title: "More than planned",
+    what: "The confirmed payments add up to more than the item's amount, by more than its tolerance.",
+    included: "Confirmed matches only: a one-off in total, a repeating item on any one date.",
+    leftOut: "Nothing is blocked: a real overpayment can happen.",
+    todo: "Check for a wrong match and remove it, or ask Claude to raise the item's amount.",
+  },
+  "plan.not_needed": {
+    title: "Not needed",
+    what: "Past dates of this item marked as never going to be paid here, so they are not listed as missed.",
+    included: "Each marked date with the reason given.",
+    leftOut: "Dates still unmatched, which show under Missed dates on the Plan tab.",
+    todo: "Ask Claude to mark a date Not needed, or to take a mark off.",
+  },
+  "plan.delete_item": {
+    title: "Delete item",
+    what: "Removes this planned item for good, with all its matches and Not needed marks, in one step.",
+    included: "Confirmed matches go too, so those payments count in spending again. Suggestions and turned-down matches go. For a project item, the project's amounts still due change.",
+    leftOut: "The payments themselves, the project and everything else stay.",
+    todo: "To keep the record instead, ask Claude to cancel a one-off or give a repeating item an end date.",
   },
 
   // --- Free cash and true cost (Phase 3 step 5); reserved until Overview shows them in step 9 (A22) ---

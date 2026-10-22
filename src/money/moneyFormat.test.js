@@ -1,6 +1,6 @@
 import {
   billingChoice, billingFields, groupSubscriptions, intervalLabel, monthlyEquivalent, multiplierLabel, reviewSoon,
-  subscriptionBreakdown, subscriptionTotals,
+  subscriptionBreakdown, subscriptionTotals, leftOf, annotatePlannedItem,
 } from "./moneyFormat";
 import {
   addMonths, costBasisLabel, exclusionLabel, formatMoney, formatMonth, groupAccounts, groupQueue, holdingGain,
@@ -68,6 +68,15 @@ describe("syncStatus", () => {
       "1 account not updated: Stale One",
       "Last sync partial: bank needs login",
     ]);
+  });
+
+  it("says when SimpleFIN Bridge is where to fix it", () => {
+    const run = (status, error_message) => syncStatus([synced()], { status, error_message }, NOW).needsBridge;
+    expect(run("partial", "Connection to Example Bank may need attention. Auth required")).toBe(true);
+    expect(run("auth_expired", null)).toBe(true);
+    expect(run("failed", "timeout reading accounts")).toBe(false);
+    expect(run("ok", "may need attention")).toBe(false);
+    expect(syncStatus([synced()], null, NOW).needsBridge).toBe(false);
   });
 
   it("works without a run (Elise cannot read platform_runs) and ignores manual and closed accounts", () => {
@@ -236,5 +245,29 @@ describe("subscriptions", () => {
     expect(billingFields("weeks", "1.5")).toBeNull();
     expect(billingChoice(sub({ cadence: "other", interval_count: 2, interval_unit: "week" }))).toEqual({ choice: "weeks", count: "2" });
     expect(billingChoice(sub({ cadence: "annual" }))).toEqual({ choice: "annual", count: "" });
+  });
+});
+
+describe("planned items (A45)", () => {
+  it("leftOf: nothing due within the tolerance, the same as SQL wb_planned_left", () => {
+    expect(leftOf(100, 99.5, 1)).toBe(0);
+    expect(leftOf(100, 99, 1)).toBe(0);
+    expect(leftOf(100, 98.99, 1)).toBe(1.01);
+    expect(leftOf(100, 150, 0)).toBe(0);
+    expect(leftOf(100, 0, null)).toBe(100);
+  });
+
+  it("annotatePlannedItem: remaining with the sign, over_matched beyond the tolerance, drafts", () => {
+    const bill = { id: "b", amount: -100, amount_tolerance: 1, interval_count: null, stage: "invoiced" };
+    const a = (it, ...paid) => annotatePlannedItem(it, paid.map((p) => ({ planned_item_id: it.id, ...p })));
+    expect(a(bill, { amount_applied: -99.5 }).remaining).toBe(0);
+    expect(a(bill, { amount_applied: -98.99 }).remaining).toBe(-1.01);
+    expect(a({ ...bill, amount: 100 }, { amount_applied: 98.99 }).remaining).toBe(1.01);
+    expect(a(bill, { amount_applied: -101.01 }).over_matched).toBe(true);
+    expect(a(bill, { amount_applied: -100.99 }).over_matched).toBe(false);
+    const rep = { id: "r", amount: -50, amount_tolerance: 0, interval_count: 1, interval_unit: "month", is_draft: true };
+    const r = a(rep, { occurrence_on: "2031-01-05", amount_applied: -50 }, { occurrence_on: "2031-02-05", amount_applied: -50 });
+    expect([r.repeating, r.draft, r.remaining, r.over_matched, r.confirmed_total]).toEqual([true, true, null, false, -100]);
+    expect(a({ ...bill, stage: "draft" }).draft).toBe(true);
   });
 });

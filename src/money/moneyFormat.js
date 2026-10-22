@@ -142,8 +142,15 @@ export function syncStatus(accounts, latestRun, now = new Date()) {
   if (latestRun && latestRun.status !== "ok" && latestRun.status !== "running") {
     problems.push(`Last sync ${latestRun.status.replace("_", " ")}${latestRun.error_message ? `: ${latestRun.error_message}` : ""}`);
   }
-  return { ok: problems.length === 0, last, problems };
+  // A bank connection that needs signing in again is fixed in SimpleFIN Bridge, not here.
+  const needsBridge = Boolean(latestRun && latestRun.status !== "ok" && latestRun.status !== "running"
+    && (latestRun.status === "auth_expired" || BRIDGE_PROBLEM.test(latestRun.error_message || "")));
+  return { ok: problems.length === 0, last, problems, needsBridge };
 }
+
+/** Where bank connections are fixed: SimpleFIN Bridge, which the daily sync reads from. */
+export const SIMPLEFIN_BRIDGE_URL = "https://beta-bridge.simplefin.org/";
+const BRIDGE_PROBLEM = /need(s)? attention|auth(entication)? required|re-?auth|log ?in|sign ?in|credentials/i;
 
 export function formatDateTime(date) {
   if (!date) return "—";
@@ -444,4 +451,55 @@ export function billingFields(choice, countText) {
   const unit = choice === "weeks" ? "week" : "month";
   const named = unit === "month" && { 1: "monthly", 3: "quarterly", 12: "annual" }[n];
   return named ? { cadence: named } : { cadence: "other", interval_count: n, interval_unit: unit };
+}
+
+// --- Planned items (Phase 3, Step 8d) ---
+
+export const STAGE_LABELS = {
+  draft: "What if", estimate: "Estimate", quoted: "Quoted", invoiced: "Invoiced", paid: "Paid", cancelled: "Cancelled",
+};
+
+const roundCents = (n) => Math.round(n * 100) / 100;
+
+/**
+ * What is still due on a planned amount, as a positive number: 0 when what is left
+ * is within the tolerance (spec A45). The same rule as SQL wb_planned_left and the
+ * MCP handlers' leftOf.
+ */
+export function leftOf(full, paid, tolerance) {
+  const left = roundCents(full - paid);
+  return left <= roundCents(tolerance || 0) ? 0 : left;
+}
+
+export const isPlannedDraft = (it) => it.stage === "draft" || it.is_draft === true;
+export const isRepeating = (it) => it.interval_count !== null && it.interval_count !== undefined;
+
+/**
+ * A planned item with what is confirmed against it and, for a one-off, what remains
+ * (both with the item's sign), and over_matched beyond the tolerance (A37, A45). The
+ * same as annotateItem in supabase/functions/_shared/tools/warren-buffet-p3.ts.
+ */
+export function annotatePlannedItem(it, confirmed) {
+  const s = Math.sign(toNumber(it.amount) ?? 0);
+  const full = Math.abs(toNumber(it.amount) ?? 0);
+  const tol = toNumber(it.amount_tolerance) ?? 0;
+  const mine = confirmed.filter((m) => m.planned_item_id === it.id);
+  const perDate = new Map();
+  for (const m of mine) {
+    const k = m.occurrence_on || "";
+    perDate.set(k, (perDate.get(k) || 0) + Math.abs(toNumber(m.amount_applied) ?? 0));
+  }
+  const paid = [...perDate.values()].reduce((t, v) => t + v, 0);
+  const repeating = isRepeating(it);
+  const left = leftOf(full, paid, tol);
+  return {
+    ...it,
+    repeating,
+    draft: isPlannedDraft(it),
+    confirmed_total: roundCents(s * paid) || 0,
+    remaining: repeating ? null : (left === 0 ? 0 : roundCents(s * left)),
+    over_matched: repeating
+      ? [...perDate.values()].some((v) => roundCents(v - full) > roundCents(tol))
+      : roundCents(paid - full) > roundCents(tol),
+  };
 }

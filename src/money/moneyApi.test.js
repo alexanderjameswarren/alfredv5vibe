@@ -223,6 +223,28 @@ describe("subscriptions in review", () => {
     expect(op("wb_transactions", "in")[0]).toEqual(["in", "id", ["t1"]]);
   });
 
+  it("gives planned match rows the project, repeating, and what that date already has confirmed", async () => {
+    mockRespond = (table) => ({
+      wb_review_queue: { data: [
+        { reason: "planned_match", transaction_id: "t1", planned_item_id: "r1", planned_on: "2031-02-05" },
+        { reason: "planned_match", transaction_id: "t2", planned_item_id: "o1", planned_on: "2031-03-01" },
+      ], error: null },
+      wb_planned_items: { data: [
+        { id: "r1", interval_count: 1, project_id: null, project: null },
+        { id: "o1", interval_count: null, project_id: "p1", project: { name: "ZZ P" } },
+      ], error: null },
+      wb_planned_matches: { data: [
+        { planned_item_id: "r1", occurrence_on: "2031-01-05", amount_applied: -50 },
+        { planned_item_id: "r1", occurrence_on: "2031-02-05", amount_applied: -10 },
+        { planned_item_id: "o1", occurrence_on: null, amount_applied: -30 },
+      ], error: null },
+    }[table]);
+    const rows = await api.getReviewQueue();
+    expect(rows.map((r) => [r.planned_repeating, r.planned_already, r.planned_project_name])).toEqual(
+      [[true, 10, null], [false, 30, "ZZ P"]]);
+    expect(op("wb_planned_matches", "eq")[0]).toEqual(["eq", "status", "confirmed"]);
+  });
+
   it("records the charge's amount as a positive price from its date", async () => {
     await api.recordSubscriptionPrice("s1", { transaction_id: "t1", txn_date: "2026-01-05", amount: -12.5 });
     expect(op("wb_subscription_prices", "upsert")[0]).toEqual(["upsert",
@@ -279,5 +301,116 @@ describe("getKindRule", () => {
   it("is null with no matched rules", async () => {
     mockRespond = () => ({ data: { matched_rule_ids: [] }, error: null });
     expect(await api.getKindRule("t1")).toBeNull();
+  });
+});
+
+describe("getPlanOverview", () => {
+  it("reads the four sources, confirmed matches only, bounded, writing nothing", async () => {
+    mockRespond = (table) => ({ data: [{ table }], error: null });
+    const r = await api.getPlanOverview();
+    expect(mockLog.map((q) => q.table).sort()).toEqual(
+      ["wb_planned_items", "wb_planned_matches", "wb_planned_unmatched", "wb_project_summary"]);
+    expect(op("wb_planned_matches", "eq")[0]).toEqual(["eq", "status", "confirmed"]);
+    expect(mockLog.every((q) => has(q.ops, "limit"))).toBe(true);
+    expect(writes()).toHaveLength(0);
+    expect(r.missed).toEqual([{ table: "wb_planned_unmatched" }]);
+  });
+
+  it("turns a failure into a plain sentence", async () => {
+    mockRespond = (table) => (table === "wb_planned_unmatched" ? { data: null, error: { message: "boom" } } : { data: [], error: null });
+    await expect(api.getPlanOverview()).rejects.toThrow("Couldn't load the plan. Please try again.");
+  });
+});
+
+describe("planned item detail and its actions", () => {
+  it("is null when the item is not visible", async () => {
+    mockRespond = () => ({ data: null, error: null });
+    expect(await api.getPlannedItemDetail("i1")).toBeNull();
+    expect(mockLog).toHaveLength(1);
+  });
+
+  it("joins each match to its payment and reads the marks", async () => {
+    mockRespond = (table) => ({
+      wb_planned_items: { data: { id: "i1", name: "ZZ I" }, error: null },
+      wb_planned_matches: { data: [{ id: "m1", transaction_id: "t1", status: "confirmed" }, { id: "m2", transaction_id: "t9", status: "rejected" }], error: null },
+      wb_planned_skips: { data: [{ id: "k1", occurrence_on: "2031-01-05" }], error: null },
+      wb_transaction_list: { data: [{ id: "t1", txn_date: "2031-01-06" }], error: null },
+    }[table]);
+    const r = await api.getPlannedItemDetail("i1");
+    expect(r.matches.map((m) => [m.id, m.payment?.id ?? null])).toEqual([["m1", "t1"], ["m2", null]]);
+    expect(r.skips).toHaveLength(1);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("removes a match through wb_unconfirm_planned_match, and says plainly when it is not confirmed", async () => {
+    mockRpc = () => ({ data: { paid_not_covered: true }, error: null });
+    expect(await api.unconfirmPlannedMatch("m1")).toEqual({ paid_not_covered: true });
+    expect(mockRpcs[0]).toEqual(["wb_unconfirm_planned_match", { p_match_id: "m1" }]);
+    mockRpc = () => ({ data: null, error: { message: "wb_unconfirm_planned_match: this match is rejected, not confirmed" } });
+    await expect(api.unconfirmPlannedMatch("m1")).rejects.toThrow("That match is no longer confirmed, so there is nothing to remove.");
+  });
+
+  it("sets a paid one-off back to invoiced only, then asks for suggestions", async () => {
+    mockRespond = () => ({ data: [{ id: "i1" }], error: null });
+    await api.setPlannedItemBackToInvoiced("i1");
+    expect(op("wb_planned_items", "update")[0][1]).toEqual({ stage: "invoiced" });
+    expect(op("wb_planned_items", "eq")).toEqual([["eq", "id", "i1"], ["eq", "stage", "paid"]]);
+    expect(mockRpcs[0]).toEqual(["wb_suggest_planned_matches", { p_transaction_ids: null, p_planned_item_ids: ["i1"] }]);
+    mockRespond = () => ({ data: [], error: null });
+    await expect(api.setPlannedItemBackToInvoiced("i1")).rejects.toThrow(/no longer at stage paid/);
+  });
+
+  it("previews what a delete removes, then deletes through wb_delete_planned_item", async () => {
+    mockRespond = (table) => (table === "wb_planned_matches"
+      ? { data: [{ status: "confirmed" }, { status: "suggested" }, { status: "rejected" }, { status: "rejected" }], error: null }
+      : { data: [{ id: "k1" }], error: null });
+    expect(await api.getDeletePreview("i1")).toEqual({ confirmed: 1, suggested: 1, rejected: 2, skips: 1 });
+    mockRpc = () => ({ data: { confirmed: 1 }, error: null });
+    expect(await api.deletePlannedItem("i1")).toEqual({ confirmed: 1 });
+    expect(mockRpcs.at(-1)).toEqual(["wb_delete_planned_item", { p_id: "i1" }]);
+    expect(writes()).toHaveLength(0);
+  });
+});
+
+describe("setTransactionProject (A17)", () => {
+  const txn = { id: "t1", splits: [{ id: "s1" }] };
+
+  it("sets or clears the one part as a hand change", async () => {
+    mockRespond = () => ({ data: [{ id: "s1" }], error: null });
+    await api.setTransactionProject(txn, "p1");
+    expect(op("wb_splits", "update")[0][1]).toEqual({ project_id: "p1", project_source: "manual" });
+    expect(op("wb_splits", "eq")).toEqual([["eq", "id", "s1"], ["eq", "transaction_id", "t1"]]);
+    await api.setTransactionProject(txn, "");
+    expect(op("wb_splits", "update")[1][1]).toEqual({ project_id: null, project_source: "manual" });
+  });
+
+  it("refuses a split payment, writing nothing, and says when the row changed", async () => {
+    await expect(api.setTransactionProject({ id: "t1", splits: [{ id: "a" }, { id: "b" }] }, "p1")).rejects.toThrow(/ask Claude/);
+    expect(writes()).toHaveLength(0);
+    mockRespond = () => ({ data: [], error: null });
+    await expect(api.setTransactionProject(txn, "p1")).rejects.toThrow(/Nothing was changed/);
+  });
+});
+
+describe("getProjectDetail", () => {
+  it("is null when the project is not visible, and reads nothing more", async () => {
+    mockRespond = () => ({ data: null, error: null });
+    expect(await api.getProjectDetail("p1")).toBeNull();
+    expect(mockLog.map((q) => q.table).sort()).toEqual(["wb_project_summary", "wb_projects"]);
+  });
+
+  it("joins each part on the project to its payment, newest first, and reads confirmed matches only", async () => {
+    mockRespond = (table) => ({
+      wb_project_summary: { data: { project_id: "p1", name: "ZZ P" }, error: null },
+      wb_projects: { data: { id: "p1", notes: null }, error: null },
+      wb_planned_items: { data: [{ id: "i1" }], error: null },
+      wb_splits: { data: [{ id: "s1", transaction_id: "t1", amount: -40 }, { id: "s2", transaction_id: "t2", amount: -10 }], error: null },
+      wb_planned_matches: { data: [], error: null },
+      wb_transaction_list: { data: [{ id: "t1", txn_date: "2031-01-02" }, { id: "t2", txn_date: "2031-02-03", split_count: 2 }], error: null },
+    }[table]);
+    const r = await api.getProjectDetail("p1");
+    expect(r.payments.map((p) => [p.split_id, p.part_amount])).toEqual([["s2", -10], ["s1", -40]]);
+    expect(op("wb_planned_matches", "eq")[0]).toEqual(["eq", "status", "confirmed"]);
+    expect(writes()).toHaveLength(0);
   });
 });
