@@ -17,7 +17,7 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 6. Database: drop intents.is_item + is_intention comment; conformance
 - [x] 7. Database: group_types (seeded, with icons and execution_mode), contexts.default_group_type_id, item_groups, item_group_members, intents.group_id (+ one live intention per group), events.group_id, executions.group_id (+ intent_id and event_id nullable), notes target 'group', last_completed_at / status triggers (status_guard on item_groups); register_table (policy 'none' + shared-context policy); conformance
 - [x] 8. Data layer: group queries, derived names, realtime
-- [ ] 9. Group create/edit page (search-and-add, drag reorder, type picker, pin, archive)
+- [x] 9. Group create/edit page (done 2026-10-22, with removal history) (search-and-add, drag reorder, type picker, pin, archive)
 - [ ] 10. Group detail page (header, buttons, members, notes, recent executions)
 - [ ] 11. Context page: create button, browse tabs, group rows, sort
 - [ ] 12. Group chips on member rows and running cards; record-links order Context > Group > Item > Intention (incl. execution page); pinned groups on Home
@@ -100,3 +100,40 @@ Each step stops for Alex's verification before the next. Database steps follow t
     - to inbox_rowcap-x7k: `src/inbox/useInboxActions.js`, `src/records/recordRoutes.js`, `useAlfredData.js`, `useRealtime.js` and `Alfred.jsx`
   - 73 file claims are still held; no db: claims.
   - **Step 9 waits until inbox_rowcap-x7k has checkpointed.** Then: gitsync, and re-claim `src/Alfred.jsx` and `src/viewPaths.js` (+ test), plus `useAlfredData.js`, `useRealtime.js` or `recordRoutes.js` if needed (recordRoutes by step 12 at the latest).
+- 2026-10-22 Step 9 is blocked before any code.
+  - inbox_rowcap-x7k is merged and synced here. Drift: the sync brought only inbox loading changes (Alfred.jsx inbox routing, useAlfredData paging, inbox screens, inboxQueries) and the snapshot. The group loading is intact, so the spec needs no changes.
+  - `src/viewPaths.js` and `src/viewPaths.test.js` are held by warren_buffet_p3-q5k (since 2026-10-21). Nothing was claimed or written; waiting on Alex.
+- 2026-10-22 Step 9 built; awaiting Alex's Chrome and phone test.
+  - After warren_buffet_p3-q5k checkpointed: drift is Money plan paths only. Re-claimed `Alfred.jsx` and `viewPaths.js` (+ test); new `shared/useDragReorder.js` (+ test).
+  - Routes: `/groups/new/context/:contextId` and `/groups/edit/:groupId` (`groupNewPath`, `groupEditPath`, `groupRouteFromPath`). The bare forms, a stale id or a missing context go to /contexts.
+  - Save returns with Back when opened in the app (`state.fromApp`); a cold load goes to the group's context.
+  - `src/groups/GroupEditScreen.jsx`:
+    - EditCard, then collection-style member rows, then ContextForm's Save/Cancel footer and red-outline Archive with a confirm (edit only).
+    - Fields: name (placeholder = derived name), type (default = context's default), context, description, pin.
+    - Members whose record is gone or archived are hidden but kept.
+  - `MemberPicker.jsx`: items and intentions; this context by default, "Search all contexts" to widen; added members and groups' own intentions are left out.
+  - `GroupEditRoute.jsx`: save, archive with Undo, leave.
+  - `groupSave.js`: create is all-or-nothing (the group is deleted if a member write fails; members cascade); edit is a diff (delete, insert, move changed positions); a blank name is stored as null.
+  - `useDragReorder` is the collection page's drag, extracted. The collection page itself is unchanged (its drag state also pauses the collection poll).
+  - `ObjectIcon.jsx`: `GroupTypeIcon` (UtensilsCrossed, SquareKanban, ListOrdered, Boxes fallback).
+  - Tests: groupSave (7), GroupEditScreen (4), useDragReorder (2), viewPaths (+3). App 2808/2808, CLI 239/239.
+  - Not done: `groups` was not added to `ALFRED_FOLDERS`. It changes the EditCard guard's counts in `src/shared/EditCard.test.jsx`, which is not in the plan.
+- 2026-10-22 Step 9 tested by Alex in Chrome (create, desktop drag, remove, derived name, project, archive with Undo). Follow-ups built:
+  - The members button shows "+ Add Members" when closed and "Done adding" (no plus) when open.
+  - The archive pop-up has the Close pop-up's shape: portal, red-outline Archive with the shared `CancelButton` beside it.
+  - Member removal history, migration `149_restructure_p5_group_member_removal.sql` (written, not applied):
+    - Collections keep a separate append-only `collection_item_removals` table and delete the member. Their Put back re-adds it at the end, and the unique `(collection_id, item_id)` never sees two rows.
+    - Groups instead mark the member: `removed_at` and `removed_by`, stamped by a trigger. The unique rule now covers live rows only (`item_group_members_live_unique`), so a removed member can be added again.
+    - `recalc_last_completed_group`, `executions_last_completed`, `status_activate_on_execution` and `events_group_freeze` skip removed rows; `item_group_members_last_completed` recalculates when `removed_at` changes.
+  - Client:
+    - `groupModel` leaves removed members out and adds `removedMembers`.
+    - Save marks members removed; `restoreMember` puts one back at the end (refused if it is live again).
+    - New `/groups/history/:groupId` (`GroupHistoryScreen`) with Put back; "View removal history" on the edit page once something is removed.
+  - `groups` added to `ALFRED_FOLDERS`; `EditCard.test.jsx` claimed, counts 3→4 (Alfred's EditCard call sites), 4→5 (all call sites) and 5→6 (PinnedFooter).
+  - Claimed: `db:table:item_group_members`; `db:fn:` recalc_last_completed_group, events_group_freeze, item_group_members_last_completed, executions_last_completed, status_activate_on_execution, item_group_members_stamp_removal.
+  - App 2816/2816, CLI 239/239. The front end needs 149 applied before removal works.
+- 2026-10-22 Step 9 done.
+  - 149 applied and verified by Alex, then checkpointed with its verify script (db: claims released). All the follow-up Chrome tests passed.
+  - Bug fixed: Put back cleared `removed_at` on the removed row, which erased the history. `restoreMember` now inserts a new live row at the end and leaves the removed row as it is, the same as re-adding from the search. `GroupHistoryScreen.test.jsx` is new.
+  - Yielded `supabase/functions/mcp/index.ts` to warren_buffet_p3-q5k (unchanged from main). Step 16 must re-claim it.
+  - App 2818/2818, CLI 239/239.

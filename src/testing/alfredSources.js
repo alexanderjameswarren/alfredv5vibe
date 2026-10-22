@@ -20,6 +20,7 @@ export const ALFRED_FOLDERS = [
   "reminders",
   "recycle",
   "alfred",
+  "groups",
 ];
 
 // Files that existed outside Alfred.jsx before the split and move into the folders

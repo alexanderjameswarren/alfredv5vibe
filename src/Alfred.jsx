@@ -63,6 +63,7 @@ import ContextsScreen from "./contexts/ContextsScreen";
 import { useCollections } from "./collections/useCollections";
 import CollectionsScreen from "./collections/CollectionsScreen";
 import CollectionDetailScreen from "./collections/CollectionDetailScreen";
+import GroupEditRoute from "./groups/GroupEditRoute";
 import CollectionHistoryScreen from "./collections/CollectionHistoryScreen";
 import ItemAddToCollectionScreen from "./collections/ItemAddToCollectionScreen";
 import CollectionAddItemsScreen from "./collections/CollectionAddItemsScreen";
@@ -149,8 +150,11 @@ export default function Alfred() {
     ensureInboxRows,
     collections,
     setCollections,
+    groupTypes,
     setGroupTypes,
+    itemGroups,
     setItemGroups,
+    groupMembers,
     setGroupMembers,
     collectionMembers,
     setCollectionMembers,
@@ -1638,6 +1642,28 @@ export default function Alfred() {
             setPreviousView={setPreviousView}
             setSelectedCollectionId={setSelectedCollectionId}
             setView={setView}
+          />
+        )}
+
+        {/* Group create/edit (Restructure P5): /groups/new/context/:id, /groups/edit/:id */}
+        {(view === "group-new" || view === "group-edit" || view === "group-history") && (
+          <GroupEditRoute
+            currentPath={currentPath}
+            contexts={contexts}
+            items={items}
+            intents={intents}
+            groupTypes={groupTypes}
+            itemGroups={itemGroups}
+            groupMembers={groupMembers}
+            setItemGroups={setItemGroups}
+            setGroupMembers={setGroupMembers}
+            openContext={(contextId) => {
+              setSelectedContextId(contextId);
+              navigate(viewToPath("context-detail"), { replace: true });
+            }}
+            offerUndoFor={offerUndoFor}
+            withLoading={withLoading}
+            setUnsavedChanges={setUnsavedChanges}
           />
         )}
 

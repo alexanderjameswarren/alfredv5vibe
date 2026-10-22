@@ -1,6 +1,7 @@
 // Groups (Restructure P5): pure helpers over the loaded lists. No React, no storage.
 // A member row names an item or an intention by id with no foreign key, so every
-// reader goes through liveMembers, which leaves out deleted and archived records.
+// reader goes through liveMembers, which leaves out deleted and archived records
+// and removed members (removedAt set: the group's removal history, migration 149).
 
 export const FALLBACK_GROUP_ICON = "Boxes";
 export const NAME_JOINER = " + ";
@@ -12,7 +13,7 @@ export function liveMembers(groupId, { members = [], items = [], intents = [] })
   const itemsById = byId(items);
   const intentsById = byId(intents);
   return members
-    .filter((m) => m.groupId === groupId)
+    .filter((m) => m.groupId === groupId && !m.removedAt)
     .sort((a, b) => a.position - b.position || String(a.id).localeCompare(String(b.id)))
     .map((member) => {
       const record =
@@ -41,9 +42,29 @@ export function groupDisplayName(group, lists) {
 /** Non-archived groups that hold this item ("item") or intention ("intention"). */
 export function groupsForRecord(memberType, recordId, { groups = [], members = [] }) {
   const ids = new Set(
-    members.filter((m) => m.memberType === memberType && m.memberId === recordId).map((m) => m.groupId)
+    members
+      .filter((m) => m.memberType === memberType && m.memberId === recordId && !m.removedAt)
+      .map((m) => m.groupId)
   );
   return groups.filter((g) => ids.has(g.id) && !g.archived);
+}
+
+/**
+ * A group's removal history, newest first: [{ member, name, record }]. `record` is
+ * null when the item or intention is gone; the name then falls back to "Unavailable".
+ */
+export function removedMembers(groupId, { members = [], items = [], intents = [] }) {
+  const itemsById = byId(items);
+  const intentsById = byId(intents);
+  return members
+    .filter((m) => m.groupId === groupId && m.removedAt)
+    .sort((a, b) => String(b.removedAt).localeCompare(String(a.removedAt)))
+    .map((member) => {
+      const record =
+        (member.memberType === "item" ? itemsById.get(member.memberId) : intentsById.get(member.memberId)) || null;
+      const name = record ? (member.memberType === "item" ? record.name : record.text) : null;
+      return { member, record, name: name || "Unavailable" };
+    });
 }
 
 /** The group's own intention (at most one is not archived; intents_one_per_group). */
