@@ -22,6 +22,8 @@ import {
   recordPath,
   RECORD_VIEW,
   moneyAccountPath,
+  moneyPlannedItemPath,
+  moneyProjectPath,
   moneyRouteFromPath,
   moneySubscriptionPath,
   moneyTransactionPath,
@@ -472,7 +474,7 @@ describe("record links (/<id>)", () => {
 
 describe("money sub-routes", () => {
   it("resolves every Money screen to the money view", () => {
-    const none = { accountId: null, transactionId: null, subscriptionId: null, adding: false };
+    const none = { accountId: null, transactionId: null, subscriptionId: null, projectId: null, plannedItemId: null, adding: false };
     expect(moneyRouteFromPath("/money")).toEqual({ tab: "overview", ...none });
     expect(moneyRouteFromPath("/money/net-worth/")).toEqual({ tab: "net-worth", ...none });
     expect(moneyRouteFromPath("/money/accounts/new").adding).toBe(true);
@@ -483,16 +485,21 @@ describe("money sub-routes", () => {
     expect(moneyRouteFromPath("/money/spending").tab).toBe("spending");
     expect(moneyRouteFromPath("/money/subscriptions")).toEqual({ tab: "subscriptions", ...none });
     expect(moneyRouteFromPath(moneySubscriptionPath("s-3"))).toEqual({ tab: "subscriptions", ...none, subscriptionId: "s-3" });
+    expect(moneyRouteFromPath("/money/plan")).toEqual({ tab: "plan", ...none });
+    expect(moneyRouteFromPath(moneyProjectPath("p-1"))).toEqual({ tab: "plan", ...none, projectId: "p-1" });
+    expect(moneyRouteFromPath(moneyPlannedItemPath("i-2"))).toEqual({ tab: "plan", ...none, plannedItemId: "i-2" });
     for (const p of ["/money", "/money/accounts", "/money/accounts/abc-1", "/money/net-worth",
                      "/money/transactions", "/money/transactions/t-9", "/money/review", "/money/spending",
-                     "/money/subscriptions", "/money/subscriptions/s-3"]) {
+                     "/money/subscriptions", "/money/subscriptions/s-3", "/money/plan", "/money/plan/projects/p-1",
+                     "/money/plan/items/i-2"]) {
       expect(pathToView(p)).toBe("money");
       expect(isKnownPath(p)).toBe(true);
     }
   });
 
   it("rejects malformed Money paths", () => {
-    for (const p of ["/money/x", "/money/accounts/a/b", "/money/transactions/a/b", "/money/subscriptions/a/b", "/moneybags"]) {
+    for (const p of ["/money/x", "/money/accounts/a/b", "/money/transactions/a/b", "/money/subscriptions/a/b", "/moneybags",
+                     "/money/plan/projects", "/money/plan/items/a/b", "/money/plan/x"]) {
       expect(moneyRouteFromPath(p)).toBeNull();
       expect(isKnownPath(p)).toBe(false);
     }

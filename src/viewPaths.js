@@ -363,6 +363,18 @@ export const MONEY_REVIEW_PATH = "/money/review";
 export const MONEY_SPENDING_PATH = "/money/spending";
 // Step 8.
 export const MONEY_SUBSCRIPTIONS_PATH = "/money/subscriptions";
+// Phase 3 (warren_buffet_p3-q5k, Step 8d).
+export const MONEY_PLAN_PATH = "/money/plan";
+const MONEY_PLAN_PROJECTS_PATH = "/money/plan/projects";
+const MONEY_PLAN_ITEMS_PATH = "/money/plan/items";
+
+export function moneyProjectPath(projectId) {
+  return `${MONEY_PLAN_PROJECTS_PATH}/${encodeURIComponent(projectId)}`;
+}
+
+export function moneyPlannedItemPath(plannedItemId) {
+  return `${MONEY_PLAN_ITEMS_PATH}/${encodeURIComponent(plannedItemId)}`;
+}
 
 export function moneyAccountPath(accountId) {
   return `${MONEY_ACCOUNTS_PATH}/${encodeURIComponent(accountId)}`;
@@ -384,14 +396,15 @@ function childId(path, base) {
 }
 
 /**
- * @returns {{tab: "overview"|"accounts"|"transactions"|"review"|"spending"|"subscriptions"|"net-worth",
+ * @returns {{tab: "overview"|"accounts"|"transactions"|"review"|"spending"|"subscriptions"|"plan"|"net-worth",
  *            accountId: string|null, transactionId: string|null, subscriptionId: string|null,
- *            adding: boolean}|null}
+ *            projectId: string|null, plannedItemId: string|null, adding: boolean}|null}
  */
 export function moneyRouteFromPath(pathname) {
   const path = normalizePath(pathname);
   const route = (tab, extra = {}) => ({
-    tab, accountId: null, transactionId: null, subscriptionId: null, adding: false, ...extra,
+    tab, accountId: null, transactionId: null, subscriptionId: null, projectId: null, plannedItemId: null,
+    adding: false, ...extra,
   });
   if (path === MONEY_PATH) return route("overview");
   if (path === MONEY_NET_WORTH_PATH) return route("net-worth");
@@ -401,6 +414,11 @@ export function moneyRouteFromPath(pathname) {
   if (path === MONEY_REVIEW_PATH) return route("review");
   if (path === MONEY_SPENDING_PATH) return route("spending");
   if (path === MONEY_SUBSCRIPTIONS_PATH) return route("subscriptions");
+  if (path === MONEY_PLAN_PATH) return route("plan");
+  const projectId = childId(path, MONEY_PLAN_PROJECTS_PATH);
+  if (projectId) return route("plan", { projectId });
+  const plannedItemId = childId(path, MONEY_PLAN_ITEMS_PATH);
+  if (plannedItemId) return route("plan", { plannedItemId });
   const subscriptionId = childId(path, MONEY_SUBSCRIPTIONS_PATH);
   if (subscriptionId) return route("subscriptions", { subscriptionId });
   const accountId = childId(path, MONEY_ACCOUNTS_PATH);
