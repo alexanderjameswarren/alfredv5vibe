@@ -93,3 +93,10 @@ Each step stops for Alex's verification before the next. Database steps follow t
   - New `src/groups/groupModel.js`: `liveMembers` (position order; deleted and archived out), `derivedGroupName`, `groupDisplayName`, `groupsForRecord`, `groupIntention`, `groupTypeOf` and `groupIcon` (Boxes fallback), `hasRunningMember` (separately groups; active only).
   - Tests: `groupModel.test.js` (14), plus additions to `storage.test.js` and `useRealtime.test.js`. App 2779/2779, CLI 239/239.
   - `src/groups/` is not yet in `ALFRED_FOLDERS` (`testing/alfredSources.js`); add it in step 9, with the first screen.
+- 2026-10-21 Step 8 verified in Chrome by Alex and checkpointed.
+  - Yielded `src/alfred/useAlfredData.js`, `src/alfred/useRealtime.js` and `src/Alfred.jsx` to inbox_rowcap-x7k (all unchanged from main).
+  - Given up so far:
+    - to warren_buffet_p3-q5k: `src/viewPaths.js` and `src/viewPaths.test.js`
+    - to inbox_rowcap-x7k: `src/inbox/useInboxActions.js`, `src/records/recordRoutes.js`, `useAlfredData.js`, `useRealtime.js` and `Alfred.jsx`
+  - 73 file claims are still held; no db: claims.
+  - **Step 9 waits until inbox_rowcap-x7k has checkpointed.** Then: gitsync, and re-claim `src/Alfred.jsx` and `src/viewPaths.js` (+ test), plus `useAlfredData.js`, `useRealtime.js` or `recordRoutes.js` if needed (recordRoutes by step 12 at the latest).
