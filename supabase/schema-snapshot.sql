@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-21 14:44, through migration 146 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-21 15:06, through migration 147 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -2191,6 +2191,64 @@ COMMENT ON FUNCTION "public"."drive_mix_sweep"() IS 'DJ: add to the Drive Mix po
 
 
 
+CREATE OR REPLACE FUNCTION "public"."events_group_freeze"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_group text;
+  v_ids   jsonb;
+begin
+  select group_id into v_group from public.intents where id = new.intent_id;
+  if v_group is null then
+    return new;
+  end if;
+  new.group_id := v_group;
+  if new.item_ids is null or new.item_ids = '[]'::jsonb then
+    select coalesce(jsonb_agg(m.member_id order by m.position, m.member_id), '[]'::jsonb)
+      into v_ids
+      from public.item_group_members m
+      join public.items i on i.id = m.member_id
+     where m.group_id = v_group
+       and m.member_type = 'item'
+       and coalesce(i.archived, false) = false;
+    new.item_ids := v_ids;
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."events_group_freeze"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."events_group_freeze"() IS 'Restructure P5. BEFORE INSERT on events: on a group''s intention, sets group_id and, when item_ids is empty, freezes the group''s live item members into it in position order. status_activate_on_event then moves those items someday -> active (accepted: scheduling a menu is a commitment to cook its recipes; never out of background).';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."executions_group_tag"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_group text;
+begin
+  if new.group_id is null and new.intent_id is not null then
+    select group_id into v_group from public.intents where id = new.intent_id;
+    new.group_id := v_group;
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."executions_group_tag"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."executions_group_tag"() IS 'Restructure P5. BEFORE INSERT on executions: an execution on a group''s intention carries that group_id when the app did not set it.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."executions_last_completed"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public', 'pg_temp'
@@ -2198,6 +2256,7 @@ CREATE OR REPLACE FUNCTION "public"."executions_last_completed"() RETURNS "trigg
 declare
   v_intents text[];
   v_items   text[];
+  v_groups  text[];
   v_id      text;
 begin
   -- Nothing to do unless a completed execution appears, changes or disappears.
@@ -2211,7 +2270,8 @@ begin
      and old.closed_at  is not distinct from new.closed_at
      and old.started_at is not distinct from new.started_at
      and old.intent_id  is not distinct from new.intent_id
-     and old.item_ids   is not distinct from new.item_ids then
+     and old.item_ids   is not distinct from new.item_ids
+     and old.group_id   is not distinct from new.group_id then
     return null;
   end if;
 
@@ -2235,6 +2295,24 @@ begin
   end loop;
   foreach v_id in array v_items loop
     perform public.recalc_last_completed_item(v_id);
+  end loop;
+
+  -- Restructure P5: the execution's own group, and separately groups holding its item or intention.
+  select coalesce(array_agg(distinct g), '{}') into v_groups from (
+    select old.group_id as g where tg_op <> 'INSERT' and old.group_id is not null
+    union
+    select new.group_id where tg_op <> 'DELETE' and new.group_id is not null
+    union
+    select m.group_id
+      from public.item_group_members m
+      join public.item_groups ig on ig.id = m.group_id
+      join public.group_types t on t.id = ig.group_type_id
+     where t.execution_mode = 'separately'
+       and ((m.member_type = 'intention' and m.member_id = any(v_intents))
+            or (m.member_type = 'item' and m.member_id = any(v_items)))
+  ) s;
+  foreach v_id in array v_groups loop
+    perform public.recalc_last_completed_group(v_id);
   end loop;
   return null;
 end;
@@ -2458,6 +2536,31 @@ ALTER FUNCTION "public"."intents_last_completed"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."intents_last_completed"() IS 'Restructure P2. AFTER UPDATE OF item_id or DELETE on intents: recalculates the old and new item''s last_completed_at.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."item_group_members_last_completed"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if tg_op <> 'INSERT' then
+    perform public.recalc_last_completed_group(old.group_id);
+  end if;
+  if tg_op <> 'DELETE' and (tg_op = 'INSERT' or new.group_id is distinct from old.group_id
+                            or new.member_type is distinct from old.member_type
+                            or new.member_id is distinct from old.member_id) then
+    perform public.recalc_last_completed_group(new.group_id);
+  end if;
+  return null;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."item_group_members_last_completed"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."item_group_members_last_completed"() IS 'Restructure P5. A member added, removed or changed recomputes its group''s last_completed_at (matters for separately groups).';
 
 
 
@@ -3104,6 +3207,39 @@ ALTER FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "j
 
 
 COMMENT ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "jsonb") IS 'Alfred: process an inbox capture in one transaction: create its item, intention (taking the capture''s reminders) and event, add a collection member, then archive the capture as processed with outcome appended and source_app. Any failure writes nothing. Only the capture''s owner can process it. Does not use intents.is_item. Security invoker. Returns the rows written.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."recalc_last_completed_group"("p_group_id" "text") RETURNS "void"
+    LANGUAGE "sql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+  update public.item_groups g
+     set last_completed_at = s.v
+    from (select max(coalesce(x.closed_at, x.started_at)) as v
+            from public.executions x
+           where x.status = 'closed' and x.outcome = 'done'
+             and (x.group_id = p_group_id
+                  or exists (
+                    select 1
+                      from public.item_groups g2
+                      join public.group_types t on t.id = g2.group_type_id
+                      join public.item_group_members m on m.group_id = g2.id
+                     where g2.id = p_group_id
+                       and t.execution_mode = 'separately'
+                       and ((m.member_type = 'intention' and m.member_id = x.intent_id)
+                            or (m.member_type = 'item'
+                                and (x.item_ids ? m.member_id
+                                     or x.intent_id in (select i.id from public.intents i where i.item_id = m.member_id))))))) s
+   where g.id = p_group_id
+     and g.last_completed_at is distinct from s.v;
+$$;
+
+
+ALTER FUNCTION "public"."recalc_last_completed_group"("p_group_id" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."recalc_last_completed_group"("p_group_id" "text") IS 'Restructure P5. Recompute item_groups.last_completed_at: latest closed, done execution carrying the group_id, or for a separately group one of a member item or intention. Done-only, as items. Called by executions_last_completed and item_group_members_last_completed.';
 
 
 
@@ -4320,6 +4456,12 @@ begin
        union
        select jsonb_array_elements_text(ids)
      );
+
+  -- Restructure P5: a group's first scheduled event (someday only, as items).
+  update public.item_groups
+     set status = 'active'
+   where status = 'someday'
+     and id = new.group_id;
   return null;
 exception when others then
   raise warning 'status_activate_on_event % failed: %', new.id, sqlerrm;
@@ -4356,6 +4498,24 @@ begin
        union
        select jsonb_array_elements_text(ids)
      );
+
+  -- Restructure P5: the execution's own group, and separately groups holding its item or intention.
+  update public.item_groups g
+     set status = 'active'
+   where g.status = 'someday'
+     and (g.id = new.group_id
+          or g.id in (
+            select m.group_id
+              from public.item_group_members m
+              join public.item_groups g2 on g2.id = m.group_id
+              join public.group_types t on t.id = g2.group_type_id
+             where t.execution_mode = 'separately'
+               and ((m.member_type = 'intention' and m.member_id = new.intent_id)
+                    or (m.member_type = 'item' and m.member_id in (
+                          select i.item_id from public.intents i
+                           where i.id = new.intent_id and i.item_id is not null
+                          union
+                          select jsonb_array_elements_text(ids))))));
   return null;
 exception when others then
   raise warning 'status_activate_on_execution % failed: %', new.id, sqlerrm;
@@ -7459,7 +7619,8 @@ CREATE TABLE IF NOT EXISTS "public"."contexts" (
     "created_at" timestamp with time zone DEFAULT "now"(),
     "archived" boolean DEFAULT false NOT NULL,
     "default_collection_id" "text",
-    "app_id" "text"
+    "app_id" "text",
+    "default_group_type_id" "text"
 );
 
 
@@ -7501,6 +7662,10 @@ COMMENT ON COLUMN "public"."contexts"."default_collection_id" IS 'App: the colle
 
 
 COMMENT ON COLUMN "public"."contexts"."app_id" IS 'The app this context belongs to, or null. Set by hand on the context form. Not used to guess inbox.source_app (Restructure Phase 3 decision 3).';
+
+
+
+COMMENT ON COLUMN "public"."contexts"."default_group_type_id" IS 'Restructure P5. The group type the context page''s create button uses ("Create Menu"). Null = "Add Group". On type delete, set null.';
 
 
 
@@ -7950,7 +8115,8 @@ CREATE TABLE IF NOT EXISTS "public"."events" (
     "collection_id" "text",
     "updated_at" timestamp with time zone DEFAULT "now"(),
     "created_at" timestamp with time zone DEFAULT "now"(),
-    "source_inbox_id" "text"
+    "source_inbox_id" "text",
+    "group_id" "text"
 );
 
 
@@ -7967,7 +8133,7 @@ COMMENT ON COLUMN "public"."events"."time" IS 'DATE, not timestamp — Alfred sc
 
 
 
-COMMENT ON COLUMN "public"."events"."item_ids" IS 'jsonb array of item ids consulted for this event.';
+COMMENT ON COLUMN "public"."events"."item_ids" IS 'jsonb array of item ids consulted for this event. On a group''s intention, frozen at insert from the group''s item members in position order (events_group_freeze), so later group edits do not rewrite history.';
 
 
 
@@ -7975,10 +8141,14 @@ COMMENT ON COLUMN "public"."events"."source_inbox_id" IS 'The public.inbox row t
 
 
 
+COMMENT ON COLUMN "public"."events"."group_id" IS 'Restructure P5. Set (by events_group_freeze) when the event is on a group''s intention.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."executions" (
     "id" "text" NOT NULL,
-    "event_id" "text" NOT NULL,
-    "intent_id" "text" NOT NULL,
+    "event_id" "text",
+    "intent_id" "text",
     "context_id" "text",
     "item_ids" "jsonb" DEFAULT '[]'::"jsonb",
     "status" "text" NOT NULL,
@@ -7994,6 +8164,8 @@ CREATE TABLE IF NOT EXISTS "public"."executions" (
     "closed_at" timestamp with time zone,
     "prior_event_date" "date",
     "prior_intent_status" "text",
+    "group_id" "text",
+    CONSTRAINT "executions_has_subject" CHECK ((("intent_id" IS NOT NULL) OR ("group_id" IS NOT NULL) OR (COALESCE("item_ids", '[]'::"jsonb") <> '[]'::"jsonb"))),
     CONSTRAINT "executions_prior_intent_status_check" CHECK (("prior_intent_status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text"])))
 );
 
@@ -8005,6 +8177,14 @@ COMMENT ON TABLE "public"."executions" IS 'ALFRED. A working session against an 
 Final stage of the GTD chain. The ACTIVE EXECUTION is the single strongest real-time
 grounding signal for any Claude conversation about Alfred state: it says what the user
 is doing right now.';
+
+
+
+COMMENT ON COLUMN "public"."executions"."event_id" IS 'The event executed. Null only when intent_id is null (a recipe execution inside a menu). Restructure P5.';
+
+
+
+COMMENT ON COLUMN "public"."executions"."intent_id" IS 'The intention executed. Null only for a recipe execution inside a menu (group_id set, the recipe in item_ids), so recipes'' own events and open-execution rules are untouched. Restructure P5.';
 
 
 
@@ -8030,6 +8210,53 @@ COMMENT ON COLUMN "public"."executions"."prior_event_date" IS 'Restructure P4. T
 
 
 COMMENT ON COLUMN "public"."executions"."prior_intent_status" IS 'Restructure P4. The intention''s status before Start Now un-parked it (background); null when Start Now changed no status. Delete Execution of an in-progress execution restores it.';
+
+
+
+COMMENT ON COLUMN "public"."executions"."group_id" IS 'Restructure P5. The group this execution belongs to: a menu''s own execution (on the menu''s intention) and each recipe execution inside it. Copied from the intention by executions_group_tag when not given.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."group_types" (
+    "id" "text" DEFAULT ("gen_random_uuid"())::"text" NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "context_id" "text",
+    "label_singular" "text" NOT NULL,
+    "label_plural" "text" NOT NULL,
+    "icon" "text" DEFAULT 'Boxes'::"text" NOT NULL,
+    "execution_mode" "text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "group_types_execution_mode_check" CHECK (("execution_mode" = ANY (ARRAY['together'::"text", 'separately'::"text"]))),
+    CONSTRAINT "group_types_label_plural_check" CHECK (("btrim"("label_plural") <> ''::"text")),
+    CONSTRAINT "group_types_label_singular_check" CHECK (("btrim"("label_singular") <> ''::"text"))
+);
+
+
+ALTER TABLE "public"."group_types" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."group_types" IS 'ALFRED. Restructure P5. What a group is called in a context and how it executes: Menu/Menus in Recipes (together), Project/Projects in Alfred and Series/Series in Alex (body, mind, spirit) (separately). Owner OR shared-context RLS (mirrors intents).';
+
+
+
+COMMENT ON COLUMN "public"."group_types"."context_id" IS 'The context this type belongs to. On context delete, set null.';
+
+
+
+COMMENT ON COLUMN "public"."group_types"."label_singular" IS 'Shown in the app: "Create Menu", a group row''s type.';
+
+
+
+COMMENT ON COLUMN "public"."group_types"."label_plural" IS 'Shown in the app: the browse tab ("Menus") and member counts.';
+
+
+
+COMMENT ON COLUMN "public"."group_types"."icon" IS 'A lucide-react icon name from the app''s icon set: UtensilsCrossed (menu), SquareKanban (project), ListOrdered (series). Boxes is the fallback for any other type.';
+
+
+
+COMMENT ON COLUMN "public"."group_types"."execution_mode" IS 'together: one tap executes every item member (menu). separately: members are executed on their own intentions and the group has no Start Now (project, series).';
 
 
 
@@ -8167,6 +8394,7 @@ CREATE TABLE IF NOT EXISTS "public"."intents" (
     "last_completed_at" timestamp with time zone,
     "closed_reason" "text",
     "status_written_at" timestamp with time zone DEFAULT "now"(),
+    "group_id" "text",
     CONSTRAINT "intents_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
     CONSTRAINT "intents_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
 );
@@ -8229,6 +8457,10 @@ COMMENT ON COLUMN "public"."intents"."status_written_at" IS 'Restructure P4. Ser
 
 
 
+COMMENT ON COLUMN "public"."intents"."group_id" IS 'Restructure P5. Set on a group''s own intention, which carries the group''s one live event. At most one non-archived intention per group (intents_one_per_group). Members'' own intentions never carry it.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."item_collections" (
     "id" "text" NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -8274,6 +8506,106 @@ COMMENT ON COLUMN "public"."item_collections"."items" IS 'jsonb array of item id
 COMMENT ON COLUMN "public"."item_collections"."archived" IS 'Soft delete. Collections are never hard-deleted: the cascade to
    collection_items and collection_item_removals would destroy removal
    history, which is the recovery mechanism for accidental removals.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."item_group_members" (
+    "id" "text" DEFAULT ("gen_random_uuid"())::"text" NOT NULL,
+    "group_id" "text" NOT NULL,
+    "member_type" "text" NOT NULL,
+    "member_id" "text" NOT NULL,
+    "position" integer NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "item_group_members_member_type_check" CHECK (("member_type" = ANY (ARRAY['item'::"text", 'intention'::"text"])))
+);
+
+
+ALTER TABLE "public"."item_group_members" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."item_group_members" IS 'ALFRED. Restructure P5. The items and intentions in a group, in position order. member_id is items.id or intents.id by member_type, with no FK: reads leave out members that are deleted or archived. No context rule: a member may sit in another context. No user_id: access follows the parent group (item_groups RLS).';
+
+
+
+COMMENT ON COLUMN "public"."item_group_members"."member_type" IS 'item | intention: which table member_id names.';
+
+
+
+COMMENT ON COLUMN "public"."item_group_members"."member_id" IS 'items.id or intents.id, by member_type. No FK.';
+
+
+
+COMMENT ON COLUMN "public"."item_group_members"."position" IS 'Order in the group, ascending; set by drag reorder. The derived name follows it.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."item_groups" (
+    "id" "text" DEFAULT ("gen_random_uuid"())::"text" NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "group_type_id" "text" NOT NULL,
+    "context_id" "text",
+    "name" "text",
+    "description" "text",
+    "status" "text" DEFAULT 'someday'::"text" NOT NULL,
+    "status_changed_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "status_written_at" timestamp with time zone DEFAULT "now"(),
+    "closed_reason" "text",
+    "last_completed_at" timestamp with time zone,
+    "pinned" boolean DEFAULT false NOT NULL,
+    "archived" boolean DEFAULT false NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "item_groups_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
+    CONSTRAINT "item_groups_name_check" CHECK ((("name" IS NULL) OR ("btrim"("name") <> ''::"text"))),
+    CONSTRAINT "item_groups_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
+);
+
+
+ALTER TABLE "public"."item_groups" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."item_groups" IS 'ALFRED. Restructure P5. A permanent group above items and intentions: a Menu, a Project, a Series (group_types). Own status, notes (notes.target_type ''group''), pin to Home; scheduled through its own intention (intents.group_id). No tags: search finds a group through its members. Groups do not contain groups. Owner OR shared-context RLS (mirrors intents).';
+
+
+
+COMMENT ON COLUMN "public"."item_groups"."group_type_id" IS 'What kind of group (group_types). Restrict on delete.';
+
+
+
+COMMENT ON COLUMN "public"."item_groups"."context_id" IS 'Set from the type at creation; editable. On context delete, set null. Members need not share it.';
+
+
+
+COMMENT ON COLUMN "public"."item_groups"."name" IS 'Null = derived: built at read time from member names in position order, joined with " + ". Never stored. Typing a name stops derivation; clearing it resumes.';
+
+
+
+COMMENT ON COLUMN "public"."item_groups"."status" IS 'Same lifecycle as items: someday | active | background | closed. The group''s own, never computed from members; closing never touches members. Moved someday -> active by status_activate_on_execution (its first execution, or a separately group''s first member execution) and status_activate_on_event (its first scheduled event). status_guard: nothing returns to someday except the Undo of a close.';
+
+
+
+COMMENT ON COLUMN "public"."item_groups"."status_changed_at" IS 'When status last changed; also the closed date. Owned by status_guard, as on items.';
+
+
+
+COMMENT ON COLUMN "public"."item_groups"."status_written_at" IS 'Server time of the last status change; owned by status_guard, as on items.';
+
+
+
+COMMENT ON COLUMN "public"."item_groups"."closed_reason" IS 'Why it was closed: done | wont_do, as on items. Null = unknown.';
+
+
+
+COMMENT ON COLUMN "public"."item_groups"."last_completed_at" IS 'Latest closed, done execution: one carrying this group_id, or (separately groups only) one of a member item or intention. Owned by triggers (executions_last_completed, item_group_members_last_completed); client writes ignored.';
+
+
+
+COMMENT ON COLUMN "public"."item_groups"."pinned" IS 'Shown in Home''s Pinned Groups, as contexts and collections pin.';
+
+
+
+COMMENT ON COLUMN "public"."item_groups"."archived" IS 'Should not have existed. Separate from closed.';
 
 
 
@@ -8532,7 +8864,7 @@ CREATE TABLE IF NOT EXISTS "public"."notes" (
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     CONSTRAINT "notes_body_check" CHECK (("length"("btrim"("body")) > 0)),
-    CONSTRAINT "notes_target_type_check" CHECK (("target_type" = ANY (ARRAY['item'::"text", 'intention'::"text"])))
+    CONSTRAINT "notes_target_type_check" CHECK (("target_type" = ANY (ARRAY['item'::"text", 'intention'::"text", 'group'::"text"])))
 );
 
 
@@ -8551,11 +8883,11 @@ COMMENT ON COLUMN "public"."notes"."user_id" IS 'The author. Only the author can
 
 
 
-COMMENT ON COLUMN "public"."notes"."target_type" IS 'What target_id names: ''item'' or ''intention''.';
+COMMENT ON COLUMN "public"."notes"."target_type" IS 'What target_id names: ''item'', ''intention'' or ''group'' (Restructure P5).';
 
 
 
-COMMENT ON COLUMN "public"."notes"."target_id" IS 'items.id or intents.id, by target_type. No FK; notes_delete_for_target removes notes with their target. Execution notes target the execution''s intention.';
+COMMENT ON COLUMN "public"."notes"."target_id" IS 'items.id, intents.id or item_groups.id, by target_type. No FK; notes_delete_for_target removes notes with their target. Execution notes target the execution''s intention.';
 
 
 
@@ -11609,6 +11941,11 @@ ALTER TABLE ONLY "public"."executions"
 
 
 
+ALTER TABLE ONLY "public"."group_types"
+    ADD CONSTRAINT "group_types_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."inbox"
     ADD CONSTRAINT "inbox_pkey" PRIMARY KEY ("id");
 
@@ -11621,6 +11958,21 @@ ALTER TABLE ONLY "public"."intents"
 
 ALTER TABLE ONLY "public"."item_collections"
     ADD CONSTRAINT "item_collections_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."item_group_members"
+    ADD CONSTRAINT "item_group_members_group_id_member_type_member_id_key" UNIQUE ("group_id", "member_type", "member_id");
+
+
+
+ALTER TABLE ONLY "public"."item_group_members"
+    ADD CONSTRAINT "item_group_members_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."item_groups"
+    ADD CONSTRAINT "item_groups_pkey" PRIMARY KEY ("id");
 
 
 
@@ -12103,6 +12455,10 @@ CREATE INDEX "idx_events_collection_id" ON "public"."events" USING "btree" ("col
 
 
 
+CREATE INDEX "idx_events_group" ON "public"."events" USING "btree" ("group_id") WHERE ("group_id" IS NOT NULL);
+
+
+
 CREATE INDEX "idx_events_intent" ON "public"."events" USING "btree" ("intent_id");
 
 
@@ -12116,6 +12472,10 @@ CREATE INDEX "idx_executions_collection_id" ON "public"."executions" USING "btre
 
 
 CREATE INDEX "idx_executions_event" ON "public"."executions" USING "btree" ("event_id");
+
+
+
+CREATE INDEX "idx_executions_group" ON "public"."executions" USING "btree" ("group_id") WHERE ("group_id" IS NOT NULL);
 
 
 
@@ -12164,6 +12524,14 @@ CREATE INDEX "idx_item_collections_shared" ON "public"."item_collections" USING 
 
 
 CREATE INDEX "idx_item_collections_user_id" ON "public"."item_collections" USING "btree" ("user_id");
+
+
+
+CREATE INDEX "idx_item_group_members_member" ON "public"."item_group_members" USING "btree" ("member_type", "member_id");
+
+
+
+CREATE INDEX "idx_item_groups_context" ON "public"."item_groups" USING "btree" ("context_id");
 
 
 
@@ -12268,6 +12636,10 @@ CREATE UNIQUE INDEX "inbox_email_message_id_key" ON "public"."inbox" USING "btre
 
 
 COMMENT ON INDEX "public"."inbox_email_message_id_key" IS 'email_capture-f4m: one row per Postmark delivery (MessageID) per user. email-capture answers a violation with 200 duplicate so Postmark stops retrying. Null messageId is never in conflict.';
+
+
+
+CREATE UNIQUE INDEX "intents_one_per_group" ON "public"."intents" USING "btree" ("group_id") WHERE (("group_id" IS NOT NULL) AND ("archived" IS NOT TRUE));
 
 
 
@@ -12583,6 +12955,10 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."group_types" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."inbox" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -12592,6 +12968,14 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."item_collections" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."item_group_members" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."item_groups" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
 
@@ -12755,7 +13139,15 @@ CREATE OR REPLACE TRIGGER "drive_mix_songs_set_artist_key" BEFORE INSERT OR UPDA
 
 
 
+CREATE OR REPLACE TRIGGER "events_group_freeze" BEFORE INSERT ON "public"."events" FOR EACH ROW EXECUTE FUNCTION "public"."events_group_freeze"();
+
+
+
 CREATE OR REPLACE TRIGGER "events_status_activate" AFTER INSERT ON "public"."events" FOR EACH ROW WHEN (("new"."archived" IS NOT TRUE)) EXECUTE FUNCTION "public"."status_activate_on_event"();
+
+
+
+CREATE OR REPLACE TRIGGER "executions_group_tag" BEFORE INSERT ON "public"."executions" FOR EACH ROW EXECUTE FUNCTION "public"."executions_group_tag"();
 
 
 
@@ -12784,6 +13176,22 @@ CREATE OR REPLACE TRIGGER "intents_last_completed_guard" BEFORE INSERT OR UPDATE
 
 
 CREATE OR REPLACE TRIGGER "intents_status_guard" BEFORE UPDATE ON "public"."intents" FOR EACH ROW EXECUTE FUNCTION "public"."status_guard"();
+
+
+
+CREATE OR REPLACE TRIGGER "item_group_members_last_completed" AFTER INSERT OR DELETE OR UPDATE ON "public"."item_group_members" FOR EACH ROW EXECUTE FUNCTION "public"."item_group_members_last_completed"();
+
+
+
+CREATE OR REPLACE TRIGGER "item_groups_delete_notes" AFTER DELETE ON "public"."item_groups" FOR EACH ROW EXECUTE FUNCTION "public"."notes_delete_for_target"('group');
+
+
+
+CREATE OR REPLACE TRIGGER "item_groups_last_completed_guard" BEFORE INSERT OR UPDATE ON "public"."item_groups" FOR EACH ROW EXECUTE FUNCTION "public"."last_completed_guard"();
+
+
+
+CREATE OR REPLACE TRIGGER "item_groups_status_guard" BEFORE UPDATE ON "public"."item_groups" FOR EACH ROW EXECUTE FUNCTION "public"."status_guard"();
 
 
 
@@ -12847,6 +13255,10 @@ CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."executions
 
 
 
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."group_types" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
 CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."inbox" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
 
 
@@ -12856,6 +13268,14 @@ CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."intents" F
 
 
 CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."item_collections" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."item_group_members" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."item_groups" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
 
 
 
@@ -13033,6 +13453,11 @@ ALTER TABLE ONLY "public"."contexts"
 
 
 ALTER TABLE ONLY "public"."contexts"
+    ADD CONSTRAINT "contexts_default_group_type_id_fkey" FOREIGN KEY ("default_group_type_id") REFERENCES "public"."group_types"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."contexts"
     ADD CONSTRAINT "contexts_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
 
 
@@ -13143,6 +13568,11 @@ ALTER TABLE ONLY "public"."events"
 
 
 ALTER TABLE ONLY "public"."events"
+    ADD CONSTRAINT "events_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."item_groups"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."events"
     ADD CONSTRAINT "events_source_inbox_id_fkey" FOREIGN KEY ("source_inbox_id") REFERENCES "public"."inbox"("id") ON DELETE SET NULL;
 
 
@@ -13153,7 +13583,22 @@ ALTER TABLE ONLY "public"."events"
 
 
 ALTER TABLE ONLY "public"."executions"
+    ADD CONSTRAINT "executions_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."item_groups"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."executions"
     ADD CONSTRAINT "executions_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."group_types"
+    ADD CONSTRAINT "group_types_context_id_fkey" FOREIGN KEY ("context_id") REFERENCES "public"."contexts"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."group_types"
+    ADD CONSTRAINT "group_types_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
 
 
 
@@ -13173,6 +13618,11 @@ ALTER TABLE ONLY "public"."intents"
 
 
 ALTER TABLE ONLY "public"."intents"
+    ADD CONSTRAINT "intents_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."item_groups"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."intents"
     ADD CONSTRAINT "intents_source_inbox_id_fkey" FOREIGN KEY ("source_inbox_id") REFERENCES "public"."inbox"("id") ON DELETE SET NULL;
 
 
@@ -13184,6 +13634,26 @@ ALTER TABLE ONLY "public"."intents"
 
 ALTER TABLE ONLY "public"."item_collections"
     ADD CONSTRAINT "item_collections_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."item_group_members"
+    ADD CONSTRAINT "item_group_members_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."item_groups"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."item_groups"
+    ADD CONSTRAINT "item_groups_context_id_fkey" FOREIGN KEY ("context_id") REFERENCES "public"."contexts"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."item_groups"
+    ADD CONSTRAINT "item_groups_group_type_id_fkey" FOREIGN KEY ("group_type_id") REFERENCES "public"."group_types"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."item_groups"
+    ADD CONSTRAINT "item_groups_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
 
 
 
@@ -13998,6 +14468,17 @@ CREATE POLICY "executions_access" ON "public"."executions" USING ((("user_id" = 
 
 
 
+ALTER TABLE "public"."group_types" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "group_types_access" ON "public"."group_types" TO "authenticated" USING ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true))))) WITH CHECK ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true)))));
+
+
+
 ALTER TABLE "public"."inbox" ENABLE ROW LEVEL SECURITY;
 
 
@@ -14028,6 +14509,28 @@ CREATE POLICY "item_collections_shared_read" ON "public"."item_collections" FOR 
 
 
 CREATE POLICY "item_collections_shared_update" ON "public"."item_collections" FOR UPDATE USING (("shared" = true)) WITH CHECK (("shared" = true));
+
+
+
+ALTER TABLE "public"."item_group_members" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "item_group_members_access" ON "public"."item_group_members" TO "authenticated" USING ((EXISTS ( SELECT 1
+   FROM "public"."item_groups" "g"
+  WHERE ("g"."id" = "item_group_members"."group_id")))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM "public"."item_groups" "g"
+  WHERE ("g"."id" = "item_group_members"."group_id"))));
+
+
+
+ALTER TABLE "public"."item_groups" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "item_groups_access" ON "public"."item_groups" TO "authenticated" USING ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true))))) WITH CHECK ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true)))));
 
 
 
@@ -14088,7 +14591,9 @@ CREATE POLICY "notes_insert" ON "public"."notes" FOR INSERT TO "authenticated" W
    FROM "public"."items" "i"
   WHERE (("i"."id" = "notes"."target_id") AND (COALESCE("i"."archived", false) = false))))) OR (("target_type" = 'intention'::"text") AND (EXISTS ( SELECT 1
    FROM "public"."intents" "t"
-  WHERE (("t"."id" = "notes"."target_id") AND (COALESCE("t"."archived", false) = false)))))) AND (("execution_id" IS NULL) OR (EXISTS ( SELECT 1
+  WHERE (("t"."id" = "notes"."target_id") AND (COALESCE("t"."archived", false) = false))))) OR (("target_type" = 'group'::"text") AND (EXISTS ( SELECT 1
+   FROM "public"."item_groups" "g"
+  WHERE (("g"."id" = "notes"."target_id") AND ("g"."archived" = false)))))) AND (("execution_id" IS NULL) OR (EXISTS ( SELECT 1
    FROM "public"."executions" "x"
   WHERE ("x"."id" = "notes"."execution_id"))))));
 
@@ -14098,7 +14603,9 @@ CREATE POLICY "notes_select" ON "public"."notes" FOR SELECT TO "authenticated" U
    FROM "public"."items" "i"
   WHERE ("i"."id" = "notes"."target_id")))) OR (("target_type" = 'intention'::"text") AND (EXISTS ( SELECT 1
    FROM "public"."intents" "t"
-  WHERE ("t"."id" = "notes"."target_id"))))));
+  WHERE ("t"."id" = "notes"."target_id")))) OR (("target_type" = 'group'::"text") AND (EXISTS ( SELECT 1
+   FROM "public"."item_groups" "g"
+  WHERE ("g"."id" = "notes"."target_id"))))));
 
 
 
@@ -14106,7 +14613,9 @@ CREATE POLICY "notes_update" ON "public"."notes" FOR UPDATE TO "authenticated" U
    FROM "public"."items" "i"
   WHERE ("i"."id" = "notes"."target_id")))) OR (("target_type" = 'intention'::"text") AND (EXISTS ( SELECT 1
    FROM "public"."intents" "t"
-  WHERE ("t"."id" = "notes"."target_id")))))));
+  WHERE ("t"."id" = "notes"."target_id")))) OR (("target_type" = 'group'::"text") AND (EXISTS ( SELECT 1
+   FROM "public"."item_groups" "g"
+  WHERE ("g"."id" = "notes"."target_id")))))));
 
 
 
@@ -14526,6 +15035,18 @@ GRANT ALL ON FUNCTION "public"."drive_mix_sweep"() TO "service_role";
 
 
 
+GRANT ALL ON FUNCTION "public"."events_group_freeze"() TO "anon";
+GRANT ALL ON FUNCTION "public"."events_group_freeze"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."events_group_freeze"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."executions_group_tag"() TO "anon";
+GRANT ALL ON FUNCTION "public"."executions_group_tag"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."executions_group_tag"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."executions_last_completed"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."executions_last_completed"() TO "service_role";
 
@@ -14557,6 +15078,12 @@ GRANT ALL ON FUNCTION "public"."inbox_set_source_app"() TO "service_role";
 
 REVOKE ALL ON FUNCTION "public"."intents_last_completed"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."intents_last_completed"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."item_group_members_last_completed"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."item_group_members_last_completed"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."item_group_members_last_completed"() TO "service_role";
 
 
 
@@ -14627,6 +15154,12 @@ GRANT ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p
 REVOKE ALL ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "jsonb") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "jsonb") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."recalc_last_completed_group"("p_group_id" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."recalc_last_completed_group"("p_group_id" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."recalc_last_completed_group"("p_group_id" "text") TO "service_role";
 
 
 
@@ -15194,6 +15727,11 @@ GRANT ALL ON TABLE "public"."executions" TO "service_role";
 
 
 
+GRANT ALL ON TABLE "public"."group_types" TO "authenticated";
+GRANT ALL ON TABLE "public"."group_types" TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."inbox" TO "authenticated";
 GRANT ALL ON TABLE "public"."inbox" TO "service_role";
 
@@ -15206,6 +15744,16 @@ GRANT ALL ON TABLE "public"."intents" TO "service_role";
 
 GRANT ALL ON TABLE "public"."item_collections" TO "authenticated";
 GRANT ALL ON TABLE "public"."item_collections" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."item_group_members" TO "authenticated";
+GRANT ALL ON TABLE "public"."item_group_members" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."item_groups" TO "authenticated";
+GRANT ALL ON TABLE "public"."item_groups" TO "service_role";
 
 
 

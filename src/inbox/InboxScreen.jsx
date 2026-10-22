@@ -35,7 +35,10 @@ export default function InboxScreen({
   archivedInboxItems,
   olderArchived,
   archivedShowAll,
-  setArchivedShowAll,
+  toggleArchivedShowAll,
+  hasMoreOlderArchived,
+  loadingOlderArchived,
+  loadOlderArchived,
   archivedExpanded,
   setArchivedExpanded,
   unarchiveInboxItem,
@@ -108,7 +111,10 @@ export default function InboxScreen({
         rows={archivedInboxItems}
         olderCount={olderArchived}
         showAll={archivedShowAll}
-        onToggleShowAll={() => setArchivedShowAll((v) => !v)}
+        onToggleShowAll={toggleArchivedShowAll}
+        hasMore={hasMoreOlderArchived}
+        loadingMore={loadingOlderArchived}
+        onLoadMore={loadOlderArchived}
         expanded={archivedExpanded}
         onToggleExpanded={() => setArchivedExpanded((v) => !v)}
         outcomeFor={(row) => archiveOutcome(row, { items, intents, events })}

@@ -7,14 +7,12 @@
  * "what happened" are the whole of this feature and all three are worth asserting
  * without rendering anything.
  *
- * ── Why archived rows are now in state at all ─────────────────────────────────
+ * ── How archived rows reach state ─────────────────────────────────────────────
  *
- * They were always FETCHED. `loadData` and `refreshData` both did
- * `supabase.from("inbox").select("*")` — no filter — and then threw the archived ones
- * away in JavaScript, which is why this section costs nothing at the network: the rows
- * were already on the wire. Alfred.jsx now keeps them, holds ONE list, and derives the
- * live inbox and this section from it. Two lists kept in step by hand is what the
- * pinned-footer rounds were about.
+ * Alfred holds ONE inbox list and derives the live inbox and this section from it; two
+ * lists kept in step by hand is what the pinned-footer rounds were about. The loaders
+ * read the live rows and this window (alfred/inboxQueries.js); "Show all" pages older
+ * rows into the same list. Reading the whole table hit PostgREST's 1000-row cap.
  */
 
 /** How far back the section reaches before "Show all" is needed. */
@@ -54,22 +52,21 @@ function allArchived(inboxItems) {
 export function recentlyArchived(inboxItems, { now = new Date(), showAll = false } = {}) {
   const rows = allArchived(inboxItems);
   if (showAll) return rows;
-  const cutoff = new Date(now.getTime() - RECENT_ARCHIVE_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  // A row with no stamp at all is OLDER than the window, not newer: `"" < cutoff` is
-  // true, so it is hidden until "Show all". That is the right way round — an unstamped
-  // row is a pre-066 relic, not something that just happened.
-  return rows.filter((i) => archivedAt(i) >= cutoff);
+  const cutoff = archiveCutoff(now);
+  // The window reads `triagedAt` only, exactly as the database query does
+  // (alfred/inboxQueries.js). A row with no stamp is a pre-066 relic: OLDER, behind
+  // "Show all", even if something touched its `updatedAt` this week.
+  return rows.filter((i) => (i.triagedAt || "") >= cutoff);
 }
 
-/**
- * How many more rows "Show all" would reveal.
- *
- * Zero means the control is hidden. A "Show all" that shows exactly what is already on
- * screen is a control that does nothing — the same reasoning that keeps a source tab off
- * the row until its source has items.
- */
-export function olderArchivedCount(inboxItems, { now = new Date() } = {}) {
-  return allArchived(inboxItems).length - recentlyArchived(inboxItems, { now }).length;
+/** The start of the "Recently archived" window, as an ISO string. */
+export function archiveCutoff(now = new Date()) {
+  return new Date(now.getTime() - RECENT_ARCHIVE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/** Whether an archived row falls inside the window — the one rule the query and state share. */
+export function isRecentlyArchived(inboxItem, now = new Date()) {
+  return Boolean(inboxItem?.archived) && (inboxItem.triagedAt || "") >= archiveCutoff(now);
 }
 
 /**

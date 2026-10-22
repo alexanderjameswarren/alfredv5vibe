@@ -44,8 +44,12 @@ import EventMetaLink from "../schedule/EventMetaLink";
 /**
  * @param {Array}    rows        The archived captures to show, already windowed and
  *   ordered by `recentlyArchived`. Newest departure first.
- * @param {number}   olderCount  How many more "Show all" would reveal. 0 hides it.
+ * @param {number}   olderCount  How many archived rows are older than the window (a count
+ *   query, not state). 0 hides "Show all".
  * @param {boolean}  showAll     Whether the window is currently off.
+ * @param {boolean}  hasMore     Show all: older rows not fetched yet. Shows "Load more".
+ * @param {boolean}  loadingMore A page is on its way.
+ * @param {Function} onLoadMore  Fetches the next page of older rows.
  * @param {Function} onToggleShowAll
  * @param {boolean}  expanded
  * @param {Function} onToggleExpanded
@@ -63,6 +67,9 @@ export default function RecentlyArchived({
   olderCount = 0,
   showAll = false,
   onToggleShowAll,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
   expanded,
   onToggleExpanded,
   outcomeFor,
@@ -126,6 +133,16 @@ export default function RecentlyArchived({
                 ))}
               </div>
             ))
+          )}
+          {showAll && (hasMore || loadingMore) && (
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={loadingMore}
+              className="mt-2 text-sm text-primary hover:underline disabled:text-muted-foreground disabled:no-underline"
+            >
+              {loadingMore ? "Loading…" : "Load more"}
+            </button>
           )}
         </div>
       )}

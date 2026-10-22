@@ -20,10 +20,8 @@ import { useExecutionRoute } from "./useExecutionRoute";
 import { useInboxActions } from "./inbox/useInboxActions";
 import InboxScreen from "./inbox/InboxScreen";
 import InboxDetailScreen from "./inbox/InboxDetailScreen";
-import {
-  olderArchivedCount,
-  recentlyArchived,
-} from "./utils/inboxArchive";
+import { recentlyArchived } from "./utils/inboxArchive";
+import { inboxIdOfRecord } from "./alfred/inboxQueries";
 import {
   ALL_SOURCES,
   effectiveSource,
@@ -141,6 +139,14 @@ export default function Alfred() {
     allInboxItems,
     setAllInboxItems,
     inboxItems,
+    olderArchivedTotal,
+    hasMoreOlderArchived,
+    olderArchivedLoaded,
+    loadingOlderArchived,
+    loadOlderArchived,
+    findInboxRow,
+    inboxRowState,
+    ensureInboxRows,
     collections,
     setCollections,
     setGroupTypes,
@@ -476,11 +482,18 @@ export default function Alfred() {
   // opens what it became instead. "kind:id", or "" to fall back to the list.
   const archivedInboxTarget = (() => {
     if (!inboxDetailMissing || !routeInboxId) return "";
-    const row = allInboxItems.find((i) => i.id === routeInboxId);
+    const row = findInboxRow(routeInboxId);
     if (!row?.archived) return "";
     const t = archivedCaptureTarget(routeInboxId, { items, intents, events });
     return t ? `${t.kind}:${t.id}` : "";
   })();
+  // An older archived capture is not loaded with the app: fetch it, and hold the
+  // redirect below until we know, rather than bouncing to the list.
+  const routeInboxState = inboxDetailMissing && routeInboxId ? inboxRowState(routeInboxId) : "loaded";
+  const inboxRoutePending = routeInboxState === "unknown" || routeInboxState === "pending";
+  useEffect(() => {
+    if (inboxRoutePending) ensureInboxRows([routeInboxId]);
+  }, [inboxRoutePending, routeInboxId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Intention detail route (Reminders) -----------------------------------
   // `/intentions/detail/:id`, which is where an intention-linked reminder's tap
@@ -599,6 +612,7 @@ export default function Alfred() {
       }
       return;
     }
+    if (inboxRoutePending) return;
     if (inboxDetailMissing || intentionDetailMissing) {
       navigate(parentPath(currentPath), { replace: true });
       return;
@@ -610,20 +624,31 @@ export default function Alfred() {
     }
     // `replace` in every case: a path the app cannot render should not become
     // a history entry the Back button can return the user to.
-  }, [currentPath, detailStateMissing, addTargetMissing, inboxDetailMissing, intentionDetailMissing, archivedInboxTarget, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentPath, detailStateMissing, addTargetMissing, inboxDetailMissing, inboxRoutePending, intentionDetailMissing, archivedInboxTarget, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- Record links (/<id>) -------------------------------------------------
   // `replace` throughout, so Back skips the /<id> address. State-opened detail
   // views mirror the archived-inbox redirect above. The lookup lets the map
   // pick only screens whose row is loaded; see records/recordRoutes.js.
+  // `findInboxRow` reads a ref, so a capture fetched in `resolveRecordWithInbox` is
+  // found by the screen's lookup before the merge into state has rendered.
   const recordLookup = {
-    inbox: (id) => allInboxItems.find((i) => i.id === id) || null,
+    inbox: (id) => findInboxRow(id),
     item: (id) => items.some((i) => i.id === id),
     intention: (id) => intents.some((i) => i.id === id),
     context: (id) => contexts.some((c) => c.id === id),
     collection: (id) => collections.some((c) => c.id === id),
     archivedTarget: (id) => archivedCaptureTarget(id, { items, intents, events }),
   };
+
+  // /<id> for a capture (or its clip or reminder) older than the loaded window: fetch the
+  // capture before the screen picks a destination, so it opens what it became.
+  async function resolveRecordWithInbox(id) {
+    const res = await supabase.rpc("resolve_record", { p_id: id });
+    const inboxId = res.error ? null : inboxIdOfRecord(res.data);
+    if (inboxId && !findInboxRow(inboxId)) await ensureInboxRows([inboxId]);
+    return res;
+  }
 
   function openRecordDestination(dest) {
     if (dest.kind === "path") {
@@ -1071,15 +1096,25 @@ export default function Alfred() {
   // the trap `effectiveSource` exists to avoid. The window and "Show all" are its own
   // controls.
   // The capture a filed record came from, for the two detail views' Original capture
-  // section. Reads `allInboxItems` rather than `inboxItems`: triage ARCHIVES the row, so
-  // by the time anything links to it, it is out of the live list by definition.
+  // section. Not `inboxItems`: triage ARCHIVES the row, so by the time anything links to
+  // it, it is out of the live list by definition — and often older than the loaded window,
+  // so the effect below fetches it.
   const capturedTextFor = (record) =>
-    record?.sourceInboxId
-      ? allInboxItems.find((i) => i.id === record.sourceInboxId)?.capturedText || null
-      : null;
+    record?.sourceInboxId ? findInboxRow(record.sourceInboxId)?.capturedText || null : null;
+  const openSourceInboxIds = [
+    intents.find((i) => i.id === effectiveIntentionId)?.sourceInboxId,
+    items.find((i) => i.id === selectedItemId)?.sourceInboxId,
+  ].filter(Boolean);
+  useEffect(() => {
+    ensureInboxRows(openSourceInboxIds);
+  }, [openSourceInboxIds.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const archivedInboxItems = recentlyArchived(allInboxItems, { showAll: archivedShowAll });
-  const olderArchived = olderArchivedCount(allInboxItems);
+  // Show all's first page loads when it is first turned on; "Load more" reads the rest.
+  function toggleArchivedShowAll() {
+    if (!archivedShowAll && !olderArchivedLoaded) loadOlderArchived();
+    setArchivedShowAll((v) => !v);
+  }
   // Keywords are not on the card, so a keyword hit shows a row whose visible
   // text does not contain the query. Accepted deliberately.
   const visibleContexts = sortRows(
@@ -1212,9 +1247,12 @@ export default function Alfred() {
             discardInboxItem={discardInboxItem}
             setInboxSuggestedStatus={setInboxSuggestedStatus}
             archivedInboxItems={archivedInboxItems}
-            olderArchived={olderArchived}
+            olderArchived={olderArchivedTotal}
             archivedShowAll={archivedShowAll}
-            setArchivedShowAll={setArchivedShowAll}
+            toggleArchivedShowAll={toggleArchivedShowAll}
+            hasMoreOlderArchived={hasMoreOlderArchived}
+            loadingOlderArchived={loadingOlderArchived}
+            loadOlderArchived={loadOlderArchived}
             archivedExpanded={archivedExpanded}
             setArchivedExpanded={setArchivedExpanded}
             unarchiveInboxItem={unarchiveInboxItem}
@@ -1693,6 +1731,7 @@ export default function Alfred() {
             recordId={recordIdFromPath(currentPath)}
             onOpen={openRecordDestination}
             lookup={recordLookup}
+            resolve={resolveRecordWithInbox}
           />
         )}
 

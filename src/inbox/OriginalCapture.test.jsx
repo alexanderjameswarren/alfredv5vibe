@@ -56,9 +56,10 @@ describe("both detail views show it", () => {
     expect(alfred.split("<OriginalCapture").length - 1).toBe(2);
   });
 
-  it("resolves the capture from sourceInboxId, out of the archived rows", () => {
+  it("resolves the capture from sourceInboxId, fetching it when not loaded", () => {
     // `inboxItems` is the LIVE list and triage archives the row, so resolving from it
-    // would find nothing for every record that has a capture.
-    expect(alfred).toContain("allInboxItems.find((i) => i.id === record.sourceInboxId)");
+    // would find nothing; and the capture is often older than the loaded window.
+    expect(alfred).toContain("findInboxRow(record.sourceInboxId)?.capturedText");
+    expect(alfred).toContain("ensureInboxRows(openSourceInboxIds)");
   });
 });

@@ -3,7 +3,7 @@ import {
   archivedAt,
   archiveOutcome,
   groupArchived,
-  olderArchivedCount,
+  isRecentlyArchived,
   RECENT_ARCHIVE_DAYS,
   recentlyArchived,
   undoNeedsConfirming,
@@ -117,6 +117,13 @@ describe("which rows the section shows", () => {
     expect(recentlyArchived([relic], { now: NOW, showAll: true })).toHaveLength(1);
   });
 
+  it("keeps an unstamped row older even when updatedAt is recent, as the query does", () => {
+    const touched = { id: "touched", archived: true, triagedAt: null, updatedAt: daysAgo(1) };
+    expect(recentlyArchived([touched], { now: NOW })).toEqual([]);
+    expect(isRecentlyArchived(touched, NOW)).toBe(false);
+    expect(isRecentlyArchived(row({ triagedAt: daysAgo(1) }), NOW)).toBe(true);
+  });
+
   it("survives a missing or non-array list", () => {
     expect(recentlyArchived(undefined, { now: NOW })).toEqual([]);
     expect(recentlyArchived(null, { now: NOW })).toEqual([]);
@@ -127,25 +134,6 @@ describe("which rows the section shows", () => {
     expect(archivedAt({ updatedAt: "u", createdAt: "c" })).toBe("u");
     expect(archivedAt({ createdAt: "c" })).toBe("c");
     expect(archivedAt({})).toBe("");
-  });
-});
-
-describe("how many more Show all would reveal", () => {
-  it("counts only what the window hides", () => {
-    const rows = [
-      row({ id: "a", triagedAt: daysAgo(1) }),
-      row({ id: "b", triagedAt: daysAgo(30) }),
-      row({ id: "c", triagedAt: daysAgo(90) }),
-      row({ id: "live", archived: false, archiveReason: null, triagedAt: null }),
-    ];
-    expect(olderArchivedCount(rows, { now: NOW })).toBe(2);
-  });
-
-  it("is zero when everything archived is recent, so the control can hide", () => {
-    // A "Show all" that shows exactly what is already on screen is a control that does
-    // nothing — the same rule that keeps a source tab off the row until it has items.
-    expect(olderArchivedCount([row({ triagedAt: daysAgo(2) })], { now: NOW })).toBe(0);
-    expect(olderArchivedCount([], { now: NOW })).toBe(0);
   });
 });
 
@@ -248,14 +236,20 @@ describe("warning before an Undo that cannot undo everything", () => {
 });
 
 // ── The guard ────────────────────────────────────────────────────────────────
-describe("archived rows reach state at all", () => {
+describe("how archived rows reach state", () => {
   const alfred = alfredSource();
 
-  it("neither loader throws archived rows away any more", () => {
-    // 🛑 This is what the whole section depends on. Both loaders used to do
-    // `.filter(item => !item.archived)` before setting state, which discarded rows the
-    // query had already fetched. If that line comes back, "Recently archived" silently
-    // empties and nothing else fails.
+  it("the loaders never read the whole inbox table", () => {
+    // 🛑 inbox_rowcap-x7k: an unfiltered select("*") passed PostgREST's 1000-row cap and
+    // silently dropped new captures. The loaders read the live rows and the archive
+    // window through alfred/inboxQueries.js; older rows come by page or by id.
+    expect(alfred).not.toContain('supabase.from("inbox").select("*")');
+    expect(alfred).toContain("liveInboxQuery(supabase)");
+    expect(alfred).toContain("recentArchivedQuery(supabase)");
+  });
+
+  it("does not drop rows in JavaScript after fetching them", () => {
+    // The pre-Step-22 loaders did `.filter(item => !item.archived)`; the query decides now.
     expect(alfred).not.toContain("filter(item => !item.archived)");
   });
 
