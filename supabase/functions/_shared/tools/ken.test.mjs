@@ -21,15 +21,27 @@ import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+// readTable stand-in over this file's in-memory db: the list tools' filters, order
+// and exact-count truncation run here; paging and previews are the real readTable's
+// (records.test.mjs).
 const STUBS = [
   "const clampLimit = (n: number | undefined) => Math.min(n ?? 20, 50);",
   "const defineTool = (o: any) => o;",
   "const envelope = (data: any, meta: any = {}) => ({ data, meta });",
+  "const readTable = async (ctx: any, o: any) => {",
+  "  let q = ctx.db.from(o.table).select('*', { count: 'exact' });",
+  "  if (o.filter) q = o.filter(q, {});",
+  "  for (const s of o.order ?? []) q = q.order(s.column, { ascending: s.ascending });",
+  "  const { data: all } = await q;",
+  "  const limit = Math.min(o.args.limit ?? 20, 50);",
+  "  const data = all.slice(0, limit);",
+  "  return { data, meta: { limit_applied: limit, truncated: all.length > data.length, total: all.length } };",
+  "};",
 ].join("\n");
 
 const dir = mkdtempSync(join(tmpdir(), "ken-"));
 const src = readFileSync(join(HERE, "ken.ts"), "utf-8").replace(
-  'import { defineTool, clampLimit, envelope } from "../platform.ts";', STUBS);
+  'import { defineTool, clampLimit, envelope, readTable } from "../platform.ts";', STUBS);
 if (src.includes("../platform.ts")) {
   throw new Error("ken.ts import line changed — update the stub in this test.");
 }
@@ -255,7 +267,7 @@ test("get_ken_areas with EXACTLY limit areas is not a truncation", async () => {
   const db = makeDb({ areas: areas(50) });
   const out = await mod.getKenAreasTool.handler({ limit: 50 }, { db });
   assert.equal(out.data.length, 50);
-  assert.deepEqual(out.meta, { limit_applied: 50, truncated: false });
+  assert.deepEqual(out.meta, { limit_applied: 50, truncated: false, total: 50 });
 });
 
 test("get_ken_areas source_refs returns only the areas linked to those seeds", async () => {
@@ -264,7 +276,7 @@ test("get_ken_areas source_refs returns only the areas linked to those seeds", a
     { source_refs: ["seed-3", "seed-41", "not-an-area"] }, { db });
   assert.deepEqual(out.data.map((a) => a.source_ref).sort(), ["seed-3", "seed-41"]);
   // The limit defaults to the ids passed, so 60 areas in the table is no cut.
-  assert.deepEqual(out.meta, { limit_applied: 3, truncated: false });
+  assert.deepEqual(out.meta, { limit_applied: 3, truncated: false, total: 2 });
 });
 
 test("get_ken_areas source_refs cannot truncate even when every id has an area", async () => {
@@ -295,7 +307,7 @@ const stamp = (i) => `2026-09-01T00:00:${String(i).padStart(2, "0")}Z`;
 test("get_ken_items: exactly limit rows is complete; one more is a truncation with the total", async () => {
   const rows = (n) => Array.from({ length: n }, (_, i) => ({ id: `i-${i}`, status: "active", created_at: stamp(i) }));
   const exact = await mod.getKenItemsTool.handler({}, { db: makeDb({ items: rows(20) }) });
-  assert.deepEqual(exact.meta, { limit_applied: 20, truncated: false });
+  assert.deepEqual(exact.meta, { limit_applied: 20, truncated: false, total: 20 });
   const over = await mod.getKenItemsTool.handler({}, { db: makeDb({ items: rows(21) }) });
   assert.deepEqual(over.meta, { limit_applied: 20, truncated: true, total: 21 });
 });
@@ -305,7 +317,7 @@ test("get_ken_misconceptions: exactly limit rows is complete; one more is a trun
     id: `m-${i}`, item_id: A, related_item_id: null, subtopic: null, status: "active", updated_at: stamp(i),
   }));
   const exact = await mod.getKenMisconceptionsTool.handler({}, { db: makeDb({ misconceptions: rows(20) }) });
-  assert.deepEqual(exact.meta, { limit_applied: 20, truncated: false });
+  assert.deepEqual(exact.meta, { limit_applied: 20, truncated: false, total: 20 });
   const over = await mod.getKenMisconceptionsTool.handler({}, { db: makeDb({ misconceptions: rows(21) }) });
   assert.deepEqual(over.meta, { limit_applied: 20, truncated: true, total: 21 });
 });

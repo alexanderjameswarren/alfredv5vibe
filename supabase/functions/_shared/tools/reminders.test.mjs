@@ -3,29 +3,16 @@
 // Run:
 //   node --experimental-strip-types --test supabase/functions/_shared/tools/reminders.test.mjs
 //
-// platform.ts is stubbed: defineTool returns its options, so each handler is
-// called directly with a fake ctx.db that records the query it was asked for.
+// The real platform.ts runs (test-platform.mjs): defineTool returns its options, so
+// each handler is called directly with a fake ctx.db that records its query.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { loadTool, settingsFor, withSettings } from "./test-platform.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const dir = mkdtempSync(join(tmpdir(), "reminders-"));
-writeFileSync(join(dir, "platform.ts"), `
-export const defineTool = (o) => o;
-export const clampLimit = (n) => Math.min(n ?? 20, 50);
-export const envelope = (data, meta = {}) => ({ data, meta });
-export const describeDbError = (name, e) => name + " failed: " + e.message;
-`);
-const IMPORT = 'from "../platform.ts";';
-const src = readFileSync(join(HERE, "reminders.ts"), "utf-8");
-if (!src.includes(IMPORT)) throw new Error("reminders.ts import line changed — update this test.");
-writeFileSync(join(dir, "reminders.ts"), src.replace(IMPORT, 'from "./platform.ts";'));
-const m = await import(pathToFileURL(join(dir, "reminders.ts")).href);
+const m = await loadTool("reminders.ts");
+const REMINDER_SETTINGS = settingsFor("reminders", ["id", "user_id", "text", "due_at", "state", "cancel_reason",
+  "sent_at", "inbox_id", "intent_id", "created_by", "created_at", "updated_at"]);
 
 const FUTURE = new Date(Date.now() + 3600_000).toISOString().replace(/\.\d+Z$/, "Z");
 const PAST = "2020-01-01T09:00:00-08:00";
@@ -43,11 +30,11 @@ function fakeDb(result = { data: null, error: null }, rpcResult = { data: { id: 
     });
     return b;
   };
-  return {
+  return withSettings({
     calls,
     from: (t) => builder(t),
     rpc: (name, params) => { calls.push(["rpc", name, params]); return Promise.resolve(rpcResult); },
-  };
+  }, [REMINDER_SETTINGS]);
 }
 
 test("parseDueAt accepts an offset and returns UTC", () => {
@@ -107,7 +94,7 @@ test("get_reminders defaults to scheduled, soonest first, and flags truncation",
   const out = await m.getRemindersTool.handler({ limit: 1 }, { db });
   assert.deepEqual(db.calls.find((c) => c[1] === "eq"), ["reminders", "eq", "state", "scheduled"]);
   assert.deepEqual(db.calls.find((c) => c[1] === "order"), ["reminders", "order", "due_at", { ascending: true }]);
-  assert.deepEqual(out.meta, { count: 3, limit_applied: 1, truncated: true });
+  assert.deepEqual(out.meta, { count: 1, truncated: true, limit_applied: 1, total: 3, next_offset: 1 });
 });
 
 test("get_reminders with state all adds no state filter", async () => {

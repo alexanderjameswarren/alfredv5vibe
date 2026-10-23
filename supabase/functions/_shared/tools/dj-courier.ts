@@ -32,7 +32,7 @@
 //    labelled "Today", so the second was silently dropped. See spec §4.3 — the
 //    key is inseparable from INGESTIBLE_BUCKETS below.
 
-import { clampLimit, defineTool } from "../platform.ts";
+import { defineTool, readTable } from "../platform.ts";
 import { resolveTrackIds, partitionDisagreements } from "./dj-tracks.ts";
 import {
   buildMatchKey,
@@ -609,26 +609,24 @@ export const getPlatformRunsTool = defineTool({
   name: "get_platform_runs",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const limit = clampLimit(args.limit as number | undefined);
-
-    // Every filter goes into the query before LIMIT — never filter a capped
-    // result in memory.
-    let q = ctx.db
-      .from("platform_runs")
-      .select(
-        "id, app, job, executor, host, status, started_at, finished_at, covered_from, covered_to, details, error_message, notified_at",
-      )
-      .order("started_at", { ascending: false })
-      .limit(limit);
-
-    if (args.app) q = q.eq("app", args.app as string);
-    if (args.job) q = q.eq("job", args.job as string);
-    if (args.status) q = q.eq("status", args.status as string);
-    if (args.unnotified_only === true) q = q.is("notified_at", null);
-
-    const { data, error } = await q;
-    if (error) throw new Error(`get_platform_runs: ${error.message}`);
-    return data ?? [];
+    // Shared read (MCP read access S8b): every filter goes into the query before
+    // the page window, never onto a capped result. details and error_message stay
+    // whole, as the courier and its alarms read them.
+    return await readTable(ctx, {
+      tool: "get_platform_runs",
+      table: "platform_runs",
+      args,
+      filter: (query) => {
+        let q = query;
+        if (args.app) q = q.eq("app", args.app as string);
+        if (args.job) q = q.eq("job", args.job as string);
+        if (args.status) q = q.eq("status", args.status as string);
+        if (args.unnotified_only === true) q = q.is("notified_at", null);
+        return q;
+      },
+      order: [{ column: "started_at", ascending: false }],
+      fullText: ["details", "error_message"],
+    });
   },
 });
 
@@ -906,30 +904,29 @@ export const getPlatformSchedulesTool = defineTool({
   name: "get_platform_schedules",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const limit = clampLimit(args.limit as number | undefined);
-    let q = ctx.db
-      .from("platform_schedules")
-      .select(
-        "id, app, job, executor, cadence, day_of_week, expected_by, grace_hours, enabled, notes, created_at",
-        { count: "exact" },
-      )
-      .order("app", { ascending: true })
-      .order("job", { ascending: true })
-      .limit(limit);
-    if (args.app) q = q.eq("app", args.app as string);
-    if (args.job) q = q.eq("job", args.job as string);
-    if (args.enabled !== undefined) q = q.eq("enabled", args.enabled as boolean);
-
-    const { data, error, count } = await q;
-    if (error) throw new Error(`get_platform_schedules: ${error.message}`);
-    const rows = data ?? [];
-    const total = count ?? rows.length;
+    // Shared read (MCP read access S8b), re-wrapped in this tool's own shape.
+    const page = await readTable(ctx, {
+      tool: "get_platform_schedules",
+      table: "platform_schedules",
+      args,
+      filter: (query) => {
+        let q = query;
+        if (args.app) q = q.eq("app", args.app as string);
+        if (args.job) q = q.eq("job", args.job as string);
+        if (args.enabled !== undefined) q = q.eq("enabled", args.enabled as boolean);
+        return q;
+      },
+      order: [{ column: "app", ascending: true }, { column: "job", ascending: true }],
+      fullText: ["notes"],
+    });
+    const rows = page.data;
+    const total = page.meta.total ?? rows.length;
     return {
       data: {
         schedules: rows,
         returned: rows.length,
         total,
-        limit_applied: limit,
+        limit_applied: page.meta.limit_applied,
         reading: (
           "These are DEFINITIONS of what should run, not occurrences — expected runs are " +
           "derived at read time, never materialised (spec §4.5). `day_of_week` uses the " +
@@ -942,9 +939,8 @@ export const getPlatformSchedulesTool = defineTool({
           "cannot be audited against the data (spec §11.4)."
         ),
       },
-      meta: rows.length < total
-        ? { truncated: true, total, limit_applied: limit, count: rows.length }
-        : {},
+      // The shared page meta: truncation "N of M", next_offset and notes.
+      meta: page.meta,
     };
   },
 });

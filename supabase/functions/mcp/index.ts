@@ -6,7 +6,7 @@ import { StreamableHTTPTransport } from "@hono/mcp";
 import { Hono } from "hono";
 import { z } from "zod";
 
-import { clampLimit, defineTool, envelope } from "../_shared/platform.ts";
+import { clampLimit, defineTool, envelope, readTable } from "../_shared/platform.ts";
 import { normaliseTags } from "../_shared/tags.ts";
 import { splitCaptureName } from "../_shared/captureName.ts";
 import {
@@ -77,6 +77,14 @@ import {
 } from "../_shared/tools/reminders.ts";
 import { getAppsTool, checkSourceApp } from "../_shared/tools/apps.ts";
 import { getGroupsTool } from "../_shared/tools/groups.ts";
+import {
+  getRecordsTool,
+  LIVE_STATUSES,
+  readItems,
+  standardAttach,
+  withCollectionMembers,
+} from "../_shared/tools/records.ts";
+import { truncationNote } from "../_shared/platform-read.ts";
 import {
   getWbAccountsTool,
   getWbBalanceHistoryTool,
@@ -160,19 +168,16 @@ import {
   proposeKenFactUpdateTool,
 } from "../_shared/tools/ken.ts";
 import {
-  searchItems,
   getExecutionHistory,
-  getIntents,
-  getEvents,
-  getCollections,
-  getInbox,
   getTags,
   updateInboxItem,
   getDatabaseSchema,
-  getSamSongs,
-  getSamSessions,
-  getSamPasses,
-  getSamSnippets,
+  applySamPassFilters,
+  applySamSessionFilters,
+  applySamSnippetFilters,
+  applySamSongFilters,
+  decorateSamSongs,
+  nameSamRows,
   getSamSongMeasures,
   getSamLyricWorkspace,
   placeSamLyrics,
@@ -195,27 +200,14 @@ const getContextsTool = defineTool({
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const shared = args.shared as boolean | undefined;
-    // get_contexts has no exposed limit knob — the manifest stays stable —
-    // but we apply the platform ceiling defensively per the invariant "no
-    // list query returns unbounded rows". clampLimit(50) resolves to 50
-    // (the hard cap). In practice contexts count is far below this.
-    const LIMIT = clampLimit(50);
-    let query = ctx.db
-      .from("contexts")
-      // No `tags` — see the note on the twin select in
-      // _shared/alfred-tools/tool-handlers.ts. The column is dropped by
-      // Migration A and selecting it afterwards is a hard PostgREST error.
-      .select("id, name, description, keywords, shared, pinned, app_id, created_at")
-      .order("pinned", { ascending: false })
-      .order("name")
-      .limit(LIMIT);
-    if (shared !== undefined) query = query.eq("shared", shared);
-    const { data, error } = await query;
-    if (error) throw new Error(`get_contexts: ${error.message}`);
-    const rows = data ?? [];
-    return envelope(rows, {
-      limit_applied: LIMIT,
-      truncated: rows.length >= LIMIT,
+    // Shared read (MCP read access S8). Defaults kept from before: up to 50
+    // contexts, archived ones included, pinned first then by name.
+    return await readTable(ctx, {
+      tool: "get_contexts",
+      table: "contexts",
+      args: { ...args, limit: args.limit ?? 50, archived: args.archived ?? "include" },
+      filter: (q) => (shared !== undefined ? q.eq("shared", shared) : q),
+      order: [{ column: "pinned", ascending: false }, { column: "name", ascending: true }],
     });
   },
 });
@@ -461,37 +453,16 @@ const createInboxItemTool = defineTool({
 // truncation via a count query — the "N of M" NOTE relies on that count.
 // ---------------------------------------------------------------------------
 
+// get_items and search_items share readItems (_shared/tools/records.ts): public.platform_search_items (migration 163)
+// under RLS for lists, readTable for ids, then the shared previews, includes, size cap and next-offset NOTE.
 const getItemsTool = defineTool({
   name: "get_items",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    // All filtering (including any-of-tags, `tags && p_tags` since
-    // items.tags became text[] in migration 039) runs in Postgres via
-    // public.platform_search_items — the RPC returns { rows, total }
-    // from a single snapshot, so the truncation NOTE math is atomic.
-    // `elements` is intentionally excluded from the list shape (heavy
-    // jsonb; loaded on demand through a single-item path).
-    const contextId  = args.context_id  as string   | undefined;
-    const searchText = args.search_text as string   | undefined;
-    const tags       = args.tags        as string[] | undefined;
-    const status     = args.status      as string[] | undefined;
-    const LIMIT      = clampLimit(args.limit as number | undefined);
-
-    const { data, error } = await ctx.db.rpc("platform_search_items", {
-      p_context_id:  contextId  ?? null,
-      p_search_text: searchText ?? null,
-      p_tags:        tags && tags.length > 0 ? tags : null,
-      p_limit:       LIMIT,
-      p_status:      status && status.length > 0 ? status : null,
-    });
-    if (error) throw new Error(`get_items: ${error.message}`);
-
-    const rows  = (data?.rows as unknown[]) ?? [];
-    const total = (data?.total as number) ?? rows.length;
-    return envelope(rows, {
-      limit_applied: LIMIT,
-      truncated: total > rows.length,
-      total,
+    return await readItems(ctx, "get_items", args, {
+      text: args.search_text as string | undefined,
+      status: args.status as string[] | undefined,
+      contextNames: false,
     });
   },
 });
@@ -500,9 +471,17 @@ const searchItemsTool = defineTool({
   name: "search_items",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const result = await searchItems(ctx.db, { query: args.query as string });
-    if (result.error) throw new Error(`search_items: ${result.error}`);
-    return result.data;
+    const query = args.query;
+    if (typeof query !== "string" || query.trim() === "") {
+      throw new Error("search_items: query must be the words to search for.");
+    }
+    // Closed items are left out unless the caller asks for them by status.
+    const status = args.status as string[] | undefined;
+    return await readItems(ctx, "search_items", args, {
+      text: query,
+      status: status && status.length > 0 ? status : LIVE_STATUSES,
+      contextNames: true,
+    });
   },
 });
 
@@ -537,26 +516,35 @@ const getIntentsTool = defineTool({
   name: "get_intents",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const LIMIT = clampLimit(args.limit as number | undefined);
-    const result = await getIntents(ctx.db, {
-      context_id: args.context_id as string | undefined,
-      search_text: args.search_text as string | undefined,
-      tags: args.tags as string[] | undefined,
-      include_archived: args.include_archived as boolean | undefined,
-      recurring_only: args.recurring_only as boolean | undefined,
-      status: args.status as string[] | undefined,
-      limit: LIMIT,
-    });
-    if (result.error) throw new Error(`get_intents: ${result.error}`);
-    // `total` is the pre-limit count the handler measured, and every filter
-    // (tags included, since the overlaps fix) is in the query it counted — so
-    // total > returned means rows were genuinely cut, not filtered out here.
-    const rows = (result.data ?? []) as unknown[];
-    const total = result.total ?? rows.length;
-    return envelope(rows, {
-      limit_applied: LIMIT,
-      truncated: total > rows.length,
-      total,
+    // Shared read (MCP read access S8): every filter in the query before the page
+    // window, the total counted over the same query. Now returns description.
+    const searchText = args.search_text as string | undefined;
+    const tags = args.tags as string[] | undefined;
+    const status = args.status as string[] | undefined;
+    return await readTable(ctx, {
+      tool: "get_intents",
+      table: "intents",
+      args: { ...args, archived: args.archived ?? (args.include_archived ? "include" : undefined) },
+      allowedIncludes: ["notes", "memberships"],
+      filter: (query) => {
+        let q = query;
+        if (args.context_id) q = q.eq("context_id", args.context_id as string);
+        if (searchText) q = q.ilike("text", `%${searchText}%`);
+        if (args.recurring_only) {
+          // {"type":"once"} is a stored config that does not recur.
+          q = q.not("recurrence_config", "is", null)
+            .or("recurrence_config->>type.is.null,recurrence_config->>type.neq.once");
+        }
+        if (status && status.length > 0) q = q.in("status", status);
+        // `overlaps` is `&&` on intents.tags (text[]): has any of these tags.
+        if (tags && tags.length > 0) q = q.overlaps("tags", tags);
+        return q;
+      },
+      order: [
+        { column: "target_start_date", ascending: true, nullsFirst: false },
+        { column: "created_at", ascending: false },
+      ],
+      attach: standardAttach(ctx.db, "intents", { contextNames: true }),
     });
   },
 });
@@ -565,16 +553,21 @@ const getEventsTool = defineTool({
   name: "get_events",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const result = await getEvents(ctx.db, {
-      date_from: args.date_from as string | undefined,
-      date_to: args.date_to as string | undefined,
-      context_id: args.context_id as string | undefined,
-      intent_id: args.intent_id as string | undefined,
-      include_archived: args.include_archived as boolean | undefined,
-      limit: clampLimit(args.limit as number | undefined),
+    return await readTable(ctx, {
+      tool: "get_events",
+      table: "events",
+      args: { ...args, archived: args.archived ?? (args.include_archived ? "include" : undefined) },
+      filter: (query) => {
+        let q = query;
+        if (args.date_from) q = q.gte("time", args.date_from as string);
+        if (args.date_to) q = q.lte("time", args.date_to as string);
+        if (args.context_id) q = q.eq("context_id", args.context_id as string);
+        if (args.intent_id) q = q.eq("intent_id", args.intent_id as string);
+        return q;
+      },
+      order: [{ column: "time", ascending: true }],
+      attach: standardAttach(ctx.db, "events", { contextNames: true, intentText: true }),
     });
-    if (result.error) throw new Error(`get_events: ${result.error}`);
-    return result.data;
   },
 });
 
@@ -582,11 +575,17 @@ const getCollectionsTool = defineTool({
   name: "get_collections",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const result = await getCollections(ctx.db, {
-      context_id: args.context_id as string | undefined,
+    // Defaults kept from before: up to 50, archived included, by name. Members come from
+    // collection_items (item_collections.items is a frozen pre-migration snapshot, never read).
+    return await readTable(ctx, {
+      tool: "get_collections",
+      table: "item_collections",
+      args: { ...args, limit: args.limit ?? 50, archived: args.archived ?? "include" },
+      filter: (q) => (args.context_id ? q.eq("context_id", args.context_id as string) : q),
+      order: [{ column: "name", ascending: true }],
+      omit: ["items"],
+      attach: async (rows) => ({ rows: await withCollectionMembers(ctx.db, rows) }),
     });
-    if (result.error) throw new Error(`get_collections: ${result.error}`);
-    return result.data;
   },
 });
 
@@ -596,56 +595,21 @@ const getInboxTool = defineTool({
   handler: async (args: Record<string, unknown>, ctx) => {
     const aiStatus = args.ai_status as string | undefined;
     const sourceType = args.source_type as string | undefined;
-    const LIMIT = clampLimit(args.limit as number | undefined);
-
-    // A hand-typed column list: nothing type-checks it, so a renamed or dropped
-    // column fails here at REQUEST time rather than at build time.
-    //
-    // `suggested_tags` went jsonb -> text[] in migration 062 and this line did
-    // not change, because it never had to: the column kept its name, and
-    // PostgREST serialises a text[] to the same JSON array of strings a jsonb
-    // array produced. A rename or a drop would still break it. A retype did
-    // not.
-    let q = ctx.db.from("inbox")
-      .select(
-        "id, captured_text, source_type, source_metadata, source_app, outcome, suggested_context_id, suggest_item, suggested_item_text, suggested_item_description, suggested_item_elements, suggested_item_id, suggest_intent, suggested_intent_text, suggested_intent_description, suggested_intent_recurrence, suggest_event, suggested_event_date, suggested_tags, suggested_collection_id, suggested_status, ai_status, ai_confidence, ai_reasoning, created_at"
-      )
-      .eq("archived", false)
-      .is("triaged_at", null)
-      .order("created_at", { ascending: false });
-    if (aiStatus) q = q.eq("ai_status", aiStatus);
-    // ⚠️ EVERY FILTER HERE MUST ALSO GO ON THE COUNT QUERY BELOW. The two are
-    // hand-kept in step and nothing checks that they agree; a filter applied to
-    // only one of them makes the "N of M" truncation NOTE quietly lie, which is
-    // worse than no NOTE because the model believes it.
-    if (sourceType) q = q.eq("source_type", sourceType);
-
-    const { data, error } = await q.limit(LIMIT);
-    if (error) throw new Error(`get_inbox: ${error.message}`);
-    const rows = data ?? [];
-
-    let truncated = false;
-    let total: number | undefined;
-    if (rows.length >= LIMIT) {
-      let cq = ctx.db.from("inbox")
-        .select("id", { count: "exact", head: true })
-        .eq("archived", false)
-        .is("triaged_at", null);
-      if (aiStatus) cq = cq.eq("ai_status", aiStatus);
-      if (sourceType) cq = cq.eq("source_type", sourceType);
-      const { count, error: countErr } = await cq;
-      if (!countErr && typeof count === "number") {
-        total = count;
-        truncated = count > rows.length;
-      } else {
-        truncated = true;
-      }
-    }
-
-    return envelope(rows, {
-      limit_applied: LIMIT,
-      truncated,
-      total,
+    // Shared read: untriaged rows, newest first; the total is counted over the same
+    // query, so the "N of M" NOTE cannot drift from the filters. captured_text stays
+    // whole in lists, because enrichment reads it from here.
+    return await readTable(ctx, {
+      tool: "get_inbox",
+      table: "inbox",
+      args,
+      filter: (query) => {
+        let q = query.is("triaged_at", null);
+        if (aiStatus) q = q.eq("ai_status", aiStatus);
+        if (sourceType) q = q.eq("source_type", sourceType);
+        return q;
+      },
+      order: [{ column: "created_at", ascending: false }],
+      fullText: ["captured_text"],
     });
   },
 });
@@ -737,11 +701,19 @@ const getSamSongsTool = defineTool({
   name: "get_sam_songs",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const result = await getSamSongs(ctx.db, {
-      search_text: args.search_text as string | undefined,
+    // Shared read (MCP read access S8b). It used to return every song unbounded;
+    // now up to 50 by default, with offset for the rest. measures (heavy) is left
+    // out, as before: get_sam_song_measures reads it.
+    const params = { search_text: args.search_text as string | undefined };
+    return await readTable(ctx, {
+      tool: "get_sam_songs",
+      table: "sam_songs",
+      args: { ...args, limit: args.limit ?? 50 },
+      filter: (q) => applySamSongFilters(q, params),
+      order: [{ column: "title", ascending: true }],
+      omit: ["measures"],
+      attach: async (rows) => ({ rows: await decorateSamSongs(ctx.db, rows) }),
     });
-    if (result.error) throw new Error(`get_sam_songs: ${result.error}`);
-    return result.data;
   },
 });
 
@@ -749,17 +721,26 @@ const getSamSessionsTool = defineTool({
   name: "get_sam_sessions",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const result = await getSamSessions(ctx.db, {
+    const params = {
       song_id: args.song_id as string | undefined,
       snippet_id: args.snippet_id as string | undefined,
       date_from: args.date_from as string | undefined,
       date_to: args.date_to as string | undefined,
       plan_id: args.plan_id as string | undefined,
       plan_item_id: args.plan_item_id as string | undefined,
-      limit: clampLimit(args.limit as number | undefined),
+    };
+    // Shared read (MCP read access S8b). The per-note events stay out, as before;
+    // settings and summary stay whole: the sam-practice skill reads them.
+    return await readTable(ctx, {
+      tool: "get_sam_sessions",
+      table: "sam_sessions",
+      args,
+      filter: (q) => applySamSessionFilters(q, params),
+      order: [{ column: "started_at", ascending: false }],
+      omit: ["events"],
+      fullText: ["settings", "summary"],
+      attach: async (rows) => ({ rows: await nameSamRows(ctx.db, rows, "session") }),
     });
-    if (result.error) throw new Error(`get_sam_sessions: ${result.error}`);
-    return result.data;
   },
 });
 
@@ -769,8 +750,7 @@ const getSamPassesTool = defineTool({
   name: "get_sam_passes",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const LIMIT = clampLimit(args.limit as number | undefined);
-    const result = await getSamPasses(ctx.db, {
+    const params = {
       song_id: args.song_id as string | undefined,
       snippet_id: args.snippet_id as string | undefined,
       whole_song_only: args.whole_song_only as boolean | undefined,
@@ -783,16 +763,18 @@ const getSamPassesTool = defineTool({
       warmup_only: args.warmup_only as boolean | undefined,
       no_warmup: args.no_warmup as boolean | undefined,
       top_rung_only: args.top_rung_only as boolean | undefined,
-      limit: LIMIT,
-    });
-    if (result.error) throw new Error(`get_sam_passes: ${result.error}`);
-    const rows = (result.data ?? []) as unknown[];
+    };
     // A clamped result and a genuinely short one look identical to the reader,
     // and miscounting passes is precisely the failure this tool exists to
-    // prevent — so the truncation flag matters more here than most places.
-    return envelope(rows, {
-      limit_applied: LIMIT,
-      truncated: rows.length >= LIMIT,
+    // prevent. The shared read (MCP read access S8b) counts the match, so the
+    // NOTE says "N of M" and gives the next offset.
+    return await readTable(ctx, {
+      tool: "get_sam_passes",
+      table: "sam_passes",
+      args,
+      filter: (q) => applySamPassFilters(q, params),
+      order: [{ column: "completed_at", ascending: false }],
+      attach: async (rows) => ({ rows: await nameSamRows(ctx.db, rows, "pass") }),
     });
   },
 });
@@ -801,12 +783,22 @@ const getSamSnippetsTool = defineTool({
   name: "get_sam_snippets",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const result = await getSamSnippets(ctx.db, {
+    // Shared read (MCP read access S8b). It used to return every snippet
+    // unbounded; now up to 50 by default, with offset for the rest. notes and
+    // settings stay whole.
+    const params = {
       song_id: args.song_id as string | undefined,
       search_text: args.search_text as string | undefined,
+    };
+    return await readTable(ctx, {
+      tool: "get_sam_snippets",
+      table: "sam_snippets",
+      args: { ...args, limit: args.limit ?? 50 },
+      filter: (q) => applySamSnippetFilters(q, params),
+      order: [{ column: "song_id", ascending: true }, { column: "start_measure", ascending: true }],
+      fullText: ["notes", "settings"],
+      attach: async (rows) => ({ rows: await nameSamRows(ctx.db, rows, "snippet") }),
     });
-    if (result.error) throw new Error(`get_sam_snippets: ${result.error}`);
-    return result.data;
   },
 });
 
@@ -903,6 +895,8 @@ type PlatformResult = {
     truncated?: boolean;
     limit_applied?: number;
     total?: number;
+    next_offset?: number;
+    notes?: string[];
   };
 };
 
@@ -965,27 +959,14 @@ async function runToolForMcp(
   try {
     const result = await fn(args, tokenAsRequest(token));
     const blocks: McpBlock[] = [];
-    if (result.meta?.truncated) {
-      const shown = Array.isArray(result.data)
-        ? result.data.length
-        : (result.meta.limit_applied ?? "?");
-      // "N of M" per the spec's "Tool house style" — M is the true row
-      // count the handler measured with a separate count query. If the
-      // handler couldn't compute it, fall back to a shape that still
-      // signals the cut without claiming a false total.
-      const total = result.meta.total;
-      const ofClause = total !== undefined ? `of ${total}` : "(more available)";
-      // A separate block, but clients (claude.ai) join text blocks with no
-      // separator, so the NOTE ran straight into the JSON ("subset.{"). The
-      // trailing blank line keeps the joined text splittable; the JSON block
-      // itself stays pure JSON.
-      blocks.push({
-        type: "text" as const,
-        text:
-          `NOTE: results truncated to ${shown} ${ofClause}. ` +
-          `Narrow the query or request a specific subset.\n\n`,
-      });
-    }
+    // "N of M" per the spec's "Tool house style", plus the next page's offset and
+    // any notes from the shared read helper (platform-read.ts). A separate block
+    // ending in a blank line: claude.ai joins text blocks with no separator.
+    const shown = Array.isArray(result.data)
+      ? result.data.length
+      : (result.meta?.limit_applied ?? "?");
+    const note = truncationNote(result.meta ?? {}, shown);
+    if (note) blocks.push({ type: "text" as const, text: note });
     // Content-block passthrough, described above. Placed AFTER the truncation
     // NOTE so such a tool still gets one if it sets meta.truncated, and BEFORE
     // the JSON block so the sentinel object itself is never serialised.
@@ -1024,6 +1005,21 @@ async function runToolForMcp(
 // cleanly and dies on the first request.
 const RUN_STATUS = z.enum(VALID_RUN_STATUS as [string, ...string[]]);
 
+// The shared read options (_shared/platform-read.ts), advertised the same way on every list tool that reads through
+// readTable. Declared above createMcpServer for the same reason as RUN_STATUS.
+const readOptions = (o: { include?: string[]; archived?: "exclude" | "include"; noContext?: boolean } = {}) => ({
+  limit: z.number().optional().describe("Rows per page (default 20, max 50)"),
+  offset: z.number().optional().describe("Rows to skip; when there are more, the truncation NOTE gives the next page's offset"),
+  ids: z.array(z.string()).optional().describe("Fetch these records (max 50) whole: full text and heavy columns, archived or not"),
+  ...(o.include
+    ? { include: z.array(z.enum(o.include as [string, ...string[]])).optional().describe(`Related content to add: ${o.include.join(", ")}`) }
+    : {}),
+  ...(o.archived
+    ? { archived: z.enum(["exclude", "include", "only"]).optional().describe(`Archived rows: exclude, include or only (default ${o.archived})`) }
+    : {}),
+  ...(o.noContext ? { no_context: z.boolean().optional().describe("Only records with no context") } : {}),
+});
+
 // Same argument as RUN_STATUS: derived from the tool module's own exports, which
 // are themselves written to mirror the CHECK constraints, so the MCP layer can
 // never reject a value the database accepts. Declared here, above every use —
@@ -1061,12 +1057,14 @@ export function createMcpServer(token: string) {
     {
       title: "Get Contexts",
       description:
-        "List all GTD contexts (areas of focus) for the user. Contexts organize items, intents, and events. Examples: 'Home', 'Work - ActBlue', 'Recipes', 'Health'. Each carries app_id, the app it belongs to (see get_apps), or null.",
+        "List all GTD contexts (areas of focus) for the user. Contexts organize items, intents, and events. Examples: 'Home', 'Work - ActBlue', 'Recipes', 'Health'. Each carries app_id, the app it belongs to (see get_apps), or null. Up to 50 by default, archived ones included, pinned first.",
       inputSchema: {
         shared: z.boolean().optional().describe("Filter by shared status"),
+        ...readOptions({ archived: "include" }),
+        limit: z.number().optional().describe("Rows per page (default 50, max 50)"),
       },
     },
-    async ({ shared }) => runToolForMcp(getContextsTool, { shared }, token),
+    async (args) => runToolForMcp(getContextsTool, args, token),
   );
 
   server.registerTool(
@@ -1074,10 +1072,13 @@ export function createMcpServer(token: string) {
     {
       title: "Get Apps",
       description:
-        "List the apps Alfred is made of (Alfred, Warren Buffet, Sam, Jobs, DJ, Ken, Arnold, ...): id, name, description, icon, path and button_name. Path and button_name are null for apps with no screen. Use the descriptions to choose an inbox capture's source_app when enriching; pass the id to create_inbox_item, update_inbox_item or archive_inbox_item. Tier 1.",
-      inputSchema: {},
+        "List the apps Alfred is made of (Alfred, Warren Buffet, Sam, Jobs, DJ, Ken, Arnold, ...): id, name, description, icon, path and button_name. Path and button_name are null for apps with no screen. Use the descriptions to choose an inbox capture's source_app when enriching; pass the id to create_inbox_item, update_inbox_item or archive_inbox_item. Up to 50 by name. Tier 1.",
+      inputSchema: {
+        ...readOptions(),
+        limit: z.number().optional().describe("Rows per page (default 50, max 50)"),
+      },
     },
-    async () => runToolForMcp(getAppsTool, {}, token),
+    async (args) => runToolForMcp(getAppsTool, args, token),
   );
 
   server.registerTool(
@@ -1085,13 +1086,15 @@ export function createMcpServer(token: string) {
     {
       title: "Get Items",
       description:
-        "Get items (reusable reference material like recipes, checklists, project notes). Can filter by context, tags and status. Each row carries its status. Items have elements (steps, ingredients, etc.). Results are capped (default 20, max 50) — the response NOTE tells you when there's more. [v22]",
+        "Get items (reusable reference material like recipes, checklists, project notes). Can filter by context (or no context), tags, status and search text. Each row carries status and closed_reason. " +
+        "Descriptions over about 200 characters are previewed in lists; elements (steps, ingredients) are left out of lists unless include has 'elements'. Fetch by ids for whole records. " +
+        "include: 'elements', 'notes' (notes on the item), 'memberships' (the collections and groups it belongs to). Paging: limit (default 20, max 50) and offset; the NOTE gives the next offset. [v24]",
       inputSchema: {
         context_id: z.string().optional().describe("Filter by context ID"),
         tags: z.array(z.string()).optional().describe("Filter by tags (items matching ANY of these tags)"),
-        search_text: z.string().optional().describe("Search item names and descriptions"),
+        search_text: z.string().optional().describe("Search words: each must appear in the name, the description or the item's notes"),
         status: z.array(z.enum(["someday", "active", "background", "closed"])).optional().describe("Filter by status (items matching ANY of these). someday = never live; active = live now; background = was active, not now; closed = done for good."),
-        limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
+        ...readOptions({ include: ["elements", "notes", "memberships"], archived: "exclude", noContext: true }),
       },
     },
     async (args) => runToolForMcp(getItemsTool, args, token),
@@ -1102,9 +1105,12 @@ export function createMcpServer(token: string) {
     {
       title: "Search Items",
       description:
-        "Full-text search across all item names and descriptions. Returns matching items with their context names. Use this to find specific items like recipes, checklists, or project references.",
+        "Search items by words: every word must appear in the name, the description or the item's notes, in any order (\"style design contract\" finds \"style consistency and design contract\"). Items whose name holds every word come first. " +
+        "Returns status, closed_reason and context_name. Closed items are left out unless status asks for them. Elements are left out unless include has 'elements'. Paging: limit (default 20, max 50) and offset; the NOTE gives the next offset.",
       inputSchema: {
-        query: z.string().describe("Search query to match against item names and descriptions"),
+        query: z.string().describe("Words to search for, matched separately against names, descriptions and notes"),
+        status: z.array(z.enum(["someday", "active", "background", "closed"])).optional().describe("Statuses to include (default someday, active and background: closed left out)"),
+        ...readOptions({ include: ["elements", "notes", "memberships"], archived: "exclude", noContext: true }),
       },
     },
     async (args) => runToolForMcp(searchItemsTool, args, token),
@@ -1135,15 +1141,16 @@ export function createMcpServer(token: string) {
     {
       title: "Get Intents",
       description:
-        "List intentions and item-intents (GTD tasks/reusable actions). Use to see active intents for briefings, recurrence review, or context planning. Returns intent rows with their status and resolved context name. A row with group_id set is a group's own intention (see get_groups): it carries that menu's or project's dates and is shown in the app as the group, not as an intention.",
+        "List intentions and item-intents (GTD tasks/reusable actions). Use to see active intents for briefings, recurrence review, or context planning. Returns intent rows with their status, description (previewed in lists; fetch by ids for all of it) and resolved context name. A row with group_id set is a group's own intention (see get_groups): it carries that menu's or project's dates and is shown in the app as the group, not as an intention. " +
+        "include: 'notes', 'memberships' (its collection and the groups it belongs to). Paging: limit (default 20, max 50) and offset; the NOTE gives the next offset.",
       inputSchema: {
         context_id: z.string().optional().describe("Filter by context ID"),
         search_text: z.string().optional().describe("Search text to match against intent text (ILIKE)"),
         tags: z.array(z.string()).optional().describe("Filter intents that have ANY of these tags"),
-        include_archived: z.boolean().optional().describe("Include archived intents (default false)"),
+        include_archived: z.boolean().optional().describe("Include archived intents (default false); same as archived: include"),
         recurring_only: z.boolean().optional().describe("Only return intents with a recurrence_config (default false)"),
         status: z.array(z.enum(["someday", "active", "background", "closed"])).optional().describe("Filter by status (intents matching ANY of these). someday = never live; active = live now; background = was active, not now; closed = done for good. Status is independent of archived."),
-        limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
+        ...readOptions({ include: ["notes", "memberships"], archived: "exclude", noContext: true }),
       },
     },
     async (args) => runToolForMcp(getIntentsTool, args, token),
@@ -1160,8 +1167,8 @@ export function createMcpServer(token: string) {
         date_to: z.string().optional().describe("End date filter (YYYY-MM-DD, inclusive)"),
         context_id: z.string().optional().describe("Filter by context ID"),
         intent_id: z.string().optional().describe("Filter by specific intent ID"),
-        include_archived: z.boolean().optional().describe("Include archived events (default false)"),
-        limit: z.number().optional().describe("Max results to return (default 50)"),
+        include_archived: z.boolean().optional().describe("Include archived events (default false); same as archived: include"),
+        ...readOptions({ archived: "exclude", noContext: true }),
       },
     },
     async (args) => runToolForMcp(getEventsTool, args, token),
@@ -1174,15 +1181,38 @@ export function createMcpServer(token: string) {
       description:
         "List live groups: menus (execution_mode together: cooked as one, each recipe recorded under the menu's execution), projects and series (separately: members are worked through their own intentions). " +
         "Each row: id, name (derived from members when name_is_derived), type { id, label, execution_mode }, context_id and context_name, status, pinned, last_completed_at (rolled up from members for projects), own_intention_id and scheduled_date (the group's own intention and its live date, or null), and members in position order (type item|intention, id, name, status). " +
-        "Filter by context_id, status, or group_type (a type label such as Menu or Project, singular or plural). Results are capped (default 20, max 50); the NOTE says when there are more. Tier 1.",
+        "Filter by context_id, status, or group_type (a type label such as Menu or Project, singular or plural). Rows also carry description and archived. include: 'notes' (notes on the group). Paging: limit (default 20, max 50) and offset; the NOTE gives the next offset. Tier 1.",
       inputSchema: {
         context_id: z.string().optional().describe("Filter by context ID"),
         status: z.array(z.enum(["someday", "active", "background", "closed"])).optional().describe("Filter by status (groups matching ANY of these)"),
         group_type: z.string().optional().describe("Filter by group type label, e.g. 'Menu' or 'Project' (singular or plural, any case)"),
-        limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
+        ...readOptions({ include: ["notes"], archived: "exclude", noContext: true }),
       },
     },
     async (args) => runToolForMcp(getGroupsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_records",
+    {
+      title: "Get Records",
+      description:
+        "Read rows from any table in Alfred's database that Claude may read (every registered table unless hidden; get_platform_contract lists them, get_database_schema shows their columns). Rows come back through row-level security, so you see what the signed-in user sees. Secret columns are never returned. " +
+        "List reads cut text over about 200 characters to a marked preview and leave out heavy jsonb columns (a NOTE names them); fetch records by ids for full values. Newest first when the table has created_at. " +
+        "Paging: limit (default 20, max 50) and offset; when more rows exist the NOTE gives the next offset. archived is exclude (default), include or only, where the table has archived. no_context: true for rows with no context. include: 'notes' (items, intents, item_groups) and 'memberships' (the collections and groups an item or intention belongs to). Tier 1, read only.",
+      inputSchema: {
+        table: z.string().describe("Table name, e.g. 'items', 'intents', 'notes', 'item_groups', 'wb_transactions'"),
+        limit: z.number().optional().describe("Rows per page (default 20, max 50)"),
+        offset: z.number().optional().describe("Rows to skip; the truncation NOTE gives the next page's offset"),
+        ids: z.array(z.string()).optional().describe("Fetch these records (max 50) with full text and heavy columns"),
+        include: z.array(z.string()).optional().describe("Related content: 'notes' (items, intents, item_groups), 'memberships' (items, intents)"),
+        archived: z.enum(["exclude", "include", "only"]).optional().describe("Archived rows, where the table has archived (default exclude)"),
+        no_context: z.boolean().optional().describe("Only rows with no context, where the table has context_id"),
+        context_id: z.string().optional().describe("Filter by context ID, where the table has context_id"),
+        status: z.array(z.string()).optional().describe("Filter by status (any of these), where the table has status"),
+      },
+    },
+    async (args) => runToolForMcp(getRecordsTool, args, token),
   );
 
   server.registerTool(
@@ -1190,9 +1220,11 @@ export function createMcpServer(token: string) {
     {
       title: "Get Collections",
       description:
-        "List item collections (like grocery lists, packing lists). Collections group items together and can be shared. Can filter by context.",
+        "List item collections (like grocery lists, packing lists). Collections group items together and can be shared. Can filter by context. Each carries items: its members in order (item_id, name, quantity). Up to 50 by default, archived ones included; the NOTE gives the next offset when there are more.",
       inputSchema: {
         context_id: z.string().optional().describe("Filter by context ID"),
+        ...readOptions({ archived: "include", noContext: true }),
+        limit: z.number().optional().describe("Rows per page (default 50, max 50)"),
       },
     },
     async (args) => runToolForMcp(getCollectionsTool, args, token),
@@ -1204,7 +1236,7 @@ export function createMcpServer(token: string) {
       title: "Get Inbox",
       description:
         "Get pending inbox items that haven't been triaged yet. The inbox is a universal capture bucket where thoughts, emails, and tasks land before being organized into contexts. Results are capped (default 20, max 50) — the response NOTE tells you when there's more. " +
-        "Archived items are never returned; use get_recent_clips with include_archived to look at handled clips. " +
+        "Archived items are left out unless archived says otherwise; get_recent_clips with include_archived is the better tool for handled clips. captured_text is always whole; other long text is previewed (fetch by ids for all of it). Paging: offset; the NOTE gives the next offset. " +
         "Each row carries source_app (its app id, see get_apps, or null) and outcome (the records it became; empty while open).",
       inputSchema: {
         ai_status: z
@@ -1219,7 +1251,7 @@ export function createMcpServer(token: string) {
           .describe(
             "Filter by how the capture arrived: 'manual' (typed into the Alfred app), 'email' (forwarded to the capture address), 'mcp' (created by Claude during a conversation), 'task' (created by a scheduled task run — these are NOT enriched and are waiting for a Claude session), 'clipboard' (a page clipped by the Chrome extension), or 'cli' (a report pushed by the Claude CLI). For clipboard and cli items, get_recent_clips is the better tool — it returns the actual page text and links, which the inbox row does not carry.",
           ),
-        limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
+        ...readOptions({ archived: "exclude" }),
       },
     },
     async (args) => runToolForMcp(getInboxTool, args, token),
@@ -1360,6 +1392,8 @@ export function createMcpServer(token: string) {
         "Get songs in the SAM music practice app. Returns song metadata (title, artist, key, default_bpm, and the goal tempo). Use search_text to find specific songs. Does not return measure data — use get_database_schema for full details if needed. TEMPO FIELDS: default_bpm is the tempo the song loads at and drifts whenever practice tempo is saved — it is NOT the target. goal_bpm is the goal in tempo-box units (quarter notes per minute) and goal_playback_speed its paired speed percent; goal_effective_bpm = round(goal_bpm * goal_playback_speed / 100) is the goal tempo actually heard, directly comparable with sam_passes.effective_bpm. goal_set_at is when the goal was confirmed; NULL means the goal is a placeholder. WARM-UP LADDER: a short range can be ramped up to tempo before it counts — a couple of passes at 70% of the target tempo, then 85%, then target. `warmup_ladder` is that ramp: an array of rungs {target_percent, accuracy_target, target_passes, consecutive}. NULL means this level sets none and the next one down applies (item, then snippet, then song, then the app default); [] means no warm-up here at all, inheriting nothing. A song's ladder is the fallback for every range of it. " + SAM_DATA_RULES,
       inputSchema: {
         search_text: z.string().optional().describe("Search song titles and artists"),
+        ...readOptions({ archived: "exclude" }),
+        limit: z.number().optional().describe("Rows per page (default 50, max 50); the NOTE gives the next offset when there are more"),
       },
     },
     async (args) => runToolForMcp(getSamSongsTool, args, token),
@@ -1381,7 +1415,7 @@ export function createMcpServer(token: string) {
         date_to: z.string().optional().describe("End date filter (ISO 8601 format)"),
         plan_id: z.string().optional().describe("Only sessions recorded while this practice plan was active"),
         plan_item_id: z.string().optional().describe("Only sessions recorded against this plan item"),
-        limit: z.number().optional().describe("Max results to return (default 20)"),
+        ...readOptions(),
       },
     },
     async (args) => runToolForMcp(getSamSessionsTool, args, token),
@@ -1430,7 +1464,7 @@ export function createMcpServer(token: string) {
         date_to: z.string().optional().describe("End date filter (ISO 8601 format)"),
         plan_id: z.string().optional().describe("Only passes recorded while this practice plan was active"),
         plan_item_id: z.string().optional().describe("Only passes recorded against this plan item (history; progress does not use it)"),
-        limit: z.number().optional().describe("Max results to return (default 20)"),
+        ...readOptions(),
       },
     },
     async (args) => runToolForMcp(getSamPassesTool, args, token),
@@ -1445,6 +1479,8 @@ export function createMcpServer(token: string) {
       inputSchema: {
         song_id: z.string().optional().describe("Filter by song ID"),
         search_text: z.string().optional().describe("Search snippet titles and notes"),
+        ...readOptions({ archived: "exclude" }),
+        limit: z.number().optional().describe("Rows per page (default 50, max 50); the NOTE gives the next offset when there are more"),
       },
     },
     async (args) => runToolForMcp(getSamSnippetsTool, args, token),
@@ -1512,6 +1548,7 @@ export function createMcpServer(token: string) {
       inputSchema: {
         status: z.enum(["active", "superseded"]).optional().describe("Filter by plan status"),
         song_id: z.string().optional().describe("Only plans containing this song; attaches that song's notes and items"),
+        ...readOptions(),
         limit: z.number().optional().describe("Max plans to return (default 20, max 50)"),
       },
     },
@@ -1543,6 +1580,7 @@ export function createMcpServer(token: string) {
         status: z.enum(["someday", "active", "done", "dropped"]).optional().describe("Filter by status"),
         kind: z.enum(["song", "technique", "progression"]).optional().describe("Filter by kind"),
         song_id: z.string().optional().describe("Only goals linked to this song"),
+        ...readOptions(),
         limit: z.number().optional().describe("Max goals to return (default 50, max 50)"),
       },
     },
@@ -1983,6 +2021,7 @@ export function createMcpServer(token: string) {
         job: z.string().optional().describe("Filter to one job name."),
         status: RUN_STATUS.optional().describe("Filter by outcome. Use 'ok' for gap detection; use 'running' to find ORPHANS - runs that opened and never closed because the task died mid-flight. Nothing closes those automatically."),
         unnotified_only: z.boolean().optional().describe("Only runs whose failure has not yet been surfaced (notified_at is null)."),
+        ...readOptions(),
         limit: z.number().optional().describe("Max rows (default 20, cap 50)."),
       },
     },
@@ -2288,7 +2327,8 @@ export function createMcpServer(token: string) {
       inputSchema: {
         name: z.string().optional().describe("Exact artist name (case-insensitive). Omit to list."),
         missing_mbid: z.boolean().optional().describe("Only artists with no mbid — the ones setlist reads cannot reach."),
-        limit: z.number().optional().describe("Max rows (default 20, cap 50)."),
+        ...readOptions(),
+        limit: z.number().optional().describe("Max rows (default 20, cap 50). Page with offset; the NOTE gives the next one."),
       },
     },
     async (args) => runToolForMcp(getDjArtistsTool, args, token),
@@ -2349,6 +2389,7 @@ export function createMcpServer(token: string) {
         app: z.enum(["dj", "sam", "alfred", "workshop", "ken", "warren_buffet"]).optional().describe("Filter to one app."),
         job: z.string().optional().describe("Filter to one job name."),
         enabled: z.boolean().optional().describe("Filter to enabled or suspended definitions."),
+        ...readOptions(),
         limit: z.number().optional().describe("Max rows (default 20, cap 50)."),
       },
     },
@@ -2466,6 +2507,7 @@ export function createMcpServer(token: string) {
         "Capped by `limit`; the response NOTE says so when it cuts. Tier 1, read-only.",
       inputSchema: {
         source_refs: z.array(z.string()).optional().describe("Alfred item ids — text like 'mtw2g9lb8cbs0xhsdij', NOT uuids. Returns only areas whose source_ref is one of these. Max 50; more is refused. An empty array is the same as omitting it."),
+        ...readOptions(),
         limit: z.coerce.number().optional().describe("Max areas (cap 50). Defaults to the number of source_refs when those are passed, otherwise 20."),
       },
     },
@@ -2486,6 +2528,7 @@ export function createMcpServer(token: string) {
         tags: z.array(z.string()).optional().describe("Items carrying ANY of these tags."),
         search_text: z.string().optional().describe("Case-insensitive substring match on `prompt` only — not ground_truth, not subtopic."),
         status: z.enum(["active", "deprecated"]).optional().describe("Defaults to 'active'. 'deprecated' returns retired items, including superseded facts whose superseded_by points at the replacement — the history that lets Ken un-teach an old answer."),
+        ...readOptions(),
         limit: z.coerce.number().optional().describe("Max rows (default 20, cap 50)."),
       },
     },
@@ -2516,6 +2559,7 @@ export function createMcpServer(token: string) {
         item_id: z.string().optional().describe("uuid. Misconceptions touching this item on EITHER side of a confusion pair (item_id or related_item_id)."),
         subtopic: z.string().optional().describe("Misconceptions scoped to this subtopic — exact match."),
         status: z.enum(["active", "resolved"]).optional().describe("Defaults to 'active'. 'resolved' = patterns that stopped recurring, kept as history."),
+        ...readOptions(),
         limit: z.coerce.number().optional().describe("Max rows (default 20, cap 50)."),
       },
     },
@@ -2611,6 +2655,7 @@ export function createMcpServer(token: string) {
           .boolean()
           .optional()
           .describe("true = only applications whose next_action_due is before today (America/Los_Angeles). Rows with no due date are excluded."),
+        ...readOptions(),
         limit: z.number().optional().describe("Max rows (default 20, hard cap 50)."),
       },
     },
@@ -2825,6 +2870,7 @@ export function createMcpServer(token: string) {
         state: z.enum(["scheduled", "sent", "cancelled", "no_subscription", "all"]).optional().describe("Default 'scheduled'. 'all' returns every state."),
         inbox_id: z.string().optional().describe("Only reminders linked to this inbox item."),
         intent_id: z.string().optional().describe("Only reminders linked to this intention."),
+        ...readOptions(),
         limit: z.number().optional().describe("Max rows, default 20, cap 50."),
       },
     },
@@ -2942,6 +2988,7 @@ export function createMcpServer(token: string) {
       inputSchema: {
         account_id: z.string().optional().describe("Only this account (get_wb_accounts, field account_id)."),
         as_of: wbDate("The day to read"),
+        ...readOptions(),
         limit: z.number().optional().describe("Max rows, default 20, cap 50."),
       },
     },
@@ -3117,6 +3164,7 @@ export function createMcpServer(token: string) {
         "Merchants: a clean name, the bank-text patterns that map to it (case-insensitive substrings of the payee, then the description), and an optional default_kind. Tier 1.",
       inputSchema: {
         search: z.string().optional().describe("Text in the merchant's name."),
+        ...readOptions(),
         limit: z.number().optional().describe("Max rows, default 20, cap 50."),
       },
     },
@@ -3152,6 +3200,7 @@ export function createMcpServer(token: string) {
       inputSchema: {
         active: z.boolean().optional(),
         merchant_id: z.string().optional().describe("Only rules matching this merchant."),
+        ...readOptions(),
         limit: z.number().optional().describe("Max rows, default 20, cap 50."),
       },
     },
@@ -3541,6 +3590,7 @@ export function createMcpServer(token: string) {
       description: "Projects that group payments (a remodel, a trip). Splits join a project through set_wb_transaction_project or a rule's set_project_id; project-linked spending leaves the burn rate. Tier 1.",
       inputSchema: {
         status: z.enum(["active", "on_hold", "done", "cancelled"]).optional(),
+        ...readOptions(),
         limit: z.number().optional().describe("Max rows, default 20, cap 50."),
       },
     },
@@ -3561,6 +3611,7 @@ export function createMcpServer(token: string) {
         due_from: wbDate("Due on or after"),
         due_to: wbDate("Due on or before"),
         include_drafts: z.boolean().optional().describe("Default true."),
+        ...readOptions(),
         limit: z.number().optional().describe("Max rows, default 20, cap 50."),
       },
     },
@@ -3900,6 +3951,7 @@ export function createMcpServer(token: string) {
         source: dmSource.optional().describe("Only songs that entered the pool this way."),
         untagged: z.boolean().optional().describe("true = only songs missing decade or genre."),
         thumbs: z.enum(["up", "down"]).optional().describe("Only songs with this latest thumb."),
+        ...readOptions(),
         limit: z.number().optional().describe("Max rows, default 20, cap 50."),
       },
     },

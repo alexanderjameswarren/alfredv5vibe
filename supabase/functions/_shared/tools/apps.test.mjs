@@ -3,27 +3,14 @@
 // Run:
 //   node --experimental-strip-types --test supabase/functions/_shared/tools/apps.test.mjs
 //
-// platform.ts is stubbed, as in reminders.test.mjs.
+// The real platform.ts and shared read run (test-platform.mjs); only defineTool is replaced.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { loadTool, sawRange, settingsFor, withSettings } from "./test-platform.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const dir = mkdtempSync(join(tmpdir(), "apps-"));
-writeFileSync(join(dir, "platform.ts"), `
-export const defineTool = (o) => o;
-export const clampLimit = (n) => Math.min(n ?? 20, 50);
-export const envelope = (data, meta = {}) => ({ data, meta });
-`);
-const IMPORT = 'from "../platform.ts";';
-const src = readFileSync(join(HERE, "apps.ts"), "utf-8");
-if (!src.includes(IMPORT)) throw new Error("apps.ts import line changed — update this test.");
-writeFileSync(join(dir, "apps.ts"), src.replace(IMPORT, 'from "./platform.ts";'));
-const m = await import(pathToFileURL(join(dir, "apps.ts")).href);
+const m = await loadTool("apps.ts");
+const APPS_SETTINGS = settingsFor("apps", ["id", "name", "description", "icon", "path", "button_name", "created_at", "updated_at"]);
 
 const APPS = [{ id: "arnold" }, { id: "jobs" }, { id: "warren_buffet" }];
 
@@ -42,7 +29,7 @@ function fakeDb(result = { data: APPS, error: null }) {
       return b;
     },
   };
-  return db;
+  return withSettings(db, [APPS_SETTINGS]);
 }
 
 test("checkSourceApp: undefined leaves it alone, null and empty clear it", async () => {
@@ -63,11 +50,14 @@ test("checkSourceApp: a non-string is refused", async () => {
   await assert.rejects(m.checkSourceApp("t", 3, fakeDb()), /must be an app id string/);
 });
 
-test("get_apps: tier 1, reads apps with every column, bounded", async () => {
+test("get_apps: tier 1, every readable column, up to 50 by name, description whole", async () => {
   assert.equal(m.getAppsTool.tier, 1);
-  const db = fakeDb({ data: [{ id: "jobs", name: "Jobs" }], error: null });
+  const long = "d".repeat(300);
+  const db = fakeDb({ data: [{ id: "jobs", name: "Jobs", description: long }], error: null, count: 1 });
   const out = await m.getAppsTool.handler({}, { db });
-  assert.deepEqual(out.data, [{ id: "jobs", name: "Jobs" }]);
-  assert.deepEqual(db.calls[0], ["apps", "select", "id, name, description, icon, path, button_name"]);
-  assert.ok(db.calls.some((c) => c[1] === "limit" && c[2] === 50));
+  assert.deepEqual(out.data, [{ id: "jobs", name: "Jobs", description: long }]);
+  assert.deepEqual(db.calls.find((c) => c[1] === "select").slice(0, 3),
+    ["apps", "select", "id, name, description, icon, path, button_name, created_at, updated_at"]);
+  assert.ok(sawRange(db.calls, "apps", 0, 49));
+  assert.ok(db.calls.some(([t, k, c, o]) => t === "apps" && k === "order" && c === "name" && o.ascending));
 });

@@ -3,7 +3,9 @@
 // Run:
 //   node --experimental-strip-types --test supabase/functions/_shared/tools/groups.test.mjs
 //
-// platform.ts is stubbed, as in apps.test.mjs.
+// The REAL platform.ts (jsr: imports stripped), platform-read.ts and records.ts
+// are loaded, since get_groups runs on the shared readTable; only defineTool is
+// replaced so the handler can be called with a fake ctx.db.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,17 +15,31 @@ import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const SHARED = join(HERE, "..");
 const dir = mkdtempSync(join(tmpdir(), "groups-"));
-writeFileSync(join(dir, "platform.ts"), `
+writeFileSync(join(dir, "platform.ts"), readFileSync(join(SHARED, "platform.ts"), "utf-8")
+  .split("\n").filter((l) => !/^import .*"jsr:/.test(l)).join("\n"));
+writeFileSync(join(dir, "platform-read.ts"), readFileSync(join(SHARED, "platform-read.ts"), "utf-8"));
+writeFileSync(join(dir, "shim.ts"), `
+export { clampLimit, finishRead, readTable, requireSettings } from "./platform.ts";
 export const defineTool = (o) => o;
-export const clampLimit = (n) => Math.min(n ?? 20, 50);
-export const envelope = (data, meta = {}) => ({ data, meta });
 `);
-const IMPORT = 'from "../platform.ts";';
-const src = readFileSync(join(HERE, "groups.ts"), "utf-8");
-if (!src.includes(IMPORT)) throw new Error("groups.ts import line changed — update this test.");
-writeFileSync(join(dir, "groups.ts"), src.replace(IMPORT, 'from "./platform.ts";'));
+const rewrite = (file) => {
+  const src = readFileSync(join(HERE, file), "utf-8");
+  if (!src.includes('from "../platform.ts";')) throw new Error(`${file} import line changed — update this test.`);
+  writeFileSync(join(dir, file), src.replaceAll('from "../platform.ts";', 'from "./shim.ts";')
+    .replaceAll('from "../platform-read.ts";', 'from "./platform-read.ts";'));
+};
+rewrite("records.ts");
+rewrite("groups.ts");
 const m = await import(pathToFileURL(join(dir, "groups.ts")).href);
+
+const GROUP_SETTINGS = {
+  table: "item_groups",
+  columns: ["id", "user_id", "group_type_id", "context_id", "name", "description", "status", "pinned", "archived",
+    "last_completed_at", "created_at", "updated_at"].map((name) => ({ name, type: "text" })),
+  secret_columns: [], heavy_columns: [], has_context_id: true, has_archived: true, has_status: true,
+};
 
 const TYPES = [
   { id: "menu", label_singular: "Menu", label_plural: "Menus", execution_mode: "together" },
@@ -35,6 +51,10 @@ function fakeDb(tables) {
   const calls = [];
   return {
     calls,
+    rpc: (name, params) => {
+      calls.push(["rpc", name, params]);
+      return Promise.resolve({ data: !params?.p_table || params.p_table === "item_groups" ? [GROUP_SETTINGS] : [], error: null });
+    },
     from(table) {
       const b = new Proxy({}, {
         get: (_t, k) => {
@@ -112,9 +132,29 @@ test("get_groups: live groups only, filters in the query, bounded, with a trunca
   assert.ok(q.some(([, k, ...a]) => k === "eq" && a[0] === "context_id" && a[1] === "c"));
   assert.ok(q.some(([, k, ...a]) => k === "in" && a[0] === "status" && a[1][0] === "active"));
   assert.ok(q.some(([, k, ...a]) => k === "in" && a[0] === "group_type_id" && a[1][0] === "proj"));
-  assert.ok(q.some(([, k, n]) => k === "limit" && n === 1));
+  assert.ok(q.some(([, k, a, b]) => k === "range" && a === 0 && b === 0));
+  assert.ok(q.some(([, k, c, o]) => k === "order" && c === "pinned" && o.ascending === false));
   assert.equal(out.data[0].context_name, "Home");
-  assert.deepEqual(out.meta, { limit_applied: 1, truncated: true, total: 3 });
+  assert.deepEqual(out.meta, { count: 1, limit_applied: 1, truncated: true, total: 3, next_offset: 1 });
+});
+
+test("get_groups: shared options — offset, ids, archived, include notes", async () => {
+  const db = fakeDb({
+    group_types: TYPES,
+    item_groups: [{ id: "p", name: "Kitchen remodel", group_type_id: "proj", archived: true }],
+    notes: [{ id: "n1", target_id: "p", body: "Call the plumber", created_at: "2026-10-23" }],
+  });
+  const out = await m.getGroupsTool.handler({ ids: ["p"], include: ["notes"] }, { db });
+  const q = db.calls.filter(([t]) => t === "item_groups");
+  assert.ok(q.some(([, k, c, v]) => k === "in" && c === "id" && v[0] === "p"));
+  assert.ok(!q.some(([, k, c]) => k === "eq" && c === "archived"));
+  assert.equal(out.data[0].archived, true);
+  assert.equal(out.data[0].notes[0].body, "Call the plumber");
+  const db2 = fakeDb({ group_types: TYPES });
+  await m.getGroupsTool.handler({ offset: 20, archived: "only" }, { db: db2 });
+  assert.ok(db2.calls.some(([t, k, c, v]) => t === "item_groups" && k === "eq" && c === "archived" && v === true));
+  assert.ok(db2.calls.some(([t, k, a, b]) => t === "item_groups" && k === "range" && a === 20 && b === 39));
+  await assert.rejects(m.getGroupsTool.handler({ include: ["memberships"] }, { db: fakeDb({ group_types: TYPES }) }), /Allowed: notes/);
 });
 
 test("get_groups: an unknown type label names the real ones", async () => {

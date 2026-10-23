@@ -34,6 +34,7 @@ for (const [from, to] of [
   platformSrc = platformSrc.replace(from, to);
 }
 writeFileSync(join(dir, "platform.ts"), platformSrc);
+writeFileSync(join(dir, "platform-read.ts"), readFileSync(join(HERE, "..", "platform-read.ts"), "utf-8"));
 
 const IMPORT = 'import { defineTool } from "../platform.ts";';
 const toolSrc = readFileSync(join(HERE, "sam-snippets.ts"), "utf-8");

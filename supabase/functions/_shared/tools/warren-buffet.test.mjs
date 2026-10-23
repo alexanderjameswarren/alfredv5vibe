@@ -8,24 +8,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { loadTool, WB_SETTINGS, withSettings } from "./test-platform.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const dir = mkdtempSync(join(tmpdir(), "wb-tools-"));
-writeFileSync(join(dir, "platform.ts"), `
-export const defineTool = (o) => o;
-export const clampLimit = (n) => Math.min(n ?? 20, 50);
-export const envelope = (data, meta = {}) => ({ data, meta });
-export const describeDbError = (name, e) => name + " failed: " + e.message;
-`);
-const IMPORT = 'from "../platform.ts";';
-const src = readFileSync(join(HERE, "warren-buffet.ts"), "utf-8");
-if (!src.includes(IMPORT)) throw new Error("warren-buffet.ts import line changed — update this test.");
-writeFileSync(join(dir, "warren-buffet.ts"), src.replace(IMPORT, 'from "./platform.ts";'));
-const m = await import(pathToFileURL(join(dir, "warren-buffet.ts")).href);
+// The real platform.ts runs (test-platform.mjs); defineTool returns its options.
+const m = await loadTool("warren-buffet.ts");
 
 const MONEY = "muvitejhrgt3rgi8t6q";
 
@@ -45,7 +31,10 @@ function fakeDb(respond = () => ({ data: [], error: null, count: 0 })) {
     });
     return b;
   };
-  return { log, from, op: (table, name) => log.filter((q) => q.table === table).flatMap((q) => q.ops).filter((o) => o[0] === name) };
+  return withSettings(
+    { log, from, op: (table, name) => log.filter((q) => q.table === table).flatMap((q) => q.ops).filter((o) => o[0] === name) },
+    WB_SETTINGS,
+  );
 }
 const has = (ops, name) => ops.some((o) => o[0] === name);
 const writes = (db) => db.log.filter((q) => has(q.ops, "insert") || has(q.ops, "update"));

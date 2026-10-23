@@ -24,8 +24,18 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readFileSync } from "node:fs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+// readTable stand-in over this file's in-memory db: the handlers' filters and order
+// run for real; paging and previews are the real readTable's, tested in records.test.mjs.
 const STUBS = [
-  "const clampLimit = (n: number | undefined) => Math.min(n ?? 20, 50);",
+  "const readTable = async (ctx: any, o: any) => {",
+  "  let q = ctx.db.from(o.table).select('*');",
+  "  if (o.filter) q = o.filter(q, {});",
+  "  for (const s of o.order ?? []) q = q.order(s.column, { ascending: s.ascending });",
+  "  const all = (await q).data ?? [];",
+  "  const limit = Math.min(o.args.limit ?? 20, 50);",
+  "  const data = all.slice(0, limit);",
+  "  return { data, meta: { total: all.length, limit_applied: limit, truncated: all.length > data.length } };",
+  "};",
   "const defineTool = (o: any) => {",
   "  (globalThis as any).__tools ??= [];",
   "  (globalThis as any).__tools.push(o);",
@@ -40,7 +50,7 @@ for (const f of readdirSync(HERE)) {
   if (f.startsWith("dj-") && f.endsWith(".ts")) copyFileSync(join(HERE, f), join(dir, f));
 }
 const src = readFileSync(join(HERE, "dj-courier.ts"), "utf-8").replace(
-  'import { clampLimit, defineTool } from "../platform.ts";',
+  'import { defineTool, readTable } from "../platform.ts";',
   STUBS,
 );
 if (src.includes("../platform.ts")) {
@@ -499,11 +509,11 @@ test("create_platform_run and get_platform_runs round-trip", async () => {
   }, ctx);
 
   const all = await toolByName.get_platform_runs.handler({ app: "dj" }, ctx);
-  assert.equal(all.length, 2);
+  assert.equal(all.data.length, 2);
   const ok = await toolByName.get_platform_runs.handler(
     { app: "dj", job: "daily_history_sync", status: "ok", limit: 1 }, ctx);
-  assert.equal(ok.length, 1);
-  assert.equal(ok[0].covered_to, "2026-08-27");
+  assert.equal(ok.data.length, 1);
+  assert.equal(ok.data[0].covered_to, "2026-08-27");
 });
 
 test("update_platform_run sets notified_at and reports before/after", async () => {

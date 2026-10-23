@@ -12,7 +12,7 @@
 // right shape here and would be the wrong shape there, and the difference is
 // not stylistic - it is whether the column is an IDENTITY or an ANNOTATION.
 
-import { clampLimit, defineTool } from "../platform.ts";
+import { clampLimit, defineTool, readTable } from "../platform.ts";
 
 const MBID_LEN = 36;
 
@@ -53,29 +53,32 @@ export const getDjArtistsTool = defineTool({
   handler: async (args: Record<string, unknown>, ctx) => {
     const name = args.name as string | undefined;
     const missingMbid = args.missing_mbid === true;
-    const limit = clampLimit(args.limit as number | undefined);
 
     // ⚠️ COUNTED, BECAUSE THIS TOOL TRUNCATES AND USED TO DO IT IN SILENCE.
     // Measured 2026-09-02: 22 artist rows exist, the default limit is 20, and an
     // unfiltered call returned exactly 20 with nothing to say so — Weezer fell
-    // off the end alphabetically, after Styx. A job that lists artists once and
-    // iterates therefore skips everything after "S", and the mbid it needs for
-    // the setlist diff is simply absent rather than reported missing. `count`
-    // costs one extra clause and is what lets the envelope raise the truncation
-    // note the house style already defines.
-    let q = ctx.db.from("dj_artists").select(COLS, { count: "exact" });
-    // Exact match first, so "Live" the band cannot be reached by a fuzzy search
-    // that also matches "Live at the Apollo" - the same class of wrong-match the
-    // mbid rule exists to prevent one layer up.
-    if (name) q = q.ilike("name", name);
-    if (missingMbid) q = q.is("mbid", null);
-    q = q.order("name", { ascending: true }).limit(limit);
-
-    const { data, error, count } = await q;
-    if (error) throw new Error(`get_dj_artists: ${error.message}`);
-    const rows = (data ?? []) as ArtistRow[];
-    const total = count ?? rows.length;
-    const truncated = rows.length < total;
+    // off the end alphabetically, after Styx. The shared read (readTable, MCP
+    // read access S8b) counts the match and gives the next offset, so a caller
+    // can page to the end instead of stopping at "S". notes stay whole.
+    const page = await readTable(ctx, {
+      tool: "get_dj_artists",
+      table: "dj_artists",
+      args,
+      filter: (query) => {
+        let q = query;
+        // Exact match first, so "Live" the band cannot be reached by a fuzzy search
+        // that also matches "Live at the Apollo" - the same class of wrong-match the
+        // mbid rule exists to prevent one layer up.
+        if (name) q = q.ilike("name", name);
+        if (missingMbid) q = q.is("mbid", null);
+        return q;
+      },
+      order: [{ column: "name", ascending: true }],
+      fullText: ["notes"],
+    });
+    const rows = page.data as ArtistRow[];
+    const total = page.meta.total ?? rows.length;
+    const limit = page.meta.limit_applied;
 
     return {
       data: {
@@ -98,10 +101,9 @@ export const getDjArtistsTool = defineTool({
           "missing while every row it needs is present in the table.",
       },
       // Raises the house truncation note (platform.ts): "results truncated to N
-      // of M". Without it a clamped read and a complete one are byte-identical.
-      meta: truncated
-        ? { truncated: true, total, limit_applied: limit, count: rows.length }
-        : {},
+      // of M. Next page: offset=K". Without it a clamped read and a complete one
+      // are byte-identical.
+      meta: { ...page.meta, count: rows.length },
     };
   },
 });

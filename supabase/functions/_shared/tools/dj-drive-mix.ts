@@ -15,7 +15,7 @@
 //   update_drive_mix_thumbs    tier 2 — record Alex's thumbs; the latest thumb wins.
 // ============================================================================
 
-import { clampLimit, defineTool, describeDbError, envelope } from "../platform.ts";
+import { clampLimit, defineTool, describeDbError, envelope, readTable } from "../platform.ts";
 
 export const GENRES = ["pop", "rock", "alternative", "country", "rap", "rnb", "dance", "other"] as const;
 export const STATUSES = ["pending", "active", "retired"] as const;
@@ -225,19 +225,23 @@ export const getDriveMixSongsTool = defineTool({
     const artist = given(args.artist) ? normaliseArtistKey(T, args.artist) : null;
     const untagged = args.untagged === true;
     const thumbs = given(args.thumbs) ? parseEnum(T, "thumbs", args.thumbs, THUMBS) : null;
-    const LIMIT = clampLimit(args.limit as number | undefined);
 
-    let q = ctx.db.from("drive_mix_songs").select(COLUMNS, { count: "exact" });
-    if (status) q = q.eq("status", status);
-    if (source) q = q.eq("source", source);
-    if (artist) q = q.eq("artist_key", artist);
-    if (untagged) q = q.or("decade.is.null,genre.is.null");
-    if (thumbs) q = q.eq("thumbs", thumbs);
-    const { data, error, count } = await q
-      .order("artist_key", { ascending: true })
-      .order("title", { ascending: true })
-      .limit(LIMIT);
-    if (error) throw new Error(`${T}: ${error.message}`);
+    // Shared read (MCP read access S8b): limit, offset, ids, the next-offset NOTE.
+    const page = await readTable(ctx, {
+      tool: T,
+      table: "drive_mix_songs",
+      args,
+      filter: (query) => {
+        let q = query;
+        if (status) q = q.eq("status", status);
+        if (source) q = q.eq("source", source);
+        if (artist) q = q.eq("artist_key", artist);
+        if (untagged) q = q.or("decade.is.null,genre.is.null");
+        if (thumbs) q = q.eq("thumbs", thumbs);
+        return q;
+      },
+      order: [{ column: "artist_key", ascending: true }, { column: "title", ascending: true }],
+    });
 
     // Pool-wide counts, independent of the filters above.
     const all = () => ctx.db.from("drive_mix_songs").select("id", { count: "exact", head: true });
@@ -259,15 +263,15 @@ export const getDriveMixSongsTool = defineTool({
       country_rap: cr, "1980s-and-earlier": s80, "1990s-2000s": s9000, "2010s-2020s": s1020,
     };
 
-    const rows = data ?? [];
-    const total = count ?? rows.length;
+    const rows = page.data;
+    const total = page.meta.total ?? rows.length;
     return envelope(
       {
         songs: rows,
         matched: total,
         pool: { by_status: { pending, active, retired }, by_thumbs: { up, down }, active_eligible_by_slice: bySlice },
       },
-      { count: rows.length, limit_applied: LIMIT, truncated: total > rows.length, total },
+      { ...page.meta, count: rows.length },
     );
   },
 });

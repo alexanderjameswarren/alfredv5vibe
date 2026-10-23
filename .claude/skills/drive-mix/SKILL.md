@@ -33,7 +33,7 @@ Workshop (Surface): `get_dj_artist_top_songs`, `search_dj_music`, `get_dj_album`
 Alex wants the songs he KNOWS, and play counts cannot predict which those are. For Madonna he chose Take a Bow, Ray of Light and Express Yourself, all below the bar. For Billy Joel he rejected Honesty and Vienna, his #4 and #5 by plays. So Alex picks every song; nothing is added without his pick.
 
 1. Call `get_dj_artist_top_songs` with the artist name and **limit 60** (time_budget_seconds 45). If it returns candidates instead of songs, pick the channel with by far the most subscribers and recognisable top songs. If none clearly fits, ask Alex. (Garth Brooks is not on YouTube Music.)
-2. Check what is already in the pool: `get_drive_mix_songs` with `artist` set to the lower-cased artist_key (e.g. `r.e.m.`), any status, limit 50. Compare by title, ignoring case, bracketed text, " - " suffixes and feat. credits.
+2. Check what is already in the pool: `get_drive_mix_songs` with `artist` set to the lower-cased artist_key (e.g. `r.e.m.`), any status, limit 50. A big artist can have more than 50: when the NOTE says the results were truncated, call again with the `offset` it gives. Compare by title, ignoring case, bracketed text, " - " suffixes and feat. credits.
 3. Show Alex ONE ranked list, by plays: every `suggested` song, then about the next 10 below the bar. Each line gives the title, the plays (e.g. 89M) and the mark **suggested** or **below bar**. Leave out songs already in the pool, and give their count in one line. Flag:
    - Christmas or holiday songs: recommend dropping.
    - Guest spots (`guest: true`): list them below the bar. A big one, over about 500M (e.g. Coldplay's "Something Just Like This"), is worth asking about.

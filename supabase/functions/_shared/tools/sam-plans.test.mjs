@@ -35,9 +35,10 @@ for (const [from, to] of [
   platformSrc = platformSrc.replace(from, to);
 }
 writeFileSync(join(dir, "platform.ts"), platformSrc);
+writeFileSync(join(dir, "platform-read.ts"), readFileSync(join(HERE, "..", "platform-read.ts"), "utf-8"));
 
 const toolSrc = readFileSync(join(HERE, "sam-plans.ts"), "utf-8");
-const IMPORT = 'import { defineTool, clampLimit, envelope } from "../platform.ts";';
+const IMPORT = 'import { defineTool, clampLimit, envelope, readTable } from "../platform.ts";';
 if (!toolSrc.includes(IMPORT)) throw new Error("sam-plans.ts import line changed — update this test.");
 writeFileSync(join(dir, "sam-plans.ts"), toolSrc.replace(IMPORT, IMPORT.replace("../platform.ts", "./platform.ts")));
 // Its one sibling: the warm-up ladder rules, imported by relative path.
@@ -129,6 +130,15 @@ function makeDb({ tables = baseTables(), rpc = {} } = {}) {
       if (fn === "platform_check_call_budget") {
         return Promise.resolve({ data: [{ allowed: true, message: "" }], error: null });
       }
+      if (fn === "platform_read_settings") {
+        // readTable's settings: the seeded rows' own columns.
+        const names = Object.keys((tables[args.p_table] ?? [])[0] ?? { id: null });
+        return Promise.resolve({ data: [{
+          table: args.p_table, columns: names.map((name) => ({ name, type: "text" })), secret_columns: [],
+          heavy_columns: [], has_context_id: names.includes("context_id"), has_archived: names.includes("archived"),
+          has_status: names.includes("status"),
+        }], error: null });
+      }
       const h = rpc[fn];
       return Promise.resolve(h ? h(args) : { data: null, error: { message: `no rpc ${fn}` } });
     },
@@ -145,6 +155,7 @@ function makeDb({ tables = baseTables(), rpc = {} } = {}) {
         lte(c, v) { st.filters.push((r) => r[c] <= v); return api; },
         order(c, o = {}) { st.order.push([c, o.ascending !== false]); return api; },
         limit(n) { st.limit = n; return api; },
+        range(a, b) { st.range = [a, b]; return api; },
         insert(p) { st.op = "insert"; st.payload = p; return api; },
         update(p) { st.op = "update"; st.payload = p; return api; },
         maybeSingle() { return run().then((r) => ({ ...r, data: r.data?.[0] ?? null })); },
@@ -172,6 +183,7 @@ function makeDb({ tables = baseTables(), rpc = {} } = {}) {
           matched = [...matched].sort((a, b) => (a[c] > b[c] ? 1 : a[c] < b[c] ? -1 : 0) * (asc ? 1 : -1));
         }
         if (st.limit != null) matched = matched.slice(0, st.limit);
+        if (st.range) matched = matched.slice(st.range[0], st.range[1] + 1);
         return Promise.resolve({ data: matched, count: st.count ? count : null, error: null });
       }
       return api;
@@ -543,18 +555,18 @@ test("get_sam_practice_plans: newest first; with song_id, that song's notes and 
 
 test("get_sam_practice_plans reports truncation from the exact count", async () => {
   const out = await call(mod.getSamPracticePlansTool, { limit: 1 }, makeDb());
-  assert.deepEqual(out.meta, { count: 1, truncated: true, limit_applied: 1, total: 2 });
+  assert.deepEqual(out.meta, { count: 1, truncated: true, limit_applied: 1, total: 2, next_offset: 1 });
 });
 
 test("get_sam_goals: default limit 50, song titles joined, filters validated", async () => {
   const db = makeDb();
   const out = await call(mod.getSamGoalsTool, {}, db);
-  assert.equal(db.calls.find((c) => c.name === "sam_goals").limit, 50);
+  assert.deepEqual(db.calls.find((c) => c.name === "sam_goals").range, [0, 49]);
   assert.equal(out.data[0].song_title, "Pastorale");
   await assert.rejects(call(mod.getSamGoalsTool, { kind: "scale" }, makeDb()), /`kind` must be one of song \| technique \| progression/);
   const db2 = makeDb();
   await call(mod.getSamGoalsTool, { limit: 500 }, db2);
-  assert.equal(db2.calls.find((c) => c.name === "sam_goals").limit, 50);
+  assert.deepEqual(db2.calls.find((c) => c.name === "sam_goals").range, [0, 49]);
 });
 
 // --- goals writes -----------------------------------------------------------------------------
