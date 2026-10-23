@@ -73,10 +73,10 @@ describe("every full-screen edit form uses the shared card", () => {
   const alfred = alfredSource();
   const inbox = sourceOf("InboxDetailView.jsx");
 
-  it("has exactly the four call sites", () => {
-    // ItemCard, IntentionCard and ContextForm in Alfred.jsx; the inbox detail page in
-    // its own file.
-    expect(alfred.split("<EditCard").length - 1).toBe(3);
+  it("has exactly the five call sites", () => {
+    // ItemCard, IntentionCard, ContextForm and the group edit page (Restructure P5) in
+    // Alfred's folders; the inbox detail page in its own file.
+    expect(alfred.split("<EditCard").length - 1).toBe(4);
     expect(inbox.split("<EditCard").length - 1).toBe(1);
   });
 
@@ -101,7 +101,7 @@ describe("every full-screen edit form uses the shared card", () => {
       ...alfred.matchAll(/<EditCard[^>]*>/gs),
       ...inbox.matchAll(/<EditCard[^>]*>/gs),
     ];
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(5);
     for (const [call] of calls) {
       expect(call).not.toMatch(/className="[^"]*\b(?:rounded|shadow|border)/);
       expect(call).not.toMatch(/className="[^"]*\bp[xytblr]?-\d/);
@@ -116,8 +116,9 @@ describe("every full-screen edit form uses the shared card", () => {
 
   it("keeps every pinned footer inside a card, except the two with no card", () => {
     // A footer inside an EditCard gets its inset from context. One outside gets [0, 0],
-    // which is right only for the two add-to-collection pages.
-    expect(alfred.split("<PinnedFooter").length - 1).toBe(5);
+    // which is right only for the two add-to-collection pages. Six with the group edit
+    // page's footer, which sits inside its card.
+    expect(alfred.split("<PinnedFooter").length - 1).toBe(6);
     expect(inbox.split("<PinnedFooter").length - 1).toBe(1);
     // Neither file states an inset any more; the card is the only source.
     for (const source of [alfred, inbox]) {

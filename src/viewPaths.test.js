@@ -27,6 +27,11 @@ import {
   moneyRouteFromPath,
   moneySubscriptionPath,
   moneyTransactionPath,
+  groupNewPath,
+  groupEditPath,
+  groupHistoryPath,
+  groupDetailPath,
+  groupRouteFromPath,
 } from "./viewPaths";
 import { uid } from "./utils/flattenElements";
 
@@ -35,10 +40,11 @@ import { uid } from "./utils/flattenElements";
 // on — above all "never crash, fall back to home".
 
 describe("the map itself", () => {
-  it("covers all 24 view values", () => {
+  it("covers all 28 view values", () => {
     // 20 until Step 12.6 added the two add pages; 23 since Clipboard Step 17
-    // made inbox triage a page; 24 with Money (warren_buffet-w7b).
-    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(24);
+    // made inbox triage a page; 24 with Money (warren_buffet-w7b); 28 with the
+    // group create, edit, history and detail pages (Restructure P5).
+    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(28);
   });
 
   it("is a bijection — no two views share a path", () => {
@@ -130,8 +136,9 @@ describe("parentPath (used by Step 9's cold-load redirect)", () => {
       (p) => p.split("/").length > 2
     );
     // 8 until Step 12.6 added /memories/new and /intentions/new; 11 since
-    // Clipboard Step 17 added /inbox/detail.
-    expect(details).toHaveLength(11);
+    // Clipboard Step 17 added /inbox/detail; 15 with /groups/new, /groups/edit,
+    // /groups/history and /groups/detail.
+    expect(details).toHaveLength(15);
     for (const path of details) {
       expect(pathToView(parentPath(path))).not.toBe(undefined);
       expect(VIEW_TO_PATH[pathToView(parentPath(path))]).toBe(parentPath(path));
@@ -503,5 +510,35 @@ describe("money sub-routes", () => {
       expect(moneyRouteFromPath(p)).toBeNull();
       expect(isKnownPath(p)).toBe(false);
     }
+  });
+});
+
+describe("group routes (Restructure P5)", () => {
+  it("round-trips create-in-context and edit", () => {
+    expect(groupRouteFromPath(groupNewPath("ctx 1"))).toEqual({ view: "group-new", contextId: "ctx 1" });
+    expect(groupRouteFromPath(groupEditPath("g-1"))).toEqual({ view: "group-edit", groupId: "g-1" });
+    expect(pathToView(groupNewPath("c"))).toBe("group-new");
+    expect(pathToView(groupEditPath("g"))).toBe("group-edit");
+    expect(isKnownPath(groupEditPath("g"))).toBe(true);
+    expect(groupRouteFromPath(groupHistoryPath("g-1"))).toEqual({ view: "group-history", groupId: "g-1" });
+    expect(pathToView(groupHistoryPath("g"))).toBe("group-history");
+    expect(groupRouteFromPath(groupDetailPath("g-1"))).toEqual({ view: "group-detail", groupId: "g-1" });
+    expect(pathToView(groupDetailPath("g"))).toBe("group-detail");
+    // The bare form is Back's address: the view, naming no group.
+    expect(pathToView("/groups/detail")).toBe("group-detail");
+    expect(groupRouteFromPath("/groups/detail")).toBeNull();
+  });
+
+  it("names nothing on the bare forms and rejects malformed ones", () => {
+    expect(groupRouteFromPath("/groups/new")).toBeNull();
+    expect(groupRouteFromPath("/groups/edit")).toBeNull();
+    for (const p of ["/groups/new/context", "/groups/new/item/x", "/groups/edit/a/b", "/groups"]) {
+      expect(isKnownPath(p)).toBe(false);
+    }
+  });
+
+  it("falls back to the contexts list", () => {
+    expect(parentPath(groupEditPath("g"))).toBe("/contexts");
+    expect(parentPath(groupNewPath("c"))).toBe("/contexts");
   });
 });

@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 07:20, through migration 149 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 07:26, through migration 151 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -8647,7 +8647,6 @@ COMMENT ON COLUMN "public"."executions"."group_id" IS 'Restructure P5. The group
 CREATE TABLE IF NOT EXISTS "public"."group_types" (
     "id" "text" DEFAULT ("gen_random_uuid"())::"text" NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
-    "context_id" "text",
     "label_singular" "text" NOT NULL,
     "label_plural" "text" NOT NULL,
     "icon" "text" DEFAULT 'Boxes'::"text" NOT NULL,
@@ -8663,11 +8662,7 @@ CREATE TABLE IF NOT EXISTS "public"."group_types" (
 ALTER TABLE "public"."group_types" OWNER TO "postgres";
 
 
-COMMENT ON TABLE "public"."group_types" IS 'ALFRED. Restructure P5. What a group is called in a context and how it executes: Menu/Menus in Recipes (together), Project/Projects in Alfred and Series/Series in Alex (body, mind, spirit) (separately). Owner OR shared-context RLS (mirrors intents).';
-
-
-
-COMMENT ON COLUMN "public"."group_types"."context_id" IS 'The context this type belongs to. On context delete, set null.';
+COMMENT ON TABLE "public"."group_types" IS 'ALFRED. Restructure P5. What a group is called and how it executes: Menu/Menus (together), Project/Projects and Series/Series (separately), and any the user adds in Settings. Shared across contexts: a context only chooses its default (contexts.default_group_type_id). Every signed-in user reads every type; only the owner adds, edits or deletes. A type in use cannot be deleted (item_groups.group_type_id restricts).';
 
 
 
@@ -14055,11 +14050,6 @@ ALTER TABLE ONLY "public"."executions"
 
 
 ALTER TABLE ONLY "public"."group_types"
-    ADD CONSTRAINT "group_types_context_id_fkey" FOREIGN KEY ("context_id") REFERENCES "public"."contexts"("id") ON DELETE SET NULL;
-
-
-
-ALTER TABLE ONLY "public"."group_types"
     ADD CONSTRAINT "group_types_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
 
 
@@ -14938,11 +14928,19 @@ CREATE POLICY "executions_access" ON "public"."executions" USING ((("user_id" = 
 ALTER TABLE "public"."group_types" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "group_types_access" ON "public"."group_types" TO "authenticated" USING ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
-   FROM "public"."contexts"
-  WHERE ("contexts"."shared" = true))))) WITH CHECK ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
-   FROM "public"."contexts"
-  WHERE ("contexts"."shared" = true)))));
+CREATE POLICY "group_types_delete" ON "public"."group_types" FOR DELETE TO "authenticated" USING (("user_id" = "auth"."uid"()));
+
+
+
+CREATE POLICY "group_types_insert" ON "public"."group_types" FOR INSERT TO "authenticated" WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+CREATE POLICY "group_types_read" ON "public"."group_types" FOR SELECT TO "authenticated" USING (true);
+
+
+
+CREATE POLICY "group_types_update" ON "public"."group_types" FOR UPDATE TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
 
 
 

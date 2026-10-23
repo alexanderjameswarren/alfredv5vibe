@@ -1,14 +1,19 @@
 import React from "react";
 import { ArchiveRestore, Scissors, Trash2 } from "lucide-react";
 import UnderlineTabs from "../shared/UnderlineTabs";
-import { OBJECT_ICONS } from "../shared/ObjectIcon";
+import { OBJECT_ICONS, GROUP_TYPE_ICONS, GroupTypeIcon } from "../shared/ObjectIcon";
 import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
+import { groupTitle } from "../groups/groupDetail";
 
 // The Recycle Bin screen, moved out of Alfred.jsx unchanged. Everything it reads comes
 // in as props: `contexts` and `intents` from Alfred, the rest from useRecycleBin.
+// Groups (Restructure P5) also need items, members and types, for the derived name and icon.
 export default function RecycleScreen({
   contexts,
   intents,
+  items = [],
+  groupMembers = [],
+  groupTypes = [],
   recycleTab,
   setRecycleTab,
   recycleData,
@@ -59,6 +64,8 @@ export default function RecycleScreen({
           { key: "executions", label: "Executions", icon: OBJECT_ICONS.execution },
           { key: "collections", label: "Collections", icon: OBJECT_ICONS.collection },
           { key: "contexts", label: "Contexts", icon: OBJECT_ICONS.context },
+          // The group fallback glyph: a group's own icon is its type's.
+          { key: "groups", label: "Groups", icon: GROUP_TYPE_ICONS.Boxes },
           { key: "songs", label: "Songs", icon: OBJECT_ICONS.sam },
           { key: "snippets", label: "Snippets", icon: Scissors },
         ]}
@@ -111,6 +118,7 @@ export default function RecycleScreen({
           {recycleData.map((record) => {
             let title = "";
             let subtitle = "";
+            let groupIcon = null;
             const contextName = record.contextId
               ? contexts.find((c) => c.id === record.contextId)?.name
               : null;
@@ -146,6 +154,13 @@ export default function RecycleScreen({
                   .filter(Boolean)
                   .join(" · ");
                 break;
+              case "groups": {
+                const type = groupTypes.find((t) => t.id === record.groupTypeId);
+                title = groupTitle(record, { members: groupMembers, items, intents }, type);
+                subtitle = [type?.labelSingular, contextName].filter(Boolean).join(" · ");
+                groupIcon = type?.icon || "Boxes";
+                break;
+              }
               case "songs":
                 title = record.title || "Untitled song";
                 subtitle = record.artist || "";
@@ -173,6 +188,7 @@ export default function RecycleScreen({
                   onChange={() => recycleToggleSelect(record.id)}
                   className="w-4 h-4 flex-shrink-0 rounded border-border accent-primary"
                 />
+                {groupIcon && <GroupTypeIcon icon={groupIcon} className="w-4 h-4 text-muted-foreground" />}
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-foreground truncate">{title}</p>
                   {(subtitle || updatedLabel) && (

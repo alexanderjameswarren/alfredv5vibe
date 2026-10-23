@@ -42,6 +42,11 @@ export const VIEW_TO_PATH = {
   "collection-detail": "/collections/detail",
   "collection-history": "/collections/history",
   "collection-add-items": "/collections/add-items",
+  // Restructure P5: the group create/edit page. See the group sub-routes below.
+  "group-new": "/groups/new",
+  "group-edit": "/groups/edit",
+  "group-history": "/groups/history",
+  "group-detail": "/groups/detail",
   settings: "/settings",
   recycle: "/recycle",
   timer: "/timer",
@@ -89,6 +94,8 @@ export function pathToView(pathname) {
   // /memories/new/context/:id is the same view as the bare /memories/new.
   const add = addRouteFromPath(pathname);
   if (add) return add.view;
+  const group = groupRouteFromPath(pathname);
+  if (group) return group.view;
   return PATH_TO_VIEW[normalizePath(pathname)] || DEFAULT_VIEW;
 }
 
@@ -119,6 +126,7 @@ export function isKnownPath(pathname) {
   // null here and is redirected to home like any other nonsense path, rather
   // than half-serving an add form with no target.
   if (addRouteFromPath(pathname)) return true;
+  if (groupRouteFromPath(pathname)) return true;
   return Boolean(PATH_TO_VIEW[normalizePath(pathname)]);
 }
 
@@ -150,6 +158,8 @@ export function parentPath(pathname) {
   // reason: /inbox/detail is not renderable cold either.
   if (inboxIdFromPath(path)) return VIEW_TO_PATH.inbox;
   if (intentionIdFromPath(path)) return VIEW_TO_PATH.intentions;
+  // Groups have no list of their own yet; they live on the context page.
+  if (path.startsWith("/groups")) return VIEW_TO_PATH.contexts;
   const cut = path.lastIndexOf("/");
   if (cut <= 0) return DEFAULT_PATH;
   return path.slice(0, cut);
@@ -302,6 +312,59 @@ export function addRouteFromPath(pathname) {
     if (!ADD_TARGET_KINDS.includes(kind) || !rawId) return null;
     return { view, target: { kind, id: decodeURIComponent(rawId) } };
   }
+  return null;
+}
+
+// --- Group sub-routes (Restructure P5) ---------------------------------------
+//
+// `/groups/new/context/:contextId` creates a group in a context;
+// `/groups/edit/:groupId` edits one. The bare forms resolve to the views (the map
+// stays a bijection) but name nothing, so `groupRouteFromPath` returns null for
+// them and Alfred sends them to the contexts list, as it does a missing group.
+
+const GROUP_NEW_PREFIX = `${VIEW_TO_PATH["group-new"]}/context/`;
+const GROUP_EDIT_PREFIX = `${VIEW_TO_PATH["group-edit"]}/`;
+const GROUP_HISTORY_PREFIX = `${VIEW_TO_PATH["group-history"]}/`;
+const GROUP_DETAIL_PREFIX = `${VIEW_TO_PATH["group-detail"]}/`;
+
+/**
+ * The group detail page (step 10). The bare /groups/detail is how Back returns
+ * from a member's page (setView has no id); Alfred then shows the group it last
+ * opened, as the bare intention-detail path does.
+ */
+export function groupDetailPath(groupId) {
+  return `${GROUP_DETAIL_PREFIX}${encodeURIComponent(groupId)}`;
+}
+
+export function groupNewPath(contextId) {
+  return `${GROUP_NEW_PREFIX}${encodeURIComponent(contextId)}`;
+}
+
+export function groupEditPath(groupId) {
+  return `${GROUP_EDIT_PREFIX}${encodeURIComponent(groupId)}`;
+}
+
+/** The group's member removal history (step 9 follow-up), opened from its edit page. */
+export function groupHistoryPath(groupId) {
+  return `${GROUP_HISTORY_PREFIX}${encodeURIComponent(groupId)}`;
+}
+
+/** @returns {{view: "group-new", contextId: string}|{view: "group-edit"|"group-history"|"group-detail", groupId: string}|null} */
+export function groupRouteFromPath(pathname) {
+  const path = normalizePath(pathname);
+  const tail = (prefix) => {
+    if (!path.startsWith(prefix)) return null;
+    const id = path.slice(prefix.length);
+    return id && !id.includes("/") ? decodeURIComponent(id) : null;
+  };
+  const contextId = tail(GROUP_NEW_PREFIX);
+  if (contextId) return { view: "group-new", contextId };
+  const groupId = tail(GROUP_EDIT_PREFIX);
+  if (groupId) return { view: "group-edit", groupId };
+  const historyId = tail(GROUP_HISTORY_PREFIX);
+  if (historyId) return { view: "group-history", groupId: historyId };
+  const detailId = tail(GROUP_DETAIL_PREFIX);
+  if (detailId) return { view: "group-detail", groupId: detailId };
   return null;
 }
 

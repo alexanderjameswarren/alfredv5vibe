@@ -6,6 +6,7 @@ import {
   groupIntention,
   groupIcon,
   hasRunningMember,
+  removedMembers,
 } from "./groupModel";
 
 const items = [
@@ -63,6 +64,27 @@ describe("derived name", () => {
 
   it("is empty for a group with no live members", () => {
     expect(derivedGroupName("g9", lists)).toBe("");
+  });
+});
+
+describe("removed members", () => {
+  it("leave the list, the derived name and the item-to-groups lookup", () => {
+    const one = { members: [{ ...m("x", "g5", "item", "rice", 1), removedAt: "t" }], items, intents };
+    expect(liveMembers("g5", one)).toEqual([]);
+    expect(derivedGroupName("g5", one)).toBe("");
+    expect(groupsForRecord("item", "rice", { groups: [{ id: "g5" }], members: one.members })).toEqual([]);
+  });
+
+  it("are listed newest first in the history", () => {
+    const history = removedMembers("g1", {
+      ...lists,
+      members: [
+        { ...m("r1", "g1", "item", "rice", 1), removedAt: "2026-10-20T00:00:00Z" },
+        { ...m("r2", "g1", "item", "gone", 2), removedAt: "2026-10-21T00:00:00Z" },
+        m("live", "g1", "item", "beans", 3),
+      ],
+    });
+    expect(history.map((h) => [h.member.id, h.name])).toEqual([["r2", "Unavailable"], ["r1", "Rice"]]);
   });
 });
 

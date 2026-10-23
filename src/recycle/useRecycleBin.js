@@ -35,17 +35,25 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
    */
   function permanentDeleteWarning(tab, count = null) {
     const isCollection = tab === "collections";
+    // Groups (Restructure P5) cascade the same way: their member list and its
+    // removal history go; the items and intentions themselves stay.
+    const isGroup = tab === "groups";
     // Contexts reach this point only when empty — the guards above refuse
     // otherwise — so there is nothing to warn about destroying. The generic
     // wording is honest here in a way it is not for collections.
-    const noun = isCollection ? "collection" : tab === "contexts" ? "context" : "record";
+    const noun = isCollection ? "collection" : isGroup ? "group" : tab === "contexts" ? "context" : "record";
     const subject =
       count === null ? `this ${noun}` : `${count} ${noun}${count > 1 ? "s" : ""}`;
-    const cascade = !isCollection
-      ? ""
-      : count === null || count === 1
+    const one = count === null || count === 1;
+    const cascade = isCollection
+      ? one
         ? " Its item list and removal history will be destroyed."
-        : " Their item lists and removal history will be destroyed.";
+        : " Their item lists and removal history will be destroyed."
+      : isGroup
+        ? one
+          ? " Its member list, removal history and notes will be destroyed; the items and intentions stay."
+          : " Their member lists, removal history and notes will be destroyed; the items and intentions stay."
+        : "";
     return `Permanently delete ${subject}?${cascade} This cannot be undone.`;
   }
 
@@ -94,6 +102,14 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
           // by the soft delete, so there is nothing to report and nothing to
           // repair on restore.
           query = supabase.from("item_collections").select("id, name, context_id, updated_at")
+            .eq("archived", true)
+            .order("updated_at", { ascending: false, nullsFirst: false })
+            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          break;
+        case "groups":
+          // Members are not read here: Alfred already holds every member row, and
+          // the derived name is built from them. Archiving never touches members.
+          query = supabase.from("item_groups").select("id, name, group_type_id, context_id, updated_at")
             .eq("archived", true)
             .order("updated_at", { ascending: false, nullsFirst: false })
             .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
@@ -167,6 +183,8 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
         case "events": table = "events"; updates = { archived: false }; break;
         case "executions": table = "executions"; updates = { status: "paused" }; break;
         case "collections": table = "item_collections"; updates = { archived: false }; break;
+        // Members were never touched by the archive, so they come back as they were.
+        case "groups": table = "item_groups"; updates = { archived: false }; break;
         case "contexts": table = "contexts"; updates = { archived: false }; break;
         case "songs": table = "sam_songs"; updates = { archived: false }; break;
         case "snippets": table = "sam_snippets"; updates = { archived: false }; break;
@@ -190,7 +208,7 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
       // can be disconnected (the header shows exactly that state), and items,
       // intents and events are all in this list despite having channels too.
       // Consistent, and correct when the socket is down.
-      if (["items", "intents", "events", "collections", "contexts"].includes(tab)) {
+      if (["items", "intents", "events", "collections", "contexts", "groups"].includes(tab)) {
         refreshData();
       }
     } catch (e) {
@@ -269,6 +287,8 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
         // The one hard delete left in the app. Cascades to collection_items and
         // collection_item_removals — deliberate, and named in the confirm.
         case "collections": table = "item_collections"; break;
+        // Cascades to item_group_members; notes go by trigger. Named in the confirm.
+        case "groups": table = "item_groups"; break;
         // Contexts do NOT cascade: no child table carries a foreign key to
         // them. Deleting one ORPHANS its children instead, which is quieter
         // and worse — see the guard above recyclePermanentDelete.
@@ -318,6 +338,8 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
         case "events": table = "events"; updates = { archived: false }; break;
         case "executions": table = "executions"; updates = { status: "paused" }; break;
         case "collections": table = "item_collections"; updates = { archived: false }; break;
+        // Members were never touched by the archive, so they come back as they were.
+        case "groups": table = "item_groups"; updates = { archived: false }; break;
         case "contexts": table = "contexts"; updates = { archived: false }; break;
         case "songs": table = "sam_songs"; updates = { archived: false }; break;
         case "snippets": table = "sam_snippets"; updates = { archived: false }; break;
@@ -349,7 +371,7 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
 
       // See recycleRestore for why contexts is included and collections is
       // required.
-      if (["items", "intents", "events", "collections", "contexts"].includes(recycleTab)) {
+      if (["items", "intents", "events", "collections", "contexts", "groups"].includes(recycleTab)) {
         refreshData();
       }
     } catch (e) {
@@ -387,6 +409,8 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
         // The one hard delete left in the app. Cascades to collection_items and
         // collection_item_removals — deliberate, and named in the confirm.
         case "collections": table = "item_collections"; break;
+        // Cascades to item_group_members; notes go by trigger. Named in the confirm.
+        case "groups": table = "item_groups"; break;
         // Contexts do NOT cascade: no child table carries a foreign key to
         // them. Deleting one ORPHANS its children instead, which is quieter
         // and worse — see the guard above recyclePermanentDelete.

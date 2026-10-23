@@ -3,6 +3,7 @@ import {
   intentionDetailPath,
   executionPath,
   samSongPath,
+  groupDetailPath,
 } from "../viewPaths";
 
 // Where a resolved record opens. Pure: takes resolve_record's result
@@ -19,7 +20,7 @@ import {
 // otherwise. Anything else falls back to the generic page.
 //
 // lookup: {inbox(id) -> row|null, item(id), intention(id), context(id),
-//          collection(id) -> boolean, archivedTarget(inboxId) -> {kind, id}|null}
+//          collection(id), group(id) -> boolean, archivedTarget(inboxId) -> {kind, id}|null}
 
 const path = (p) => ({ kind: "path", path: p });
 const state = (kind, id) => ({ kind, id });
@@ -55,6 +56,10 @@ export const RECORD_SCREENS = {
     openInbox(row.inbox_id, lookup) || openIntention(row.intent_id, lookup),
   notification_steps: (row) => row.execution_id && path(executionPath(row.execution_id)),
   collection_items: (row, lookup) => openCollection(row.collection_id, lookup),
+  // Restructure P5. A member row opens its group, as a collection member does.
+  item_groups: (row, lookup) => (lookup.group?.(row.id) ? path(groupDetailPath(row.id)) : null),
+  item_group_members: (row, lookup) =>
+    lookup.group?.(row.group_id) ? path(groupDetailPath(row.group_id)) : null,
 };
 
 export function recordDestination(result, lookup) {
