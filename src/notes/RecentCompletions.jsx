@@ -5,7 +5,7 @@ import { storage } from "../utils/storage";
 import { countRecentExecutions, currentUserId, listRecentCompletions, listRecentSkips, onNotesChanged } from "./notesApi";
 import { NoteLine } from "./noteFormat";
 import ObjectIcon from "../shared/ObjectIcon";
-import { listCookParents, listCookRecipes } from "../executions/menuHistory";
+import { listCookParents, listCookRecipes, listMenuSkips } from "../executions/menuHistory";
 import { cookSummary } from "../groups/menuRun";
 import { useGroupLookup } from "../groups/GroupsContext";
 
@@ -72,9 +72,12 @@ export default function RecentCompletions({ itemId = null, intentId = null, inte
         listRecentSkips(skipIds, limit),
         // Only the count for "Show all": a failure hides the control, not the list.
         Promise.resolve(countRecentExecutions({ itemId, intentIds: skipIds })).catch(() => 0),
+        // A recipe skipped inside a menu has no intention: read by item (step 15).
+        Promise.resolve(listMenuSkips(itemId, limit)).catch(() => []),
       ])
-        .then(async ([uid, done, skipped, count]) => {
-          const merged = mergeRecent(done || [], skipped || [], limit * 2);
+        .then(async ([uid, done, skipped, count, menuSkips]) => {
+          const inMenus = (menuSkips || []).map((s) => ({ ...s, intentId: null, inMenu: { parentId: s.parentExecutionId, groupId: s.groupId } }));
+          const merged = mergeRecent(done || [], [...(skipped || []), ...inMenus], limit * 2);
           // A failed menu lookup leaves the plain list.
           const rich = await withCookInfo(merged, { cooks }).catch((e) => {
             console.error("[Notes] menu cooks lookup failed:", e);
@@ -128,10 +131,10 @@ export default function RecentCompletions({ itemId = null, intentId = null, inte
             const label = (
               <>
                 {r.day ? formatEventDate(r.day) : "Undated"}
-                {r.kind === "skipped" && " (skipped)"}
+                {r.kind === "skipped" && !menuName && " (skipped)"}
                 {showIntention && intentText && <span className="font-normal"> · {intentText}</span>}
                 {r.cook && <span className="font-normal"> · {r.cook}</span>}
-                {menuName && <span className="font-normal"> · in {menuName}</span>}
+                {menuName && <span className="font-normal"> · {r.kind === "skipped" ? "skipped in" : "in"} {menuName}</span>}
               </>
             );
             // A recipe cooked inside a menu opens the menu's cook.
@@ -142,9 +145,9 @@ export default function RecentCompletions({ itemId = null, intentId = null, inte
                   // A skip is history, not a completion: greyed, no card border, the Skip icon.
                   <button
                     type="button"
-                    onClick={() => open(r.id)}
+                    onClick={() => open(openId)}
                     disabled={!onOpenExecution}
-                    title="Open this skipped execution"
+                    title={r.inMenu ? "Open the menu's cook" : "Open this skipped execution"}
                     className="w-full text-left text-sm px-3 sm:px-4 py-2 min-h-[44px] rounded-lg text-muted-foreground hover:bg-muted disabled:cursor-default disabled:hover:bg-transparent"
                   >
                     <span className="flex items-start gap-1.5">

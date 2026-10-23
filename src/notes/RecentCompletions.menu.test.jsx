@@ -1,8 +1,21 @@
-import { withCookInfo } from "./RecentCompletions";
-import { listCookParents, listCookRecipes } from "../executions/menuHistory";
+import React from "react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import "@testing-library/jest-dom";
+import RecentCompletions, { withCookInfo } from "./RecentCompletions";
+import { listCookParents, listCookRecipes, listMenuSkips } from "../executions/menuHistory";
+import { GroupsProvider } from "../groups/GroupsContext";
+import { storage } from "../utils/storage";
+import * as api from "./notesApi";
 
-jest.mock("../executions/menuHistory", () => ({ listCookParents: jest.fn(), listCookRecipes: jest.fn() }));
-jest.mock("./notesApi", () => ({}));
+jest.mock("../executions/menuHistory", () => ({ listCookParents: jest.fn(), listCookRecipes: jest.fn(), listMenuSkips: jest.fn() }));
+jest.mock("../utils/storage", () => ({ storage: { get: jest.fn() } }));
+jest.mock("./notesApi", () => ({
+  currentUserId: jest.fn(),
+  listRecentCompletions: jest.fn(),
+  listRecentSkips: jest.fn(),
+  countRecentExecutions: jest.fn(),
+  onNotesChanged: jest.fn(),
+}));
 
 const done = (id, intentId = "o") => ({ id, kind: "done", intentId });
 
@@ -29,4 +42,26 @@ test("nothing from a menu: no lookup", async () => {
   jest.clearAllMocks();
   await withCookInfo([done("own", "i1")]);
   expect(listCookParents).not.toHaveBeenCalled();
+});
+
+test("a recipe skipped inside a menu sits in line: 'skipped in <menu>', opening the menu's cook", async () => {
+  api.currentUserId.mockResolvedValue("me");
+  api.listRecentCompletions.mockResolvedValue([]);
+  api.listRecentSkips.mockResolvedValue([]);
+  api.countRecentExecutions.mockResolvedValue(1);
+  api.onNotesChanged.mockReturnValue(() => {});
+  listMenuSkips.mockResolvedValue([{ id: "r2", parentExecutionId: "c1", groupId: "g", closedAt: "2026-10-23T18:00:00Z" }]);
+  storage.get.mockResolvedValue({ id: "c1" });
+  const onOpenExecution = jest.fn();
+  render(
+    <GroupsProvider itemGroups={[{ id: "g", groupTypeId: "menu", name: "P5 Test Menu" }]} groupTypes={[]} groupMembers={[]} items={[]} intents={[]} onOpenGroup={() => {}}>
+      <RecentCompletions itemId="dal" intentIds={[]} onOpenExecution={onOpenExecution} />
+    </GroupsProvider>,
+  );
+  const row = await screen.findByText(/skipped in P5 Test Menu/);
+  expect(listMenuSkips).toHaveBeenCalledWith("dal", 5);
+  expect(screen.queryByText(/\(skipped\)/)).toBeNull();
+  fireEvent.click(row.closest("button"));
+  await waitFor(() => expect(storage.get).toHaveBeenCalledWith("execution:c1"));
+  expect(onOpenExecution).toHaveBeenCalledWith({ id: "c1" });
 });

@@ -16,6 +16,7 @@ jest.mock("../notes/notesApi", () => ({
 
 jest.mock("../utils/remindersApi", () => ({ ...jest.requireActual("../utils/remindersApi"), getReminderSummary: jest.fn() }));
 jest.mock("../notes/RecentCompletions", () => () => <section aria-label="Recent executions" />);
+jest.mock("./MemberExecutions", () => () => <section aria-label="Recent executions" data-testid="member-executions" />);
 
 // CRA resets mock implementations before each test.
 beforeEach(() => {
@@ -208,6 +209,23 @@ test("no Log Execution while the menu is cooking", async () => {
   renderPage({ ...handlers(), onLogMenu: jest.fn(), groupTypes: together, group: { ...group, status: "active" }, intents: [own], executions: [run] });
   await notesLoaded();
   expect(screen.queryByRole("button", { name: "Log Execution" })).toBeNull();
+});
+
+test("a project: last done, the members' marker, their dated list; no Start Now or Log Execution", async () => {
+  renderPage({
+    ...handlers(),
+    onStartNow: jest.fn(),
+    onLogMenu: jest.fn(),
+    groupTypes: [{ ...groupTypes[0], executionMode: "separately" }],
+    group: { ...group, status: "active", lastCompletedAt: "2026-10-21T12:00:00Z" },
+    intents: [{ id: "cook", text: "Cook rice", itemId: "rice" }],
+    executions: [{ id: "x", intentId: "cook", status: "active" }],
+  });
+  await notesLoaded();
+  expect(screen.getByText(/^Last done: Oct 21, 2026/)).toBeInTheDocument();
+  expect(screen.getByText("In progress")).toBeInTheDocument();
+  expect(screen.getByTestId("member-executions")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Start Now|Log Execution/ })).toBeNull();
 });
 
 test("no Start Now on a separately group", async () => {

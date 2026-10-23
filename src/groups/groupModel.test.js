@@ -6,6 +6,7 @@ import {
   groupIntention,
   groupIcon,
   hasRunningMember,
+  memberRunState,
   removedMembers,
 } from "./groupModel";
 
@@ -138,5 +139,13 @@ describe("hasRunningMember", () => {
     expect(
       hasRunningMember({ id: "g1", groupTypeId: "menu" }, { ...base, activeExecutions: [{ intentId: "i-chips", status: "active" }] })
     ).toBe(false);
+  });
+
+  it("memberRunState: running wins over paused; paused alone; nothing; never on a menu", () => {
+    const run = (status, x = { intentId: "i-chips" }) => ({ ...x, status });
+    expect(memberRunState(project, { ...base, openExecutions: [run("paused"), run("active", { itemIds: ["beans"] })] })).toBe("active");
+    expect(memberRunState(project, { ...base, openExecutions: [run("paused", { intentId: "i-rice" })] })).toBe("paused");
+    expect(memberRunState(project, { ...base, openExecutions: [run("active", { intentId: "elsewhere" })] })).toBeNull();
+    expect(memberRunState({ id: "g1", groupTypeId: "menu" }, { ...base, openExecutions: [run("active")] })).toBeNull();
   });
 });

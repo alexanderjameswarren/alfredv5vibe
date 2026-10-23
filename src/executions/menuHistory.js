@@ -28,6 +28,25 @@ export async function listCookParents(ids = []) {
   return (data || []).map(toCamelCase);
 }
 
+/**
+ * A recipe's skips inside menus, newest first (step 15's leftover from 14b): skips
+ * are otherwise listed by intention, and a recipe in a menu has none.
+ */
+export async function listMenuSkips(itemId, limit = 5) {
+  if (!itemId) return [];
+  const { data, error } = await supabase
+    .from("executions")
+    .select("id, parent_execution_id, group_id, closed_at")
+    .contains("item_ids", [itemId])
+    .not("parent_execution_id", "is", null)
+    .eq("status", "closed")
+    .eq("outcome", "skipped")
+    .order("closed_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data || []).map(toCamelCase);
+}
+
 /** Move a completed menu's recipe runs to its new completion time. */
 export async function moveCookRecipes(menuRun, closedAt) {
   const { error } = await supabase

@@ -24,7 +24,10 @@ import NoteTimeline from "../notes/NoteTimeline";
 import RecentCompletions from "../notes/RecentCompletions";
 import { useRecordNotes } from "../notes/useRecordNotes";
 import { friendlyDate } from "../inbox/CaptureMeta";
-import { groupIntention, groupTypeOf, liveMembers, removedMembers } from "./groupModel";
+import { groupIntention, groupTypeOf, liveMembers, memberRunState, removedMembers } from "./groupModel";
+import MemberRunMarker from "./MemberRunMarker";
+import MemberExecutions from "./MemberExecutions";
+import { shortDate } from "../notes/noteFormat";
 import { groupTitle, memberRows, recentRemovals } from "./groupDetail";
 import ArchiveGroupDialog from "./ArchiveGroupDialog";
 
@@ -85,6 +88,7 @@ export default function GroupDetailScreen({
   const plural = (type?.labelPlural || "members").toLowerCase();
   const noun = (type?.labelSingular || "group").toLowerCase();
   const together = type?.executionMode === "together";
+  const memberRun = memberRunState(group, { groupTypes, members: groupMembers, items, intents, openExecutions: executions });
 
   const actions = recordActions(ownIntention, events, executions);
   const liveEvents = ownIntention ? liveEventsFor(events, ownIntention.id) : [];
@@ -190,6 +194,11 @@ export default function GroupDetailScreen({
         <p className="text-sm mt-2">
           <ScheduledLine actions={actions} />
         </p>
+        {/* Step 15: the roll-up from members (a trigger), and a member running now. */}
+        {group.lastCompletedAt && (
+          <p className="text-sm text-muted-foreground mt-1">Last done: {shortDate(group.lastCompletedAt)}</p>
+        )}
+        {memberRun && <MemberRunMarker state={memberRun} className="mt-1" />}
         <IntentionReminderLines
           intentId={ownIntention?.id || null}
           text={title}
@@ -352,8 +361,17 @@ export default function GroupDetailScreen({
 
       <NoteTimeline notesState={notesState} archived={Boolean(group.archived)} sources={{ here: { type: "group", id: group.id }, onOpenExecution }} />
 
-      {/* Executions on the group's own intention carry its group_id (migration 148). */}
-      {ownIntention ? (
+      {/* Executions on the group's own intention carry its group_id (migration 148).
+          A project or series lists its members' executions instead (step 15). */}
+      {type?.executionMode === "separately" ? (
+        <MemberExecutions
+          groupId={group.id}
+          lists={lists}
+          ownIntention={ownIntention}
+          groupName={title}
+          onOpenExecution={onOpenExecution}
+        />
+      ) : ownIntention ? (
         // A menu lists each cook with its recipes' tally (step 14b).
         <RecentCompletions intentId={ownIntention.id} onOpenExecution={onOpenExecution} cooks={together} />
       ) : (

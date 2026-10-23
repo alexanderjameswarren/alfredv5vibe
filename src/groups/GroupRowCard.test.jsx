@@ -49,6 +49,15 @@ test("a menu row starts its cook, or continues the open one", () => {
   expect(onOpenExecution).toHaveBeenCalledWith(open);
 });
 
+test("a project's marker: teal In progress, amber Paused, none otherwise", () => {
+  const { container, rerender } = render(<GroupRowCard row={{ ...base, memberRun: "active" }} />);
+  expect(screen.getByText("In progress")).toHaveClass("bg-success-light");
+  rerender(<GroupRowCard row={{ ...base, memberRun: "paused" }} />);
+  expect(screen.getByText("Paused")).toHaveClass("bg-warning-light");
+  rerender(<GroupRowCard row={{ ...base, memberRun: null }} />);
+  expect(container.querySelector("[data-member-run]")).toBeNull();
+});
+
 test("no handlers, no buttons (Home's pinned cards)", () => {
   render(<GroupRowCard row={base} />);
   expect(screen.queryByRole("button", { name: /Schedule|Close/ })).toBeNull();

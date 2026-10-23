@@ -5,7 +5,7 @@ import { filterByStatus, liveEventsFor, statusCounts, statusOf, withTag } from "
 import { sortRows } from "./sortOrders";
 import { matchesQuery } from "./search";
 import { toLocalDateString } from "./eventDates";
-import { groupDisplayName, groupIntention, groupTypeOf, liveMembers } from "../groups/groupModel";
+import { groupDisplayName, groupIntention, groupTypeOf, liveMembers, memberRunState } from "../groups/groupModel";
 
 const unique = (values) => [...new Set(values)];
 
@@ -94,6 +94,8 @@ export function buildGroupRows({ groups = [], groupTypes = [], members = [], ite
         intents: [],
         ownIntent,
         ...attributes(ownIntent, events, openExecutions),
+        // Step 15: a project's or series' members running ("active") or paused.
+        memberRun: memberRunState(group, { groupTypes, members, items, intents, openExecutions }),
         status: statusOf(group),
         tags: unique(live.flatMap((m) => m.record.tags || [])),
         name: groupDisplayName(group, { members, items, intents }),

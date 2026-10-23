@@ -5,6 +5,7 @@ import { RowMetaLine } from "../shared/TagChips";
 import ScheduledLine from "../shared/ScheduledLine";
 import SchedulePopover from "../shared/recurrence/SchedulePopover";
 import { CloseRowButton } from "../shared/useRowClose";
+import MemberRunMarker from "./MemberRunMarker";
 import { getTodayDate } from "../utils/eventDates";
 import { closedBlockTitle, RUN_ACTIVE_MOVE_REASON } from "../utils/status";
 import { shortDate } from "../notes/noteFormat";
@@ -63,6 +64,8 @@ export default function GroupRowCard({ row, contextName, onOpen, onSchedule, onC
             </span>
           </p>
           <RowMetaLine statusRow={row.group} contextName={contextName} />
+          {/* Step 15: a member of this project or series is running (or paused). */}
+          {row.memberRun && <MemberRunMarker state={row.memberRun} className="mt-1" />}
           <div className="flex items-center gap-1 mt-1 text-xs text-foreground">
             <ObjectIcon type="event" className="w-3.5 h-3.5 text-muted-foreground" />
             <ScheduledLine actions={{ live: row.event, open: row.open }} />

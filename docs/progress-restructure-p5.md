@@ -25,8 +25,8 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 13. Scheduling a group through its intention (frozen item_ids on events); Close/Undo for groups (done 2026-10-23; closed_reason rules in migration 153)
 - [x] 14. Menu execution, split in two:
   - [x] 14a. Start Now together, cooking page (per-recipe sections, sticky jump bar, recipe notes), skip a recipe, Complete all, Pause/Continue, Delete (done 2026-10-23)
-  - [x] 14b. parent_execution_id (migration 154); Log Execution on a menu; Recent executions on menu and recipe pages; the finished cook's page; jump bar position; the menu's own card (built 2026-10-23; awaiting migration and Chrome test)
-- [ ] 15. Projects/series: dated member execution list, teal in-progress marker, last_completed_at roll-up
+  - [x] 14b. parent_execution_id (migration 154); Log Execution on a menu; Recent executions on menu and recipe pages; the finished cook's page; jump bar position; the menu's own card (done 2026-10-23)
+- [x] 15. Projects/series: dated member execution list, teal in-progress marker, last_completed_at roll-up (built 2026-10-23; awaiting Chrome test)
 - [ ] 16. MCP: skip wording, get_groups, group_id on reads, recipe (item) filter on get_execution_history / platform_search_executions; deploy (mcp/index.ts claimed at step 2)
 - [ ] 17. Final verification; close Alfred intentions mvhawlfa9s9xlsnv069 and muh9uyjx8wdg02kck5d; update the build-order doc
 
@@ -321,3 +321,13 @@ Each step stops for Alex's verification before the next. Database steps follow t
   5. The jump bar sticks at the measured bottom of whatever is pinned at top 0 (`pinnedTopHeight`, i.e. AppChrome's header), re-measured on resize, and sits below the header (z-[5] vs z-10). A jump scrolls so the section's header lands right under the bar (`jumpTarget`). AppChrome is not edited.
   6. ExecutionBadge: a group's own run is titled with the group's current name and has no group line. Member runs keep the line.
   - Tests: menuRun (+1), useExecutionActions.menu (+2, fixtures moved to parents), MenuRecipeSections (+1), ExecutionDetailScreen (+1), RecentCompletions.menu (3), LogMenuDialog (1), GroupDetailScreen (+2), ExecutionBadge (+1). App 3011/3011, CLI 239/239.
+- 2026-10-23 Migration 154 ran and verified; step 14b passed in Chrome. Step 15 built (restructure_p5-h7m-s15-w2rk). No db: claims held; no database change; no new claims (everything is under src/groups/, src/notes/ and rowModel).
+  - 14b leftover: a recipe skipped inside a menu now sits in line on the recipe's Recent executions as "date · skipped in <menu>", opening the menu's cook. `listMenuSkips(itemId)` reads it by item_ids with a parent.
+  - Separately groups (projects, series):
+    - `MemberExecutions` + `groupHistory.js` give one dated list of every live member's closed done/skipped executions, newest first. A member is a member intention, an intention of a member item, or an execution carrying a member item.
+    - Each row reads "<member> · date" ("(skipped)" for skips, dated by the event as Phase 4 does), and opens that execution. "Show all (N older)" appears beyond five.
+    - The group's own intention (a Completed close) is listed too, under the group's name.
+  - The marker is `memberRunState` (groupModel): "active" when a live member runs, else "paused", else null; never on together groups. It is on group rows (context page), Home's pinned cards (buildGroupRows' `memberRun`) and the detail header (`MemberRunMarker`: teal In progress, amber Paused). `hasRunningMember` now uses it.
+  - Last done: rows already showed "last done:"; the detail page now shows "Last done: <date>" from the roll-up trigger.
+  - There is still no Start Now or Log Execution on separately groups (tested).
+  - Tests: groupModel (+1), rowModel (+1), MemberExecutions (3), GroupRowCard (+1), GroupDetailScreen (+1), RecentCompletions.menu (+1). App 3019/3019 (SamPlayer.plan flaked once and passed on rerun), CLI 239/239.
