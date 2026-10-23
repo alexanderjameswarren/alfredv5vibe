@@ -1,6 +1,6 @@
 ---
 name: mcp-platform
-description: House rules for the Alfred / Ken / Homer MCP platform layer. Read BEFORE any migration adding a new table, any Edge Function tool, or any change touching `_shared/platform.ts`. Covers the never-import-Supabase-directly rule, the write-tier taxonomy for `defineTool`, the `platform.register_table()` requirement, tool house style (params / envelope / errors / naming), and the mandatory `check_platform_conformance` step at the end of every migration block.
+description: House rules for the Alfred / Ken / Homer MCP platform layer. Read BEFORE any migration adding a new table, view or function (explicit grants, no anon), any Edge Function tool, or any change touching `_shared/platform.ts`. Covers the never-import-Supabase-directly rule, the write-tier taxonomy for `defineTool`, the `platform.register_table()` requirement, tool house style (params / envelope / errors / naming), and the mandatory `check_platform_conformance` step at the end of every migration block.
 ---
 
 # MCP Platform Layer — House Rules
@@ -49,6 +49,26 @@ select platform.register_table(
 This one call replaces ~40 lines of RLS boilerplate, grants, and audit-trigger attachment. It also introspects `pg_attribute` to pick the right `user_id` policy expression (uuid vs text) — so tables inherit correct policies regardless of which type they use.
 
 **If you don't call `register_table`, the table will show up in `platform.conformance_failures`** at the end of the migration block, and `check_platform_conformance` will refuse to return `CONFORMANT`.
+
+---
+
+## Rule 2b — Explicit grants on every new table, view and function (migration 161)
+
+From 2026-10-30, Supabase stops granting new objects to the API roles by default. This project has also stopped giving anon and PUBLIC anything by default. So every migration grants explicitly, in the same file that creates the object:
+
+- **Table:** `register_table` grants select/insert/update/delete to `authenticated` and `service_role`, and usage on the table's own sequences. It strips anon and PUBLIC. Nothing more to write.
+- **View:** create it `with (security_invoker = true)`, then:
+  ```sql
+  revoke all on public.my_view from public, anon;
+  grant select on public.my_view to authenticated;   -- plus service_role if a server job reads it
+  ```
+- **Function:**
+  ```sql
+  revoke all on function public.my_fn(int) from public, anon;
+  grant execute on function public.my_fn(int) to authenticated;   -- and/or service_role, as its callers need
+  ```
+  A trigger function needs no execute grant to fire.
+- **Anon gets nothing.** If something must work before sign-in, grant it, and in the same migration add a row to `platform.anon_access` (object_kind, object_name, reason). Otherwise `platform.anon_exposure` lists it and `check_platform_conformance` fails.
 
 ---
 

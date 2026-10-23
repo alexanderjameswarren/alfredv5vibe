@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 13:47, through migration 159 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 14:00, through migration 160 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -35,9 +35,10 @@ COMMENT ON SCHEMA "platform" IS 'Platform contract v1 — shared infrastructure 
 RULES FOR ANY NEW TABLE:
   1. Every migration that creates a table MUST end with a schema-qualified call:
        select platform.register_table(''public.my_table'');
-     This enables RLS, creates the owner policy, issues the grants required by
-     Supabase from Oct-2026 onward, strips all privileges from anon, attaches the
-     audit trigger, and records the table in platform.registry.
+     This enables RLS, creates the owner policy, grants DML to authenticated AND
+     service_role explicitly (and usage on the table''s own sequences), strips all
+     privileges from anon and PUBLIC, attaches the audit trigger, and records the
+     table in platform.registry.
   2. Full signature (all params p_-prefixed):
        select platform.register_table(
          ''public.my_table'',
@@ -66,6 +67,20 @@ RULES FOR ANY NEW TABLE:
      reads preview it, and heavy jsonb is returned only when records are fetched by
      ids. Change settings later with platform.set_read_settings().
 
+RULES FOR ANY NEW VIEW OR FUNCTION (explicit grants, same migration):
+  1. Supabase stops granting new objects by default from 2026-10-30, and this project
+     no longer gives anon or PUBLIC anything by default. Every new view and function
+     states its grants in the migration that creates it:
+       create view public.my_view with (security_invoker = true) as ...;
+       revoke all on public.my_view from public, anon;
+       grant select on public.my_view to authenticated;           -- and service_role if a server job reads it
+       revoke all on function public.my_fn(int) from public, anon;
+       grant execute on function public.my_fn(int) to authenticated;  -- and/or service_role, as its callers need
+     Views are security_invoker, so the caller''s RLS applies.
+  2. anon gets nothing. If something genuinely must work before sign-in, grant it and
+     record why in platform.anon_access (object_kind, object_name, reason) in the same
+     migration; otherwise platform.anon_exposure lists it and conformance fails.
+
 RULES FOR ANY NEW MCP TOOL:
   1. Build it with defineTool() from _shared/platform.ts. Never import the Supabase
      client directly in a tool file — ctx.db is the only DB path.
@@ -81,7 +96,7 @@ RULES FOR ANY NEW MCP TOOL:
   5. Actor attribution rides the x-actor request header (PostgREST request.headers),
      NOT a set_config() RPC — supabase-js runs each call in its own transaction.
 
-VERIFY WITH: select * from platform.conformance_failures;  -- empty = conformant
+VERIFY WITH: select platform.check_conformance();  -- tables: platform.conformance_failures; anon: platform.anon_exposure
 Run check_platform_conformance as the final step of every migration block.
 
 When you mention any Alfred, SAM, Ken, DJ or Warren Buffet record, link it as https://alfredv5vibe.vercel.app/<id> using its id, instead of describing where to find it.';
@@ -263,17 +278,20 @@ CREATE OR REPLACE FUNCTION "platform"."check_conformance"() RETURNS "text"
     LANGUAGE "plpgsql"
     AS $$
 declare
-  v_fail  int;
-  v_total int;
-  v_out   text;
+  v_fail     int;
+  v_total    int;
+  v_anon     int;
+  v_out      text;
+  v_anon_out text;
 begin
   perform platform.maybe_prune();   -- opportunistic housekeeping, ~1% of calls
 
   select count(*) into v_total from platform.conformance where not exempt;
   select count(*) into v_fail  from platform.conformance_failures;
+  select count(*) into v_anon  from platform.anon_exposure;
 
-  if v_fail = 0 then
-    return format('CONFORMANT — all %s non-exempt public tables satisfy platform contract v1.', v_total);
+  if v_fail = 0 and v_anon = 0 then
+    return format('CONFORMANT — all %s non-exempt public tables satisfy platform contract v1, and anon reaches nothing undecided.', v_total);
   end if;
 
   select string_agg(
@@ -284,8 +302,15 @@ begin
     into v_out
     from platform.conformance_failures;
 
-  return format('NON-CONFORMANT — %s of %s tables violate platform contract v1:%s%s',
-                v_fail, v_total, E'\n', v_out);
+  select string_agg(format('  %s %s (%s)', kind, object_name, privileges), E'\n' order by kind, object_name)
+    into v_anon_out
+    from platform.anon_exposure;
+
+  return concat_ws(E'\n',
+    format('NON-CONFORMANT — %s of %s tables violate platform contract v1; anon can reach %s object(s) not decided in platform.anon_access.',
+           v_fail, v_total, v_anon),
+    v_out,
+    case when v_anon > 0 then E'ANON EXPOSURE (revoke, or record in platform.anon_access with a reason):\n' || v_anon_out end);
 end;
 $$;
 
@@ -294,7 +319,51 @@ ALTER FUNCTION "platform"."check_conformance"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "platform"."check_conformance"() IS 'Human/model-readable conformance report. Surfaced as the check_platform_conformance
-MCP tool and run as the final step of every migration block.';
+MCP tool and run as the final step of every migration block. Fails on any row in
+platform.conformance_failures (tables) or platform.anon_exposure (anything anon can
+reach without a decision in platform.anon_access).';
+
+
+
+CREATE OR REPLACE FUNCTION "platform"."heavy_jsonb_columns"("p_table" "regclass") RETURNS "text"[]
+    LANGUAGE "plpgsql" STABLE
+    AS $_$
+declare
+  v_rel text;
+  v_col text;
+  v_avg numeric;
+  v_max int;
+  v_out text[] := '{}';
+begin
+  select format('%I.%I', n.nspname, c.relname) into v_rel
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+   where c.oid = p_table;
+
+  for v_col in
+    select a.attname::text
+      from pg_attribute a
+     where a.attrelid = p_table and a.attnum > 0 and not a.attisdropped
+       and a.atttypid in ('jsonb'::regtype, 'json'::regtype)
+     order by a.attnum
+  loop
+    -- pg_column_size is the stored size, read from the TOAST pointer for big values without decompressing them.
+    execute format(
+      'select avg(w), max(w) from (select pg_column_size(%1$I) as w from %2$s where %1$I is not null limit 200) s',
+      v_col, v_rel)
+      into v_avg, v_max;
+    if v_avg > 500 or v_max > 2000 then
+      v_out := v_out || v_col;
+    end if;
+  end loop;
+  return v_out;
+end;
+$_$;
+
+
+ALTER FUNCTION "platform"."heavy_jsonb_columns"("p_table" "regclass") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "platform"."heavy_jsonb_columns"("p_table" "regclass") IS 'jsonb/json columns of a table that MCP list reads leave out (returned only when records are fetched by ids): over up to 200 sampled non-null stored values (pg_column_size), the average is over 500 bytes or one value is over 2000. Needs no ANALYZE; pg_stats.avg_width cannot be used because it records a TOASTed value at its pointer size. Reads sizes only, never values.';
 
 
 
@@ -410,6 +479,7 @@ declare
   v_expr     text;
   v_policy   text;
   v_bad      text;
+  v_seq      text;
 begin
   if p_policy_mode not in ('owner', 'none') then
     raise exception 'register_table: policy_mode must be ''owner'' or ''none'', got %', p_policy_mode;
@@ -466,11 +536,21 @@ begin
       v_policy, v_schema, v_name, v_expr, v_expr);
   end if;
 
-  -- (c) Grants: authenticated gets DML; anon is explicitly stripped so a table
-  --     can never ship publicly writable even if default privileges drift.
+  -- (c) Grants, explicit (Supabase stops granting new tables by default from 2026-10-30): authenticated and service_role
+  --     get DML, the table's own sequences (serial or identity) get usage; anon and PUBLIC are stripped.
   execute format(
-    'grant select, insert, update, delete on %I.%I to authenticated', v_schema, v_name);
-  execute format('revoke all on %I.%I from anon', v_schema, v_name);
+    'grant select, insert, update, delete on %I.%I to authenticated, service_role', v_schema, v_name);
+  execute format('revoke all on %I.%I from public, anon', v_schema, v_name);
+  for v_seq in
+    select format('%I.%I', sn.nspname, s.relname)
+      from pg_depend d
+      join pg_class s on s.oid = d.objid and s.relkind = 'S'
+      join pg_namespace sn on sn.oid = s.relnamespace
+     where d.classid = 'pg_class'::regclass and d.refobjid = p_table and d.deptype in ('a', 'i')
+  loop
+    execute format('grant usage, select on sequence %s to authenticated, service_role', v_seq);
+    execute format('revoke all on sequence %s from public, anon', v_seq);
+  end loop;
 
   -- (d) Audit trigger
   execute format('drop trigger if exists audit_trigger on %I.%I', v_schema, v_name);
@@ -498,7 +578,7 @@ begin
     secret_columns   = coalesce(p_secret_columns, platform.registry.secret_columns),
     cleared_columns  = coalesce(p_cleared_columns, platform.registry.cleared_columns);
 
-  return format('registered %s (policy=%s, audited=%s, exempt=%s, anon stripped, mcp_read=%s)',
+  return format('registered %s (policy=%s, audited=%s, exempt=%s, granted authenticated + service_role, anon stripped, mcp_read=%s)',
                 v_full, p_policy_mode, p_audited, p_exempt,
                 (select mcp_read from platform.registry where table_name = v_full));
 end;
@@ -3092,15 +3172,9 @@ CREATE OR REPLACE FUNCTION "public"."platform_read_settings"("p_table" "text" DE
                     and a.attname <> all(r.secret_columns)),
                'secret_columns', to_jsonb(r.secret_columns),
                'heavy_columns', (
-                 select coalesce(jsonb_agg(a.attname::text order by a.attnum), '[]'::jsonb)
-                   from pg_attribute a
-                   join pg_stats s
-                     on s.schemaname = n.nspname and s.tablename = c.relname
-                    and s.attname = a.attname and not s.inherited
-                  where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
-                    and a.atttypid = 'jsonb'::regtype
-                    and s.avg_width > 1000
-                    and a.attname <> all(r.secret_columns)),
+                 select coalesce(jsonb_agg(h.col order by h.ord), '[]'::jsonb)
+                   from unnest(platform.heavy_jsonb_columns(c.oid::regclass)) with ordinality as h(col, ord)
+                  where h.col <> all(r.secret_columns)),
                'has_context_id', exists (select 1 from pg_attribute a
                                           where a.attrelid = c.oid and a.attname = 'context_id'
                                             and a.attnum > 0 and not a.attisdropped),
@@ -3123,7 +3197,7 @@ $$;
 ALTER FUNCTION "public"."platform_read_settings"("p_table" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."platform_read_settings"("p_table" "text") IS 'MCP read access (spec docs/technical-spec-mcp-read-access.md): for every visible registered public table, or the one named, the readable columns (secret columns removed), secret_columns, heavy_columns (jsonb with pg_stats avg_width over 1000 bytes: left out of list reads, returned by ids) and has_context_id / has_archived / has_status. Reads the catalog and pg_stats only, never row data, so it reveals nothing RLS hides. Security definer because PostgREST does not expose the platform schema.';
+COMMENT ON FUNCTION "public"."platform_read_settings"("p_table" "text") IS 'MCP read access (spec docs/technical-spec-mcp-read-access.md): for every visible registered public table, or the one named, the readable columns (secret columns removed), secret_columns, heavy_columns (platform.heavy_jsonb_columns: left out of list reads, returned by ids) and has_context_id / has_archived / has_status. Reads the catalog and stored sizes only, never values, so it reveals nothing RLS hides beyond how big a column tends to be. Security definer because PostgREST does not expose the platform schema.';
 
 
 
@@ -7943,6 +8017,113 @@ COMMENT ON FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") I
 
 
 
+CREATE TABLE IF NOT EXISTS "platform"."anon_access" (
+    "object_kind" "text" NOT NULL,
+    "object_name" "text" NOT NULL,
+    "reason" "text" NOT NULL,
+    "decided_by" "text" DEFAULT 'alex'::"text" NOT NULL,
+    "decided_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "anon_access_object_kind_check" CHECK (("object_kind" = ANY (ARRAY['function'::"text", 'table'::"text", 'view'::"text", 'materialized view'::"text", 'sequence'::"text"])))
+);
+
+
+ALTER TABLE "platform"."anon_access" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "platform"."anon_access" IS 'Every object in public (or platform) that anon may reach on purpose, with the reason. object_name is schema.name for relations and schema.name(identity args) for functions, as platform.anon_exposure prints it. Anything anon can reach that is not here fails check_conformance. Empty since migration 161: no Alfred caller runs as anon.';
+
+
+
+CREATE OR REPLACE VIEW "platform"."anon_exposure" AS
+ WITH "reach" AS (
+         SELECT 'function'::"text" AS "kind",
+            (((((("n"."nspname")::"text" || '.'::"text") || ("p"."proname")::"text") || '('::"text") || "pg_get_function_identity_arguments"("p"."oid")) || ')'::"text") AS "object_name",
+            'EXECUTE'::"text" AS "privileges"
+           FROM ("pg_proc" "p"
+             JOIN "pg_namespace" "n" ON (("n"."oid" = "p"."pronamespace")))
+          WHERE (("n"."nspname" = ANY (ARRAY['public'::"name", 'platform'::"name"])) AND "has_schema_privilege"('anon'::"name", "n"."oid", 'USAGE'::"text") AND "has_function_privilege"('anon'::"name", "p"."oid", 'EXECUTE'::"text") AND (NOT (EXISTS ( SELECT 1
+                   FROM "pg_depend" "d"
+                  WHERE (("d"."classid" = ('"pg_proc"'::"regclass")::"oid") AND ("d"."objid" = "p"."oid") AND ("d"."deptype" = 'e'::"char"))))))
+        UNION ALL
+         SELECT
+                CASE "c"."relkind"
+                    WHEN 'v'::"char" THEN 'view'::"text"
+                    WHEN 'm'::"char" THEN 'materialized view'::"text"
+                    ELSE 'table'::"text"
+                END AS "case",
+            ((("n"."nspname")::"text" || '.'::"text") || ("c"."relname")::"text"),
+            "array_to_string"("array_remove"(ARRAY[
+                CASE
+                    WHEN "has_table_privilege"('anon'::"name", "c"."oid", 'SELECT'::"text") THEN 'SELECT'::"text"
+                    ELSE NULL::"text"
+                END,
+                CASE
+                    WHEN "has_table_privilege"('anon'::"name", "c"."oid", 'INSERT'::"text") THEN 'INSERT'::"text"
+                    ELSE NULL::"text"
+                END,
+                CASE
+                    WHEN "has_table_privilege"('anon'::"name", "c"."oid", 'UPDATE'::"text") THEN 'UPDATE'::"text"
+                    ELSE NULL::"text"
+                END,
+                CASE
+                    WHEN "has_table_privilege"('anon'::"name", "c"."oid", 'DELETE'::"text") THEN 'DELETE'::"text"
+                    ELSE NULL::"text"
+                END,
+                CASE
+                    WHEN "has_table_privilege"('anon'::"name", "c"."oid", 'TRUNCATE'::"text") THEN 'TRUNCATE'::"text"
+                    ELSE NULL::"text"
+                END,
+                CASE
+                    WHEN "has_table_privilege"('anon'::"name", "c"."oid", 'REFERENCES'::"text") THEN 'REFERENCES'::"text"
+                    ELSE NULL::"text"
+                END,
+                CASE
+                    WHEN "has_table_privilege"('anon'::"name", "c"."oid", 'TRIGGER'::"text") THEN 'TRIGGER'::"text"
+                    ELSE NULL::"text"
+                END,
+                CASE
+                    WHEN "has_table_privilege"('anon'::"name", "c"."oid", 'MAINTAIN'::"text") THEN 'MAINTAIN'::"text"
+                    ELSE NULL::"text"
+                END], NULL::"text"), ', '::"text") AS "array_to_string"
+           FROM ("pg_class" "c"
+             JOIN "pg_namespace" "n" ON (("n"."oid" = "c"."relnamespace")))
+          WHERE (("n"."nspname" = ANY (ARRAY['public'::"name", 'platform'::"name"])) AND "has_schema_privilege"('anon'::"name", "n"."oid", 'USAGE'::"text") AND ("c"."relkind" = ANY (ARRAY['r'::"char", 'p'::"char", 'v'::"char", 'm'::"char", 'f'::"char"])))
+        UNION ALL
+         SELECT 'sequence'::"text",
+            ((("n"."nspname")::"text" || '.'::"text") || ("c"."relname")::"text"),
+            "array_to_string"("array_remove"(ARRAY[
+                CASE
+                    WHEN "has_sequence_privilege"('anon'::"name", "c"."oid", 'USAGE'::"text") THEN 'USAGE'::"text"
+                    ELSE NULL::"text"
+                END,
+                CASE
+                    WHEN "has_sequence_privilege"('anon'::"name", "c"."oid", 'SELECT'::"text") THEN 'SELECT'::"text"
+                    ELSE NULL::"text"
+                END,
+                CASE
+                    WHEN "has_sequence_privilege"('anon'::"name", "c"."oid", 'UPDATE'::"text") THEN 'UPDATE'::"text"
+                    ELSE NULL::"text"
+                END], NULL::"text"), ', '::"text") AS "array_to_string"
+           FROM ("pg_class" "c"
+             JOIN "pg_namespace" "n" ON (("n"."oid" = "c"."relnamespace")))
+          WHERE (("n"."nspname" = ANY (ARRAY['public'::"name", 'platform'::"name"])) AND "has_schema_privilege"('anon'::"name", "n"."oid", 'USAGE'::"text") AND ("c"."relkind" = 'S'::"char"))
+        )
+ SELECT "kind",
+    "object_name",
+    "privileges"
+   FROM "reach" "r"
+  WHERE (("privileges" <> ''::"text") AND (NOT (EXISTS ( SELECT 1
+           FROM "platform"."anon_access" "a"
+          WHERE (("a"."object_kind" = "r"."kind") AND ("a"."object_name" = "r"."object_name"))))));
+
+
+ALTER VIEW "platform"."anon_exposure" OWNER TO "postgres";
+
+
+COMMENT ON VIEW "platform"."anon_exposure" IS 'Everything anon can reach in a schema it has USAGE on (public; platform only if anon ever gets USAGE) that platform.anon_access does not record as decided: functions it can EXECUTE, relations with any privilege, sequences. EMPTY = nothing reaches anon by accident. check_conformance fails while this has rows.';
+
+
+
 CREATE TABLE IF NOT EXISTS "platform"."audit_log" (
     "id" bigint NOT NULL,
     "user_id" "text",
@@ -12733,6 +12914,11 @@ ALTER TABLE ONLY "platform"."mcp_call_log" ALTER COLUMN "id" SET DEFAULT "nextva
 
 
 
+ALTER TABLE ONLY "platform"."anon_access"
+    ADD CONSTRAINT "anon_access_pkey" PRIMARY KEY ("object_kind", "object_name");
+
+
+
 ALTER TABLE ONLY "platform"."audit_log"
     ADD CONSTRAINT "audit_log_pkey" PRIMARY KEY ("id");
 
@@ -15966,13 +16152,17 @@ GRANT USAGE ON SCHEMA "public" TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "platform"."heavy_jsonb_columns"("p_table" "regclass") FROM PUBLIC;
+
+
+
 REVOKE ALL ON FUNCTION "public"."alfred_recent_completions"("p_item_id" "text", "p_intent_id" "text", "p_limit" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."alfred_recent_completions"("p_item_id" "text", "p_intent_id" "text", "p_limit" integer) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."alfred_recent_completions"("p_item_id" "text", "p_intent_id" "text", "p_limit" integer) TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."apps_touch_updated_at"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."apps_touch_updated_at"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."apps_touch_updated_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."apps_touch_updated_at"() TO "service_role";
 
@@ -15984,7 +16174,7 @@ GRANT ALL ON FUNCTION "public"."archive_inbox_item"("p_inbox_id" "text", "p_args
 
 
 
-GRANT ALL ON FUNCTION "public"."bump_song_edited_at"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."bump_song_edited_at"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."bump_song_edited_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."bump_song_edited_at"() TO "service_role";
 
@@ -16001,43 +16191,43 @@ GRANT ALL ON FUNCTION "public"."create_reminder"("p_text" "text", "p_due_at" tim
 
 
 
-GRANT ALL ON FUNCTION "public"."dj_album_coverage"("p_status" "text", "p_tag" "text", "p_limit" integer, "p_album_id" "uuid") TO "anon";
+REVOKE ALL ON FUNCTION "public"."dj_album_coverage"("p_status" "text", "p_tag" "text", "p_limit" integer, "p_album_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."dj_album_coverage"("p_status" "text", "p_tag" "text", "p_limit" integer, "p_album_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."dj_album_coverage"("p_status" "text", "p_tag" "text", "p_limit" integer, "p_album_id" "uuid") TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."dj_artist_activity"("p_window_days" integer, "p_limit" integer, "p_tag" "text") TO "anon";
+REVOKE ALL ON FUNCTION "public"."dj_artist_activity"("p_window_days" integer, "p_limit" integer, "p_tag" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."dj_artist_activity"("p_window_days" integer, "p_limit" integer, "p_tag" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."dj_artist_activity"("p_window_days" integer, "p_limit" integer, "p_tag" "text") TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."dj_fold_artist"("p_artist" "text") TO "anon";
+REVOKE ALL ON FUNCTION "public"."dj_fold_artist"("p_artist" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."dj_fold_artist"("p_artist" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."dj_fold_artist"("p_artist" "text") TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."dj_playlist_engagement"("p_playlist_ids" "uuid"[], "p_window_days" integer, "p_recent_days" integer) TO "anon";
+REVOKE ALL ON FUNCTION "public"."dj_playlist_engagement"("p_playlist_ids" "uuid"[], "p_window_days" integer, "p_recent_days" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."dj_playlist_engagement"("p_playlist_ids" "uuid"[], "p_window_days" integer, "p_recent_days" integer) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."dj_playlist_engagement"("p_playlist_ids" "uuid"[], "p_window_days" integer, "p_recent_days" integer) TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."dj_tag_candidates"("p_window_days" integer, "p_limit" integer) TO "anon";
+REVOKE ALL ON FUNCTION "public"."dj_tag_candidates"("p_window_days" integer, "p_limit" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."dj_tag_candidates"("p_window_days" integer, "p_limit" integer) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."dj_tag_candidates"("p_window_days" integer, "p_limit" integer) TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."dj_tag_coverage"("p_tag" "text", "p_window_days" integer) TO "anon";
+REVOKE ALL ON FUNCTION "public"."dj_tag_coverage"("p_tag" "text", "p_window_days" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."dj_tag_coverage"("p_tag" "text", "p_window_days" integer) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."dj_tag_coverage"("p_tag" "text", "p_window_days" integer) TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."dj_tag_review"("p_tag" "text", "p_source" "text", "p_window_days" integer, "p_limit" integer) TO "anon";
+REVOKE ALL ON FUNCTION "public"."dj_tag_review"("p_tag" "text", "p_source" "text", "p_window_days" integer, "p_limit" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."dj_tag_review"("p_tag" "text", "p_source" "text", "p_window_days" integer, "p_limit" integer) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."dj_tag_review"("p_tag" "text", "p_source" "text", "p_window_days" integer, "p_limit" integer) TO "service_role";
 
@@ -16055,7 +16245,7 @@ GRANT ALL ON FUNCTION "public"."drive_mix_simulate"("p_start" "date", "p_days" i
 
 
 
-GRANT ALL ON FUNCTION "public"."drive_mix_songs_set_artist_key"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."drive_mix_songs_set_artist_key"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."drive_mix_songs_set_artist_key"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."drive_mix_songs_set_artist_key"() TO "service_role";
 
@@ -16072,13 +16262,13 @@ GRANT ALL ON FUNCTION "public"."drive_mix_sweep"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."events_group_freeze"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."events_group_freeze"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."events_group_freeze"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."events_group_freeze"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."executions_group_tag"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."executions_group_tag"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."executions_group_tag"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."executions_group_tag"() TO "service_role";
 
@@ -16101,13 +16291,13 @@ GRANT ALL ON FUNCTION "public"."get_schema_info"("target_table" "text") TO "serv
 
 
 
-GRANT ALL ON FUNCTION "public"."inbox_outcome_valid"("p_outcome" "jsonb") TO "anon";
+REVOKE ALL ON FUNCTION "public"."inbox_outcome_valid"("p_outcome" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."inbox_outcome_valid"("p_outcome" "jsonb") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."inbox_outcome_valid"("p_outcome" "jsonb") TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."inbox_set_source_app"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."inbox_set_source_app"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."inbox_set_source_app"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."inbox_set_source_app"() TO "service_role";
 
@@ -16124,13 +16314,13 @@ GRANT ALL ON FUNCTION "public"."item_group_members_last_completed"() TO "service
 
 
 
-GRANT ALL ON FUNCTION "public"."item_group_members_stamp_removal"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."item_group_members_stamp_removal"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."item_group_members_stamp_removal"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."item_group_members_stamp_removal"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."ken_record_attempts"("p_attempts" "jsonb") TO "anon";
+REVOKE ALL ON FUNCTION "public"."ken_record_attempts"("p_attempts" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."ken_record_attempts"("p_attempts" "jsonb") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."ken_record_attempts"("p_attempts" "jsonb") TO "service_role";
 
@@ -16141,13 +16331,13 @@ GRANT ALL ON TABLE "public"."ken_items" TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."ken_select_batch"("p_limit" integer, "p_area_id" "uuid", "p_mode" "text") TO "anon";
+REVOKE ALL ON FUNCTION "public"."ken_select_batch"("p_limit" integer, "p_area_id" "uuid", "p_mode" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."ken_select_batch"("p_limit" integer, "p_area_id" "uuid", "p_mode" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."ken_select_batch"("p_limit" integer, "p_area_id" "uuid", "p_mode" "text") TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."last_completed_guard"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."last_completed_guard"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."last_completed_guard"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."last_completed_guard"() TO "service_role";
 
@@ -16158,7 +16348,7 @@ GRANT ALL ON FUNCTION "public"."notes_delete_for_target"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."notes_touch_updated_at"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."notes_touch_updated_at"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."notes_touch_updated_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."notes_touch_updated_at"() TO "service_role";
 
@@ -16188,13 +16378,13 @@ GRANT ALL ON FUNCTION "public"."platform_recent_audit"("p_limit" integer, "p_act
 
 
 
-GRANT ALL ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer, "p_item_id" "text") TO "anon";
+REVOKE ALL ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer, "p_item_id" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer, "p_item_id" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer, "p_item_id" "text") TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[]) TO "anon";
+REVOKE ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[]) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[]) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[]) TO "service_role";
 
@@ -16234,7 +16424,7 @@ GRANT ALL ON FUNCTION "public"."reminders_follow_intent_archive"() TO "service_r
 
 
 
-GRANT ALL ON FUNCTION "public"."reminders_touch_updated_at"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."reminders_touch_updated_at"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."reminders_touch_updated_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."reminders_touch_updated_at"() TO "service_role";
 
@@ -16264,7 +16454,7 @@ GRANT ALL ON FUNCTION "public"."sam_default_warmup_ladder"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."sam_goals_touch_updated_at"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."sam_goals_touch_updated_at"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."sam_goals_touch_updated_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."sam_goals_touch_updated_at"() TO "service_role";
 
@@ -16282,13 +16472,13 @@ GRANT ALL ON FUNCTION "public"."sam_plan_unplanned_practice"("p_plan_id" "uuid",
 
 
 
-GRANT ALL ON FUNCTION "public"."sam_practice_plans_guard_update"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."sam_practice_plans_guard_update"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."sam_practice_plans_guard_update"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."sam_practice_plans_guard_update"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."sam_practice_reject_update"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."sam_practice_reject_update"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."sam_practice_reject_update"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."sam_practice_reject_update"() TO "service_role";
 
@@ -16306,13 +16496,13 @@ GRANT ALL ON FUNCTION "public"."sam_song_scores_freshness"("p_song_id" "uuid", "
 
 
 
-GRANT ALL ON FUNCTION "public"."sam_songs_fill_goal_tempo"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."sam_songs_fill_goal_tempo"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."sam_songs_fill_goal_tempo"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."sam_songs_fill_goal_tempo"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."sam_songs_mark_goal_set"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."sam_songs_mark_goal_set"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."sam_songs_mark_goal_set"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."sam_songs_mark_goal_set"() TO "service_role";
 
@@ -16324,13 +16514,13 @@ GRANT ALL ON FUNCTION "public"."sam_warmup_ladder_is_valid"("p_ladder" "jsonb") 
 
 
 
-GRANT ALL ON FUNCTION "public"."set_archived_at"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."set_archived_at"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."set_archived_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."set_archived_at"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."stamp_song_edited"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."stamp_song_edited"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."stamp_song_edited"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."stamp_song_edited"() TO "service_role";
 
@@ -16342,31 +16532,31 @@ GRANT ALL ON FUNCTION "public"."stamp_songs_from_measure_statement"() TO "servic
 
 
 
-GRANT ALL ON FUNCTION "public"."status_activate_on_event"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."status_activate_on_event"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."status_activate_on_event"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."status_activate_on_event"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."status_activate_on_execution"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."status_activate_on_execution"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."status_activate_on_execution"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."status_activate_on_execution"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."status_guard"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."status_guard"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."status_guard"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."status_guard"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."update_modified_column"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."update_modified_column"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."update_modified_column"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."update_modified_column"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."update_updated_at"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."update_updated_at"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."update_updated_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."update_updated_at"() TO "service_role";
 
@@ -16389,7 +16579,7 @@ GRANT ALL ON FUNCTION "public"."wb_apply_tags"("p_transaction_ids" "uuid"[], "p_
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_bulk_create"("p_payload" "jsonb", "p_context_id" "text", "p_dry_run" boolean, "p_created_by" "text") TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_bulk_create"("p_payload" "jsonb", "p_context_id" "text", "p_dry_run" boolean, "p_created_by" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_bulk_create"("p_payload" "jsonb", "p_context_id" "text", "p_dry_run" boolean, "p_created_by" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_bulk_create"("p_payload" "jsonb", "p_context_id" "text", "p_dry_run" boolean, "p_created_by" "text") TO "service_role";
 
@@ -16430,7 +16620,7 @@ GRANT ALL ON FUNCTION "public"."wb_delete_planned_item"("p_id" "uuid") TO "authe
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_detect_subscriptions"("p_today" "date") TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_detect_subscriptions"("p_today" "date") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_detect_subscriptions"("p_today" "date") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_detect_subscriptions"("p_today" "date") TO "service_role";
 
@@ -16472,7 +16662,7 @@ GRANT ALL ON FUNCTION "public"."wb_is_transfer_phrase"("p_text" "text") TO "serv
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_link_subscription"("p_transaction_ids" "uuid"[], "p_subscription_id" "uuid", "p_source" "text") TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_link_subscription"("p_transaction_ids" "uuid"[], "p_subscription_id" "uuid", "p_source" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_link_subscription"("p_transaction_ids" "uuid"[], "p_subscription_id" "uuid", "p_source" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_link_subscription"("p_transaction_ids" "uuid"[], "p_subscription_id" "uuid", "p_source" "text") TO "service_role";
 
@@ -16526,7 +16716,7 @@ GRANT ALL ON FUNCTION "public"."wb_process_transactions"("ids" "uuid"[]) TO "ser
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_refresh_subscriptions"("p_ids" "uuid"[]) TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_refresh_subscriptions"("p_ids" "uuid"[]) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_refresh_subscriptions"("p_ids" "uuid"[]) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_refresh_subscriptions"("p_ids" "uuid"[]) TO "service_role";
 
@@ -16550,7 +16740,7 @@ GRANT ALL ON FUNCTION "public"."wb_rule_preview"("p_match" "jsonb", "p_pattern" 
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_rules_check_tags"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_rules_check_tags"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_rules_check_tags"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_rules_check_tags"() TO "service_role";
 
@@ -16562,19 +16752,19 @@ GRANT ALL ON FUNCTION "public"."wb_set_transfer_pair"("p_id" "uuid", "p_pair_wit
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_split_tags_fill"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_split_tags_fill"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_split_tags_fill"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_split_tags_fill"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_splits_check_sum"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_splits_check_sum"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_splits_check_sum"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_splits_check_sum"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_splits_copy_owner"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_splits_copy_owner"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_splits_copy_owner"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_splits_copy_owner"() TO "service_role";
 
@@ -16592,25 +16782,25 @@ GRANT ALL ON FUNCTION "public"."wb_subscription_occurrences"("p_from" "date", "p
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_subscription_price_on"("p_subscription_id" "uuid", "p_on" "date") TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_subscription_price_on"("p_subscription_id" "uuid", "p_on" "date") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_subscription_price_on"("p_subscription_id" "uuid", "p_on" "date") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_subscription_price_on"("p_subscription_id" "uuid", "p_on" "date") TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_subscription_prices_copy_owner"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_subscription_prices_copy_owner"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_subscription_prices_copy_owner"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_subscription_prices_copy_owner"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_subscriptions_fill_interval"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_subscriptions_fill_interval"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_subscriptions_fill_interval"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_subscriptions_fill_interval"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_subscriptions_fill_owner"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_subscriptions_fill_owner"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_subscriptions_fill_owner"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_subscriptions_fill_owner"() TO "service_role";
 
@@ -16628,37 +16818,37 @@ GRANT ALL ON FUNCTION "public"."wb_suggest_planned_matches"("p_transaction_ids" 
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_tag_exclusions_copy_owner"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_tag_exclusions_copy_owner"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_tag_exclusions_copy_owner"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_tag_exclusions_copy_owner"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_tag_groups_push_exclusive"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_tag_groups_push_exclusive"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_tag_groups_push_exclusive"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_tag_groups_push_exclusive"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_tags_check"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_tags_check"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_tags_check"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_tags_check"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_touch_updated_at"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_touch_updated_at"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_touch_updated_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_touch_updated_at"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_transactions_amount_follow"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_transactions_amount_follow"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_transactions_amount_follow"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_transactions_amount_follow"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_transactions_default_split"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_transactions_default_split"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_transactions_default_split"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_transactions_default_split"() TO "service_role";
 
@@ -16682,7 +16872,6 @@ GRANT SELECT ON TABLE "platform"."audit_log" TO "authenticated";
 
 GRANT ALL ON TABLE "public"."allowed_emails" TO "authenticated";
 GRANT ALL ON TABLE "public"."allowed_emails" TO "service_role";
-GRANT SELECT ON TABLE "public"."allowed_emails" TO "anon";
 
 
 
@@ -17081,7 +17270,6 @@ GRANT ALL ON TABLE "public"."wb_subscription_prices" TO "service_role";
 
 
 
-GRANT SELECT,MAINTAIN ON TABLE "public"."wb_subscription_overview" TO "anon";
 GRANT ALL ON TABLE "public"."wb_subscription_overview" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_subscription_overview" TO "service_role";
 
@@ -17098,7 +17286,6 @@ GRANT ALL ON TABLE "public"."wb_true_cost" TO "service_role";
 
 
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON SEQUENCES TO "postgres";
-ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON SEQUENCES TO "anon";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON SEQUENCES TO "authenticated";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON SEQUENCES TO "service_role";
 
@@ -17108,7 +17295,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON SEQ
 
 
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON FUNCTIONS TO "postgres";
-ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON FUNCTIONS TO "anon";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON FUNCTIONS TO "authenticated";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON FUNCTIONS TO "service_role";
 
@@ -17118,7 +17304,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON FUN
 
 
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "postgres";
-ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT SELECT,MAINTAIN ON TABLES TO "anon";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "authenticated";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "service_role";
 
