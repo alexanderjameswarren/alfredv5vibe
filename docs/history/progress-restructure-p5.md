@@ -3,7 +3,7 @@
 Project code: restructure_p5-h7m
 Spec: docs/technical-spec-restructure-p5.md
 
-## Status: In progress (step 3 done, awaiting verification)
+## Status: Done (2026-10-23)
 
 Each step stops for Alex's verification before the next. Database steps follow the just-in-time pattern: gitsync, drift check, claim db items at that step, `_pending_` migration numbered after the sync, Alex runs the SQL, conformance CONFORMANT, Checkpoint releases db claims.
 
@@ -27,8 +27,17 @@ Each step stops for Alex's verification before the next. Database steps follow t
   - [x] 14a. Start Now together, cooking page (per-recipe sections, sticky jump bar, recipe notes), skip a recipe, Complete all, Pause/Continue, Delete (done 2026-10-23)
   - [x] 14b. parent_execution_id (migration 154); Log Execution on a menu; Recent executions on menu and recipe pages; the finished cook's page; jump bar position; the menu's own card (done 2026-10-23)
 - [x] 15. Projects/series: dated member execution list, teal in-progress marker, last_completed_at roll-up (built 2026-10-23; awaiting Chrome test)
-- [ ] 16. MCP: skip wording, get_groups, group_id on reads, recipe (item) filter on get_execution_history / platform_search_executions; deploy (mcp/index.ts claimed at step 2)
-- [ ] 17. Final verification; close Alfred intentions mvhawlfa9s9xlsnv069 and muh9uyjx8wdg02kck5d; update the build-order doc
+- [x] 16. MCP: skip wording, get_groups, group_id on reads, recipe (item) filter on get_execution_history / platform_search_executions; deploy (done 2026-10-23: migration 157, mcp v163; awaiting claude.ai test)
+- [x] 17. Final verification; close Alfred intentions mvhawlfa9s9xlsnv069 and muh9uyjx8wdg02kck5d; update the build-order doc (done 2026-10-23)
+  - [x] Step 16 checkpoint confirmed in origin/main (all seven paths match)
+  - [x] Full app suite 3019/3019, CLI 239/239, production build passes (CI=true)
+  - [x] No live ai-enrich or is_item code left (comments, defensive stripping and test fixtures only)
+  - [x] Cleanup script written: `supabase/tests/restructure_p5-h7m/cleanup_test_data.sql` (not run)
+  - [ ] get_execution_history description fix and mcp redeploy: parked (see Parked below)
+  - [x] Conformance: CONFORMANT (71 tables, no failures)
+  - [x] Test data cleanup run (the item renamed "P5 Undo other" deleted by hand)
+  - [x] Alfred intentions mvhawlfa9s9xlsnv069 and muh9uyjx8wdg02kck5d closed
+  - [x] Build-order doc updated (Phases 4 and 5 done)
 
 ### Notes
 
@@ -331,3 +340,53 @@ Each step stops for Alex's verification before the next. Database steps follow t
   - Last done: rows already showed "last done:"; the detail page now shows "Last done: <date>" from the roll-up trigger.
   - There is still no Start Now or Log Execution on separately groups (tested).
   - Tests: groupModel (+1), rowModel (+1), MemberExecutions (3), GroupRowCard (+1), GroupDetailScreen (+1), RecentCompletions.menu (+1). App 3019/3019 (SamPlayer.plan flaked once and passed on rerun), CLI 239/239.
+- 2026-10-23 Step 16, first try (s16-f5hd): stopped at claims. warren_buffet_p3-q5k held mcp/index.ts and mcp_read_gaps-t8k held _shared/tools/groups.ts. Both were freed by Alex (warren checkpointed 819a9fe and yielded).
+- 2026-10-23 Step 16 built (s16b-x8ce) after Alex's gitsync.
+  - Drift: none. platform_search_executions is unchanged since migration 100; index.ts only gained warren's two get_wb_rule_health description lines.
+  - Claimed: mcp/index.ts, `_shared/tools/groups.ts` + test, `_shared/alfred-tools/`, db:fn:platform_search_executions, and the migration files. Migration 157 was numbered after the sync (155 and 156 are warren's).
+  - Migration `157_restructure_p5_search_executions_item.sql`:
+    - platform_search_executions gains p_item_id, which matches an execution carrying the item in item_ids or one on an intention of the item.
+    - Rows add intent_id, event_id, group_id and parent_execution_id; a recipe run's event_date is its parent menu run's.
+    - The 5-argument version is dropped, so calls are not ambiguous. The live function keeps working (named arguments).
+    - Verify with `supabase/tests/restructure_p5-h7m/step16_search_executions_verify.sql`.
+  - `get_groups` (tier 1, `_shared/tools/groups.ts`):
+    - Filters: context_id, status[], group_type (label, singular or plural) and limit (clampLimit, count-based truncation).
+    - Each row: id, name (derived when null, plus name_is_derived), type {id, label, execution_mode}, context, status, pinned, last_completed_at, own_intention_id, scheduled_date, and live members in order (type, id, name, status).
+    - It reads through ctx.db only. An unknown type label is an operational error naming the real labels.
+  - get_execution_history: `item_id` filter (sent only when given). The description now carries the Phase 4 skip wording (is_completion; skipped is never last done) and the menu shape.
+  - get_intents and get_events select group_id, and their descriptions say what it means.
+  - Null intent_id/event_id: the only tool reading executions is get_execution_history, through the RPC's left joins, so nothing breaks.
+  - **Blocked before deploy:** `supabase/functions/mcp/index.test.mjs`, the registry count test, is held by warren_buffet_p3-q5k (unchanged from main). It needs get_groups added and 139 → 140. It fails until then (33/34 pass); the groups tests pass 5/5.
+- 2026-10-23 Step 16 deployed (s16c-j3pv).
+  - Migration 157 ran and verified: conformant; one 6-argument version, SECURITY INVOKER; rice_total 0 after cleanup; the old 5-argument call shape still works (129).
+  - warren_buffet_p3-q5k yielded `mcp/index.test.mjs`. It was claimed and now lists `EXPECTED_ADDED_P5 = ["get_groups"]`, with the count 139 → 140. get_groups joined the schema-matches-handler check. 34/34 pass, and every `_shared/tools` and `alfred-tools` test passes.
+  - db:deploy was claimed, `npx supabase functions deploy mcp` run, and **mcp v163** is live; db:deploy was released.
+  - db:fn:platform_search_executions was released too: its SQL is live, and a db: claim is never carried to the next step. 157 and its verify file still need a Checkpoint into main.
+  - `claims.mjs status`: no db: claims held.
+- 2026-10-23 Step 17 (s17-w4kd), first pass:
+  - The step 16 checkpoint is in origin/main: all seven paths match.
+  - A block notice said warren_buffet_p3-q5k waits on mcp/index.ts and mcp/index.test.mjs. Both were unchanged from main and were yielded. The get_execution_history description lives in mcp/index.ts (no test asserts it), so the description fix and the redeploy wait until this thread can claim index.ts again. db:deploy was checked: free.
+  - Verification:
+    - App 3019/3019 (no flakes this run), CLI 239/239, `npm run build` (CI=true) passes.
+    - ai-enrich appears only in historical comments (Alfred.jsx, CollectionDetailScreen.jsx, useInboxActions.js, technical-spec-email-capture.md) and in test fixtures naming the real intention "Retire the ai-enrich edge function".
+    - is_item appears only in comments, in storage.js's defensive strip of a stale is_item, in their tests, and in inbox_atomic's verify script, which checks it is gone.
+  - Cleanup script: `supabase/tests/restructure_p5-h7m/cleanup_test_data.sql`, a PART 1 preview (it also lists every other live group) and a PART 2 transaction. Not run.
+  - **Migrations this phase added (ours):**
+    - `147_restructure_p5_drop_is_item`
+    - `148_restructure_p5_groups`
+    - `149_restructure_p5_group_member_removal`
+    - `150_restructure_p5_shared_group_types`
+    - `152_restructure_p5_archived_at`
+    - `153_restructure_p5_closed_reason_rules`
+    - `154_restructure_p5_parent_execution`
+    - `157_restructure_p5_search_executions_item`
+    - Not ours: 150_wb, 151_wb, 153_wb, 155_wb and 156_wb. Two files share 150, and two share 153.
+  - **Parked (not this phase):**
+    - Deleting a completed execution does not reopen the one-time intention it closed (filed in Alfred by Alex).
+    - The inbox's Recently Archived still dates by triaged_at, not archived_at.
+    - Home's pinned group cards have no buttons.
+    - Add reminder on a group is disabled until its first Schedule.
+    - mcp_read_gaps-t8k's S8 moves get_groups onto its shared read helper (their decision 9).
+    - The duplicate 150 and 153 numbers in main.
+    - get_execution_history description (supabase/functions/mcp/index.ts) says group_id is only on a menu's own execution; recipe executions cooked inside a menu also carry group_id and parent_execution_id, with intent_id and event_id null. One-sentence fix plus MCP redeploy; parked because warren_buffet_p3-q5k holds index.ts. Do it in the next thread that touches the MCP server.
+
