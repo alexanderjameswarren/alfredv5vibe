@@ -6,6 +6,10 @@ import { longDate } from "../utils/recurrenceDisplay";
 import { getRecurrenceConfig } from "../utils/recurrence";
 import { itemActionTarget, isDueBy } from "../utils/runNow";
 import { carriedItems, closeFields, liveEventsFor, restoredCloseFields, CLOSE_REASON_SAVED } from "../utils/status";
+import { groupIntention, liveMembers } from "../groups/groupModel";
+import { newGroupIntention } from "../groups/useGroupActions";
+import { isMenuRun, recipeOutcome, recipeRunsOf } from "../groups/menuRun";
+import { moveCookRecipes } from "./menuHistory";
 import {
   createNotificationSteps,
   completeNotificationStep,
@@ -25,6 +29,8 @@ export function withActive(list, execution) {
  * today (or not given), otherwise midday that day. Any past day is allowed: it may be
  * a backfill from before the execution was even started.
  */
+const sameInstant = (a, b) => Boolean(a && b) && new Date(a).getTime() === new Date(b).getTime();
+
 export function closedAtFor(completedOn, now = new Date()) {
   const pad = (n) => String(n).padStart(2, "0");
   const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
@@ -62,7 +68,22 @@ export function useExecutionActions({
   setItems,
   notify,
   offerUndoFor,
+  // Restructure P5 step 14: cooking a menu.
+  itemGroups = [],
+  setItemGroups,
+  groupTypes = [],
+  groupMembers = [],
 }) {
+  const groupLists = { groups: itemGroups, groupTypes };
+  // The open recipe runs of a menu run (they sit in the same active and paused lists).
+  const recipeRunsFor = (menuRun) =>
+    isMenuRun(menuRun, groupLists) ? recipeRunsOf(menuRun, [...activeExecutions, ...pausedExecutions]) : [];
+  const replaceIn = (row) => (prev) => prev.map((e) => (e.id === row.id ? row : e));
+  // A closed menu's recipes, for re-reading their last-done dates: as refreshMenuRecords takes runs.
+  const menuRecipeIds = (menuRun) => [
+    { itemIds: groupMembers.filter((m) => m.groupId === menuRun.groupId && m.memberType === "item").map((m) => m.memberId) },
+  ];
+
   // The rows an execution insert can flip to active (088): its intention, that
   // intention's item, and every item it carries.
   function watchExecution(intent, itemIds = []) {
@@ -266,9 +287,17 @@ export function useExecutionActions({
   // was done ("YYYY-MM-DD"), which sets closed_at and so last_completed_at.
   async function closeExecution(outcome, { nextDate = null, completedOn = null } = {}) {
     if (!writable(activeExecution)) return;
+    const recipeRuns = recipeRunsFor(activeExecution);
     return withLoading('Completing...', async () => {
       // Cancel = Delete: just remove active execution, don't archive anything
       if (outcome === "cancelled") {
+        // A menu: its recipe runs go with it (Start Now made them all).
+        for (const run of recipeRuns) {
+          await endNotificationChain(run.id);
+          if (!(await storage.delete(`execution:${run.id}`))) throw writeError("Deleting a recipe's execution");
+          setActiveExecutions((prev) => prev.filter((e) => e.id !== run.id));
+          setPausedExecutions((prev) => prev.filter((e) => e.id !== run.id));
+        }
         // Cancel the chain BEFORE deleting the execution: afterwards the rows
         // would be orphans referencing a row that no longer exists. The
         // dispatcher's join to active executions would hide them, but leaving
@@ -291,6 +320,15 @@ export function useExecutionActions({
         status: "closed",
       };
 
+      // A menu: every recipe closes at the same moment, done or skipped (step 14).
+      for (const run of recipeRuns) {
+        const done = { ...run, status: "closed", closedAt: closed.closedAt, outcome: recipeOutcome(run) };
+        if (!(await storage.set(`execution:${run.id}`, done))) throw writeError("Completing a recipe");
+        await endNotificationChain(run.id);
+        setActiveExecutions((prev) => prev.filter((e) => e.id !== run.id));
+        setPausedExecutions((prev) => prev.filter((e) => e.id !== run.id));
+      }
+
       // Archive the execution (elements are preserved via spread; notes live in the notes table)
       await storage.set(`execution:${closed.id}`, closed);
       await endNotificationChain(closed.id);
@@ -310,7 +348,8 @@ export function useExecutionActions({
         if (config.type === "once") {
           // Closed, not archived: finishing is a reason to keep it. Its one
           // live event was the one just archived above.
-          if (outcome === "done") {
+          // A group's own intention stays open: the menu is cooked again (step 14).
+          if (outcome === "done" && !intent.groupId) {
             // Automatic close: reason 'done', Closed on = the completion (Step 11 writes them).
             const closedIntent = await storage.patch(`intent:${intent.id}`, { status: "closed", ...closeFields("done", closed.closedAt) });
             if (closedIntent) setIntents((prev) => prev.map((i) => (i.id === intent.id ? closedIntent : i)));
@@ -321,7 +360,13 @@ export function useExecutionActions({
         }
       }
       // The database has just written last_completed_at (trigger); show it now.
-      if (outcome === "done") await refreshCompletedRecords(closed);
+      if (outcome === "done") {
+        await refreshCompletedRecords(closed);
+        if (recipeRuns.length || closed.groupId) {
+          await refreshMenuRecords(closed, recipeRuns);
+          completionsChanged();
+        }
+      }
 
       // Remove completed items from collection. Only an affirmative completion
       // clears anything — cancel returns above, and pause never reaches here.
@@ -368,6 +413,12 @@ export function useExecutionActions({
     if (madeByStartNow) {
       if (!(await storage.delete(`event:${event.id}`))) throw writeError("Removing today's event");
       setEvents((prev) => prev.filter((e) => e.id !== event.id));
+      // A menu's own intention Start Now made (same millisecond stamp) goes too.
+      const own = intents.find((i) => i.id === execution.intentId);
+      if (own?.groupId && sameInstant(own.createdAt, execution.startedAt)) {
+        if (!(await storage.delete(`intent:${own.id}`))) throw writeError("Removing the menu's intention");
+        setIntents((prev) => prev.filter((i) => i.id !== own.id));
+      }
     } else if (priorEventDate && priorEventDate >= today) {
       if (untouched) {
         const saved = await storage.set(`event:${event.id}`, { ...event, time: priorEventDate });
@@ -404,9 +455,17 @@ export function useExecutionActions({
 
   async function pauseExecution() {
     if (!writable(activeExecution)) return;
+    const recipeRuns = recipeRunsFor(activeExecution);
     return withLoading('Pausing...', async () => {
       const paused = { ...activeExecution, status: "paused" };
       await storage.set(`execution:${paused.id}`, paused);
+      // A menu pauses as a whole.
+      for (const run of recipeRuns) {
+        const p = { ...run, status: "paused" };
+        if (!(await storage.set(`execution:${run.id}`, p))) throw writeError("Pausing a recipe");
+        setActiveExecutions((prev) => prev.filter((e) => e.id !== run.id));
+        setPausedExecutions((prev) => [p, ...prev.filter((e) => e.id !== run.id)]);
+      }
       setActiveExecutions((prev) => prev.filter((e) => e.id !== activeExecution.id));
       setPausedExecutions((prev) => [paused, ...prev]);
       setActiveExecution(null);
@@ -416,9 +475,17 @@ export function useExecutionActions({
 
   async function makeExecutionActive() {
     if (!writable(activeExecution)) return;
+    const recipeRuns = recipeRunsFor(activeExecution);
     return withLoading('Resuming...', async () => {
       const activated = { ...activeExecution, status: "active" };
       await storage.set(`execution:${activated.id}`, activated);
+      for (const run of recipeRuns) {
+        const a = { ...run, status: "active" };
+        if (!(await storage.set(`execution:${run.id}`, a))) throw writeError("Resuming a recipe");
+        await rescheduleNotificationChain(run.id);
+        setPausedExecutions((prev) => prev.filter((e) => e.id !== run.id));
+        setActiveExecutions((prev) => withActive(prev.filter((e) => e.id !== run.id), a));
+      }
       // Pausing writes no rows — the dispatcher filters on execution status, so
       // a paused chain is already silent. Only resuming needs to act, so that a
       // due time that passed during the pause does not fire for a moment gone by.
@@ -429,9 +496,11 @@ export function useExecutionActions({
     });
   }
 
-  async function toggleExecutionElement(elementIndex) {
-    if (!writable(activeExecution)) return;
-    const updatedElements = [...activeExecution.elements];
+  // `target`: a recipe's run inside a menu (step 14); the page's own execution otherwise.
+  async function toggleExecutionElement(elementIndex, target = null) {
+    const base = target || activeExecution;
+    if (!writable(base)) return;
+    const updatedElements = [...base.elements];
     const el = updatedElements[elementIndex];
     updatedElements[elementIndex] = {
       ...el,
@@ -439,10 +508,10 @@ export function useExecutionActions({
       completedAt: !el.isCompleted ? new Date().toISOString() : null,
       inProgress: false,
     };
-    const updated = { ...activeExecution, elements: updatedElements };
+    const updated = { ...base, elements: updatedElements };
 
     // Optimistic: update UI immediately
-    setActiveExecution(updated);
+    if (!target) setActiveExecution(updated);
     setActiveExecutions((prev) =>
       prev.map((e) => (e.id === updated.id ? updated : e))
     );
@@ -471,14 +540,15 @@ export function useExecutionActions({
     }
   }
 
-  async function updateExecutionElement(elementIndex, fields) {
-    if (!writable(activeExecution)) return;
-    const updatedElements = [...activeExecution.elements];
+  async function updateExecutionElement(elementIndex, fields, target = null) {
+    const base = target || activeExecution;
+    if (!writable(base)) return;
+    const updatedElements = [...base.elements];
     updatedElements[elementIndex] = { ...updatedElements[elementIndex], ...fields };
-    const updated = { ...activeExecution, elements: updatedElements };
+    const updated = { ...base, elements: updatedElements };
 
     // Optimistic: update UI immediately
-    setActiveExecution(updated);
+    if (!target) setActiveExecution(updated);
     setActiveExecutions((prev) =>
       prev.map((e) => (e.id === updated.id ? updated : e))
     );
@@ -733,6 +803,243 @@ export function useExecutionActions({
     });
   }
 
+  // A recipe's elements as a run starts them: flattened, nothing ticked.
+  async function startingElements(item) {
+    if (!item || !(item.elements || item.components)) return [];
+    const rawEls = (item.elements || item.components).map((el) =>
+      typeof el === "string" ? { name: el, displayType: "step", quantity: "", description: "" } : { ...el },
+    );
+    const flattened = await flattenElements(rawEls, (id) => items.find((i) => i.id === id) || null);
+    return flattened.map((el) => ({
+      ...el,
+      isCompleted: false,
+      completedAt: null,
+      inProgress: false,
+      startedAt: null,
+      sourceItemId: el.sourceItemId || item.id,
+    }));
+  }
+
+  // One recipe's run inside a menu run: no intention, no event, the menu run its parent.
+  function recipeRunRow(recipe, menuRun, fields) {
+    return {
+      id: uid(),
+      user_id: user.id,
+      intentId: null,
+      eventId: null,
+      parentExecutionId: menuRun.id,
+      groupId: menuRun.groupId,
+      contextId: recipe.contextId || menuRun.contextId || null,
+      itemIds: [recipe.id],
+      startedAt: menuRun.startedAt,
+      elements: [],
+      progress: [],
+      ...fields,
+    };
+  }
+
+  // The menu's own intention, made (and put in state) when it has none. Returns { own, created }.
+  async function ensureMenuIntention(group, now) {
+    const existing = groupIntention(group.id, intents);
+    if (existing) return { own: existing, created: null };
+    const row = newGroupIntention(group, { members: groupMembers, items, intents }, { id: uid(), userId: user.id, now });
+    const created = await storage.set(`intent:${row.id}`, row);
+    if (!created) throw new Error("The menu's intention was not saved.");
+    setIntents((prev) => [...prev, created]);
+    return { own: created, created };
+  }
+
+  /**
+   * Log Execution on a menu (step 14b): the menu's run and one closed run per recipe,
+   * in one step, dated `completedOn`. Recipes in `doneIds` are done, the rest skipped.
+   * On the live date (archived), else on a new archived one that day. The note is the
+   * menu's. Undo deletes the menu run (its recipe runs cascade), puts the date back or
+   * removes the new one, and removes an intention this made.
+   */
+  async function logMenuDone(groupId, { note = "", completedOn = null, doneIds = [] } = {}) {
+    const group = itemGroups.find((g) => g.id === groupId);
+    if (!group) return false;
+    const existing = groupIntention(groupId, intents);
+    if (existing && hasOpen(existing.id)) return false;
+    let ok = false;
+    await withLoading("Saving...", async () => {
+      const day = completedOn || getTodayDate();
+      const closedAt = closedAtFor(day);
+      const { own, created: createdIntent } = await ensureMenuIntention(group, new Date());
+      const recipes = liveMembers(groupId, { members: groupMembers, items, intents }).filter((m) => m.memberType === "item").map((m) => m.record);
+      const live = liveEventsFor(events, own.id)[0] || null;
+      let createdEvent = null;
+      if (!live) {
+        createdEvent = { id: uid(), user_id: user.id, intentId: own.id, time: day, itemIds: [], contextId: own.contextId || null, archived: true, createdAt: new Date().toISOString() };
+        if (!(await storage.set(`event:${createdEvent.id}`, createdEvent))) throw writeError("Recording it");
+      }
+      const event = live || createdEvent;
+      const menuRun = {
+        id: uid(),
+        user_id: user.id,
+        eventId: event.id,
+        intentId: own.id,
+        groupId,
+        contextId: group.contextId || own.contextId || null,
+        itemIds: [],
+        startedAt: closedAt,
+        closedAt,
+        status: "closed",
+        outcome: "done",
+        elements: [],
+        progress: [],
+      };
+      if (!(await storage.set(`execution:${menuRun.id}`, menuRun))) throw writeError("Recording it");
+      for (const recipe of recipes) {
+        const run = recipeRunRow(recipe, menuRun, { status: "closed", closedAt, outcome: doneIds.includes(recipe.id) ? "done" : "skipped" });
+        if (!(await storage.set(`execution:${run.id}`, run))) {
+          await storage.delete(`execution:${menuRun.id}`);
+          throw writeError(`Recording "${recipe.name}"`);
+        }
+      }
+      if (note.trim()) await saveNote({ body: note, targetType: "group", targetId: groupId, executionId: menuRun.id });
+      if (live) {
+        const archived = { ...live, archived: true };
+        await storage.set(`event:${live.id}`, archived);
+        setEvents((prev) => prev.map((e) => (e.id === live.id ? archived : e)));
+      } else {
+        setEvents((prev) => [...prev, createdEvent]);
+      }
+      const recipeRuns = [{ itemIds: recipes.map((r) => r.id) }];
+      await refreshMenuRecords(menuRun, recipeRuns);
+      completionsChanged();
+      offerUndoFor?.(`Logged a cook on ${longDate(day, getTodayDate())}.`, async () => {
+        if (!(await storage.delete(`execution:${menuRun.id}`))) throw writeError("Removing the cook");
+        if (live) {
+          if (!(await storage.set(`event:${live.id}`, live))) throw writeError("Restoring its date");
+          setEvents((prev) => prev.map((e) => (e.id === live.id ? live : e)));
+        } else {
+          if (!(await storage.delete(`event:${createdEvent.id}`))) throw writeError("Removing its date");
+          setEvents((prev) => prev.filter((e) => e.id !== createdEvent.id));
+        }
+        if (createdIntent) {
+          if (!(await storage.delete(`intent:${createdIntent.id}`))) throw writeError("Removing the intention");
+          setIntents((prev) => prev.filter((i) => i.id !== createdIntent.id));
+        }
+        await refreshMenuRecords(menuRun, recipeRuns);
+        completionsChanged();
+      });
+      ok = true;
+    });
+    return ok;
+  }
+
+  /**
+   * Start Now on a menu (Restructure P5 step 14). Through the menu's own intention
+   * (made if needed) and its one live event, as intention Start Now: an open run is
+   * continued, a future date is moved to today (and put back by Delete), no date makes
+   * one for today. Then the menu's run (item_ids empty) and one run per live recipe
+   * (item_ids [recipe], no intention, no event): recipes' own intentions and events are
+   * never touched. If a run fails to save, the runs already made are deleted and the
+   * error shown (the date, like intention Start Now's, stays).
+   */
+  async function startMenuNow(groupId) {
+    const group = itemGroups.find((g) => g.id === groupId);
+    if (!group) return;
+    const memberLists = { members: groupMembers, items, intents };
+    const existing = groupIntention(groupId, intents);
+    const open = existing ? openExecutionFor(existing.id) : null;
+    if (open) {
+      setPreviousView(view);
+      goToExecution(open);
+      return;
+    }
+    const live = existing ? liveEventsFor(events, existing.id)[0] || null : null;
+    return withLoading("Starting execution...", async () => {
+      const today = getTodayDate();
+      const startedAt = new Date().toISOString();
+      const made = [];
+      // createdAt = startedAt when made here: how Delete knows to remove it.
+      const { own, created: createdIntent } = await ensureMenuIntention(group, new Date(startedAt));
+      const recipes = liveMembers(groupId, memberLists).filter((m) => m.memberType === "item").map((m) => m.record);
+      const settle = watchStatus({
+        intents: createdIntent ? [] : [own],
+        items: recipes,
+        groups: [group],
+        refreshIntentIds: createdIntent ? [own.id] : [],
+      });
+      const prior = {};
+      let event = live;
+      if (live && !isDueBy(live, today)) {
+        const saved = await storage.set(`event:${live.id}`, { ...live, time: today });
+        if (!saved) throw writeError("Moving the event to today");
+        setEvents((prev) => prev.map((e) => (e.id === live.id ? saved : e)));
+        event = saved;
+        if (CLOSE_REASON_SAVED) prior.priorEventDate = String(live.time).slice(0, 10);
+      }
+      if (!event) {
+        // createdAt = startedAt: how Delete knows Start Now made it (restoreStartNow).
+        const row = { id: uid(), user_id: user.id, intentId: own.id, time: today, itemIds: [], contextId: own.contextId || null, archived: false, createdAt: startedAt };
+        event = await storage.set(`event:${row.id}`, row);
+        if (!event) throw writeError("Today's event");
+        setEvents((prev) => [...prev, event]);
+        if (CLOSE_REASON_SAVED && own.status === "background") prior.priorIntentStatus = "background";
+      }
+      const menuRun = {
+        id: uid(),
+        user_id: user.id,
+        eventId: event.id,
+        intentId: own.id,
+        groupId,
+        contextId: group.contextId || own.contextId || null,
+        itemIds: [],
+        ...prior,
+        startedAt,
+        status: "active",
+        elements: [],
+        progress: [],
+      };
+      try {
+        if (!(await storage.set(`execution:${menuRun.id}`, menuRun))) throw writeError("Starting");
+        made.push(menuRun);
+        for (const recipe of recipes) {
+          const run = recipeRunRow(recipe, menuRun, { status: "active", elements: await startingElements(recipe) });
+          if (!(await storage.set(`execution:${run.id}`, run))) throw writeError(`Starting "${recipe.name}"`);
+          made.push(run);
+        }
+      } catch (e) {
+        for (const run of made.reverse()) await storage.delete(`execution:${run.id}`);
+        throw e;
+      }
+      await settle();
+      for (const run of made) await startNotificationChain(run);
+      setActiveExecutions((prev) => made.reduce((list, run) => withActive(list, run), prev));
+      setActiveExecution(menuRun);
+      setPreviousView(view);
+      goToExecution(menuRun);
+    });
+  }
+
+  /** Skip a recipe inside a menu run, or take the skip back, before the menu completes. */
+  async function setRecipeSkipped(run, skipped) {
+    if (!writable(run)) return;
+    const saved = await storage.patch(`execution:${run.id}`, { outcome: skipped ? "skipped" : null });
+    if (!saved) {
+      notify?.("The skip was not saved.", { error: true });
+      return;
+    }
+    setActiveExecutions(replaceIn(saved));
+    setPausedExecutions(replaceIn(saved));
+  }
+
+  // After a menu completes: the menu and each recipe's last_completed_at (triggers).
+  async function refreshMenuRecords(menuRun, recipeRuns) {
+    if (setItemGroups && menuRun.groupId) {
+      const fresh = await storage.get(`group:${menuRun.groupId}`);
+      if (fresh) setItemGroups((prev) => prev.map((g) => (g.id === fresh.id ? fresh : g)));
+    }
+    if (!setItems) return;
+    for (const id of new Set(recipeRuns.flatMap((r) => r.itemIds || []))) {
+      const item = await storage.get(`item:${id}`);
+      if (item) setItems((prev) => prev.map((i) => (i.id === item.id ? item : i)));
+    }
+  }
+
   /**
    * Re-read the intention and item(s) an execution counts for. Their
    * last_completed_at is written by the database (executions_last_completed), and
@@ -761,10 +1068,14 @@ export function useExecutionActions({
     if (!execution || execution.status !== "closed" || execution.outcome !== "done") return false;
     let ok = false;
     await withLoading("Saving...", async () => {
-      const saved = await storage.patch(`execution:${execution.id}`, { closedAt: closedAtFor(completedOn) });
+      const closedAt = closedAtFor(completedOn);
+      // A menu's recipes move with it, so the cook stays one moment (step 14).
+      if (isMenuRun(execution, groupLists)) await moveCookRecipes(execution, closedAt);
+      const saved = await storage.patch(`execution:${execution.id}`, { closedAt });
       if (!saved) throw writeError("The completion date");
       setActiveExecution(saved);
       await refreshCompletedRecords(saved);
+      if (isMenuRun(saved, groupLists)) await refreshMenuRecords(saved, menuRecipeIds(saved));
       completionsChanged();
       notify?.(`Completed on ${longDate(completedOn, getTodayDate())}.`);
       ok = true;
@@ -783,8 +1094,10 @@ export function useExecutionActions({
     if (!execution || execution.status !== "closed") return false;
     let ok = false;
     await withLoading("Deleting...", async () => {
+      // A menu's recipe runs go with it (parent_execution_id, on delete cascade).
       if (!(await storage.delete(`execution:${execution.id}`))) throw writeError("Deleting it");
       await refreshCompletedRecords(execution);
+      if (isMenuRun(execution, groupLists)) await refreshMenuRecords(execution, menuRecipeIds(execution));
       completionsChanged();
       setActiveExecution(null);
       setView(previousView);
@@ -961,5 +1274,8 @@ export function useExecutionActions({
     toggleCollectionItem,
     startNowFromItem,
     startNowFromIntention,
+    startMenuNow,
+    setRecipeSkipped,
+    logMenuDone,
   };
 }

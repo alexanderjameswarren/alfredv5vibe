@@ -43,6 +43,12 @@ export function chipForGroup(groupId, { groups = [], groupTypes = [], members = 
   return { id: g.id, name: groupDisplayName(g, { members, items, intents }) || "Untitled group", icon: groupTypeOf(g, groupTypes)?.icon };
 }
 
+/** (groupId) => its chip ({ id, name, icon }) or null: for history rows that name a group. */
+export function useGroupLookup() {
+  const ctx = useContext(GroupsContext);
+  return (groupId) => (ctx && groupId ? chipForGroup(groupId, ctx.lists) : null);
+}
+
 /** Chips for records, plus how to open one. Empty outside a provider. */
 export function useRecordGroups(records) {
   const ctx = useContext(GroupsContext);

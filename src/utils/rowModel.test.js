@@ -196,6 +196,17 @@ describe("a group's own intention (step 13)", () => {
     expect(row).toMatchObject({ ownIntent: own, event: live, open: run, intents: [] });
     expect(buildGroupRows({ groups: [{ id: "g" }] })[0]).toMatchObject({ ownIntent: null, event: null, open: null });
   });
+
+  it("a project row carries its members' run state (step 15)", () => {
+    const [row] = buildGroupRows({
+      groups: [{ id: "p", groupTypeId: "proj" }],
+      groupTypes: [{ id: "proj", executionMode: "separately" }],
+      members: [{ id: "m", groupId: "p", memberType: "intention", memberId: "bug", position: 1 }],
+      intents: [{ id: "bug", text: "Bug A" }],
+      openExecutions: [{ id: "x", intentId: "bug", status: "paused" }],
+    });
+    expect(row.memberRun).toBe("paused");
+  });
 });
 
 describe("group rows", () => {

@@ -317,14 +317,16 @@ test("the tool count is 72 after the job-search tools", () => {
     "unconfirm_wb_planned_match"];
   // 2026-10-23, +1 for Warren Buffet Phase 3 Step 9c: the money to-do list.
   const EXPECTED_ADDED_WB_9C = ["get_wb_action_items"];
+  // 2026-10-23, +1 for Restructure P5 Step 16: groups (menus, projects, series).
+  const EXPECTED_ADDED_P5 = ["get_groups"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
-                      ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C]) {
+                      ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C, ...EXPECTED_ADDED_P5]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 139,
-    `expected 139 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 140,
+    `expected 140 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -352,7 +354,7 @@ test("the job-search surface is registered, and its schemas match its handlers",
 });
 
 test("Restructure P3: get_apps and archive_inbox_item schemas match their handlers", () => {
-  for (const [file, name] of [["apps.ts", "get_apps"], ["clipboard.ts", "archive_inbox_item"]]) {
+  for (const [file, name] of [["apps.ts", "get_apps"], ["clipboard.ts", "archive_inbox_item"], ["groups.ts", "get_groups"]]) {
     const src = readFileSync(join(TOOLS, file), "utf-8");
     const block = src.split("defineTool({").slice(1).find((b) => b.includes(`name: "${name}"`));
     assert.ok(block, `${name} not found in ${file}`);

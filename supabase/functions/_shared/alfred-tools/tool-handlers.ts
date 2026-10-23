@@ -49,6 +49,7 @@ export async function getExecutionHistory(
   params: {
     intent_id?: string;
     context_id?: string;
+    item_id?: string;
     date_from?: string;
     date_to?: string;
     limit?: number;
@@ -56,6 +57,10 @@ export async function getExecutionHistory(
 ): Promise<ToolResult> {
   try {
     const limit = params.limit || 20;
+    // Restructure P5 (migration 157): an item's executions through its intentions or
+    // carried in item_ids, so a recipe's cooks inside a menu are found. Sent only
+    // when given, so the call shape is the 5-argument one otherwise.
+    const itemFilter = params.item_id ? { p_item_id: params.item_id } : {};
 
     // Every filter — intent, context AND the event date range — is applied in
     // Postgres before the limit by platform_search_executions (migration 077).
@@ -70,11 +75,14 @@ export async function getExecutionHistory(
       p_date_from: params.date_from ?? null,
       p_date_to: params.date_to ?? null,
       p_limit: limit,
+      ...itemFilter,
     });
     if (error) return { error: error.message };
 
     // Restructure P4: a closed execution is a completion only with outcome 'done'.
     // Skipped (a passed-over date) and cancelled rows are history, never "last done".
+    // P5: a recipe's run inside a menu has no intention or event (both null) and
+    // carries parent_execution_id, the menu's run; nothing here reads either id.
     const rows = ((data?.rows as Record<string, unknown>[]) ?? []).map((r) => ({
       ...r,
       is_completion: r.status === "closed" && r.outcome === "done",
@@ -104,7 +112,8 @@ export async function getIntents(
     let query = client
       .from("intents")
       .select(
-        "id, text, is_intention, item_id, context_id, tags, collection_id, recurrence_config, target_start_date, end_date, status, status_changed_at, closed_reason, created_at, updated_at",
+        // group_id (Restructure P5): set on a group's own intention, which carries its dates.
+        "id, text, is_intention, item_id, context_id, group_id, tags, collection_id, recurrence_config, target_start_date, end_date, status, status_changed_at, closed_reason, created_at, updated_at",
         // Counted, so truncation is measured rather than inferred from
         // "we got exactly `limit` rows back".
         { count: "exact" }
@@ -196,7 +205,8 @@ export async function getEvents(
     let query = client
       .from("events")
       .select(
-        "id, intent_id, time, item_ids, context_id, collection_id, text, created_at, updated_at"
+        // group_id (Restructure P5): a group's date; item_ids are its frozen recipes.
+        "id, intent_id, group_id, time, item_ids, context_id, collection_id, text, created_at, updated_at"
       )
       .order("time", { ascending: true })
       .limit(limit);

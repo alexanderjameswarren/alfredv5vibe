@@ -16,6 +16,7 @@ jest.mock("../notes/notesApi", () => ({
 
 jest.mock("../utils/remindersApi", () => ({ ...jest.requireActual("../utils/remindersApi"), getReminderSummary: jest.fn() }));
 jest.mock("../notes/RecentCompletions", () => () => <section aria-label="Recent executions" />);
+jest.mock("./MemberExecutions", () => () => <section aria-label="Recent executions" data-testid="member-executions" />);
 
 // CRA resets mock implementations before each test.
 beforeEach(() => {
@@ -164,6 +165,73 @@ test("Close opens the Close pop-up and closes the group with its own intention",
       group: expect.objectContaining({ id: "g" }), intentIds: ["o"], reason: "wont_do", pickedIntentId: "o",
     })),
   );
+});
+
+// Step 14.
+const together = [{ ...groupTypes[0], executionMode: "together" }];
+
+test("a menu leads with Start Now, then Continue while its run is open; a project has none", async () => {
+  const onStartNow = jest.fn();
+  const props = renderPage({ ...handlers(), onStartNow, groupTypes: together, group: { ...group, status: "active" } });
+  await notesLoaded();
+  const names = screen.getAllByRole("button").map((b) => b.textContent.trim()).filter((t) => ["Start Now", "Schedule", "Edit", "Close", "Archive"].includes(t));
+  expect(names).toEqual(["Start Now", "Schedule", "Edit", "Close", "Archive"]);
+  fireEvent.click(screen.getByRole("button", { name: "Start Now" }));
+  expect(onStartNow).toHaveBeenCalledWith("g");
+  expect(props.onOpenExecution).not.toHaveBeenCalled();
+});
+
+test("Continue opens the menu's open run", async () => {
+  const run = { id: "x", intentId: "o", groupId: "g", status: "active" };
+  const props = renderPage({ ...handlers(), onStartNow: jest.fn(), groupTypes: together, group: { ...group, status: "active" }, intents: [own], executions: [run] });
+  await notesLoaded();
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(props.onOpenExecution).toHaveBeenCalledWith(run);
+});
+
+test("a menu's Log Execution lists its recipes and logs the ticked ones; hidden while cooking", async () => {
+  const onLogMenu = jest.fn(async () => true);
+  renderPage({ ...handlers(), onStartNow: jest.fn(), onLogMenu, groupTypes: together, group: { ...group, status: "active" } });
+  await notesLoaded();
+  const names = screen.getAllByRole("button").map((b) => b.textContent.trim()).filter((t) => ["Start Now", "Schedule", "Log Execution", "Edit"].includes(t));
+  expect(names).toEqual(["Start Now", "Schedule", "Log Execution", "Edit"]);
+  fireEvent.click(screen.getByRole("button", { name: "Log Execution" }));
+  const dialog = screen.getByRole("dialog", { name: "Log execution" });
+  expect(within(dialog).getAllByRole("checkbox").map((b) => b.closest("label").textContent)).toEqual(["Beans", "Rice"]);
+  fireEvent.click(within(dialog).getByLabelText("Rice"));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Log" }));
+  await waitFor(() => expect(onLogMenu).toHaveBeenCalledWith("g", expect.objectContaining({ doneIds: ["beans"] })));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+test("no Log Execution while the menu is cooking", async () => {
+  const run = { id: "x", intentId: "o", groupId: "g", status: "active" };
+  renderPage({ ...handlers(), onLogMenu: jest.fn(), groupTypes: together, group: { ...group, status: "active" }, intents: [own], executions: [run] });
+  await notesLoaded();
+  expect(screen.queryByRole("button", { name: "Log Execution" })).toBeNull();
+});
+
+test("a project: last done, the members' marker, their dated list; no Start Now or Log Execution", async () => {
+  renderPage({
+    ...handlers(),
+    onStartNow: jest.fn(),
+    onLogMenu: jest.fn(),
+    groupTypes: [{ ...groupTypes[0], executionMode: "separately" }],
+    group: { ...group, status: "active", lastCompletedAt: "2026-10-21T12:00:00Z" },
+    intents: [{ id: "cook", text: "Cook rice", itemId: "rice" }],
+    executions: [{ id: "x", intentId: "cook", status: "active" }],
+  });
+  await notesLoaded();
+  expect(screen.getByText(/^Last done: Oct 21, 2026/)).toBeInTheDocument();
+  expect(screen.getByText("In progress")).toBeInTheDocument();
+  expect(screen.getByTestId("member-executions")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Start Now|Log Execution/ })).toBeNull();
+});
+
+test("no Start Now on a separately group", async () => {
+  renderPage({ ...handlers(), onStartNow: jest.fn(), groupTypes: [{ ...groupTypes[0], executionMode: "separately" }] });
+  await notesLoaded();
+  expect(screen.queryByRole("button", { name: "Start Now" })).toBeNull();
 });
 
 test("a run on its own intention blocks Close and Archive", async () => {

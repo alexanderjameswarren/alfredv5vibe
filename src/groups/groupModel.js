@@ -86,12 +86,31 @@ export function groupIcon(group, groupTypes) {
  * member item, or carrying a member item in item_ids. Together groups: false.
  */
 export function hasRunningMember(group, { groupTypes = [], members = [], items = [], intents = [], activeExecutions = [] }) {
-  if (groupTypeOf(group, groupTypes)?.executionMode !== "separately") return false;
-  const live = liveMembers(group.id, { members, items, intents });
+  return memberRunState(group, { groupTypes, members, items, intents, openExecutions: activeExecutions }) === "active";
+}
+
+/**
+ * The intention ids and item ids a group's live members cover: member intentions,
+ * member items, and every intention of a member item. Their executions are the members'.
+ */
+export function memberScope(groupId, { members = [], items = [], intents = [] }) {
+  const live = liveMembers(groupId, { members, items, intents });
   const intentIds = new Set(live.filter((m) => m.memberType === "intention").map((m) => m.record.id));
   const itemIds = new Set(live.filter((m) => m.memberType === "item").map((m) => m.record.id));
-  for (const i of intents) if (i.itemId && itemIds.has(i.itemId)) intentIds.add(i.id);
-  return activeExecutions.some(
-    (x) => x.status !== "paused" && (intentIds.has(x.intentId) || (x.itemIds || []).some((id) => itemIds.has(id)))
-  );
+  for (const i of intents) if (i.itemId && itemIds.has(i.itemId) && !i.archived) intentIds.add(i.id);
+  return { live, intentIds, itemIds };
+}
+
+/**
+ * Restructure P5 step 15, a separately group's marker, worked out at read time:
+ * "active" when any live member has a running execution, else "paused" when one is
+ * paused, else null. Together groups (menus): always null; their own run shows instead.
+ */
+export function memberRunState(group, { groupTypes = [], members = [], items = [], intents = [], openExecutions = [] }) {
+  if (groupTypeOf(group, groupTypes)?.executionMode !== "separately") return null;
+  const { intentIds, itemIds } = memberScope(group.id, { members, items, intents });
+  const mine = openExecutions.filter((x) => intentIds.has(x.intentId) || (x.itemIds || []).some((id) => itemIds.has(id)));
+  if (mine.some((x) => x.status === "active")) return "active";
+  if (mine.some((x) => x.status === "paused")) return "paused";
+  return null;
 }

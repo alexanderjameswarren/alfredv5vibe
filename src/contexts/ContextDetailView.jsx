@@ -96,6 +96,7 @@ export default function ContextDetailView({
   onViewGroupDetail,
   onOpenCreateGroup,
   onScheduleGroup,
+  onStartGroupNow,
   // The selected tab, held by Alfred per context so Back from a record keeps it
   // (as the inbox's source tab is). Falls back to local state when not given.
   rowTab: heldTab,
@@ -376,6 +377,7 @@ export default function ContextDetailView({
                   onCloseRecords={onCloseRecords}
                   onViewGroupDetail={onViewGroupDetail}
                   onScheduleGroup={onScheduleGroup}
+                  onStartGroupNow={onStartGroupNow}
                 />
               )}
             </>

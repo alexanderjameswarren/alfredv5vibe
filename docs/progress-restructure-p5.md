@@ -23,8 +23,10 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 12. Group chips on member rows and running cards; record-links order Context > Group > Item > Intention (incl. execution page); pinned groups on Home
   - Apply bug mvjx4363b4bn4gezrys to item and intention detail pages: Archived pill, Restore as the only action, Edit hidden, edit page redirects.
 - [x] 13. Scheduling a group through its intention (frozen item_ids on events); Close/Undo for groups (done 2026-10-23; closed_reason rules in migration 153)
-- [ ] 14. Menu execution: Start Now together, per-recipe sections, sticky jump bar, skip a recipe, complete all, Log Execution
-- [ ] 15. Projects/series: dated member execution list, teal in-progress marker, last_completed_at roll-up
+- [x] 14. Menu execution, split in two:
+  - [x] 14a. Start Now together, cooking page (per-recipe sections, sticky jump bar, recipe notes), skip a recipe, Complete all, Pause/Continue, Delete (done 2026-10-23)
+  - [x] 14b. parent_execution_id (migration 154); Log Execution on a menu; Recent executions on menu and recipe pages; the finished cook's page; jump bar position; the menu's own card (done 2026-10-23)
+- [x] 15. Projects/series: dated member execution list, teal in-progress marker, last_completed_at roll-up (built 2026-10-23; awaiting Chrome test)
 - [ ] 16. MCP: skip wording, get_groups, group_id on reads, recipe (item) filter on get_execution_history / platform_search_executions; deploy (mcp/index.ts claimed at step 2)
 - [ ] 17. Final verification; close Alfred intentions mvhawlfa9s9xlsnv069 and muh9uyjx8wdg02kck5d; update the build-order doc
 
@@ -279,3 +281,53 @@ Each step stops for Alex's verification before the next. Database steps follow t
   - App paths write a reason only together with status closed: closeFields, and `statusPatch` for an Undo back to Closed. `storage.set` strips closed_reason on update.
   - Verify with `supabase/tests/restructure_p5-h7m/step13_closed_reason_rules_verify.sql`. db: claims held: items, intents, item_groups and fn status_guard, until Checkpoint.
   - Test: statusPatch never writes a reason without Closed. App 2952/2952 (SamPlayer.plan flaked once and passed on rerun), CLI 239/239.
+- 2026-10-23 Step 14a built (restructure_p5-h7m-s14-p8wa); 14b is left for the next pass. No db: claims held, no database change. Claimed `src/executions/`, `src/notes/` and `IntentionsScreen.jsx` (no change needed there in the end).
+  - The shape of a menu run:
+    - One execution on the menu's own intention: group_id set, item_ids [].
+    - One per live item member: group_id, item_ids [recipe], intent_id and event_id null.
+    - Intention members are not executed. Pure helpers are in `src/groups/menuRun.js`.
+  - `startMenuNow` (useExecutionActions):
+    - It goes through the own intention, made if needed with createdAt = startedAt, and its live event, as intention Start Now does: an open run is continued, a future date moves to today (priorEventDate), and no date makes today's.
+    - Recipes' own intentions and events are never touched.
+    - If a recipe run fails to save, the runs already made are deleted.
+  - Complete, Delete, Pause and Continue act on the whole menu:
+    - Complete closes every recipe at the menu's exact closed_at, as done or skipped. The menu's own intention is NOT auto-closed as a one-off is, because the menu is cooked again.
+    - Delete removes the recipe runs, then restoreStartNow, and also the own intention when Start Now made it.
+    - Skip saves outcome 'skipped' on the open recipe run, and Unskip sets it back to null.
+    - Step ticks and Start/Reset take a `target` run.
+  - Hidden everywhere: Alfred derives `shownRuns(...)` for every running list (Home Active/Paused, every In progress section, item rows, allLiveExecutions). The raw lists still hold recipe runs for the hooks and the cooking page. An open recipe run opened by URL or note link shows "Open the menu" instead of itself.
+  - Cooking page:
+    - ExecutionDetailView takes `menu`. The step list moved unchanged into `ExecutionElements.jsx`. `MenuRecipeSections.jsx` adds a sticky, sideways-scrolling jump bar and collapsible sections, each with its steps, Skip/Unskip and its own note.
+    - The menu's note is on the group (target 'group'); a recipe's is on the item with that run's execution_id. useExecutionNotes takes `target`.
+    - The header is named after the menu; the hidden intention is never linked.
+  - Completed menu: Delete and Change date carry the recipe runs, found by group_id + intent_id null + the same closed_at (`menuHistory.js`). There is no parent column. That match is the one join, and a `parent_execution_id` column would be the sturdier option for 14b's history if wanted.
+  - Start Now (teal, first) is on the menu page and on menu rows; Continue opens the open run. It is not offered on separately groups or on the date cards.
+  - Tests: menuRun (5), useExecutionActions.menu (8), MenuRecipeSections (5), ExecutionDetailScreen (3), GroupDetailScreen (+3), GroupRowCard (+1). App 2977/2977, CLI 239/239.
+- 2026-10-23 Step 14a passed in Chrome (notes on a skipped recipe stay allowed, as Alex likes). Step 14b built (restructure_p5-h7m-s14b-g6ln) after Alex's gitsync. The sync brought 153_wb, which does not touch executions, so there is no drift. **Main now has two migrations numbered 153** (`153_restructure_p5_closed_reason_rules` and `153_wb_phase3_step9e_overview_cash_flow`); this was reported to Alex.
+  1. Migration `154_restructure_p5_parent_execution.sql`:
+     - It adds executions.parent_execution_id (text, references executions(id) on delete cascade), a partial index, and a check that only a run with no intention has a parent (never itself).
+     - The backfill uses the 14a rule.
+     - Verify with `supabase/tests/restructure_p5-h7m/step14b_parent_execution_verify.sql`. db:table:executions is held until Checkpoint.
+     - Every lookup now uses the parent: recipeRunsOf, Complete, Pause/Continue, and the cooking page (`useCookRecipes`). Deleting a finished cook is one delete (the cascade takes the recipes); Change date moves the recipes by parent. The closed_at match is gone.
+     - **The front end needs 154 live**, because Start Now writes parent_execution_id.
+  2. Log Execution on a menu (`logMenuDone`, `LogMenuDialog`): the Phase 4 pop-up (CompleteNoteDialog gained `children`) with every recipe ticked; unticked ones are recorded as skipped.
+     - It records on the live date (archived), else on a new archived date that day. The note goes on the menu.
+     - Undo is one delete plus the date (and the intention, if it made one).
+     - It is hidden while the menu is cooking.
+  3. Recent executions (`withCookInfo` in RecentCompletions):
+     - The menu page shows each cook's "N done · N skipped".
+     - A recipe page's done rows from inside a menu read "· in <menu>" and open the menu's cook. Recipe skips inside a menu are not listed there (skips list by intention).
+  4. A finished cook's page reads its recipe runs by parent and shows them read-only, each marked Done or Skipped, with their notes.
+  5. The jump bar sticks at the measured bottom of whatever is pinned at top 0 (`pinnedTopHeight`, i.e. AppChrome's header), re-measured on resize, and sits below the header (z-[5] vs z-10). A jump scrolls so the section's header lands right under the bar (`jumpTarget`). AppChrome is not edited.
+  6. ExecutionBadge: a group's own run is titled with the group's current name and has no group line. Member runs keep the line.
+  - Tests: menuRun (+1), useExecutionActions.menu (+2, fixtures moved to parents), MenuRecipeSections (+1), ExecutionDetailScreen (+1), RecentCompletions.menu (3), LogMenuDialog (1), GroupDetailScreen (+2), ExecutionBadge (+1). App 3011/3011, CLI 239/239.
+- 2026-10-23 Migration 154 ran and verified; step 14b passed in Chrome. Step 15 built (restructure_p5-h7m-s15-w2rk). No db: claims held; no database change; no new claims (everything is under src/groups/, src/notes/ and rowModel).
+  - 14b leftover: a recipe skipped inside a menu now sits in line on the recipe's Recent executions as "date · skipped in <menu>", opening the menu's cook. `listMenuSkips(itemId)` reads it by item_ids with a parent.
+  - Separately groups (projects, series):
+    - `MemberExecutions` + `groupHistory.js` give one dated list of every live member's closed done/skipped executions, newest first. A member is a member intention, an intention of a member item, or an execution carrying a member item.
+    - Each row reads "<member> · date" ("(skipped)" for skips, dated by the event as Phase 4 does), and opens that execution. "Show all (N older)" appears beyond five.
+    - The group's own intention (a Completed close) is listed too, under the group's name.
+  - The marker is `memberRunState` (groupModel): "active" when a live member runs, else "paused", else null; never on together groups. It is on group rows (context page), Home's pinned cards (buildGroupRows' `memberRun`) and the detail header (`MemberRunMarker`: teal In progress, amber Paused). `hasRunningMember` now uses it.
+  - Last done: rows already showed "last done:"; the detail page now shows "Last done: <date>" from the roll-up trigger.
+  - There is still no Start Now or Log Execution on separately groups (tested).
+  - Tests: groupModel (+1), rowModel (+1), MemberExecutions (3), GroupRowCard (+1), GroupDetailScreen (+1), RecentCompletions.menu (+1). App 3019/3019 (SamPlayer.plan flaked once and passed on rerun), CLI 239/239.

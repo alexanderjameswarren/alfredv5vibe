@@ -38,6 +38,8 @@ export default function RowList({
   onViewGroupDetail,
   // Step 13: (groupId, date), through the group's own intention.
   onScheduleGroup,
+  // Step 14: (groupId) Start Now on a menu row.
+  onStartGroupNow,
   reminderFor = () => null,
 }) {
   const rowClose = useRowClose({ events, executions, onCloseRecords });
@@ -52,6 +54,8 @@ export default function RowList({
               contextName={contexts?.find((c) => c.id === row.group.contextId)?.name}
               onOpen={onViewGroupDetail}
               onSchedule={onScheduleGroup}
+              onStartNow={row.type?.executionMode === "together" ? onStartGroupNow : null}
+              onOpenExecution={onOpenExecution}
               {...rowClose.closeProps(row)}
             />
           ) : row.intent ? (

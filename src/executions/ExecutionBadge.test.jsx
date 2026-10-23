@@ -1,6 +1,7 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import ExecutionBadge from "./ExecutionBadge";
+import { GroupsProvider } from "../groups/GroupsContext";
 
 function card(status) {
   const { container, unmount } = render(
@@ -34,4 +35,28 @@ test("a paused run stays amber", () => {
     <ExecutionBadge exec={{ id: "x", status: "paused" }} intents={[]} contexts={[]} getIntentDisplay={() => ""} onOpen={() => {}} />,
   );
   expect(screen.getByText(/Paused/)).toBeTruthy();
+});
+
+test("a menu's own card is titled with the menu's name and has no group line repeating it", () => {
+  const { container } = render(
+    <GroupsProvider
+      itemGroups={[{ id: "g", groupTypeId: "menu", name: "P5 Test Menu" }]}
+      groupTypes={[{ id: "menu", icon: "UtensilsCrossed" }]}
+      groupMembers={[]}
+      items={[]}
+      intents={[]}
+      onOpenGroup={() => {}}
+    >
+      <ExecutionBadge
+        exec={{ id: "mr", intentId: "o", groupId: "g", status: "active" }}
+        intents={[{ id: "o", groupId: "g", text: "Old name" }]}
+        contexts={[]}
+        getIntentDisplay={(i) => i.text}
+        onOpen={() => {}}
+      />
+    </GroupsProvider>,
+  );
+  expect(screen.getByText("P5 Test Menu")).toBeTruthy();
+  expect(screen.queryByText("Old name")).toBeNull();
+  expect(container.querySelectorAll("[data-group-line]")).toHaveLength(0);
 });

@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 11:53, through migration 154 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 12:16, through migration 156 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -2970,16 +2970,20 @@ operation run from the SQL editor.';
 
 
 
-CREATE OR REPLACE FUNCTION "public"."platform_search_executions"("p_intent_id" "text" DEFAULT NULL::"text", "p_context_id" "text" DEFAULT NULL::"text", "p_date_from" "date" DEFAULT NULL::"date", "p_date_to" "date" DEFAULT NULL::"date", "p_limit" integer DEFAULT 20) RETURNS "jsonb"
+CREATE OR REPLACE FUNCTION "public"."platform_search_executions"("p_intent_id" "text" DEFAULT NULL::"text", "p_context_id" "text" DEFAULT NULL::"text", "p_date_from" "date" DEFAULT NULL::"date", "p_date_to" "date" DEFAULT NULL::"date", "p_limit" integer DEFAULT 20, "p_item_id" "text" DEFAULT NULL::"text") RETURNS "jsonb"
     LANGUAGE "sql" STABLE
     SET "search_path" TO 'public', 'pg_temp'
     AS $$
   with filtered as (
     select
-      x.id                as execution_id,
-      i.text              as intent_text,
-      i.item_id           as intent_item_id,
-      ev.time             as event_date,
+      x.id                    as execution_id,
+      x.intent_id,
+      x.event_id,
+      x.group_id,
+      x.parent_execution_id,
+      i.text                  as intent_text,
+      i.item_id               as intent_item_id,
+      coalesce(ev.time, pev.time) as event_date,
       x.started_at,
       x.closed_at,
       x.status,
@@ -2990,12 +2994,15 @@ CREATE OR REPLACE FUNCTION "public"."platform_search_executions"("p_intent_id" "
                                  order by n.created_at), '[]'::jsonb)
          from notes n where n.execution_id = x.id) as notes
       from executions x
-      left join intents i  on i.id  = x.intent_id
-      left join events  ev on ev.id = x.event_id
+      left join intents i     on i.id   = x.intent_id
+      left join events  ev    on ev.id  = x.event_id
+      left join executions px on px.id  = x.parent_execution_id
+      left join events  pev   on pev.id = px.event_id
      where (p_intent_id  is null or x.intent_id  = p_intent_id)
        and (p_context_id is null or x.context_id = p_context_id)
-       and (p_date_from is null or (ev.time is not null and ev.time >= p_date_from))
-       and (p_date_to   is null or (ev.time is not null and ev.time <= p_date_to))
+       and (p_item_id    is null or x.item_ids ? p_item_id or i.item_id = p_item_id)
+       and (p_date_from is null or (coalesce(ev.time, pev.time) is not null and coalesce(ev.time, pev.time) >= p_date_from))
+       and (p_date_to   is null or (coalesce(ev.time, pev.time) is not null and coalesce(ev.time, pev.time) <= p_date_to))
   )
   select jsonb_build_object(
     'rows',
@@ -3012,10 +3019,10 @@ CREATE OR REPLACE FUNCTION "public"."platform_search_executions"("p_intent_id" "
 $$;
 
 
-ALTER FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer) OWNER TO "postgres";
+ALTER FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer, "p_item_id" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer) IS 'Alfred: get_execution_history''s reader. Filters intent, context and the event DATE RANGE in Postgres before the limit — the date lives on events.time and executions has no FK to events, so PostgREST cannot embed the join and the handler used to filter dates in memory after the limit. Returns { rows, total } from one snapshot for an honest truncation note. SECURITY INVOKER on purpose: executions RLS is owner-OR-shared-context and must not be re-implemented here. See migration 077. Restructure P2: each row carries its notes (id, body, created_at), read under notes RLS.';
+COMMENT ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer, "p_item_id" "text") IS 'Alfred: get_execution_history''s reader. Filters intent, context, item (Restructure P5: through its intentions or carried in item_ids, so a recipe''s cooks inside a menu are found) and the event DATE RANGE in Postgres before the limit. A recipe run inside a menu has no event: its date is its parent menu run''s event''s. Rows carry intent_id, event_id, group_id and parent_execution_id (P5) and their notes (P2). Returns { rows, total } from one snapshot for an honest truncation note. SECURITY INVOKER on purpose: executions RLS is owner-OR-shared-context and must not be re-implemented here. See migrations 077, 100.';
 
 
 
@@ -15892,9 +15899,9 @@ GRANT ALL ON FUNCTION "public"."platform_recent_audit"("p_limit" integer, "p_act
 
 
 
-GRANT ALL ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer) TO "anon";
-GRANT ALL ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer) TO "authenticated";
-GRANT ALL ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer) TO "service_role";
+GRANT ALL ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer, "p_item_id" "text") TO "anon";
+GRANT ALL ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer, "p_item_id" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", "p_context_id" "text", "p_date_from" "date", "p_date_to" "date", "p_limit" integer, "p_item_id" "text") TO "service_role";
 
 
 

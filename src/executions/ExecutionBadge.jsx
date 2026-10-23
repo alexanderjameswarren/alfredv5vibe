@@ -3,22 +3,16 @@ import { Pause, Play } from "lucide-react";
 import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
 import { useExecutionGroups } from "../groups/GroupsContext";
 
-// The run's group, styled as the context line above it: plain icon and name, no
-// pill. Rows keep the chip, as they keep the context pill. The card opens the run.
-function ExecutionGroupLines({ exec }) {
-  const { chips } = useExecutionGroups({ groupId: exec.groupId, intentId: exec.intentId, itemIds: exec.itemIds || [] });
-  return chips.map((g) => (
-    <p key={g.id} data-group-line="" className="flex items-center gap-1.5 text-sm text-foreground">
-      <GroupTypeIcon icon={g.icon} className="w-3.5 h-3.5" />
-      {g.name}
-    </p>
-  ));
-}
-
 // `children` render inside the card, below its state line (the run's notes on detail pages).
 export default function ExecutionBadge({ exec, intents, contexts, getIntentDisplay, onOpen, children }) {
   const intent = intents.find((i) => i.id === exec.intentId);
   const isActive = exec.status === "active";
+  // The run's group, styled as the context line above it: plain icon and name, no
+  // pill. A group's own run (a menu cooking) IS the group: its current name is the
+  // title and no group line repeats it (step 14b). Member runs keep the line.
+  const { chips } = useExecutionGroups({ groupId: exec.groupId, intentId: exec.intentId, itemIds: exec.itemIds || [] });
+  const ownGroup = intent?.groupId ? chips.find((g) => g.id === intent.groupId) || null : null;
+  const groupLines = ownGroup ? [] : chips;
 
   return (
     <div
@@ -42,7 +36,7 @@ export default function ExecutionBadge({ exec, intents, contexts, getIntentDispl
       <p className="flex items-start gap-1.5 font-medium text-foreground">
         <ObjectIcon type="execution" className="w-4 h-4" align="first-line" />
         <span className="min-w-0">
-          {intent ? getIntentDisplay(intent) : "Execution"}
+          {ownGroup ? ownGroup.name : intent ? getIntentDisplay(intent) : "Execution"}
         </span>
       </p>
       {exec.contextId && (
@@ -52,7 +46,12 @@ export default function ExecutionBadge({ exec, intents, contexts, getIntentDispl
         </p>
       )}
       {/* Restructure P5: the group this run belongs to. */}
-      <ExecutionGroupLines exec={exec} />
+      {groupLines.map((g) => (
+        <p key={g.id} data-group-line="" className="flex items-center gap-1.5 text-sm text-foreground">
+          <GroupTypeIcon icon={g.icon} className="w-3.5 h-3.5" />
+          {g.name}
+        </p>
+      ))}
       {isActive && (
         <p className="text-xs text-foreground mt-1 flex items-center gap-1">
           <Play className="w-3 h-3" />
