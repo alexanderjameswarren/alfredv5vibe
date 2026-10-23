@@ -26,6 +26,14 @@ test("statusPatch: leaving Closed clears the reason; an Undo back to Closed rest
   expect(statusPatch("closed", closed)).toEqual({ status: "closed", closedReason: "wont_do", statusChangedAt: "2026-10-20T12:00:00Z" });
 });
 
+test("statusPatch never writes a reason without Closed (migration 153's CHECK)", () => {
+  const closed = { status: "closed", closedReason: "done" };
+  for (const s of ["someday", "active", "background", "closed"]) {
+    const patch = statusPatch(s, closed);
+    if (patch.closedReason) expect(patch.status).toBe("closed");
+  }
+});
+
 const rows = [
   { id: "a", status: "active" },
   { id: "b", status: "background" },

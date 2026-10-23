@@ -22,7 +22,7 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 11. Context page: create button, browse tabs, group rows, sort
 - [x] 12. Group chips on member rows and running cards; record-links order Context > Group > Item > Intention (incl. execution page); pinned groups on Home
   - Apply bug mvjx4363b4bn4gezrys to item and intention detail pages: Archived pill, Restore as the only action, Edit hidden, edit page redirects.
-- [x] 13. Scheduling a group through its intention (frozen item_ids on events); Close/Undo for groups (built 2026-10-23; awaiting Chrome test)
+- [x] 13. Scheduling a group through its intention (frozen item_ids on events); Close/Undo for groups (done 2026-10-23; closed_reason rules in migration 153)
 - [ ] 14. Menu execution: Start Now together, per-recipe sections, sticky jump bar, skip a recipe, complete all, Log Execution
 - [ ] 15. Projects/series: dated member execution list, teal in-progress marker, last_completed_at roll-up
 - [ ] 16. MCP: skip wording, get_groups, group_id on reads, recipe (item) filter on get_execution_history / platform_search_executions; deploy (mcp/index.ts claimed at step 2)
@@ -273,3 +273,9 @@ Each step stops for Alex's verification before the next. Database steps follow t
      - Recommended, not written: clear closed_reason in status_guard on any move out of closed, which covers MCP and any future path. The app fix stays either way.
      - Claimed `src/utils/status.js` and its test.
   - App 2951/2951, CLI 239/239.
+- 2026-10-23 Step 13 follow-ups passed in Chrome; production had no reason on a non-closed row. Database rules (restructure_p5-h7m-s13c-r9td), migration `153_restructure_p5_closed_reason_rules.sql`, numbered right after Alex's gitsync (which brought only the snapshot; no drift):
+  - Rule 1 is in `status_guard`: once the final status is decided (after the someday revert), a move out of closed sets closed_reason null. Every other behaviour is unchanged, including the 10-minute Undo-of-close exception. It is inside the function, not a second trigger, so it never depends on trigger firing order.
+  - Rule 2 is `<table>_closed_reason_only_closed` CHECK (closed_reason is null or status = 'closed') on items, intents and item_groups. The column and function comments are updated.
+  - App paths write a reason only together with status closed: closeFields, and `statusPatch` for an Undo back to Closed. `storage.set` strips closed_reason on update.
+  - Verify with `supabase/tests/restructure_p5-h7m/step13_closed_reason_rules_verify.sql`. db: claims held: items, intents, item_groups and fn status_guard, until Checkpoint.
+  - Test: statusPatch never writes a reason without Closed. App 2952/2952 (SamPlayer.plan flaked once and passed on rerun), CLI 239/239.
