@@ -182,6 +182,22 @@ describe("row sort, rank and search", () => {
 });
 
 // Restructure P5 step 11: groups in the same list.
+describe("a group's own intention (step 13)", () => {
+  const own = { id: "o", groupId: "g", text: "Rice + Beans" };
+  const live = { id: "e", intentId: "o", time: "2099-01-05", archived: false };
+
+  it("is never an intention row", () => {
+    expect(buildRows({ intents: [own, { id: "x", text: "Call" }] }).map((r) => r.key)).toEqual(["intent:x"]);
+  });
+
+  it("gives the group row its live date and open run", () => {
+    const run = { id: "r", intentId: "o", status: "paused" };
+    const [row] = buildGroupRows({ groups: [{ id: "g", groupTypeId: "menu" }], intents: [own], events: [live], openExecutions: [run] });
+    expect(row).toMatchObject({ ownIntent: own, event: live, open: run, intents: [] });
+    expect(buildGroupRows({ groups: [{ id: "g" }] })[0]).toMatchObject({ ownIntent: null, event: null, open: null });
+  });
+});
+
 describe("group rows", () => {
   const menuType = { id: "menu", labelPlural: "Menus", executionMode: "together" };
   const projType = { id: "proj", labelPlural: "Projects", executionMode: "separately" };

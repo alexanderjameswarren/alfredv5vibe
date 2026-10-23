@@ -3,7 +3,7 @@ import { uid } from "../utils/flattenElements";
 import { assertNoActiveRun } from "../utils/runGuard";
 import { getTodayDate, formatEventDate } from "../utils/eventDates";
 import { intentionUpdateRow } from "../utils/intentionRows";
-import { liveEventsFor, carriedItems, STATUS_LABELS, closeFields, restoredCloseFields, CLOSE_REASON_SAVED } from "../utils/status";
+import { liveEventsFor, carriedItems, STATUS_LABELS, closeFields, restoredCloseFields, statusPatch, CLOSE_REASON_SAVED } from "../utils/status";
 import { closedAtFor } from "../executions/useExecutionActions";
 import { saveNote, deleteNote, completionsChanged } from "../notes/notesApi";
 import { cancelRemindersForStatus, restoreRemindersAfterStatus } from "../utils/remindersApi";
@@ -37,6 +37,7 @@ export function useIntentionActions({
   offerUndoFor,
   watchStatus,
   refreshReminderIndex,
+  setItemGroups,
 }) {
   async function moveToPlanner(intentId, scheduledDate = "today") {
     return withLoading('Scheduling...', async () => {
@@ -243,7 +244,7 @@ export function useIntentionActions({
     const intent = intents.find((i) => i.id === intentId);
     if (!intent) return;
     return withLoading("Saving...", async () => {
-      const saved = await storage.patch(`intent:${intentId}`, { status });
+      const saved = await storage.patch(`intent:${intentId}`, statusPatch(status));
       if (!saved) throw new Error("Status was not saved.");
       setIntents((prev) => prev.map((i) => (i.id === intentId ? saved : i)));
 
@@ -274,7 +275,7 @@ export function useIntentionActions({
       const what = statusUndoWhat(archivedEvents.length, cancelledReminders.length);
       offerUndoFor(`Moved to ${STATUS_LABELS[status]}${what}.`, async () => {
         if (canRestore) {
-          const back = await storage.patch(`intent:${intentId}`, { status: previous });
+          const back = await storage.patch(`intent:${intentId}`, statusPatch(previous, intent));
           if (!back) throw writeError("Restoring the status");
           setIntents((prev) => prev.map((i) => (i.id === intentId ? back : i)));
         }
@@ -361,7 +362,11 @@ export function useIntentionActions({
   // live event or a new archived one, carrying the note; it never makes a next event.
   // Otherwise the note is a standalone note (item first, else the intention). Undo
   // deletes what was created first, then restores; it stops at the first failed write.
-  async function closeRecords({ item = null, intentIds = [], label, reason = null, note = "", closedOn = null, pickedIntentId = null }) {
+  //
+  // Restructure P5: `group` closes a group with its own intention (in `intentIds`),
+  // never its members. A Completed close records on the group's intention with empty
+  // item_ids, so no recipe is counted as cooked; a note without one is the group's.
+  async function closeRecords({ item = null, group = null, intentIds = [], label, reason = null, note = "", closedOn = null, pickedIntentId = null }) {
     const targets = intents.filter((i) => intentIds.includes(i.id));
     const today = getTodayDate();
     const day = closedOn || today;
@@ -385,6 +390,13 @@ export function useIntentionActions({
         if (!saved) throw new Error("Close was not saved.");
         setItems?.((prev) => prev.map((i) => (i.id === item.id ? saved : i)));
         itemBefore = item;
+      }
+      let groupBefore = null;
+      if (group && group.status !== "closed") {
+        const saved = await storage.patch(`group:${group.id}`, { status: "closed", ...extra });
+        if (!saved) throw new Error("Close was not saved.");
+        setItemGroups?.((prev) => prev.map((g) => (g.id === group.id ? saved : g)));
+        groupBefore = group;
       }
 
       const archivedEvents = [];
@@ -410,7 +422,8 @@ export function useIntentionActions({
       let createdExecution = null;
       let createdEvent = null;
       let createdNote = null;
-      if (reason === "done" && picked && !picked.lastCompletedAt) {
+      const ownOfGroup = Boolean(picked?.groupId);
+      if (reason === "done" && picked && !picked.lastCompletedAt && !group?.lastCompletedAt) {
         let event = pickedLive;
         if (!event) {
           createdEvent = {
@@ -435,7 +448,7 @@ export function useIntentionActions({
           intentId: picked.id,
           contextId: picked.contextId || null,
           collectionId: picked.collectionId || null,
-          itemIds: event.itemIds || [],
+          itemIds: ownOfGroup ? [] : event.itemIds || [],
           startedAt: closedAt,
           closedAt,
           status: "closed",
@@ -444,13 +457,18 @@ export function useIntentionActions({
           progress: [],
         };
         if (!(await storage.set(`execution:${createdExecution.id}`, createdExecution))) throw writeError("Recording the completion");
-        if (note.trim()) await saveNote({ body: note, targetType: "intention", targetId: picked.id, executionId: createdExecution.id });
+        if (note.trim()) {
+          const on = group ? { targetType: "group", targetId: group.id } : { targetType: "intention", targetId: picked.id };
+          await saveNote({ body: note, ...on, executionId: createdExecution.id });
+        }
       } else if (note.trim()) {
-        const target = item ? { targetType: "item", targetId: item.id } : { targetType: "intention", targetId: (picked || targets[0])?.id };
+        const target = group
+          ? { targetType: "group", targetId: group.id }
+          : item ? { targetType: "item", targetId: item.id } : { targetType: "intention", targetId: (picked || targets[0])?.id };
         if (target.targetId) createdNote = await saveNote({ body: note, ...target });
       }
       if (createdExecution) {
-        await refreshClosed(targets, item);
+        await refreshClosed(targets, item, group);
         completionsChanged();
       }
 
@@ -460,7 +478,7 @@ export function useIntentionActions({
       const futureEvents = archivedEvents.filter((e) => String(e.time).slice(0, 10) >= today);
       const canUndo =
         before.some(({ intent, stop }) => stop || restorable(intent.status)) ||
-        restorable(itemBefore?.status) || futureEvents.length > 0 || cancelledReminders.length > 0 ||
+        restorable(itemBefore?.status) || restorable(groupBefore?.status) || futureEvents.length > 0 || cancelledReminders.length > 0 ||
         Boolean(createdExecution || createdNote);
       // Nothing to put back (all were someday, which status_guard refuses): a plain notice.
       offerUndoFor(`Closed "${label}"${what}.`, canUndo ? async () => {
@@ -490,6 +508,14 @@ export function useIntentionActions({
           if (!back) throw writeError("Restoring the item");
           setItems?.((prev) => prev.map((i) => (i.id === itemBefore.id ? back : i)));
         }
+        if (restorable(groupBefore?.status)) {
+          const back = await storage.patch(`group:${groupBefore.id}`, {
+            status: groupBefore.status,
+            ...restoredCloseFields(groupBefore),
+          });
+          if (!back) throw writeError("Restoring the group");
+          setItemGroups?.((prev) => prev.map((g) => (g.id === groupBefore.id ? back : g)));
+        }
         for (const event of futureEvents) {
           if (!(await storage.set(`event:${event.id}`, event))) throw writeError("Restoring its event");
           setEvents((prev) => prev.map((e) => (e.id === event.id ? event : e)));
@@ -500,7 +526,7 @@ export function useIntentionActions({
         }
         // last_completed_at falls back by itself (the 100 trigger); the rows re-read it.
         if (createdExecution) {
-          await refreshClosed(targets, item);
+          await refreshClosed(targets, item, group);
           completionsChanged();
         }
       } : null);
@@ -508,7 +534,7 @@ export function useIntentionActions({
   }
 
   // Re-reads the records a close touched, for last_completed_at (set by triggers).
-  async function refreshClosed(targets, item) {
+  async function refreshClosed(targets, item, group = null) {
     for (const intent of targets) {
       const fresh = await storage.get(`intent:${intent.id}`);
       if (fresh) setIntents((prev) => prev.map((i) => (i.id === fresh.id ? fresh : i)));
@@ -516,6 +542,10 @@ export function useIntentionActions({
     if (item && setItems) {
       const fresh = await storage.get(`item:${item.id}`);
       if (fresh) setItems((prev) => prev.map((i) => (i.id === fresh.id ? fresh : i)));
+    }
+    if (group && setItemGroups) {
+      const fresh = await storage.get(`group:${group.id}`);
+      if (fresh) setItemGroups((prev) => prev.map((g) => (g.id === fresh.id ? fresh : g)));
     }
   }
 

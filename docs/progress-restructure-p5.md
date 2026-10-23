@@ -20,9 +20,9 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 9. Group create/edit page (done 2026-10-22, with removal history) (search-and-add, drag reorder, type picker, pin, archive)
 - [x] 10. Group detail page (header, buttons, members, notes, recent executions)
 - [x] 11. Context page: create button, browse tabs, group rows, sort
-- [ ] 12. Group chips on member rows and running cards; record-links order Context > Group > Item > Intention (incl. execution page); pinned groups on Home
+- [x] 12. Group chips on member rows and running cards; record-links order Context > Group > Item > Intention (incl. execution page); pinned groups on Home
   - Apply bug mvjx4363b4bn4gezrys to item and intention detail pages: Archived pill, Restore as the only action, Edit hidden, edit page redirects.
-- [ ] 13. Scheduling a group through its intention (frozen item_ids on events); Close/Undo for groups
+- [x] 13. Scheduling a group through its intention (frozen item_ids on events); Close/Undo for groups (built 2026-10-23; awaiting Chrome test)
 - [ ] 14. Menu execution: Start Now together, per-recipe sections, sticky jump bar, skip a recipe, complete all, Log Execution
 - [ ] 15. Projects/series: dated member execution list, teal in-progress marker, last_completed_at roll-up
 - [ ] 16. MCP: skip wording, get_groups, group_id on reads, recipe (item) filter on get_execution_history / platform_search_executions; deploy (mcp/index.ts claimed at step 2)
@@ -205,3 +205,71 @@ Each step stops for Alex's verification before the next. Database steps follow t
      - Delete appears only when no group uses the type, behind a confirm with CancelButton.
   - Claimed: `src/reminders/SettingsScreen.jsx` (+ test), the 150 migration, and `db:table:group_types`. EditCard guard counts are now 5/6/7.
   - App 2906/2906, CLI 239/239. One SAM test (`SamPlayer.plan`) failed once under load, then passed alone and on a full rerun.
+- 2026-10-23 Step 12 built; awaiting Alex's Chrome test. No db: claims held at the start.
+  - `src/groups/GroupsContext.jsx`:
+    - Alfred wraps the app in `GroupsProvider`, so cards and headers find a record's groups without new props (`useRecordGroups`, `useExecutionGroups`).
+    - `chipsFor` covers live groups of live memberships only.
+    - `GroupChips` / `RecordGroupChips` draw the chip line.
+  - Chips:
+    - Item rows (ItemCard) and intention rows (IntentionCard; a merged row counts its item and intentions) get their own chip line.
+    - Running execution cards (ExecutionBadge, used on Home and in In progress) show the execution's own group, else its intention's.
+    - EventCard's meta row gains the group and follows the new order.
+  - RecordLinks:
+    - New `groups` prop; the order is Context > Group > Item > Intention > execution everywhere.
+    - The item, intention and execution headers pass their groups.
+    - NoteSourceLinks follows the order automatically, since it goes through RecordLinks.
+  - Home: Pinned Groups (GroupRowCard, the Pinned Collections grid), shown only when a pinned live group exists.
+  - Bug mvjx4363b4bn4gezrys on item and intention detail:
+    - The status menu becomes an Archived pill beside a read-only status, with "This item/intention is archived."
+    - `restoreAction` (added to ActionBar.jsx) is the only action and un-archives in place.
+    - The edit form never opens for an archived record (`startInEditMode` included). Intention reminder lines are disabled.
+    - Related Intentions and member rows are unchanged: they are live records.
+  - The claims guard blocked a new `src/shared/archivedRecord.jsx`. It was not claimed; `restoreAction` lives in the already-claimed ActionBar.jsx and the pill is inline. Claimed `src/schedule/EventCard.jsx` and five test files under "anything else".
+  - Tests: GroupsContext (5), RecordLinks (+2), ItemDetailView (+3), IntentionDetailView (+2). App 2918/2918, CLI 239/239.
+- 2026-10-23 Step 12 Chrome test passed. Follow-ups:
+  1. `src/shared/archivedRecord.jsx` (claimed with Alex's OK) holds `ArchivedPill`, `ArchivedNotice` and `restoreAction`, now used by the item, intention and group pages. `restoreAction` was moved out of ActionBar.jsx, not copied.
+  2. Running cards (ExecutionBadge): the group is a plain icon-and-name line like the context line, with no pill and no button. Rows keep the chip.
+  3. GroupRowCard shows the Pin icon after the name when the group is pinned, as Collection and Context cards do.
+  4. Not done. The context Archived section sorts by `status_changed_at || updated_at`; status_changed_at defaults to the creation time, hence Alex's report. `update_updated_at` stamps updated_at on EVERY update, so it is reliable on archive but not only on archive (later trigger writes move it). Options reported; waiting on Alex.
+  - Yielded `_shared/platform.ts` and `.claude/skills/mcp-platform/SKILL.md` to mcp_read_gaps-t8k (both unchanged).
+  - `_shared/alfred-tools/tool-handlers.ts` and `tool-definitions.ts` are unchanged from main, but they are held through the folder claim, so they cannot be yielded.
+  - App 2920/2920, CLI 239/239.
+- 2026-10-23 Step 12 follow-ups passed in Chrome. Second round (restructure_p5-h7m-s12c-k8rm):
+  1. Pin: Chrome pushed the pin, a flex sibling of the clamped name, to the card's right edge. It now sits inline inside the name span, after the last word.
+  2. `git diff main -- supabase/functions/_shared/alfred-tools/` is empty, and the step 5 removals (fbf3226) are in main. The folder claim was released with Alex's OK so mcp_read_gaps-t8k can work. **Step 16 re-claims `_shared/alfred-tools/tool-handlers.ts`, and anything else it needs there, just in time** (after a gitsync, since mcp_read_gaps-t8k may have changed it).
+  3. Migration `152_restructure_p5_archived_at.sql` (Alex chose this over updated_at): `archived_at` on all nine tables with an archived column (contexts, events, inbox, intents, item_collections, item_groups, items, sam_snippets, sam_songs). None was held by another thread.
+     - One trigger function, `public.set_archived_at()`: set on true, cleared on false, else unchanged.
+     - Backfill from the audit log's latest false-to-true change, else updated_at, with user triggers paused.
+     - Verify with `supabase/tests/restructure_p5-h7m/step12_archived_at_verify.sql`. Number taken right after Alex's gitsync, so no `_pending_` file was needed.
+     - App: the context Archived section and every archive tab of the Recycle Bin (not Executions, which has no archived column) sort by archived_at, newest first, and show "Archived <date>". Shared helpers `archivedAt`, `byNewestArchive` and `archivedOnLabel` are in archivedRecord.jsx. updated_at stands in for a row with no archived_at.
+     - The Recycle Bin selects archived_at, so the migration must run before this reaches main.
+     - Not changed: the inbox's Recently Archived (src/inbox, unclaimed) still dates by triaged_at.
+  - App 2921/2921, CLI 239/239.
+- 2026-10-23 Step 13 built (restructure_p5-h7m-s13-b4qw); awaiting Alex's Chrome test. No db: claims held; no database change.
+  - New `src/groups/useGroupActions.js`:
+    - `scheduleGroup`: the first Schedule creates the own intention (named after the group then, its context, one-off, `groupId`) and an event with empty item_ids. `events_group_freeze` sets group_id and freezes the recipes; `status_activate_on_event` flips the group and recipes someday → active. The client only re-reads statuses: watchStatus now takes `groups`.
+    - A later Schedule reuses the intention; a live date is moved through moveToPlanner.
+    - Undo deletes the event, and the intention if this tap made it.
+    - `setGroupStatus`: the own intention follows where its status allows. The live-events sheet's yes archives its dates and cancels its reminders. Undo restores all of it.
+    - `archiveGroup` / `unarchiveGroup`: Archive takes the own intention and its live dates; its reminders follow by trigger. Undo brings all three back. Restore brings the newest archived own intention back, but not its dates.
+  - `closeRecords` takes `group`:
+    - It closes the group and its own intention, and never its members.
+    - Completed records on the own intention with item_ids [] (no recipe is counted as cooked). The note goes on the group.
+    - Undo restores the group's status and reason.
+  - Group detail:
+    - Header: an editable StatusMenu (same gate as intentions), the ScheduledLine, and the reminder line. Add reminder is disabled until the first Schedule, because a reminder needs the intention.
+    - Buttons: Schedule/Reschedule, Edit, Close (new `closeAction`), Archive. A run on the own intention blocks Close and Archive.
+  - Group rows (RowList, context page): a real when line, Schedule and Close. `closeTargets` and `closeBlocked` know group rows.
+    - Home's pinned group cards show the when line but no buttons, as pinned collections have none.
+  - The own intention is never a row: buildRows skips intents with groupId, and the Recycle Bin's Intentions tab skips them. Restoring a group there also restores its intention.
+  - EventCard: a group's own date shows the group type icon and name, and tapping it opens the group. It has no intention link and no Start (step 14 adds Start Now for menus).
+  - Tests: useGroupActions (7), GroupRowCard (3), GroupDetailScreen (+5), useIntentionActions (+3), useRowClose (+3), useStatusSync (+1), EventCard (+1), rowModel (+2).
+  - App 2946/2946 (SamPlayer.plan flaked once and passed on rerun), CLI 239/239.
+- 2026-10-23 Step 13 Chrome test passed. Follow-ups (restructure_p5-h7m-s13b-v7jx):
+  1. GroupRowCard now uses the row cards' own layout: `flex-col sm:flex-row sm:items-center sm:justify-between`, with the buttons `shrink-0 self-end sm:self-auto`, as ItemCard and IntentionCard have.
+  2. The bug: closed_reason was kept on reopen. Every status move outside the Close pop-up patched only `{ status }`, and status_guard never touches closed_reason. It affected items, intentions and groups, both through the status chip and the edit form, and the Undo of a move. Close's own Undo was already right.
+     - New `statusPatch(status, before)` in utils/status.js: leaving Closed clears closedReason, and an Undo back to Closed restores `before`'s reason and closed date.
+     - It is used by setItemStatus, setIntentionStatus and setGroupStatus (including the own intention that follows the group), and by their Undos.
+     - Recommended, not written: clear closed_reason in status_guard on any move out of closed, which covers MCP and any future path. The app fix stays either way.
+     - Claimed `src/utils/status.js` and its test.
+  - App 2951/2951, CLI 239/239.

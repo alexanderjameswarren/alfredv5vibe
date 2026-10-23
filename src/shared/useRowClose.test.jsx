@@ -17,7 +17,14 @@ beforeEach(() => getReminderSummary.mockResolvedValue({ scheduled: [] }));
 
 describe("closeTargets", () => {
   it("closes the item and its intentions not yet closed", () => {
-    expect(closeTargets(row)).toEqual({ item, intents: [open] });
+    expect(closeTargets(row)).toEqual({ item, group: null, intents: [open] });
+  });
+
+  it("a group row closes the group and its own intention, never members", () => {
+    const group = { id: "g", status: "active" };
+    const own = { id: "o", groupId: "g", status: "active" };
+    expect(closeTargets({ kind: "group", group, ownIntent: own, intents: [] })).toEqual({ item: null, group, intents: [own] });
+    expect(closeTargets({ kind: "group", group, ownIntent: null, intents: [] }).intents).toEqual([]);
   });
 
   it("skips an item already closed", () => {
@@ -36,6 +43,13 @@ describe("closeBlocked", () => {
 
   it("is free otherwise", () => {
     expect(closeBlocked(row, [{ intentId: "other", status: "active" }])).toBe(false);
+  });
+
+  it("a group is blocked by a run on its own intention or carrying its id", () => {
+    const g = { kind: "group", group: { id: "g" }, ownIntent: { id: "o" }, intents: [] };
+    expect(closeBlocked(g, [{ intentId: "o" }])).toBe(true);
+    expect(closeBlocked(g, [{ intentId: null, groupId: "g" }])).toBe(true);
+    expect(closeBlocked(g, [{ intentId: "x" }])).toBe(false);
   });
 });
 
@@ -65,7 +79,7 @@ describe("useRowClose", () => {
     fireEvent.click(confirmIn(dialog));
     await waitFor(() =>
       expect(onCloseRecords).toHaveBeenCalledWith({
-        item, intentIds: ["a"], label: "Vent fan", reason: "wont_do", note: "not needed", closedOn: today, pickedIntentId: "a",
+        item, group: null, intentIds: ["a"], label: "Vent fan", reason: "wont_do", note: "not needed", closedOn: today, pickedIntentId: "a",
       }),
     );
   });
@@ -115,6 +129,21 @@ describe("useRowClose", () => {
     expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
     rerender(<Harness onCloseRecords={jest.fn()} theRow={closedIntention} />);
     expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+  });
+
+  it("a group row closes through the same pop-up, with the group", async () => {
+    const onCloseRecords = jest.fn();
+    const group = { id: "g", status: "active" };
+    const own = { id: "o", groupId: "g", status: "active" };
+    const theRow = { kind: "group", key: "group:g", name: "Rice + Beans", group, ownIntent: own, intents: [], status: "active" };
+    render(<Harness onCloseRecords={onCloseRecords} theRow={theRow} />);
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("radio", { name: "Completed" }));
+    fireEvent.click(confirmIn(dialog));
+    await waitFor(() =>
+      expect(onCloseRecords).toHaveBeenCalledWith(expect.objectContaining({ item: null, group, intentIds: ["o"], pickedIntentId: "o" })),
+    );
   });
 
   it("closes just the item when every intention is already closed", async () => {

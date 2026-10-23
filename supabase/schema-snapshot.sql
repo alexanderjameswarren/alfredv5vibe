@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 10:13, through migration 152 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 10:20, through migration 153 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -4611,6 +4611,10 @@ begin
     else
       new.status_changed_at := now();
     end if;
+    -- Restructure P5: the reason belongs to Closed. Leaving it, by any path, clears it.
+    if old.status = 'closed' and new.status is distinct from 'closed' then
+      new.closed_reason := null;
+    end if;
   else
     new.status_written_at := old.status_written_at;
     new.status_changed_at := old.status_changed_at;
@@ -4624,7 +4628,7 @@ $$;
 ALTER FUNCTION "public"."status_guard"() OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."status_guard"() IS 'Restructure P1, P4. BEFORE UPDATE on any table with status, status_changed_at and status_written_at (intents, items). Keeps the old status when an update would move it back to someday, except closed -> someday within 10 minutes of the close by status_written_at (Undo). On a status change, stamps status_written_at now(), keeps an app-supplied status_changed_at that is no later than now() and otherwise stamps now(); an update that does not change status keeps both stored values.';
+COMMENT ON FUNCTION "public"."status_guard"() IS 'Restructure P1, P4, P5. BEFORE UPDATE on items, intents and item_groups. Keeps the old status when an update would move it back to someday, except closed -> someday within 10 minutes of the close by status_written_at (Undo). On a status change, stamps status_written_at now(), keeps an app-supplied status_changed_at that is no later than now() and otherwise stamps now(), and (P5) clears closed_reason when the status leaves closed; an update that does not change status keeps both stored dates.';
 
 
 
@@ -8961,6 +8965,7 @@ CREATE TABLE IF NOT EXISTS "public"."intents" (
     "group_id" "text",
     "archived_at" timestamp with time zone,
     CONSTRAINT "intents_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
+    CONSTRAINT "intents_closed_reason_only_closed" CHECK ((("closed_reason" IS NULL) OR ("status" = 'closed'::"text"))),
     CONSTRAINT "intents_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
 );
 
@@ -9014,7 +9019,7 @@ COMMENT ON COLUMN "public"."intents"."last_completed_at" IS 'Latest completion (
 
 
 
-COMMENT ON COLUMN "public"."intents"."closed_reason" IS 'Restructure P4. Why it was closed: done (Completed) | wont_do (Won''t do). Null = unknown (closed before P4, or never recorded). Written by the app''s Close pop-up and by the automatic close of a one-time intention on completion; not cleared on reopen.';
+COMMENT ON COLUMN "public"."intents"."closed_reason" IS 'Restructure P4. Why it was closed: done (Completed) | wont_do (Won''t do). Null = unknown (closed before P4, or never recorded), and always null when not closed (P5: status_guard clears it on reopen; intents_closed_reason_only_closed). Written by the app''s Close pop-up and by the automatic close of a one-time intention on completion.';
 
 
 
@@ -9142,6 +9147,7 @@ CREATE TABLE IF NOT EXISTS "public"."item_groups" (
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "archived_at" timestamp with time zone,
     CONSTRAINT "item_groups_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
+    CONSTRAINT "item_groups_closed_reason_only_closed" CHECK ((("closed_reason" IS NULL) OR ("status" = 'closed'::"text"))),
     CONSTRAINT "item_groups_name_check" CHECK ((("name" IS NULL) OR ("btrim"("name") <> ''::"text"))),
     CONSTRAINT "item_groups_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
 );
@@ -9178,7 +9184,7 @@ COMMENT ON COLUMN "public"."item_groups"."status_written_at" IS 'Server time of 
 
 
 
-COMMENT ON COLUMN "public"."item_groups"."closed_reason" IS 'Why it was closed: done | wont_do, as on items. Null = unknown.';
+COMMENT ON COLUMN "public"."item_groups"."closed_reason" IS 'Why it was closed: done | wont_do, as on items. Null = unknown, and always null when not closed (status_guard clears it on reopen; item_groups_closed_reason_only_closed).';
 
 
 
@@ -9219,6 +9225,7 @@ CREATE TABLE IF NOT EXISTS "public"."items" (
     "status_written_at" timestamp with time zone DEFAULT "now"(),
     "archived_at" timestamp with time zone,
     CONSTRAINT "items_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
+    CONSTRAINT "items_closed_reason_only_closed" CHECK ((("closed_reason" IS NULL) OR ("status" = 'closed'::"text"))),
     CONSTRAINT "items_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
 );
 
@@ -9271,7 +9278,7 @@ COMMENT ON COLUMN "public"."items"."last_completed_at" IS 'Latest completion (cl
 
 
 
-COMMENT ON COLUMN "public"."items"."closed_reason" IS 'Restructure P4. Why it was closed: done (Completed) | wont_do (Won''t do). Null = unknown (closed before P4, or never recorded). Written by the app''s Close pop-up; not cleared on reopen.';
+COMMENT ON COLUMN "public"."items"."closed_reason" IS 'Restructure P4. Why it was closed: done (Completed) | wont_do (Won''t do). Null = unknown (closed before P4, or never recorded), and always null when not closed (P5: status_guard clears it on reopen; items_closed_reason_only_closed). Written by the app''s Close pop-up.';
 
 
 

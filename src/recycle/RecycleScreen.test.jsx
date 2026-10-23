@@ -31,13 +31,14 @@ test("an archived group is listed by its derived name, type and context, and res
     <RecycleScreen
       {...base}
       recycleTab="groups"
-      recycleData={[{ id: "g", name: null, groupTypeId: "proj", contextId: "alfred" }]}
+      recycleData={[{ id: "g", name: null, groupTypeId: "proj", contextId: "alfred", archivedAt: "2026-10-23T15:00:00Z" }]}
       recycleRestore={recycleRestore}
     />,
   );
   expect(screen.getByRole("tab", { name: /Groups/ })).toBeInTheDocument();
   expect(screen.getByText("Bug list + Retire the ai-enrich edge function")).toBeInTheDocument();
   expect(screen.getByText(/Project · Alfred/)).toBeInTheDocument();
+  expect(screen.getByText(/Archived Oct 23, 2026/)).toBeInTheDocument();
   fireEvent.click(screen.getByTitle("Restore"));
   expect(recycleRestore).toHaveBeenCalledWith("groups", "g");
 });

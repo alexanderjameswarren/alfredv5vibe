@@ -8,16 +8,32 @@ import { hasOpenRun } from "../utils/rowModel";
 
 export const CLOSE_BLOCKED = "Finish the execution first";
 
-/** What Close on a list row closes: the item, if any, and its intentions not yet closed. */
+/**
+ * What Close on a list row closes: the item, if any, and its intentions not yet closed.
+ * A group row (Restructure P5): the group and its own intention, never its members.
+ */
 export function closeTargets(row) {
+  if (row.kind === "group") {
+    return {
+      item: null,
+      group: statusOf(row.group) !== "closed" ? row.group : null,
+      intents: row.ownIntent && statusOf(row.ownIntent) !== "closed" ? [row.ownIntent] : [],
+    };
+  }
   return {
     item: row.item && statusOf(row.item) !== "closed" ? row.item : null,
+    group: null,
     intents: row.intents.filter((i) => statusOf(i) !== "closed"),
   };
 }
 
-/** True while the row's item or any of its intentions has an open (active or paused) run. */
-export const closeBlocked = hasOpenRun;
+/** True while the row's item or any of its intentions (a group: its own) has an open (active or paused) run. */
+export function closeBlocked(row, executions) {
+  if (row.kind === "group") {
+    return executions.some((x) => x.groupId === row.group.id || (row.ownIntent && x.intentId === row.ownIntent.id));
+  }
+  return hasOpenRun(row, executions);
+}
 
 /**
  * Close on list rows (Restructure P4). `closeProps(row)` feeds a card's Close
@@ -60,7 +76,7 @@ export default function useRowClose({ events = [], executions = [], onCloseRecor
   async function request(row) {
     const targets = closeTargets(row);
     const picked = row.intent && targets.intents.some((i) => i.id === row.intent.id) ? row.intent : targets.intents[0] || null;
-    setPending({ row, targets, picked, ...closeDefaults({ item: targets.item, intents: targets.intents, picked, events }), loading: true });
+    setPending({ row, targets, picked, ...closeDefaults({ item: targets.item || targets.group, intents: targets.intents, picked, events }), loading: true });
     const found = await loadClosePending(events, targets.intents);
     setPending((p) => p && p.row === row && { ...p, ...found, loading: false });
   }
@@ -68,7 +84,7 @@ export default function useRowClose({ events = [], executions = [], onCloseRecor
   function closeProps(row) {
     const targets = closeTargets(row);
     // A row whose chip reads Closed has no Close, even if an item's intention is still open.
-    if (!onCloseRecords || row.status === "closed" || (!targets.item && targets.intents.length === 0)) return {};
+    if (!onCloseRecords || row.status === "closed" || (!targets.item && !targets.group && targets.intents.length === 0)) return {};
     return { onClose: () => request(row), closeBlocked: closeBlocked(row, executions) ? CLOSE_BLOCKED : null };
   }
 
@@ -85,6 +101,7 @@ export default function useRowClose({ events = [], executions = [], onCloseRecor
         setPending(null);
         await onCloseRecords({
           item: held.targets.item,
+          group: held.targets.group,
           intentIds: held.targets.intents.map((i) => i.id),
           label: held.row.name,
           reason,

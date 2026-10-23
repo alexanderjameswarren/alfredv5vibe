@@ -3,6 +3,7 @@ import { render, screen, fireEvent, within, waitFor } from "@testing-library/rea
 import "@testing-library/jest-dom";
 import GroupDetailScreen from "./GroupDetailScreen";
 import { currentUserId, listNotesForTargets } from "../notes/notesApi";
+import { getReminderSummary } from "../utils/remindersApi";
 
 jest.mock("../notes/notesApi", () => ({
   currentUserId: jest.fn(),
@@ -13,10 +14,14 @@ jest.mock("../notes/notesApi", () => ({
   deleteNote: jest.fn(),
 }));
 
+jest.mock("../utils/remindersApi", () => ({ ...jest.requireActual("../utils/remindersApi"), getReminderSummary: jest.fn() }));
+jest.mock("../notes/RecentCompletions", () => () => <section aria-label="Recent executions" />);
+
 // CRA resets mock implementations before each test.
 beforeEach(() => {
   currentUserId.mockResolvedValue("u");
   listNotesForTargets.mockResolvedValue([]);
+  getReminderSummary.mockResolvedValue({ scheduled: [], fired: [], cancelled: [] });
 });
 // The standard rows are tested where they live; here only which rows, in order.
 jest.mock("../shared/RowList", () => ({ rows }) => (
@@ -113,4 +118,57 @@ test("no own intention yet: Recent executions reads None yet", async () => {
   renderPage();
   await notesLoaded();
   expect(within(screen.getByRole("region", { name: "Recent executions" })).getByText("None yet")).toBeInTheDocument();
+});
+
+// Step 13.
+const own = { id: "o", groupId: "g", text: "Beans + Rice", status: "active" };
+const live = { id: "e", intentId: "o", time: "2099-03-02", archived: false };
+const handlers = () => ({ onSchedule: jest.fn(), onSetStatus: jest.fn(), onCloseRecords: jest.fn() });
+
+test("buttons in the fixed order: Schedule, Edit, Close, Archive; not scheduled, no reminder yet", async () => {
+  renderPage(handlers());
+  await notesLoaded();
+  const names = screen.getAllByRole("button").map((b) => b.textContent.trim()).filter((t) => ["Schedule", "Reschedule", "Edit", "Close", "Archive"].includes(t));
+  expect(names).toEqual(["Schedule", "Edit", "Close", "Archive"]);
+  expect(screen.getByText("Not scheduled")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Add reminder" })).toBeDisabled();
+  expect(screen.getByTitle("Schedule it first to add a reminder.")).toBeInTheDocument();
+});
+
+test("scheduled: the header reads its own intention's date and the button is Reschedule", async () => {
+  renderPage({ ...handlers(), group: { ...group, status: "active" }, intents: [own], events: [live] });
+  await notesLoaded();
+  expect(screen.getByText(/^Scheduled · /)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Reschedule" })).toBeInTheDocument();
+});
+
+test("status chip: Background with a live date asks first, then passes the answer", async () => {
+  const props = renderPage({ ...handlers(), group: { ...group, status: "active" }, intents: [own], events: [live] });
+  await notesLoaded();
+  fireEvent.click(screen.getByRole("button", { name: /^Status: Active/ }));
+  fireEvent.click(screen.getByRole("menuitemradio", { name: "Background" }));
+  expect(props.onSetStatus).not.toHaveBeenCalled();
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /Archive/ }));
+  await waitFor(() => expect(props.onSetStatus).toHaveBeenCalledWith("g", "background", { archiveEvents: true }));
+});
+
+test("Close opens the Close pop-up and closes the group with its own intention", async () => {
+  const props = renderPage({ ...handlers(), group: { ...group, status: "active" }, intents: [own] });
+  await notesLoaded();
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("radio", { name: "Won't do" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  await waitFor(() =>
+    expect(props.onCloseRecords).toHaveBeenCalledWith(expect.objectContaining({
+      group: expect.objectContaining({ id: "g" }), intentIds: ["o"], reason: "wont_do", pickedIntentId: "o",
+    })),
+  );
+});
+
+test("a run on its own intention blocks Close and Archive", async () => {
+  renderPage({ ...handlers(), group: { ...group, status: "active" }, intents: [own], executions: [{ id: "x", intentId: "o", status: "paused" }] });
+  await notesLoaded();
+  expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled();
 });

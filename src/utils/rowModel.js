@@ -5,7 +5,7 @@ import { filterByStatus, liveEventsFor, statusCounts, statusOf, withTag } from "
 import { sortRows } from "./sortOrders";
 import { matchesQuery } from "./search";
 import { toLocalDateString } from "./eventDates";
-import { groupDisplayName, groupTypeOf, liveMembers } from "../groups/groupModel";
+import { groupDisplayName, groupIntention, groupTypeOf, liveMembers } from "../groups/groupModel";
 
 const unique = (values) => [...new Set(values)];
 
@@ -25,7 +25,8 @@ export function pickIntentionForItem(itemId, intents, events, openExecutions) {
  * Each row: { key, kind, item, intent, intents, event, open, status, tags }.
  */
 export function buildRows({ items = [], intents = [], events = [], openExecutions = [], itemsWithoutIntents = true }) {
-  const live = intents.filter((i) => !i.archived);
+  // A group's own intention (P5 step 13) is never a row: it shows as the group.
+  const live = intents.filter((i) => !i.archived && !i.groupId);
   const itemIds = new Set(items.map((i) => i.id));
   const rows = [];
 
@@ -75,12 +76,14 @@ export function buildRows({ items = [], intents = [], events = [], openExecution
  * Restructure P5: one row per live group, for the same lists. A group has no tags
  * of its own: it carries its live members' tags (for the tag filter) and their
  * names (for search). `groups` is what the page shows; archived ones are left out.
+ * `ownIntent`, `event` and `open`: the group's own intention, its live date and open run.
  */
-export function buildGroupRows({ groups = [], groupTypes = [], members = [], items = [], intents = [] }) {
+export function buildGroupRows({ groups = [], groupTypes = [], members = [], items = [], intents = [], events = [], openExecutions = [] }) {
   return groups
     .filter((g) => !g.archived)
     .map((group) => {
       const live = liveMembers(group.id, { members, items, intents });
+      const ownIntent = groupIntention(group.id, intents);
       return {
         key: `group:${group.id}`,
         kind: "group",
@@ -89,8 +92,8 @@ export function buildGroupRows({ groups = [], groupTypes = [], members = [], ite
         item: null,
         intent: null,
         intents: [],
-        event: null,
-        open: null,
+        ownIntent,
+        ...attributes(ownIntent, events, openExecutions),
         status: statusOf(group),
         tags: unique(live.flatMap((m) => m.record.tags || [])),
         name: groupDisplayName(group, { members, items, intents }),

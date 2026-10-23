@@ -1,5 +1,5 @@
 import React, { useLayoutEffect, useRef, useState } from "react";
-import { Archive, CalendarX, CircleStop, NotebookPen } from "lucide-react";
+import { Archive, CalendarX, CircleCheckBig, CircleStop, NotebookPen } from "lucide-react";
 import OverflowMenu from "./OverflowMenu";
 import { ACTION_BUTTON } from "./actionButton";
 
@@ -49,6 +49,23 @@ export function stopAction(onClick) {
       <button onClick={onClick} className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}>
         <CircleStop className="w-4 h-4" />
         Stop repeating
+      </button>
+    ),
+  };
+}
+
+/** Close (Restructure P5 step 13, groups): neutral, as the row's Close; nothing is destroyed. */
+export function closeAction(onClick, blockedTitle = null) {
+  return {
+    menu: { label: "Close", icon: CircleCheckBig, onClick, disabled: Boolean(blockedTitle), title: blockedTitle },
+    button: (
+      <button
+        onClick={onClick}
+        disabled={Boolean(blockedTitle)}
+        className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground disabled:opacity-50 disabled:cursor-not-allowed`}
+      >
+        <CircleCheckBig className="w-4 h-4" />
+        Close
       </button>
     ),
   };

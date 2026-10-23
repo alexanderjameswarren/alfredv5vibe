@@ -13,6 +13,7 @@ import UnderlineTabs from "../shared/UnderlineTabs";
 import InProgressSection from "../executions/InProgressSection";
 import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
 import { groupDisplayName } from "../groups/groupModel";
+import { archivedOnLabel, byNewestArchive } from "../shared/archivedRecord";
 import StatusFilterChips from "../shared/StatusFilterChips";
 import {
   DEFAULT_STATUS_FILTER,
@@ -94,6 +95,7 @@ export default function ContextDetailView({
   groupMembers = [],
   onViewGroupDetail,
   onOpenCreateGroup,
+  onScheduleGroup,
   // The selected tab, held by Alfred per context so Back from a record keeps it
   // (as the inbox's source tab is). Falls back to local state when not given.
   rowTab: heldTab,
@@ -164,7 +166,7 @@ export default function ContextDetailView({
   const liveGroups = groups.filter((g) => !g.archived);
   const rows = [
     ...buildRows({ items, intents, events, openExecutions: executions }),
-    ...buildGroupRows({ groups: liveGroups, groupTypes, ...memberLists }),
+    ...buildGroupRows({ groups: liveGroups, groupTypes, ...memberLists, events, openExecutions: executions }),
   ];
   const { visibleRows: filteredRows, statusCounts: statusCountsHere, tagCountRows, total } = listRows({
     rows,
@@ -201,11 +203,7 @@ export default function ContextDetailView({
         icon: groupTypes.find((t) => t.id === g.groupTypeId)?.icon,
         row: g,
       })),
-  ].sort((a, b) =>
-    String(b.row.statusChangedAt || b.row.updatedAt || "").localeCompare(
-      String(a.row.statusChangedAt || a.row.updatedAt || ""),
-    ),
-  );
+  ].sort((a, b) => byNewestArchive(a.row, b.row));
   const contextCollections = collections.filter((c) => c.contextId === contextId);
   const visibleCollections = sortBy(contextCollections, NAMED_RECORD_ACCESSORS).filter(
     (coll) => matchesQuery(search, coll.name),
@@ -377,6 +375,7 @@ export default function ContextDetailView({
                   onCancelExecution={onCancelExecution}
                   onCloseRecords={onCloseRecords}
                   onViewGroupDetail={onViewGroupDetail}
+                  onScheduleGroup={onScheduleGroup}
                 />
               )}
             </>
@@ -458,7 +457,7 @@ export default function ContextDetailView({
                       <span className="min-w-0 flex-1 truncate">{r.label}</span>
                       <span className="shrink-0 text-xs text-muted-foreground">
                         {STATUS_LABELS[statusOf(r.row)]}
-                        {archivedDate(r.row) && ` · ${archivedDate(r.row)}`}
+                        {archivedOnLabel(r.row) && ` · ${archivedOnLabel(r.row)}`}
                       </span>
                     </button>
                   </li>
@@ -474,13 +473,4 @@ export default function ContextDetailView({
 /** "Create Menu" from the context's default group type; "Add Group" when it has none. */
 export function createGroupButtonLabel(defaultType) {
   return defaultType?.labelSingular ? `Create ${defaultType.labelSingular}` : "Add Group";
-}
-
-function archivedDate(row) {
-  const raw = row.statusChangedAt || row.updatedAt;
-  if (!raw) return null;
-  const d = new Date(raw);
-  return Number.isNaN(d.getTime())
-    ? null
-    : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }

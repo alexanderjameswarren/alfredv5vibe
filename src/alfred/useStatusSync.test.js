@@ -36,6 +36,17 @@ test("reports the flip without a notice, and its restore puts Background back", 
   expect(storage.patch).toHaveBeenCalledWith("intent:a", { status: "background" });
 });
 
+test("a group's flip is re-read, merged and restorable", async () => {
+  mockRows = { item_groups: [{ id: "g", status: "active" }] };
+  const setItemGroups = jest.fn();
+  const { watchStatus } = useStatusSync({ setIntents: jest.fn(), setItems: jest.fn(), setItemGroups, showNotice: jest.fn() });
+  const flip = await watchStatus({ groups: [{ id: "g", status: "background" }] })({ announce: false });
+  expect(flip.moved).toBe(true);
+  expect(setItemGroups).toHaveBeenCalled();
+  await flip.restore();
+  expect(storage.patch).toHaveBeenCalledWith("group:g", { status: "background" });
+});
+
 test("restore stops at a failed write", async () => {
   mockRows = { intents: [{ id: "a", status: "active" }, { id: "b", status: "active" }] };
   const { watchStatus } = setup();

@@ -6,6 +6,7 @@ import WhenButton from "../shared/WhenButton";
 import { getRecurrenceConfig } from "../utils/recurrence";
 import { describeRepeat, repeats } from "../utils/recurrenceDisplay";
 import { RowMetaLine } from "../shared/TagChips";
+import { RecordGroupChips } from "../groups/GroupsContext";
 import EditCard from "../shared/EditCard";
 import PinnedFooter from "../shared/PinnedFooter";
 import TagPicker from "../shared/TagPicker";
@@ -397,6 +398,14 @@ export default function IntentionCard({
           {/* Restructure P4: one line per kind of information — what it is, then when. */}
           {/* A merged row's chip is the item's; the intention shows in the when line. */}
           <RowMetaLine statusRow={asItem ? row.item : intent} contextName={contextName} tags={shownTags} />
+          {/* Restructure P5: the groups it is in, own line; a merged row counts its item and intentions. */}
+          <RecordGroupChips
+            records={
+              asItem
+                ? [{ memberType: "item", id: row.item.id }, ...(row.intents || []).map((i) => ({ memberType: "intention", id: i.id }))]
+                : [{ memberType: "intention", id: intent.id }]
+            }
+          />
           {(showScheduling || reminder) && (
             <div className="flex items-center gap-x-3 gap-y-1 mt-1 flex-wrap text-xs text-foreground">
               {showScheduling && (
