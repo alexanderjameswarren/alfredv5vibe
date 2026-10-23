@@ -17,7 +17,7 @@ No amounts in this file. The safety floor is never written into the repo.
 | 8c | Planning skill `.claude/skills/wb-planning/SKILL.md` (A44); scripted planning conversation in a fresh thread. **Notes from 8b:** (a) for bills whose amount varies (fuel, utilities), suggest a wider amount_tolerance before backdating, or only some payments qualify; (b) when backdating moves the due day, tell Alex the new day | done, 2026-10-20 (all six fresh-thread tests passed; two fixes to the skill, see log) |
 | 8d | Slimmer app (A44, A46, A47): 8d-1 the delete function; 8d-2 the Plan overview (read-only missed dates); 8d-3 project detail; 8d-4 item detail (Remove match, Delete item); 8d-5 the full Review card; 8d-6 the single-part project picker; help. **No add or edit forms, and no split-editor picker** | 8d-1 done 2026-10-21 (146 applied, tests 12/12); 8d-2 and 8d-3 tested 2026-10-21; 8d-4 done 2026-10-22 (fixes re-tested); 8d-5 and 8d-6 tested 2026-10-22. **8d done 2026-10-22, live** (merge 4bd3d97; the live Plan tab matches local testing) |
 | 9 | Overview numbers, plus Action Items and Dropping below the floor (A49). Data first, then mockups in claude.ai, then the UI | 9a and 9b done 2026-10-23: 150 and 151 applied (live tests 40/40 and 21/21; A51); 9c done (mcp v159, fresh-thread check passed); 9d built (moneyApi reads, unit-tested); 9e live 2026-10-23 (A52, A53; checkpoint 1d583db, merged as ffeb7cc); 9f done 2026-10-23 (mcp v160, fresh-thread check passed). **Step 9 done** |
-| 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed. **Also: a sync encoding check.** A SimpleFIN account name arrives as "VISA SIGNATURE�� CARD", with the ® garbled (found 2026-10-23); find where wb-sync decodes it | not started |
+| 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed. **Also: a sync encoding check.** A SimpleFIN account name arrives as "VISA SIGNATURE�� CARD", with the ® garbled (found 2026-10-23); find where wb-sync decodes it | **10a, 10b, 10c and the A55 fix done** 2026-10-23: 155 and 156 live (tests 17/17 and 17/17), mcp v162, wb-sync v8; the fresh thread confirmed the new findings. July: no change needed (A54). **Left: 10d**, pasting the 2026-10-23a weekly prompt into the scheduled task |
 | 11 | Phase 3 review | not started |
 
 ## Log
@@ -797,6 +797,84 @@ All six tests passed in a fresh claude.ai thread with the skill loaded. No amoun
   - `get_wb_action_items` led with the Visa 3782 interest flag (red, note shown, no refund), then below_floor on Nov 9 and cash_flow with its runway;
   - `mark_wb_reviewed` refused a note with two ids, and refused one with reviewed false. Nothing was written.
 - Released `db:deploy`.
+
+### Step 10 planned, read-only (2026-10-23, run tag `warren_buffet_p3-q5k-s24-k9wa`)
+- 9f was checkpointed as 93ed311 and merged as 7e9b858. Alex's scope: the prompt rebuild on `get_wb_action_items`, `never_fires` (A16), project overrides, the July check and the SimpleFIN encoding. Out of scope: the "has more" flag (dropped), the shared confirm component and the CSV import.
+- **July finding:** synced history starts on **Jul 10, 2026**, so July holds 22 days. The subscriptions billed on the 1st to the 9th (the largest among them) have no July charge in the data. The links look complete, so this is not a linking gap. It goes away on Nov 1, when the burn window becomes Aug to Oct. One loose end: The Pool Doctor shows 2 charges where 3 monthly ones are expected.
+- **Encoding finding:** `wb-sync` parses SimpleFIN's body with `res.json()`, which is UTF-8, and `mapAccount` stores `name` unchanged. The name is sync-owned and rewritten on every sync, so a one-off repair would not last; the cure belongs in `mapAccount`. Whether the two "�" come from SimpleFIN or from decoding needs the byte check in the plan report.
+- **Proposed sub-steps:** 10a the rule-health SQL (one redefinition of `wb_rule_health_all`), with help and `ruleNumbers.js`; 10b the mcp description, with a deploy; 10c the wb-sync name clean-up, with a deploy; 10d the prompt rebuild, pasted and run once by hand. 10e (July) needs no change.
+- Also noted: main now has two migrations numbered 153 as well (restructure_p5's `153_restructure_p5_closed_reason_rules.sql`).
+
+### Step 10 built, not deployed (2026-10-23, run tag `warren_buffet_p3-q5k-s24-b3tn`, A54)
+- **10a:** `supabase/migrations/_pending_warren_buffet_p3-q5k_rule_health.sql` redefines `wb_rule_health_all` once, with the new `never_fires` and project overrides, and restates `wb_rule_health`. Tests: `supabase/tests/warren_buffet_p3/5_rule_health_tests.sql`, 13 checks.
+  - Help (`rule_health.never_fires` and `often_overridden`) and `ruleNumbers.js` are updated, and the help test reads the new SQL.
+  - **PGlite:** every file passes except `128_wb_phase2_step10_rule_health_tests.sql`'s `never_fires_old_rule`. That fixture is a 30-day-old rule with no match: flagged under the old 14-day rule, not under the new 45-day default. It is a Phase 2 file I don't hold.
+- **10b:** the `get_wb_rule_health` description in `mcp/index.ts`, with its test.
+- **10c:** `wb-sync-core.ts` `cleanName` and `mapAccount`, with tests.
+- **10d:** the weekly prompt is at version 2026-10-23a.
+- **July note:** until Nov 1, the burn median includes a 22-day July (history starts Jul 10), so the burn rate is understated. The window moves to Aug to Oct on Nov 1. The Pool Doctor check is Money inbox item `1d4e5775-f24c-44b1-9e08-6c0865838cca`, which the Overview lists in To do.
+- Next: Alex runs gitsync, then the drift check, the claims of `db:table:wb_rule_health_all` and `db:table:wb_rule_health`, numbering, and his runs. After that, one `db:deploy` window for mcp and wb-sync.
+
+### Step 10a numbered 155 (2026-10-23, run tag `warren_buffet_p3-q5k-s25-r7kd`)
+- gitsync took main from 93ed311 to c5f1865. It brought restructure_p5's `153_restructure_p5_closed_reason_rules.sql` and `154_restructure_p5_parent_execution.sql`.
+- **Drift check: clear.**
+  - 153 changes `status_guard` and adds `closed_reason` checks on items, intents and item_groups. `wb_action_items` reads intents' status, archived, is_intention and text, never `closed_reason`.
+  - 154 touches only `executions`.
+  - Neither touches the wb rule tables, the rule-health views, transactions or splits.
+- Claimed `db:table:wb_rule_health_all`, `db:table:wb_rule_health`, the numbered path, and `128_wb_phase2_step10_rule_health_tests.sql` (Alex approved). Not `db:deploy` yet.
+- Numbered **155_wb_phase3_step10a_rule_health.sql**, the next after the two 153s and 154, and deleted the `_pending_` file.
+- 128: rule r3 is now 60 days old; it still proves an old rule with no match is flagged.
+- PGlite: all 18 test files pass: `5_` 13/13, 128 17/17, and every earlier file. The help test passes 7/7.
+
+### Step 10a done; 10b and 10c deployed (2026-10-23, run tag `warren_buffet_p3-q5k-s26-m3vx`)
+- **10a live:** Alex ran 155 (conformant), `5_rule_health_tests.sql` (13/13) and 128 (17/17).
+- **One `db:deploy` window** (claimed with the note "Step 10b/10c"). mcp was v160 (mine) and wb-sync v7 (Oct 12). Main had no function changes beyond this tree.
+  - The only other wb-sync change since v7 is fbf3226, which removed the unused `createUserClient` from `supabase-client.ts`.
+- **Deployed:**
+  - mcp **v161**: 139 tools, with the new `get_wb_rule_health` description;
+  - wb-sync **v8**: `cleanName`.
+  - Both return 401 with no auth.
+- Released `db:deploy`, `db:table:wb_rule_health_all` and `db:table:wb_rule_health`. No `db:` claims are left.
+- **The two Visa names** are cleaned by the next daily sync with no repair: wb-sync rewrites the sync-owned `name` on every run.
+- restructure_p5-h7m is waiting on `supabase/functions/mcp/index.ts`, which has the 10b change (finished and live as v161).
+- Next: the fresh-thread check of 10b, then Alex pastes the 2026-10-23a prompt (10d) and runs it once by hand.
+
+### Step 10 fixes after the fresh-thread check (2026-10-23, run tag `warren_buffet_p3-q5k-s27-h8wq`, A55)
+- The thread found 10 never_fires flags (mostly short-gap rules quiet a few days), the old often_overridden wording, and the old "older than 14 days" sentence.
+- **Fix 1 and 2:** `supabase/migrations/_pending_warren_buffet_p3-q5k_rule_health_floor.sql` redefines `wb_rule_health_all` with:
+  - the 30-day floor;
+  - the numbers in a `params` row;
+  - "every day" for an interval of 1;
+  - often_overridden detail as "tag swapped on 2, removed on 2 (of 5)".
+  It restates `wb_rule_health`.
+- **Tests:**
+  - `5_rule_health_tests.sql` has 17 checks: four new floor and wording cases, and the project detail check updated;
+  - 128's overridden detail check now reads "tag swapped on 1, removed on 1 (of 4)";
+  - help and `ruleNumbers.js` gain `NEVER_FIRES_FLOOR_DAYS`.
+- **Fix 3:** the stale sentence was claude.ai's saved copy. Live v161 already returned the new text, and no code string was missed. The `get_wb_rule_health` description now states the floor and the new detail wording. Not deployed.
+- PGlite passes all 18 test files. mcp 34, wb-sync-core 43, CLI 239, app suite 2974/2974.
+- Next: Alex runs gitsync, then the drift check, numbering, the claims, his runs, and an mcp redeploy.
+
+### Step 10 fix numbered 156 (2026-10-23, run tag `warren_buffet_p3-q5k-s28-p2nc`)
+- gitsync: already up to date with main, so there was no drift.
+- Claimed `db:table:wb_rule_health_all`, `db:table:wb_rule_health` and the numbered path, with the note "Step 10 fix A55". Not `db:deploy`.
+- Numbered **156_wb_phase3_step10_rule_health_floor.sql** (the next after 155) and deleted the `_pending_` file. Only the path line differs.
+- **155 is unchanged since Alex ran it:** last written 11:18:52, before the report that sent it, and never edited since. It shows as changed only because it has never been committed.
+- PGlite with 155 then 156: all 18 test files pass.
+
+### Step 10 fix live: mcp v162 (2026-10-23, run tag `warren_buffet_p3-q5k-s29-w5tj`)
+- Alex ran 156 (conformant), `5_` (17/17) and 128 (17/17).
+- The claude.ai check of live `get_wb_rule_health` found:
+  - never_fires 3: Team IMPACT, Lived In Design and Sambalatte;
+  - often_overridden 1: Quill Health, "tag swapped on 2, removed on 2 (of 5)";
+  - acknowledged_hidden 2.
+- Released `db:table:wb_rule_health_all` and `db:table:wb_rule_health`.
+- Claimed `db:deploy` with the note "Step 10 fix A55 mcp redeploy". Live was v161 (mine). Deployed mcp **v162**:
+  - 139 tools;
+  - `tools/list` shows the 30-day floor and the new detail wording;
+  - no auth: 401.
+  Released `db:deploy`; no `db:` claims are held.
+- **10a, 10b, 10c and the A55 fix are done. 10d is left:** Alex pastes the 2026-10-23a prompt into the Money cleanup task and runs it once by hand.
 
 ## Later
 

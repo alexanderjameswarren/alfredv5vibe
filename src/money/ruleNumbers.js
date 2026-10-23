@@ -22,9 +22,15 @@ export const OVERDUE_GRACE_DAYS = 7;
 // wb_burn_rate_on (Phase 3 step 5 migration), v_months. Help: overview.burn_rate, overview.true_cost.
 export const BURN_MONTHS = 3;
 
-// wb_rule_health_all (131_wb_phase2_step10_acks.sql). Help: rule_health.*.
-export const NEVER_FIRES_AFTER_DAYS = 14;
-export const NEVER_FIRES_SKIP_MONTHS = 3;
+// wb_rule_health_all (the Phase 3 step 10 migration). Help: rule_health.*.
+// never_fires (A54, A55): flagged once quiet for more than NEVER_FIRES_FACTOR times the expected interval
+// and more than NEVER_FIRES_FLOOR_DAYS; the interval falls back to the annual or quarterly notes days,
+// then NEVER_FIRES_DEFAULT_DAYS. All are the params row of wb_rule_health_all.
+export const NEVER_FIRES_FACTOR = 1.5;
+export const NEVER_FIRES_FLOOR_DAYS = 30;
+export const NEVER_FIRES_DEFAULT_DAYS = 30;
+export const NEVER_FIRES_QUARTER_DAYS = 91;
+export const NEVER_FIRES_ANNUAL_DAYS = 365;
 export const TOO_BROAD_PAYEES = 3;
 export const OVERRIDDEN_MIN = 2;
 export const OVERRIDDEN_SHARE_DIVISOR = 4; // "at least a quarter": n * 4 >= hits
