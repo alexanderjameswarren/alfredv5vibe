@@ -16,7 +16,15 @@ import {
   readStoredStatusFilter,
   writeStoredStatusFilter,
   DEFAULT_STATUS_FILTER,
+  statusPatch,
 } from "./status";
+
+test("statusPatch: leaving Closed clears the reason; an Undo back to Closed restores it", () => {
+  expect(statusPatch("active")).toEqual({ status: "active", closedReason: null });
+  expect(statusPatch("background")).toEqual({ status: "background", closedReason: null });
+  const closed = { status: "closed", closedReason: "wont_do", statusChangedAt: "2026-10-20T12:00:00Z" };
+  expect(statusPatch("closed", closed)).toEqual({ status: "closed", closedReason: "wont_do", statusChangedAt: "2026-10-20T12:00:00Z" });
+});
 
 const rows = [
   { id: "a", status: "active" },

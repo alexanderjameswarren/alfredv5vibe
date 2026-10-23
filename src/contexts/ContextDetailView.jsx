@@ -95,6 +95,7 @@ export default function ContextDetailView({
   groupMembers = [],
   onViewGroupDetail,
   onOpenCreateGroup,
+  onScheduleGroup,
   // The selected tab, held by Alfred per context so Back from a record keeps it
   // (as the inbox's source tab is). Falls back to local state when not given.
   rowTab: heldTab,
@@ -165,7 +166,7 @@ export default function ContextDetailView({
   const liveGroups = groups.filter((g) => !g.archived);
   const rows = [
     ...buildRows({ items, intents, events, openExecutions: executions }),
-    ...buildGroupRows({ groups: liveGroups, groupTypes, ...memberLists }),
+    ...buildGroupRows({ groups: liveGroups, groupTypes, ...memberLists, events, openExecutions: executions }),
   ];
   const { visibleRows: filteredRows, statusCounts: statusCountsHere, tagCountRows, total } = listRows({
     rows,
@@ -374,6 +375,7 @@ export default function ContextDetailView({
                   onCancelExecution={onCancelExecution}
                   onCloseRecords={onCloseRecords}
                   onViewGroupDetail={onViewGroupDetail}
+                  onScheduleGroup={onScheduleGroup}
                 />
               )}
             </>

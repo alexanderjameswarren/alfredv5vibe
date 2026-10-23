@@ -36,6 +36,8 @@ export default function RowList({
   onCloseRecords,
   // Restructure P5: group rows (kind "group") open the group detail page.
   onViewGroupDetail,
+  // Step 13: (groupId, date), through the group's own intention.
+  onScheduleGroup,
   reminderFor = () => null,
 }) {
   const rowClose = useRowClose({ events, executions, onCloseRecords });
@@ -49,6 +51,8 @@ export default function RowList({
               row={row}
               contextName={contexts?.find((c) => c.id === row.group.contextId)?.name}
               onOpen={onViewGroupDetail}
+              onSchedule={onScheduleGroup}
+              {...rowClose.closeProps(row)}
             />
           ) : row.intent ? (
             <IntentionCard

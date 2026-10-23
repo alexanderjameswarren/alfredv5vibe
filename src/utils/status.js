@@ -124,6 +124,17 @@ export function restoredCloseFields(row) {
   return { closedReason: row.closedReason ?? null, ...(row.statusChangedAt ? { statusChangedAt: row.statusChangedAt } : {}) };
 }
 
+/**
+ * The patch for a status move outside the Close pop-up (status chip, edit form, an
+ * Undo). Leaving Closed clears closed_reason; going back to Closed (an Undo) puts
+ * `before`'s reason and closed date back.
+ */
+export function statusPatch(status, before = null) {
+  if (!CLOSE_REASON_SAVED) return { status };
+  if (status === "closed") return { status, ...(before ? restoredCloseFields(before) : {}) };
+  return { status, closedReason: null };
+}
+
 /** The extra fields a close writes on each record it closes, once Step 11 is live. */
 export function closeFields(reason, closedAt) {
   if (!CLOSE_REASON_SAVED || !reason) return {};

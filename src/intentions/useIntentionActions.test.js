@@ -257,3 +257,49 @@ describe("closeRecords", () => {
     expect(storage.patch).toHaveBeenLastCalledWith("intent:a", { status: "someday", closedReason: null });
   });
 });
+
+describe("setIntentionStatus: leaving Closed", () => {
+  it("clears the reason; Undo puts the reason and closed date back", async () => {
+    const closed = { id: "a", status: "closed", closedReason: "done", statusChangedAt: "2026-10-20T12:00:00Z" };
+    const { actions, undo } = setup({ intents: [closed] });
+    await actions.setIntentionStatus("a", "active");
+    expect(storage.patch).toHaveBeenLastCalledWith("intent:a", { status: "active", closedReason: null });
+    await undo().restore();
+    expect(storage.patch).toHaveBeenLastCalledWith("intent:a", { status: "closed", closedReason: "done", statusChangedAt: "2026-10-20T12:00:00Z" });
+  });
+});
+
+describe("closeRecords: a group (Restructure P5 step 13)", () => {
+  const group = { id: "g", status: "active", closedReason: null, statusChangedAt: "2026-10-01T00:00:00Z" };
+  const own = { id: "o", groupId: "g", status: "active", recurrenceConfig: { type: "once" } };
+  const recipeIds = ["rice", "beans"];
+
+  it("closes the group and its own intention, never members; Completed records with no recipes", async () => {
+    const live = { id: "e", intentId: "o", groupId: "g", time: today, archived: false, itemIds: recipeIds };
+    const { actions } = setup({ intents: [own], events: [live] });
+    await actions.closeRecords({ group, intentIds: ["o"], label: "Menu", reason: "done", note: "good", closedOn: today, pickedIntentId: "o" });
+    const patched = storage.patch.mock.calls.map(([k]) => k);
+    expect(patched).toEqual(["intent:o", "group:g"]);
+    expect(storage.patch).toHaveBeenCalledWith("group:g", expect.objectContaining({ status: "closed", closedReason: "done" }));
+    const exec = storage.set.mock.calls.find(([k]) => k.startsWith("execution:"))[1];
+    expect(exec).toMatchObject({ intentId: "o", eventId: "e", itemIds: [] });
+    expect(saveNote).toHaveBeenCalledWith(expect.objectContaining({ body: "good", targetType: "group", targetId: "g" }));
+    expect(storage.set.mock.calls.some(([k]) => k.startsWith("item:"))).toBe(false);
+  });
+
+  it("Undo puts the group's status and reason back", async () => {
+    const { actions, undo } = setup({ intents: [own] });
+    await actions.closeRecords({ group, intentIds: ["o"], label: "Menu", reason: "wont_do", pickedIntentId: "o" });
+    storage.patch.mockClear();
+    await undo().restore();
+    expect(storage.patch).toHaveBeenCalledWith("group:g", { status: "active", closedReason: null, statusChangedAt: group.statusChangedAt });
+    expect(storage.patch).toHaveBeenCalledWith("intent:o", expect.objectContaining({ status: "active" }));
+  });
+
+  it("a group with no own intention: status and a note on the group, nothing invented", async () => {
+    const { actions } = setup({ intents: [] });
+    await actions.closeRecords({ group, intentIds: [], label: "Menu", reason: "done", note: "n", pickedIntentId: null });
+    expect(storage.set.mock.calls.some(([k]) => k.startsWith("intent:") || k.startsWith("execution:"))).toBe(false);
+    expect(saveNote).toHaveBeenCalledWith({ body: "n", targetType: "group", targetId: "g" });
+  });
+});

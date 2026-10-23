@@ -36,9 +36,10 @@ export default function GroupEditRoute({
   selectedGroupId,
   setSelectedGroupId,
   openContext,
-  offerUndoFor,
-  withLoading,
   setUnsavedChanges,
+  // Step 13: useGroupActions' writers, and closeRecords for Close.
+  groupActions,
+  onCloseRecords,
   onOpenExecution,
   rowListProps,
 }) {
@@ -109,29 +110,10 @@ export default function GroupEditRoute({
 
   // `then` is where to go after: the detail page leaves the way it came, the edit
   // page goes to the context (Back to an archived group's detail would be a dead end).
-  function handleArchive(then) {
-    const name = groupDisplayName(group, { members: groupMembers, items, intents }) || "group";
-    return withLoading("Archiving...", async () => {
-      const archived = await storage.patch(`group:${group.id}`, { archived: true });
-      if (!archived) throw new Error("The group was not archived.");
-      setItemGroups((prev) => upsert(prev, [archived]));
-      offerUndoFor(`Archived "${name}".`, async () => {
-        const back = await storage.patch(`group:${group.id}`, { archived: false });
-        if (!back) throw new Error("Restoring the group was not saved.");
-        setItemGroups((prev) => upsert(prev, [back]));
-      });
-      then();
-    });
-  }
-
+  // Archive and Restore take the group's own intention with them (step 13).
+  const handleArchive = (then) => groupActions.archiveGroup(group.id, then);
   // Restore from the group's own page: un-archive in place.
-  function handleUnarchive() {
-    return withLoading("Restoring...", async () => {
-      const back = await storage.patch(`group:${group.id}`, { archived: false });
-      if (!back) throw new Error("The group was not restored.");
-      setItemGroups((prev) => upsert(prev, [back]));
-    });
-  }
+  const handleUnarchive = () => groupActions.unarchiveGroup(group.id);
 
   if (route.view === "group-detail") {
     return (
@@ -153,6 +135,9 @@ export default function GroupEditRoute({
         onViewContextDetail={openContext}
         onOpenExecution={onOpenExecution}
         onUnarchive={handleUnarchive}
+        onSchedule={groupActions.scheduleGroup}
+        onSetStatus={groupActions.setGroupStatus}
+        onCloseRecords={onCloseRecords}
         rowListProps={rowListProps}
       />
     );

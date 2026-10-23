@@ -67,6 +67,7 @@ import CollectionsScreen from "./collections/CollectionsScreen";
 import CollectionDetailScreen from "./collections/CollectionDetailScreen";
 import GroupEditRoute from "./groups/GroupEditRoute";
 import { GroupsProvider } from "./groups/GroupsContext";
+import { useGroupActions } from "./groups/useGroupActions";
 import { buildGroupRows } from "./utils/rowModel";
 import CollectionHistoryScreen from "./collections/CollectionHistoryScreen";
 import ItemAddToCollectionScreen from "./collections/ItemAddToCollectionScreen";
@@ -273,7 +274,7 @@ export default function Alfred() {
   // "Moved to Active" after a write the 088 triggers may answer. Before the
   // action hooks, which take `watchStatus`.
   const { notice, showNotice } = useNotice();
-  const { watchStatus } = useStatusSync({ setIntents, setItems, showNotice });
+  const { watchStatus } = useStatusSync({ setIntents, setItems, setItemGroups, showNotice });
   // Called here, after `user` and every state it reads. `withLoading` and
   // `offerUndoFor` are function declarations below, hoisted.
   const {
@@ -322,6 +323,24 @@ export default function Alfred() {
     withLoading,
     offerUndoFor,
     watchStatus,
+    refreshReminderIndex,
+    setItemGroups,
+  });
+  // Restructure P5 step 13: schedule, status, archive and restore for groups.
+  const groupActions = useGroupActions({
+    user,
+    itemGroups,
+    setItemGroups,
+    groupMembers,
+    items,
+    intents,
+    setIntents,
+    events,
+    setEvents,
+    withLoading,
+    offerUndoFor,
+    watchStatus,
+    moveToPlanner,
     refreshReminderIndex,
   });
   const { updateItem, deepCloneItem, setItemStatus } = useItemActions({
@@ -1236,6 +1255,8 @@ export default function Alfred() {
               members: groupMembers,
               items,
               intents,
+              events,
+              openExecutions: allLiveExecutions,
             })}
             onOpenGroup={openGroup}
             intents={intents}
@@ -1413,6 +1434,7 @@ export default function Alfred() {
             groupMembers={groupMembers}
             onViewGroupDetail={(id) => navigate(groupDetailPath(id), { state: { fromApp: true } })}
             onOpenCreateGroup={() => navigate(groupNewPath(selectedContextId), { state: { fromApp: true } })}
+            onScheduleGroup={groupActions.scheduleGroup}
             rowTab={contextRowTabs[selectedContextId]}
             onRowTabChange={(tab) => setContextRowTabs((prev) => ({ ...prev, [selectedContextId]: tab }))}
           />
@@ -1724,9 +1746,9 @@ export default function Alfred() {
               setSelectedContextId(contextId);
               navigate(viewToPath("context-detail"), { replace: true });
             }}
-            offerUndoFor={offerUndoFor}
-            withLoading={withLoading}
             setUnsavedChanges={setUnsavedChanges}
+            groupActions={groupActions}
+            onCloseRecords={closeRecords}
           />
         )}
 

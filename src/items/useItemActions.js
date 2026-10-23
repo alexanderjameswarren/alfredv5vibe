@@ -1,6 +1,6 @@
 import { storage, writeError } from "../utils/storage";
 import { uid } from "../utils/flattenElements";
-import { STATUS_LABELS } from "../utils/status";
+import { STATUS_LABELS, statusPatch } from "../utils/status";
 
 // Item writers, moved out of Alfred.jsx unchanged. Holds no state: everything it
 // reads or sets is Alfred's, passed in.
@@ -123,13 +123,13 @@ export function useItemActions({
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
     return withLoading("Saving...", async () => {
-      const saved = await storage.patch(`item:${itemId}`, { status });
+      const saved = await storage.patch(`item:${itemId}`, statusPatch(status));
       if (!saved) throw new Error("Status was not saved.");
       setItems((prev) => prev.map((i) => (i.id === itemId ? saved : i)));
       const previous = item.status;
       if (!previous || previous === "someday") return;
       offerUndoFor(`Moved to ${STATUS_LABELS[status]}.`, async () => {
-        const back = await storage.patch(`item:${itemId}`, { status: previous });
+        const back = await storage.patch(`item:${itemId}`, statusPatch(previous, item));
         if (!back) throw writeError("Restoring the status");
         setItems((prev) => prev.map((i) => (i.id === itemId ? back : i)));
       });

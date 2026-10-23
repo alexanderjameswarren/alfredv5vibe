@@ -75,7 +75,8 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
           query = archived("items", "id, name, context_id, tags");
           break;
         case "intents":
-          query = archived("intents", "id, text, context_id, recurrence_config, target_start_date, end_date, tags");
+          // A group's own intention is restored with its group, never on its own (step 13).
+          query = archived("intents", "id, text, context_id, recurrence_config, target_start_date, end_date, tags").is("group_id", null);
           break;
         case "events":
           query = archived("events", "id, intent_id, time, context_id");
@@ -151,6 +152,21 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
     return open?.length ? "Its intention already has an open execution. Finish or cancel that one first." : null;
   }
 
+  // Restructure P5 step 13: a restored group brings back its newest archived own
+  // intention, unless a live one exists (one per group). Its future reminders re-arm
+  // with it; its dates stay archived.
+  async function restoreGroupIntention(groupId) {
+    const { data: live } = await supabase.from("intents").select("id")
+      .eq("group_id", groupId).not("archived", "is", true).limit(1);
+    if (live?.length) return;
+    const { data: last } = await supabase.from("intents").select("id")
+      .eq("group_id", groupId).eq("archived", true)
+      .order("archived_at", { ascending: false, nullsFirst: false }).limit(1);
+    if (!last?.length) return;
+    const { error } = await supabase.from("intents").update({ archived: false }).eq("id", last[0].id);
+    if (error) throw error;
+  }
+
   async function recycleRestore(tab, id) {
     const blocker = await restoreBlocker(tab, id);
     if (blocker) {
@@ -176,6 +192,7 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
 
       const { error } = await supabase.from(table).update(updates).eq("id", id);
       if (error) throw error;
+      if (tab === "groups") await restoreGroupIntention(id);
 
       setRecycleData(prev => prev.filter(r => r.id !== id));
 
@@ -347,6 +364,7 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
       } else {
         const { error } = await supabase.from(table).update(updates).in("id", ids);
         if (error) throw error;
+        if (recycleTab === "groups") for (const id of ids) await restoreGroupIntention(id);
       }
 
       setRecycleData(prev => prev.filter(r => !restored.has(r.id)));

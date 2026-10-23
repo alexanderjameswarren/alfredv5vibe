@@ -1,6 +1,7 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import EventCard from "./EventCard";
+import { GroupsProvider } from "../groups/GroupsContext";
 
 jest.mock("../supabaseClient", () => ({ supabase: {} }));
 
@@ -138,4 +139,33 @@ test("row Start and Continue are teal", () => {
 test("Start is live otherwise", () => {
   renderEvent("active");
   expect(screen.getByRole("button", { name: "Start" }).disabled).toBe(false);
+});
+
+test("a group's own date shows as the group, opens it, and has no Start", () => {
+  const onOpenGroup = jest.fn();
+  render(
+    <GroupsProvider
+      itemGroups={[{ id: "g", groupTypeId: "menu", name: "Taco night" }]}
+      groupTypes={[{ id: "menu", icon: "UtensilsCrossed" }]}
+      groupMembers={[]}
+      items={[]}
+      intents={[]}
+      onOpenGroup={onOpenGroup}
+    >
+      <EventCard
+        event={{ id: "e1", intentId: "o", groupId: "g", time: "2026-10-30" }}
+        intent={{ id: "o", text: "Old name", groupId: "g", status: "active" }}
+        contexts={[]}
+        onActivate={jest.fn()}
+        onUpdate={jest.fn()}
+        getIntentDisplay={(i) => i.text}
+        onViewIntention={jest.fn()}
+      />
+    </GroupsProvider>,
+  );
+  expect(screen.queryByText("Old name")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+  expect(screen.queryByTitle(/Open intention/)).toBeNull();
+  fireEvent.click(screen.getByText("Taco night"));
+  expect(onOpenGroup).toHaveBeenCalledWith("g");
 });

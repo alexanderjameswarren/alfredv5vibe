@@ -9,7 +9,9 @@ import { CLOSE_REASON_SAVED, flippedToActive, mergeStatuses, statusOf } from "..
 // returned `settle` AFTER it: the rows' status is re-read, merged into state,
 // and "Moved to Active" shown if any flipped. Before-states are taken from the
 // caller, not from state, because realtime may already have delivered the flip.
-export function useStatusSync({ setIntents, setItems, showNotice }) {
+// Restructure P5: groups too (`setItemGroups`), for a group's first scheduled date.
+export function useStatusSync({ setIntents, setItems, setItemGroups, showNotice }) {
+  const setterFor = (key) => (key.startsWith("intent:") ? setIntents : key.startsWith("group:") ? setItemGroups : setItems);
   async function readStatuses(table, ids) {
     if (!ids.length) return [];
     const { data, error } = await supabase
@@ -34,30 +36,32 @@ export function useStatusSync({ setIntents, setItems, showNotice }) {
         ...(CLOSE_REASON_SAVED ? { statusChangedAt: row.statusChangedAt } : {}),
       });
       if (!back) throw writeError("Restoring the status");
-      const set = key.startsWith("intent:") ? setIntents : setItems;
-      set((prev) => prev.map((r) => (r.id === back.id ? { ...r, status: back.status, statusChangedAt: back.statusChangedAt } : r)));
+      setterFor(key)?.((prev) => prev.map((r) => (r.id === back.id ? { ...r, status: back.status, statusChangedAt: back.statusChangedAt } : r)));
     }
   }
 
   // `refreshIntentIds`: rows created by the same action. Re-read and merged,
   // never announced — they had no status to move from.
-  function watchStatus({ intents = [], items = [], refreshIntentIds = [] }) {
-    const before = { intents: intents.filter(Boolean), items: items.filter(Boolean) };
+  function watchStatus({ intents = [], items = [], groups = [], refreshIntentIds = [] }) {
+    const before = { intents: intents.filter(Boolean), items: items.filter(Boolean), groups: groups.filter(Boolean) };
     // Returns { moved, restore }: whether anything flipped, and the Undo for it.
     // `announce: false`: the caller folds " Moved to Active." into its own toast
     // (one tap, one message) and runs `restore` in that toast's Undo.
     return async function settle({ announce = true } = {}) {
-      const [freshIntents, freshItems] = await Promise.all([
+      const [freshIntents, freshItems, freshGroups] = await Promise.all([
         readStatuses("intents", [...before.intents.map((r) => r.id), ...refreshIntentIds]),
         readStatuses("items", before.items.map((r) => r.id)),
+        readStatuses("item_groups", before.groups.map((r) => r.id)),
       ]);
       if (freshIntents.length) setIntents((prev) => mergeStatuses(prev, freshIntents));
       if (freshItems.length) setItems((prev) => mergeStatuses(prev, freshItems));
+      if (freshGroups.length) setItemGroups?.((prev) => mergeStatuses(prev, freshGroups));
       const byId = (rows) => new Map(rows.map((r) => [r.id, r]));
-      const was = { intents: byId(before.intents), items: byId(before.items) };
+      const was = { intents: byId(before.intents), items: byId(before.items), groups: byId(before.groups) };
       const flips = [
         ...flippedToActive(before.intents, freshIntents).map((r) => ({ key: `intent:${r.id}`, row: was.intents.get(r.id) })),
         ...flippedToActive(before.items, freshItems).map((r) => ({ key: `item:${r.id}`, row: was.items.get(r.id) })),
+        ...flippedToActive(before.groups, freshGroups).map((r) => ({ key: `group:${r.id}`, row: was.groups.get(r.id) })),
       ];
       if (flips.length && announce) showNotice("Moved to Active");
       return { moved: flips.length > 0, restore: () => restoreStatuses(flips) };

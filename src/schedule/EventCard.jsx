@@ -114,8 +114,11 @@ export default function EventCard({
     ? contexts.find((c) => c.id === contextId)?.name
     : null;
   // Restructure P5: the group this date belongs to (a group's own event), else its intention's.
-  const eventGroups = useExecutionGroups({ groupId: event.groupId, intentId: intent?.id || event.intentId });
-  const groupLinks = eventGroups.onOpenGroup ? eventGroups.chips : [];
+  const ownGroupId = event.groupId || intent?.groupId || null;
+  const eventGroups = useExecutionGroups({ groupId: ownGroupId, intentId: intent?.id || event.intentId });
+  // Step 13: a group's own date IS the group: its icon and name as the title, opening it.
+  const asGroup = ownGroupId && eventGroups.onOpenGroup ? eventGroups.chips.find((g) => g.id === ownGroupId) || null : null;
+  const groupLinks = eventGroups.onOpenGroup && !asGroup ? eventGroups.chips : [];
 
   // Following a link out of the EDIT form unmounts it and drops whatever is
   // typed. EventCard never joined the app's `onDirtyChange` plumbing — that is
@@ -139,7 +142,8 @@ export default function EventCard({
   // calling it inline keeps React out of the remount question entirely.
   //
   // `guard` is the only thing that differs between the two call sites.
-  const showIntentionLink = Boolean(onViewIntention && intent?.id);
+  // A group's own intention is never shown as an intention.
+  const showIntentionLink = Boolean(onViewIntention && intent?.id && !asGroup);
   const showItemLink = Boolean(onViewItem && linkedItem);
   // Hoisted rather than left as an early return inside the renderer, because
   // the edit form needs the answer BEFORE it decides whether to draw a label
@@ -341,6 +345,8 @@ export default function EventCard({
         e.stopPropagation();
         if (execution && onOpenExecution) {
           onOpenExecution(execution);
+        } else if (asGroup) {
+          eventGroups.onOpenGroup(asGroup.id);
         } else {
           setIsEditing(true);
         }
@@ -371,8 +377,12 @@ export default function EventCard({
               top-level rows too, which never had the prefix and so were the
               one place an event did not announce itself. */}
           <p className="flex items-start gap-1.5 font-medium text-foreground hover:text-primary">
-            <ObjectIcon type="event" className="w-4 h-4" align="first-line" />
-            <span className="min-w-0">{eventTitle}</span>
+            {asGroup ? (
+              <GroupTypeIcon icon={asGroup.icon} className="w-4 h-4" align="first-line" />
+            ) : (
+              <ObjectIcon type="event" className="w-4 h-4" align="first-line" />
+            )}
+            <span className="min-w-0">{asGroup ? asGroup.name : eventTitle}</span>
           </p>
           <p className="text-sm text-muted-foreground">
             {formatEventDate(event.time)} • {execution ? (execution.status === "active" ? "In progress" : "Paused") : "Not started"}
@@ -422,7 +432,8 @@ export default function EventCard({
             <Play className="w-3 h-3" />
             Continue
           </button>
-        ) : (
+        ) : asGroup ? null : (
+          // A group's date has no Start here: a menu's Start Now is step 14, a project has none.
           <button
             onClick={(e) => {
               e.stopPropagation();

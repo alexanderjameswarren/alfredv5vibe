@@ -89,7 +89,16 @@ describe("setItemStatus", () => {
     const t = setup([item]);
     await t.actions.setItemStatus("a", "background");
     await t.undo().restore();
-    expect(storage.patch).toHaveBeenLastCalledWith("item:a", { status: "active" });
+    expect(storage.patch).toHaveBeenLastCalledWith("item:a", { status: "active", closedReason: null });
     expect(t.state()[0].status).toBe("active");
+  });
+
+  it("reopening a closed item clears its reason; Undo puts the reason and closed date back", async () => {
+    const closed = { ...item, status: "closed", closedReason: "wont_do", statusChangedAt: "2026-10-20T12:00:00Z" };
+    const t = setup([closed]);
+    await t.actions.setItemStatus("a", "active");
+    expect(storage.patch).toHaveBeenLastCalledWith("item:a", { status: "active", closedReason: null });
+    await t.undo().restore();
+    expect(storage.patch).toHaveBeenLastCalledWith("item:a", { status: "closed", closedReason: "wont_do", statusChangedAt: "2026-10-20T12:00:00Z" });
   });
 });
