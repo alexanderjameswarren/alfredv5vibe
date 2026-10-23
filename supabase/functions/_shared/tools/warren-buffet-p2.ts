@@ -912,6 +912,10 @@ export const splitWbTransactionTool = defineTool({
 // ---------------------------------------------------------------------------
 // mark_wb_reviewed — tier 2
 // ---------------------------------------------------------------------------
+// An optional note (Step 9f, A53) goes on one transaction only, while marking it reviewed, and is
+// added after any note already there. Reviewed plus a note is what closes a card fee flag.
+
+export const MAX_NOTE_CHARS = 2000;
 
 export const markWbReviewedTool = defineTool({
   name: "mark_wb_reviewed",
@@ -920,6 +924,22 @@ export const markWbReviewedTool = defineTool({
     const T = "mark_wb_reviewed";
     const ids = idList(T, "transaction_ids", args.transaction_ids, MAX_REVIEW_ROWS);
     const reviewed = optBool(T, "reviewed", args.reviewed) ?? true;
+    const note = optText(T, "note", args.note);
+    if (note !== null) {
+      if (ids.length !== 1) throw new Error(`${T}: a note goes on one transaction; pass exactly one transaction_id with it. Nothing was changed.`);
+      if (!reviewed) throw new Error(`${T}: a note is written only when marking reviewed (reviewed true). Nothing was changed.`);
+      if (note.length > MAX_NOTE_CHARS) throw new Error(`${T}: note is longer than ${MAX_NOTE_CHARS} characters. Nothing was changed.`);
+      const { data: cur, error: ce } = await ctx.db.from("wb_transactions").select("id, notes").eq("id", ids[0]).maybeSingle();
+      if (ce) throw new Error(dbError(T, ce));
+      if (!cur) return { reviewed, updated: 0, not_found: ids };
+      const old = String((cur as Obj).notes ?? "").trim();
+      const notes = old ? `${old}\n${note}` : note;
+      const { data: row, error: ue } = await ctx.db.from("wb_transactions").update({ reviewed, notes }).eq("id", ids[0])
+        .select("id, notes").maybeSingle();
+      if (ue) throw new Error(dbError(T, ue));
+      if (!row) return { reviewed, updated: 0, not_found: ids };
+      return { reviewed, updated: 1, not_found: [], notes: (row as Obj).notes };
+    }
     const { data, error } = await ctx.db.from("wb_transactions").update({ reviewed }).in("id", ids).select("id");
     if (error) throw new Error(dbError(T, error));
     const updated = ((data ?? []) as Obj[]).map((r) => r.id);

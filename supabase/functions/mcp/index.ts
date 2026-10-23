@@ -3285,10 +3285,12 @@ export function createMcpServer(token: string) {
     {
       title: "Mark Transactions Reviewed",
       description:
-        "Mark up to 50 transactions reviewed (or not), which takes them out of the tag and transfer reasons of the review queue. Tier 2.",
+        "Mark up to 50 transactions reviewed (or not), which takes them out of the tag and transfer reasons of the review queue. " +
+        "With note (one transaction only, while marking it reviewed), the note is added after any note already on it; reviewed plus a note is what closes a card fee flag in get_wb_action_items. Ask Alex for the note's wording first. Tier 2.",
       inputSchema: {
         transaction_ids: wbIds("Up to 50 transaction ids."),
         reviewed: z.boolean().optional().describe("Default true."),
+        note: z.string().optional().describe("Up to 2000 characters, for exactly one transaction, added after its existing note."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(markWbReviewedTool, args, token),
@@ -3812,15 +3814,16 @@ export function createMcpServer(token: string) {
       title: "Get Money Action Items",
       description:
         "The money to-do list, one object: use it for \"what needs my attention?\". Every row has type, severity (red, amber, info), title, todo (what to do about it), amount, on (its date), and a link: link_kind (planned_item, subscription, account, transaction, review_reason, intention, inbox_item, merchant) with link_id. Sections:\n" +
-        "- flags: red. Card interest, late fees and finance charges in the last 30 days, and a card bill past due and unpaid.\n" +
+        "- flags: card interest, late fees and finance charges in the last 90 days, and a card bill past due and unpaid. Each carries note (the charge's note). A credit of the same amount on that card turns a flag info, with refund (amount, on, link_kind, link_id), but does not clear it; a flag clears only when the charge is reviewed and has a note (mark_wb_reviewed with note). Otherwise red.\n" +
         "- reconcile: counts of what waits in Review, by reason (count; link_id is the reason).\n" +
         "- overdue: planned dates past their match window that no payment covers, and subscription charges more than 7 days late.\n" +
-        "- coming_up: planned items (less what is already paid) and subscription charges in the next `days`. Rows with late true are past due but not yet overdue, and come first.\n" +
+        "- coming_up: planned items (less what is already paid) and subscription charges in the next `days`. Rows with late true are past due but not yet overdue, and come first; big true marks money out over big_amount.\n" +
         "- big_bites: payments out over big_amount in the next big_days; what_if true marks a draft, which free cash leaves out.\n" +
         "- card_bills: from each card's statement_close_day, payment_due_day and autopay: the statement balance less card payments since, due on the next due day. card_days_missing means the days are not set yet (update_wb_account). Card bills are never planned items: free cash already counts card balances.\n" +
         "- needs_attention: bank sync problems, stale or missing balances, subscriptions to review or confirm, accounts with no role, rule health.\n" +
         "- money_intentions and money_inbox: open intentions and unprocessed inbox items in the Money context.\n" +
-        "- below_floor: an object, not rows. first_below_on is the first projected day under the safety floor, and shortfall_then the gap that day. shortfall_at_low is the amount to move from the reserve (reserve_balance) to stay above the floor at the low point (low_on, low_balance). causes are the payments up to that day. floor_missing true means no floor is set.\n" +
+        "- below_floor: an object, not rows. first_below_on is the first projected day under the safety floor, and shortfall_then the gap that day. shortfall_at_low is the amount to move from the reserve (reserve_balance) to stay above the floor at the low point (low_on, low_balance). causes are the payments up to that day. path is the way there: the starting balance, then every dated payment, deposit and subscription charge, and the burn rate one row a week, each with balance (that day's projected closing; the app shows it on the day's last row) and below (under the floor). floor_missing true means no floor is set.\n" +
+        "- cash_flow: money in less money out. last_30_actual (settled, own transfers left out), next_30_projected (the projection's change), typical_month (expected income less true cost), and runway_months (the reserve over a monthly shortfall; null when there is none).\n" +
         "Lead with red rows and below_floor. This reads only: never mark, match or change anything from it without asking Alex. " +
         WB_SIGN + "Tier 1.",
       inputSchema: {

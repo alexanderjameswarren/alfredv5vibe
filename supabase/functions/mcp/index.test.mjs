@@ -482,6 +482,20 @@ test("Warren Buffet Step 9c descriptions explain the to-do list and the card fie
   assert.match(desc("update_wb_account"), /statement_close_day, payment_due_day and autopay/);
 });
 
+test("Warren Buffet Step 9f: fee flag rules in the description, and a note on mark_wb_reviewed", () => {
+  const desc = (n) => registered.find((r) => r.name === n).cfg.description;
+  const d = desc("get_wb_action_items");
+  assert.match(d, /last 90 days/);
+  assert.match(d, /turns a flag info, with refund .* but does not clear it/);
+  assert.match(d, /clears only when the charge is reviewed and has a note/);
+  assert.match(d, /path is the way there/);
+  assert.match(d, /- cash_flow: .*last_30_actual.*next_30_projected.*typical_month.*runway_months/);
+  assert.match(d, /big true marks money out over big_amount/);
+  const r = registered.find((t) => t.name === "mark_wb_reviewed");
+  assert.ok(r.cfg.inputSchema.note, "mark_wb_reviewed has note");
+  assert.match(r.cfg.description, /one transaction only/);
+});
+
 test("Warren Buffet Step 8b descriptions say when to use each tool and its key rule", () => {
   const desc = (n) => registered.find((r) => r.name === n).cfg.description;
   assert.match(desc("get_wb_free_cash"), /can we afford X/);

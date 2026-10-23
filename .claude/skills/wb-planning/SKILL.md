@@ -131,6 +131,8 @@ There is no delete tool, on purpose: deleting would lose matches and history.
   floor, and `shortfall_at_low`: the amount to move from the reserve), then the rest by section.
 - Give each row's link (`link_kind`, `link_id`) and its `todo`.
 - **It only reads.** Never mark, match, confirm or change anything from it without asking Alex first.
+- **To close a fee flag:** ask Alex for the note, then call `mark_wb_reviewed` with that one charge's
+  `transaction_ids` and `note`. Reviewed plus a note is the only thing that clears a flag; a refund only turns it green.
 - **Card bills come from the card's statement and due days** (`update_wb_account`:
   `statement_close_day`, `payment_due_day`, `autopay`, taken from the statement), never from a
   planned item: free cash already counts card balances.
