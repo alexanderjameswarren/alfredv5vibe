@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 10:20, through migration 153 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 11:14, through migration 153 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -8733,7 +8733,9 @@ CREATE TABLE IF NOT EXISTS "public"."executions" (
     "prior_event_date" "date",
     "prior_intent_status" "text",
     "group_id" "text",
+    "parent_execution_id" "text",
     CONSTRAINT "executions_has_subject" CHECK ((("intent_id" IS NOT NULL) OR ("group_id" IS NOT NULL) OR (COALESCE("item_ids", '[]'::"jsonb") <> '[]'::"jsonb"))),
+    CONSTRAINT "executions_parent_is_recipe_run" CHECK ((("parent_execution_id" IS NULL) OR (("intent_id" IS NULL) AND ("parent_execution_id" <> "id")))),
     CONSTRAINT "executions_prior_intent_status_check" CHECK (("prior_intent_status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text"])))
 );
 
@@ -8782,6 +8784,10 @@ COMMENT ON COLUMN "public"."executions"."prior_intent_status" IS 'Restructure P4
 
 
 COMMENT ON COLUMN "public"."executions"."group_id" IS 'Restructure P5. The group this execution belongs to: a menu''s own execution (on the menu''s intention) and each recipe execution inside it. Copied from the intention by executions_group_tag when not given.';
+
+
+
+COMMENT ON COLUMN "public"."executions"."parent_execution_id" IS 'Restructure P5. On a recipe''s execution inside a menu cook: the menu''s execution (group_id set, on the menu''s own intention). Null otherwise. Deleting the menu''s execution deletes these (cascade).';
 
 
 
@@ -13103,6 +13109,10 @@ CREATE INDEX "idx_executions_group" ON "public"."executions" USING "btree" ("gro
 
 
 
+CREATE INDEX "idx_executions_parent" ON "public"."executions" USING "btree" ("parent_execution_id") WHERE ("parent_execution_id" IS NOT NULL);
+
+
+
 CREATE INDEX "idx_executions_user" ON "public"."executions" USING "btree" ("user_id");
 
 
@@ -14256,6 +14266,11 @@ ALTER TABLE ONLY "public"."events"
 
 ALTER TABLE ONLY "public"."executions"
     ADD CONSTRAINT "executions_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."item_groups"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."executions"
+    ADD CONSTRAINT "executions_parent_execution_id_fkey" FOREIGN KEY ("parent_execution_id") REFERENCES "public"."executions"("id") ON DELETE CASCADE;
 
 
 
