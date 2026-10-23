@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 14:00, through migration 160 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 14:15, through migration 161 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -325,6 +325,59 @@ reach without a decision in platform.anon_access).';
 
 
 
+CREATE OR REPLACE FUNCTION "platform"."grant_table"("p_table" "regclass") RETURNS "text"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    AS $$
+declare
+  v_kind char;
+  v_rel  text;
+  v_seq  text;
+begin
+  select c.relkind, format('%I.%I', n.nspname, c.relname)
+    into v_kind, v_rel
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+   where c.oid = p_table;
+
+  if v_kind is null then
+    raise exception 'grant_table: could not resolve %', p_table;
+  end if;
+  if v_kind not in ('r', 'p', 'f', 'v', 'm') then
+    raise exception 'grant_table: % is not a table or view (relkind %)', v_rel, v_kind;
+  end if;
+
+  if v_kind = 'm' then
+    -- A materialized view can only be read.
+    execute format('grant select on %s to authenticated, service_role', v_rel);
+  else
+    -- Views get DML too, as default privileges gave them; security_invoker views and RLS still decide the rows.
+    execute format('grant select, insert, update, delete on %s to authenticated, service_role', v_rel);
+  end if;
+  execute format('revoke all on %s from public, anon', v_rel);
+
+  -- The table's own sequences (serial or identity columns).
+  for v_seq in
+    select format('%I.%I', sn.nspname, s.relname)
+      from pg_depend d
+      join pg_class s on s.oid = d.objid and s.relkind = 'S'
+      join pg_namespace sn on sn.oid = s.relnamespace
+     where d.classid = 'pg_class'::regclass and d.refobjid = p_table and d.deptype in ('a', 'i')
+  loop
+    execute format('grant usage, select on sequence %s to authenticated, service_role', v_seq);
+    execute format('revoke all on sequence %s from public, anon', v_seq);
+  end loop;
+
+  return format('granted %s to authenticated + service_role, anon and PUBLIC stripped', v_rel);
+end;
+$$;
+
+
+ALTER FUNCTION "platform"."grant_table"("p_table" "regclass") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "platform"."grant_table"("p_table" "regclass") IS 'Explicit grants for one table or view, independent of default privileges (Supabase stops granting new tables from 2026-10-30): select, insert, update, delete to authenticated and service_role (select only for a materialized view), usage and select on the table''s own sequences, everything revoked from anon and PUBLIC. register_table calls it; a migration creating a view calls it directly after the create.';
+
+
+
 CREATE OR REPLACE FUNCTION "platform"."heavy_jsonb_columns"("p_table" "regclass") RETURNS "text"[]
     LANGUAGE "plpgsql" STABLE
     AS $_$
@@ -479,7 +532,6 @@ declare
   v_expr     text;
   v_policy   text;
   v_bad      text;
-  v_seq      text;
 begin
   if p_policy_mode not in ('owner', 'none') then
     raise exception 'register_table: policy_mode must be ''owner'' or ''none'', got %', p_policy_mode;
@@ -536,21 +588,8 @@ begin
       v_policy, v_schema, v_name, v_expr, v_expr);
   end if;
 
-  -- (c) Grants, explicit (Supabase stops granting new tables by default from 2026-10-30): authenticated and service_role
-  --     get DML, the table's own sequences (serial or identity) get usage; anon and PUBLIC are stripped.
-  execute format(
-    'grant select, insert, update, delete on %I.%I to authenticated, service_role', v_schema, v_name);
-  execute format('revoke all on %I.%I from public, anon', v_schema, v_name);
-  for v_seq in
-    select format('%I.%I', sn.nspname, s.relname)
-      from pg_depend d
-      join pg_class s on s.oid = d.objid and s.relkind = 'S'
-      join pg_namespace sn on sn.oid = s.relnamespace
-     where d.classid = 'pg_class'::regclass and d.refobjid = p_table and d.deptype in ('a', 'i')
-  loop
-    execute format('grant usage, select on sequence %s to authenticated, service_role', v_seq);
-    execute format('revoke all on sequence %s from public, anon', v_seq);
-  end loop;
+  -- (c) Grants, explicit: see platform.grant_table.
+  perform platform.grant_table(p_table);
 
   -- (d) Audit trigger
   execute format('drop trigger if exists audit_trigger on %I.%I', v_schema, v_name);
@@ -16149,6 +16188,10 @@ GRANT USAGE ON SCHEMA "public" TO "postgres";
 GRANT USAGE ON SCHEMA "public" TO "anon";
 GRANT USAGE ON SCHEMA "public" TO "authenticated";
 GRANT USAGE ON SCHEMA "public" TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "platform"."grant_table"("p_table" "regclass") FROM PUBLIC;
 
 
 
