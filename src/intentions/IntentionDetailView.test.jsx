@@ -441,3 +441,40 @@ test("title pill: a running execution refuses with its reason", () => {
   expect(screen.getByRole("alert").textContent).toMatch(/execution is in progress/);
   expect(onSetStatus).not.toHaveBeenCalled();
 });
+
+// Restructure P5 step 12, bug mvjx4363b4bn4gezrys.
+test("an archived intention shows the Archived pill and Restore as its only action", () => {
+  const { onUpdateIntention } = renderDetail({ intention: { id: "i1", text: "Water plants", status: "active", archived: true } });
+  expect(screen.getByText("Archived")).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toBe("This intention is archived.");
+  for (const name of [/Start Now/, /Reschedule/, /^Schedule/, /^Edit$/, /^Archive$/, /Skip/, /Log Execution/]) {
+    expect(screen.queryByRole("button", { name })).toBeNull();
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+  expect(onUpdateIntention).toHaveBeenCalledWith("i1", { archived: false });
+});
+
+test("header links run Context > Group > Item", () => {
+  const { GroupsProvider } = require("../groups/GroupsContext");
+  render(
+    <GroupsProvider
+      itemGroups={[{ id: "g1", name: "Kitchen remodel", groupTypeId: "proj" }]}
+      groupTypes={[{ id: "proj", icon: "SquareKanban" }]}
+      groupMembers={[{ id: "m1", groupId: "g1", memberType: "intention", memberId: "i9", position: 1 }]}
+      onOpenGroup={jest.fn()}
+    >
+      <IntentionDetailView
+        intention={{ id: "i9", text: "Order tiles", status: "active", contextId: "c1", itemId: "tiles" }}
+        events={[]}
+        contexts={[{ id: "c1", name: "Home" }]}
+        items={[{ id: "tiles", name: "Tile list" }]}
+        getIntentDisplay={(i) => i.text}
+        onViewContextDetail={jest.fn()}
+        onViewItemDetail={jest.fn()}
+        onBack={jest.fn()}
+      />
+    </GroupsProvider>,
+  );
+  const links = within(screen.getByLabelText("Linked records")).getAllByRole("button").map((b) => b.getAttribute("title"));
+  expect(links).toEqual(["Open context: Home", "Open group: Kitchen remodel", "Open item: Tile list"]);
+});

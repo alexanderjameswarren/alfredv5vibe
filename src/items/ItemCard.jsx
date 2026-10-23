@@ -17,6 +17,7 @@ import StatusPill from "../shared/StatusPill";
 import StatusPicker from "../shared/StatusPicker";
 import { CloseRowButton } from "../shared/useRowClose";
 import TagChips, { RowMetaLine } from "../shared/TagChips";
+import { RecordGroupChips } from "../groups/GroupsContext";
 import { closedBlockTitle, statusOf, statusOptionsFor } from "../utils/status";
 
 export default function ItemCard({
@@ -664,6 +665,8 @@ export default function ItemCard({
         <>
           {/* List rows (Restructure P4), as IntentionCard: what it is, then when. */}
           <RowMetaLine statusRow={item} contextName={contextName} tags={item.tags || []} />
+          {/* Restructure P5: its own line of the groups it is in; nothing when none. */}
+          <RecordGroupChips records={[{ memberType: "item", id: item.id }]} />
           {scheduleLine && (
             <div className="flex items-center gap-1 mt-1 text-xs text-foreground">
               <ObjectIcon type="event" className="w-3.5 h-3.5 text-muted-foreground" />

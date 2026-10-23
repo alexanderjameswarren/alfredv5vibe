@@ -1,6 +1,19 @@
 import React from "react";
 import { Pause, Play } from "lucide-react";
-import ObjectIcon from "../shared/ObjectIcon";
+import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
+import { useExecutionGroups } from "../groups/GroupsContext";
+
+// The run's group, styled as the context line above it: plain icon and name, no
+// pill. Rows keep the chip, as they keep the context pill. The card opens the run.
+function ExecutionGroupLines({ exec }) {
+  const { chips } = useExecutionGroups({ groupId: exec.groupId, intentId: exec.intentId, itemIds: exec.itemIds || [] });
+  return chips.map((g) => (
+    <p key={g.id} data-group-line="" className="flex items-center gap-1.5 text-sm text-foreground">
+      <GroupTypeIcon icon={g.icon} className="w-3.5 h-3.5" />
+      {g.name}
+    </p>
+  ));
+}
 
 // `children` render inside the card, below its state line (the run's notes on detail pages).
 export default function ExecutionBadge({ exec, intents, contexts, getIntentDisplay, onOpen, children }) {
@@ -38,6 +51,8 @@ export default function ExecutionBadge({ exec, intents, contexts, getIntentDispl
           {contexts.find((c) => c.id === exec.contextId)?.name}
         </p>
       )}
+      {/* Restructure P5: the group this run belongs to. */}
+      <ExecutionGroupLines exec={exec} />
       {isActive && (
         <p className="text-xs text-foreground mt-1 flex items-center gap-1">
           <Play className="w-3 h-3" />

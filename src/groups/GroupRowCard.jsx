@@ -1,4 +1,5 @@
 import React from "react";
+import { Pin } from "lucide-react";
 import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
 import { RowMetaLine } from "../shared/TagChips";
 import { shortDate } from "../notes/noteFormat";
@@ -41,7 +42,14 @@ export default function GroupRowCard({ row, contextName, onOpen }) {
     >
       <p className="flex items-start gap-1.5 font-medium">
         <GroupTypeIcon icon={row.type?.icon} className="w-4 h-4 text-primary" align="first-line" />
-        <span className="min-w-0 line-clamp-2" title={row.name}>{row.name || "Untitled"}</span>
+        {/* The pin sits inline after the last word, as on pinned collections and contexts;
+            as a flex sibling of the clamped name Chrome pushed it to the card's right edge. */}
+        <span className="min-w-0 line-clamp-2" title={row.name}>
+          {row.name || "Untitled"}
+          {row.group?.pinned && (
+            <Pin className="inline-block w-3.5 h-3.5 ml-1.5 align-[-0.1em] text-muted-foreground" aria-label="Pinned" />
+          )}
+        </span>
       </p>
       <RowMetaLine statusRow={row.group} contextName={contextName} />
       <div className="flex items-center gap-1 mt-1 text-xs text-foreground">

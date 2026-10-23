@@ -18,6 +18,7 @@ import { nextForCompletion } from "../utils/recurrence";
 import { describeRepeat } from "../utils/recurrenceDisplay";
 import { NoteList, ARCHIVED_NOTICE } from "../notes/NoteTimeline";
 import { useRecordNotes } from "../notes/useRecordNotes";
+import { useExecutionGroups } from "../groups/GroupsContext";
 
 export const DELETE_EXECUTION_CONFIRM =
   "Delete this execution? Its notes and ticked steps are deleted. A date Start Now moved to today goes back.";
@@ -65,6 +66,12 @@ export default function ExecutionDetailView({
   // and threaded into the element rows rather than rendered as its own list.
   const chain = useNotificationChain(execution.id, execution.elements);
   const [editingStep, setEditingStep] = useState(null);
+  // Restructure P5: the group this execution belongs to (its own, else its intention's).
+  const execGroups = useExecutionGroups({
+    groupId: execution.groupId,
+    intentId: execution.intentId,
+    itemIds: execution.itemIds || [],
+  });
 
   // 🛑 Reload the chain AFTER the toggle has finished writing, not when the
   // element state changes.
@@ -308,6 +315,10 @@ export default function ExecutionDetailView({
               name: contextName,
               onOpen: onViewContext && (() => leaveTo(() => onViewContext(execution.contextId))),
             } : null}
+            groups={execGroups.onOpenGroup ? execGroups.chips.map((g) => ({
+              ...g,
+              onOpen: () => leaveTo(() => execGroups.onOpenGroup(g.id)),
+            })) : []}
             intention={intent && onViewIntention ? {
               name: getIntentDisplay(intent),
               onOpen: () => leaveTo(() => onViewIntention(intent.id)),

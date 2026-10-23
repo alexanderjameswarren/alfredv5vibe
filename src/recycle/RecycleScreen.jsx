@@ -4,6 +4,7 @@ import UnderlineTabs from "../shared/UnderlineTabs";
 import { OBJECT_ICONS, GROUP_TYPE_ICONS, GroupTypeIcon } from "../shared/ObjectIcon";
 import { getRecurrenceDisplayString } from "../utils/recurrenceDisplay";
 import { groupTitle } from "../groups/groupDetail";
+import { archivedOnLabel } from "../shared/archivedRecord";
 
 // The Recycle Bin screen, moved out of Alfred.jsx unchanged. Everything it reads comes
 // in as props: `contexts` and `intents` from Alfred, the rest from useRecycleBin.
@@ -173,9 +174,10 @@ export default function RecycleScreen({
                 break;
             }
 
-            const updatedLabel = record.updatedAt
-              ? new Date(record.updatedAt).toLocaleDateString()
-              : "";
+            // Archived tabs show when the row was archived; Executions keep their last update.
+            const updatedLabel = recycleTab === "executions"
+              ? record.updatedAt ? new Date(record.updatedAt).toLocaleDateString() : ""
+              : archivedOnLabel(record) || "";
 
             return (
               <div

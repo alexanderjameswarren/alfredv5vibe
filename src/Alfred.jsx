@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   viewToPath,
   isKnownPath,
@@ -66,6 +66,8 @@ import { useCollections } from "./collections/useCollections";
 import CollectionsScreen from "./collections/CollectionsScreen";
 import CollectionDetailScreen from "./collections/CollectionDetailScreen";
 import GroupEditRoute from "./groups/GroupEditRoute";
+import { GroupsProvider } from "./groups/GroupsContext";
+import { buildGroupRows } from "./utils/rowModel";
 import CollectionHistoryScreen from "./collections/CollectionHistoryScreen";
 import ItemAddToCollectionScreen from "./collections/ItemAddToCollectionScreen";
 import CollectionAddItemsScreen from "./collections/CollectionAddItemsScreen";
@@ -262,6 +264,12 @@ export default function Alfred() {
   const [selectedGroupId, setSelectedGroupId] = useState(null);
   // Each context page's selected tab (All / a group type / Items and intentions).
   const [contextRowTabs, setContextRowTabs] = useState({});
+  // Open a group's detail page from anywhere (chips, record links, Home). Stable for
+  // GroupsProvider's memo.
+  const openGroup = useCallback(
+    (groupId) => navigate(groupDetailPath(groupId), { state: { fromApp: true } }),
+    [navigate],
+  );
   // "Moved to Active" after a write the 088 triggers may answer. Before the
   // action hooks, which take `watchStatus`.
   const { notice, showNotice } = useNotice();
@@ -1182,6 +1190,14 @@ export default function Alfred() {
   }
 
   return (
+    <GroupsProvider
+      itemGroups={itemGroups}
+      groupTypes={groupTypes}
+      groupMembers={groupMembers}
+      items={items}
+      intents={intents}
+      onOpenGroup={openGroup}
+    >
     <div className="min-h-screen bg-background">
       {isLoading && <LoadingOverlay message={loadingMessage} />}
 
@@ -1214,6 +1230,14 @@ export default function Alfred() {
             visibleTodayEvents={visibleTodayEvents}
             pinnedCollections={pinnedCollections}
             pinnedContexts={pinnedContexts}
+            pinnedGroupRows={buildGroupRows({
+              groups: itemGroups.filter((g) => g.pinned && !g.archived),
+              groupTypes,
+              members: groupMembers,
+              items,
+              intents,
+            })}
+            onOpenGroup={openGroup}
             intents={intents}
             contexts={contexts}
             items={items}
@@ -1840,5 +1864,6 @@ export default function Alfred() {
         handleCapture={handleCapture}
       />
     </div>
+    </GroupsProvider>
   );
 }

@@ -3,6 +3,9 @@ import { ArrowLeft, CalendarPlus, Copy, CopyPlus, NotebookPen, Play, Plus, Setti
 import { recordCopyText } from "../shared/copyRecord";
 import ObjectIcon from "../shared/ObjectIcon";
 import ActionBar, { archiveAction, logAction, skipAction, stopAction } from "../shared/ActionBar";
+import StatusPill from "../shared/StatusPill";
+import { ArchivedNotice, ArchivedPill, restoreAction } from "../shared/archivedRecord";
+import { useRecordGroups } from "../groups/GroupsContext";
 import useStopRepeat, { canStop } from "../shared/useStopRepeat";
 import CopyButton from "../shared/CopyButton";
 import CancelButton from "../shared/CancelButton";
@@ -111,8 +114,16 @@ export default function ItemDetailView({
     itemIds: item ? [item.id] : [],
     intentionIds: notesIntentions.map((i) => i.id),
   });
+  // Restructure P5: the groups this item (or one of its intentions) is in, for the header links.
+  const recordGroups = useRecordGroups(
+    item
+      ? [{ memberType: "item", id: item.id }, ...notesIntentions.map((i) => ({ memberType: "intention", id: i.id }))]
+      : [],
+  );
 
   if (!item) return null;
+  // Bug mvjx4363b4bn4gezrys: an archived item is not editable.
+  const archived = Boolean(item.archived);
 
   // Note sources as links; the item itself is this page, so it is left out.
   const noteSources = {
@@ -206,8 +217,9 @@ export default function ItemDetailView({
       ? contexts.find((c) => c.id === item.contextId)?.name
       : null;
 
-  // If editing, show the ItemCard in edit mode
-  if (isEditing) {
+  // If editing, show the ItemCard in edit mode. An archived item never opens the
+  // form (bug mvjx4363b4bn4gezrys): it shows its page with Restore instead.
+  if (isEditing && !archived) {
     return (
       <div>
         <button
@@ -279,24 +291,34 @@ export default function ItemDetailView({
               title="Copy for a Claude chat"
             />
           </h2>
-          {onSetStatus && (
-            <StatusMenu
-              row={item}
-              blocked={itemCloseBlocked ? { closed: itemCloseBlocked } : {}}
-              onChoose={(status) => (status === "closed" && onCloseRecords ? openItemClose() : onSetStatus(item.id, status))}
-            />
+          {archived ? (
+            // Archived: the flag beside a read-only status, no status menu.
+            <div className="flex items-center gap-1.5 shrink-0">
+              <ArchivedPill />
+              <StatusPill row={item} />
+            </div>
+          ) : (
+            onSetStatus && (
+              <StatusMenu
+                row={item}
+                blocked={itemCloseBlocked ? { closed: itemCloseBlocked } : {}}
+                onChoose={(status) => (status === "closed" && onCloseRecords ? openItemClose() : onSetStatus(item.id, status))}
+              />
+            )
           )}
           {closeDialog}
           {stopping.sheet}
         </div>
+        {archived && <ArchivedNotice noun="item" />}
 
-        {/* The execution page's link row: the context pill. */}
+        {/* The execution page's link row: Context > Group (Restructure P5). */}
         <div className="mt-2">
           <RecordLinks
             context={contextName ? {
               name: contextName,
               onOpen: onViewContextDetail && (() => onViewContextDetail(item.contextId)),
             } : null}
+            groups={recordGroups.onOpenGroup ? recordGroups.chips.map((g) => ({ ...g, onOpen: () => recordGroups.onOpenGroup(g.id) })) : []}
           />
         </div>
         <DetailMeta tags={item.tags} />
@@ -312,7 +334,11 @@ export default function ItemDetailView({
         {/* Record actions (Restructure P4), in one order: Start Now, Schedule, Skip,
             Complete, Add to Collection, Clone, Edit, Archive, all acting on the
             intention Start Now would pick. As many as fit are buttons; the rest go
-            into ⋯ in the same order (ActionBar), then Create Intention. */}
+            into ⋯ in the same order (ActionBar), then Create Intention.
+            Archived: Restore is the only action (bug mvjx4363b4bn4gezrys). */}
+        {archived ? (
+          <ActionBar actions={[restoreAction(() => onUpdateItem(item.id, { archived: false }))]} />
+        ) : (
         <ActionBar
           actions={[
             onStartNow && {
@@ -414,6 +440,7 @@ export default function ItemDetailView({
             },
           ].filter(Boolean)}
         />
+        )}
         {completing && (
           <CompleteNoteDialog
             title="Log execution"

@@ -4,6 +4,9 @@ import CompleteNoteDialog from "../notes/CompleteNoteDialog";
 import { recordCopyText } from "../shared/copyRecord";
 import CopyButton from "../shared/CopyButton";
 import ActionBar, { archiveAction, logAction, skipAction, stopAction } from "../shared/ActionBar";
+import StatusPill from "../shared/StatusPill";
+import { ArchivedNotice, ArchivedPill, restoreAction } from "../shared/archivedRecord";
+import { useRecordGroups } from "../groups/GroupsContext";
 import useStopRepeat, { canStop } from "../shared/useStopRepeat";
 import { ACTION_BUTTON } from "../shared/actionButton";
 import { getTodayDate } from "../utils/eventDates";
@@ -84,8 +87,12 @@ export default function IntentionDetailView({
   // A reminder added, cancelled or fired elsewhere (realtime, Step 12) re-reads the lines.
   useEffect(() => onRemindersChanged(reminders.reload), [reminders.reload]);
   const stopping = useStopRepeat({ events, onStopRepeat, onDone: () => reminders.reload() });
+  // Restructure P5: the groups this intention is in, for the header links.
+  const recordGroups = useRecordGroups(intention ? [{ memberType: "intention", id: intention.id }] : []);
 
   if (!intention) return null;
+  // Bug mvjx4363b4bn4gezrys: an archived intention is not editable.
+  const archived = Boolean(intention.archived);
 
   const liveEvents = liveEventsFor(events, intention.id);
   const closedTitle = closedBlockTitle(intention, "intention");
@@ -215,8 +222,8 @@ export default function IntentionDetailView({
       : null;
   const linkedItem = intention.itemId ? (items || []).find((i) => i.id === intention.itemId) : null;
 
-  // If editing, show the IntentionCard in edit mode
-  if (isEditing) {
+  // If editing, show the IntentionCard in edit mode; never for an archived one.
+  if (isEditing && !archived) {
     return (
       <div>
         <button
@@ -284,10 +291,18 @@ export default function IntentionDetailView({
               title="Copy for a Claude chat"
             />
           </h2>
-          {onSetStatus && (
-            <StatusMenu row={intention} onChoose={chooseStatus} blocked={hasActiveExecutions ? { closed: CLOSE_BLOCKED } : {}} />
+          {archived ? (
+            <div className="flex items-center gap-1.5 shrink-0">
+              <ArchivedPill />
+              <StatusPill row={intention} />
+            </div>
+          ) : (
+            onSetStatus && (
+              <StatusMenu row={intention} onChoose={chooseStatus} blocked={hasActiveExecutions ? { closed: CLOSE_BLOCKED } : {}} />
+            )
           )}
         </div>
+        {archived && <ArchivedNotice noun="intention" />}
 
         {/* Details — `intents.description`, migration 069. Step 17c.
             Below the name and above the metadata, because it is the intention's
@@ -303,13 +318,14 @@ export default function IntentionDetailView({
           </p>
         )}
 
-        {/* The execution page's link row: context pill, then the linked item. */}
+        {/* The execution page's link row: Context > Group > Item (Restructure P5). */}
         <div className="mt-2">
           <RecordLinks
             context={contextName ? {
               name: contextName,
               onOpen: onViewContextDetail && (() => onViewContextDetail(intention.contextId)),
             } : null}
+            groups={recordGroups.onOpenGroup ? recordGroups.chips.map((g) => ({ ...g, onOpen: () => recordGroups.onOpenGroup(g.id) })) : []}
             item={linkedItem && onViewItemDetail ? {
               name: linkedItem.name,
               onOpen: () => onViewItemDetail(linkedItem.id),
@@ -336,14 +352,18 @@ export default function IntentionDetailView({
           text={intention.text || ""}
           scheduled={reminders.scheduled}
           onChanged={reminders.reload}
-          disabledReason={closedTitle}
+          disabledReason={archived ? "This intention is archived." : closedTitle}
         />
 
         {statusNotices}
 
         {/* Record actions (Restructure P4), in one order: Start Now, Schedule /
             Reschedule, Skip, Complete, Edit, Archive. As many as fit are buttons;
-            the rest go into ⋯ in the same order (ActionBar). */}
+            the rest go into ⋯ in the same order (ActionBar).
+            Archived: Restore is the only action (bug mvjx4363b4bn4gezrys). */}
+        {archived ? (
+          <ActionBar actions={[restoreAction(() => onUpdateIntention(intention.id, { archived: false }))]} />
+        ) : (
         <ActionBar
           actions={[
             onStartNow && {
@@ -426,6 +446,7 @@ export default function IntentionDetailView({
             },
           ].filter(Boolean)}
         />
+        )}
         {/* The disabled buttons' reason, as visible text (no tooltip repeats it). */}
         {(closedTitle || actions.moveBlocked) && (onStartNow || onSchedule) && (
           <p className="mt-2 text-sm text-muted-foreground">{closedTitle || actions.moveBlocked}</p>

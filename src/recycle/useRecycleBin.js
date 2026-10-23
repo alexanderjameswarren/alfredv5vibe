@@ -62,25 +62,23 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
     try {
       let query;
       const offset = append ? recycleData.length : 0;
+      // Archived tabs: newest archive first, by archived_at (migration 152), id breaking ties.
+      const archived = (table, columns) =>
+        supabase.from(table).select(`${columns}, updated_at, archived_at`)
+          .eq("archived", true)
+          .order("archived_at", { ascending: false, nullsFirst: false })
+          .order("id", { ascending: true })
+          .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
 
       switch (tab) {
         case "items":
-          query = supabase.from("items").select("id, name, context_id, tags, updated_at")
-            .eq("archived", true)
-            .order("updated_at", { ascending: false, nullsFirst: false })
-            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          query = archived("items", "id, name, context_id, tags");
           break;
         case "intents":
-          query = supabase.from("intents").select("id, text, context_id, recurrence_config, target_start_date, end_date, tags, updated_at")
-            .eq("archived", true)
-            .order("updated_at", { ascending: false, nullsFirst: false })
-            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          query = archived("intents", "id, text, context_id, recurrence_config, target_start_date, end_date, tags");
           break;
         case "events":
-          query = supabase.from("events").select("id, intent_id, time, context_id, updated_at")
-            .eq("archived", true)
-            .order("updated_at", { ascending: false, nullsFirst: false })
-            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          query = archived("events", "id, intent_id, time, context_id");
           break;
         case "executions":
           query = supabase.from("executions").select("id, intent_id, event_id, outcome, started_at, closed_at, updated_at")
@@ -91,40 +89,25 @@ export function useRecycleBin({ view, refreshData, contextArchiveBlockers }) {
             .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
           break;
         case "contexts":
-          query = supabase.from("contexts").select("id, name, description, shared, updated_at")
-            .eq("archived", true)
-            .order("updated_at", { ascending: false, nullsFirst: false })
-            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          query = archived("contexts", "id, name, description, shared");
           break;
         case "collections":
           // Only the columns the row actually renders. Membership is not read
           // here: an archived collection's `collection_items` rows are untouched
           // by the soft delete, so there is nothing to report and nothing to
           // repair on restore.
-          query = supabase.from("item_collections").select("id, name, context_id, updated_at")
-            .eq("archived", true)
-            .order("updated_at", { ascending: false, nullsFirst: false })
-            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          query = archived("item_collections", "id, name, context_id");
           break;
         case "groups":
           // Members are not read here: Alfred already holds every member row, and
           // the derived name is built from them. Archiving never touches members.
-          query = supabase.from("item_groups").select("id, name, group_type_id, context_id, updated_at")
-            .eq("archived", true)
-            .order("updated_at", { ascending: false, nullsFirst: false })
-            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          query = archived("item_groups", "id, name, group_type_id, context_id");
           break;
         case "songs":
-          query = supabase.from("sam_songs").select("id, title, artist, updated_at")
-            .eq("archived", true)
-            .order("updated_at", { ascending: false, nullsFirst: false })
-            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          query = archived("sam_songs", "id, title, artist");
           break;
         case "snippets":
-          query = supabase.from("sam_snippets").select("id, title, song_id, start_measure, end_measure, updated_at")
-            .eq("archived", true)
-            .order("updated_at", { ascending: false, nullsFirst: false })
-            .range(offset, offset + RECYCLE_PAGE_SIZE - 1);
+          query = archived("sam_snippets", "id, title, song_id, start_measure, end_measure");
           break;
         default:
           setRecycleLoading(false);

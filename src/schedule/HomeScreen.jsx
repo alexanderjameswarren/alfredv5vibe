@@ -6,6 +6,7 @@ import { EVENT_SORT_OPTIONS } from "../utils/listSortOptions";
 import { ExecutionList } from "../executions/InProgressSection";
 import CollectionCard from "../collections/CollectionCard";
 import ContextCard from "../contexts/ContextCard";
+import GroupRowCard from "../groups/GroupRowCard";
 import EventCard from "./EventCard";
 
 // The Home screen, moved out of Alfred.jsx unchanged. Everything it reads comes in
@@ -20,6 +21,9 @@ export default function HomeScreen({
   visibleTodayEvents,
   pinnedCollections,
   pinnedContexts,
+  // Restructure P5: standard group rows (rowModel.buildGroupRows) for pinned, live groups.
+  pinnedGroupRows = [],
+  onOpenGroup,
   intents,
   contexts,
   items,
@@ -166,6 +170,23 @@ export default function HomeScreen({
                   setView("collection-detail");
                 }}
                 onArchive={archiveCollection}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Pinned Groups (Restructure P5): groups with pinned on, as Pinned Collections. */}
+      {pinnedGroupRows.length > 0 && (
+        <div className="mt-6">
+          <h3 className="text-lg font-medium mb-3 text-foreground">Pinned Groups</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {pinnedGroupRows.map((row) => (
+              <GroupRowCard
+                key={row.key}
+                row={row}
+                contextName={contexts.find((c) => c.id === row.group.contextId)?.name}
+                onOpen={onOpenGroup}
               />
             ))}
           </div>

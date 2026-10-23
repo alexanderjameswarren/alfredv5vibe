@@ -20,7 +20,7 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 9. Group create/edit page (done 2026-10-22, with removal history) (search-and-add, drag reorder, type picker, pin, archive)
 - [x] 10. Group detail page (header, buttons, members, notes, recent executions)
 - [x] 11. Context page: create button, browse tabs, group rows, sort
-- [ ] 12. Group chips on member rows and running cards; record-links order Context > Group > Item > Intention (incl. execution page); pinned groups on Home
+- [x] 12. Group chips on member rows and running cards; record-links order Context > Group > Item > Intention (incl. execution page); pinned groups on Home
   - Apply bug mvjx4363b4bn4gezrys to item and intention detail pages: Archived pill, Restore as the only action, Edit hidden, edit page redirects.
 - [ ] 13. Scheduling a group through its intention (frozen item_ids on events); Close/Undo for groups
 - [ ] 14. Menu execution: Start Now together, per-recipe sections, sticky jump bar, skip a recipe, complete all, Log Execution
@@ -205,3 +205,43 @@ Each step stops for Alex's verification before the next. Database steps follow t
      - Delete appears only when no group uses the type, behind a confirm with CancelButton.
   - Claimed: `src/reminders/SettingsScreen.jsx` (+ test), the 150 migration, and `db:table:group_types`. EditCard guard counts are now 5/6/7.
   - App 2906/2906, CLI 239/239. One SAM test (`SamPlayer.plan`) failed once under load, then passed alone and on a full rerun.
+- 2026-10-23 Step 12 built; awaiting Alex's Chrome test. No db: claims held at the start.
+  - `src/groups/GroupsContext.jsx`:
+    - Alfred wraps the app in `GroupsProvider`, so cards and headers find a record's groups without new props (`useRecordGroups`, `useExecutionGroups`).
+    - `chipsFor` covers live groups of live memberships only.
+    - `GroupChips` / `RecordGroupChips` draw the chip line.
+  - Chips:
+    - Item rows (ItemCard) and intention rows (IntentionCard; a merged row counts its item and intentions) get their own chip line.
+    - Running execution cards (ExecutionBadge, used on Home and in In progress) show the execution's own group, else its intention's.
+    - EventCard's meta row gains the group and follows the new order.
+  - RecordLinks:
+    - New `groups` prop; the order is Context > Group > Item > Intention > execution everywhere.
+    - The item, intention and execution headers pass their groups.
+    - NoteSourceLinks follows the order automatically, since it goes through RecordLinks.
+  - Home: Pinned Groups (GroupRowCard, the Pinned Collections grid), shown only when a pinned live group exists.
+  - Bug mvjx4363b4bn4gezrys on item and intention detail:
+    - The status menu becomes an Archived pill beside a read-only status, with "This item/intention is archived."
+    - `restoreAction` (added to ActionBar.jsx) is the only action and un-archives in place.
+    - The edit form never opens for an archived record (`startInEditMode` included). Intention reminder lines are disabled.
+    - Related Intentions and member rows are unchanged: they are live records.
+  - The claims guard blocked a new `src/shared/archivedRecord.jsx`. It was not claimed; `restoreAction` lives in the already-claimed ActionBar.jsx and the pill is inline. Claimed `src/schedule/EventCard.jsx` and five test files under "anything else".
+  - Tests: GroupsContext (5), RecordLinks (+2), ItemDetailView (+3), IntentionDetailView (+2). App 2918/2918, CLI 239/239.
+- 2026-10-23 Step 12 Chrome test passed. Follow-ups:
+  1. `src/shared/archivedRecord.jsx` (claimed with Alex's OK) holds `ArchivedPill`, `ArchivedNotice` and `restoreAction`, now used by the item, intention and group pages. `restoreAction` was moved out of ActionBar.jsx, not copied.
+  2. Running cards (ExecutionBadge): the group is a plain icon-and-name line like the context line, with no pill and no button. Rows keep the chip.
+  3. GroupRowCard shows the Pin icon after the name when the group is pinned, as Collection and Context cards do.
+  4. Not done. The context Archived section sorts by `status_changed_at || updated_at`; status_changed_at defaults to the creation time, hence Alex's report. `update_updated_at` stamps updated_at on EVERY update, so it is reliable on archive but not only on archive (later trigger writes move it). Options reported; waiting on Alex.
+  - Yielded `_shared/platform.ts` and `.claude/skills/mcp-platform/SKILL.md` to mcp_read_gaps-t8k (both unchanged).
+  - `_shared/alfred-tools/tool-handlers.ts` and `tool-definitions.ts` are unchanged from main, but they are held through the folder claim, so they cannot be yielded.
+  - App 2920/2920, CLI 239/239.
+- 2026-10-23 Step 12 follow-ups passed in Chrome. Second round (restructure_p5-h7m-s12c-k8rm):
+  1. Pin: Chrome pushed the pin, a flex sibling of the clamped name, to the card's right edge. It now sits inline inside the name span, after the last word.
+  2. `git diff main -- supabase/functions/_shared/alfred-tools/` is empty, and the step 5 removals (fbf3226) are in main. The folder claim was released with Alex's OK so mcp_read_gaps-t8k can work. **Step 16 re-claims `_shared/alfred-tools/tool-handlers.ts`, and anything else it needs there, just in time** (after a gitsync, since mcp_read_gaps-t8k may have changed it).
+  3. Migration `152_restructure_p5_archived_at.sql` (Alex chose this over updated_at): `archived_at` on all nine tables with an archived column (contexts, events, inbox, intents, item_collections, item_groups, items, sam_snippets, sam_songs). None was held by another thread.
+     - One trigger function, `public.set_archived_at()`: set on true, cleared on false, else unchanged.
+     - Backfill from the audit log's latest false-to-true change, else updated_at, with user triggers paused.
+     - Verify with `supabase/tests/restructure_p5-h7m/step12_archived_at_verify.sql`. Number taken right after Alex's gitsync, so no `_pending_` file was needed.
+     - App: the context Archived section and every archive tab of the Recycle Bin (not Executions, which has no archived column) sort by archived_at, newest first, and show "Archived <date>". Shared helpers `archivedAt`, `byNewestArchive` and `archivedOnLabel` are in archivedRecord.jsx. updated_at stands in for a row with no archived_at.
+     - The Recycle Bin selects archived_at, so the migration must run before this reaches main.
+     - Not changed: the inbox's Recently Archived (src/inbox, unclaimed) still dates by triaged_at.
+  - App 2921/2921, CLI 239/239.

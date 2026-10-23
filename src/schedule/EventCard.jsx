@@ -3,7 +3,8 @@ import { Archive, Play } from "lucide-react";
 import { getRecurrenceConfig } from "../utils/recurrence";
 import { skipAction } from "../shared/ActionBar";
 import { supabase } from "../supabaseClient";
-import ObjectIcon from "../shared/ObjectIcon";
+import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
+import { useExecutionGroups } from "../groups/GroupsContext";
 import { formatEventDate, getTodayDate } from "../utils/eventDates";
 import { PAST_DATE_MESSAGE } from "../shared/recurrence/SchedulePopover";
 import { closedBlockTitle, RUN_ACTIVE_MOVE_REASON } from "../utils/status";
@@ -112,6 +113,9 @@ export default function EventCard({
   const contextName = contextId
     ? contexts.find((c) => c.id === contextId)?.name
     : null;
+  // Restructure P5: the group this date belongs to (a group's own event), else its intention's.
+  const eventGroups = useExecutionGroups({ groupId: event.groupId, intentId: intent?.id || event.intentId });
+  const groupLinks = eventGroups.onOpenGroup ? eventGroups.chips : [];
 
   // Following a link out of the EDIT form unmounts it and drops whatever is
   // typed. EventCard never joined the app's `onDirtyChange` plumbing — that is
@@ -141,7 +145,7 @@ export default function EventCard({
   // the edit form needs the answer BEFORE it decides whether to draw a label
   // above the row — and asking by calling the renderer and testing the result
   // means rendering it twice.
-  const hasMetaRow = Boolean(contextName || showIntentionLink || showItemLink);
+  const hasMetaRow = Boolean(contextName || groupLinks.length || showIntentionLink || showItemLink);
 
   function renderMetaRow(guard) {
     if (!hasMetaRow) return null;
@@ -168,16 +172,18 @@ export default function EventCard({
               {contextName}
             </span>
           ))}
-        {showIntentionLink && (
+        {/* One order everywhere (Restructure P5): Context > Group > Item > Intention. */}
+        {groupLinks.map((g) => (
           <EventMetaLink
-            icon={<ObjectIcon type="intention" className="w-3.5 h-3.5" />}
-            name={intentionName}
-            showName={intentionName !== eventTitle}
-            onClick={() => onViewIntention(intent.id)}
+            key={g.id}
+            icon={<GroupTypeIcon icon={g.icon} className="w-3.5 h-3.5" />}
+            name={g.name}
+            showName
+            onClick={() => eventGroups.onOpenGroup(g.id)}
             guard={guard}
-            title={`Open intention: ${intentionName}`}
+            title={`Open group: ${g.name}`}
           />
-        )}
+        ))}
         {showItemLink && (
           <EventMetaLink
             icon={<ObjectIcon type="item" className="w-3.5 h-3.5" />}
@@ -186,6 +192,16 @@ export default function EventCard({
             onClick={() => onViewItem(linkedItem.id)}
             guard={guard}
             title={`Open item: ${linkedItem.name}`}
+          />
+        )}
+        {showIntentionLink && (
+          <EventMetaLink
+            icon={<ObjectIcon type="intention" className="w-3.5 h-3.5" />}
+            name={intentionName}
+            showName={intentionName !== eventTitle}
+            onClick={() => onViewIntention(intent.id)}
+            guard={guard}
+            title={`Open intention: ${intentionName}`}
           />
         )}
       </div>

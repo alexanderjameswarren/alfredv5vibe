@@ -3,7 +3,8 @@ import { Archive, ArchiveRestore, ArrowLeft, Settings } from "lucide-react";
 import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
 import CopyButton from "../shared/CopyButton";
 import { recordCopyText } from "../shared/copyRecord";
-import StatusPill, { PILL_CLASS } from "../shared/StatusPill";
+import StatusPill from "../shared/StatusPill";
+import { ArchivedNotice, ArchivedPill, restoreAction } from "../shared/archivedRecord";
 import RecordLinks from "../shared/RecordLinks";
 import ActionBar, { archiveAction } from "../shared/ActionBar";
 import { ACTION_BUTTON } from "../shared/actionButton";
@@ -89,21 +90,13 @@ export default function GroupDetailScreen({
             />
           </h2>
           <div className="flex items-center gap-1.5 shrink-0">
-            {group.archived && (
-              <span data-archived="" className={PILL_CLASS}>
-                Archived
-              </span>
-            )}
+            {group.archived && <ArchivedPill />}
             <StatusPill row={group} />
           </div>
         </div>
 
         {/* Archived: say so where the eye lands (bug mvjx4363b4bn4gezrys). */}
-        {group.archived && (
-          <p role="status" className="mt-2 text-sm text-muted-foreground">
-            This {(type?.labelSingular || "group").toLowerCase()} is archived.
-          </p>
-        )}
+        {group.archived && <ArchivedNotice noun={(type?.labelSingular || "group").toLowerCase()} />}
 
         <div className="mt-2">
           <RecordLinks
@@ -115,18 +108,7 @@ export default function GroupDetailScreen({
         <ActionBar
           actions={
             group.archived
-              ? [
-                  {
-                    key: "restore",
-                    menu: { label: "Restore", icon: ArchiveRestore, onClick: onUnarchive },
-                    button: (
-                      <button onClick={onUnarchive} className={`${ACTION_BUTTON} bg-secondary hover:bg-secondary text-foreground`}>
-                        <ArchiveRestore className="w-4 h-4" />
-                        Restore
-                      </button>
-                    ),
-                  },
-                ]
+              ? [restoreAction(onUnarchive)]
               : [
                   {
                     key: "edit",

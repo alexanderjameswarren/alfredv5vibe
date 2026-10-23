@@ -356,3 +356,56 @@ test("an intention with an open run shows only under In progress, and the counts
   expect(screen.getByRole("button", { name: "Active (1)" })).toBeTruthy();
   expect(screen.getAllByRole("button", { name: "Close" })).toHaveLength(1);
 });
+
+// Restructure P5 step 12, bug mvjx4363b4bn4gezrys.
+describe("archived item", () => {
+  it("shows the Archived pill and Restore as the only action", () => {
+    const { onUpdateItem } = renderItem({ archived: true, status: "active" });
+    expect(screen.getByText("Archived")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("This item is archived.");
+    for (const name of [/Start Now/, /^Schedule/, /^Edit$/, /^Archive$/, /Log Execution/]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    expect(onUpdateItem).toHaveBeenCalledWith("it1", { archived: false });
+  });
+
+  it("never opens the edit form, even when asked to start in it", () => {
+    renderItem({ archived: true }, { startInEditMode: true });
+    expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  });
+});
+
+describe("item groups in the header", () => {
+  it("links each live group the item is in, after the context", () => {
+    const { GroupsProvider } = require("../groups/GroupsContext");
+    const onOpenGroup = jest.fn();
+    render(
+      <GroupsProvider
+        itemGroups={[{ id: "g1", name: "Taco night", groupTypeId: "menu" }, { id: "g2", name: "Old", archived: true }]}
+        groupTypes={[{ id: "menu", icon: "UtensilsCrossed" }]}
+        groupMembers={[
+          { id: "m1", groupId: "g1", memberType: "item", memberId: "it1", position: 1 },
+          { id: "m2", groupId: "g2", memberType: "item", memberId: "it1", position: 1 },
+        ]}
+        onOpenGroup={onOpenGroup}
+      >
+        <ItemDetailView
+          item={{ id: "it1", name: "Rice", contextId: "c1" }}
+          intents={[]}
+          events={[]}
+          contexts={[{ id: "c1", name: "Recipes" }]}
+          items={[]}
+          getIntentDisplay={(i) => i.text}
+          onViewContextDetail={jest.fn()}
+          onBack={jest.fn()}
+        />
+      </GroupsProvider>,
+    );
+    const links = within(screen.getByLabelText("Linked records")).getAllByRole("button").map((b) => b.getAttribute("title"));
+    expect(links).toEqual(["Open context: Recipes", "Open group: Taco night"]);
+    fireEvent.click(screen.getByRole("button", { name: "Open group: Taco night" }));
+    expect(onOpenGroup).toHaveBeenCalledWith("g1");
+  });
+});
