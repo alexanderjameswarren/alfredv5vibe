@@ -771,3 +771,38 @@ export async function deletePlannedItem(id) {
   if (error) fail("Couldn't delete the item", error);
   return data;
 }
+
+// --- Overview (Step 9d; spec A49, A50, A51) ---------------------------------
+
+/** The money to-do list, as wb_action_items returns it. Options left out keep the SQL defaults. */
+export async function getActionItems({ days, bigAmount, bigDays } = {}) {
+  const params = {};
+  if (days != null) params.p_days = days;
+  if (bigAmount != null) params.p_big_amount = bigAmount;
+  if (bigDays != null) params.p_big_days = bigDays;
+  const { data, error } = await supabase.rpc("wb_action_items", params);
+  if (error) fail("Couldn't load the action items", error);
+  return data;
+}
+
+/** The free cash card: wb_free_cash's one row, plus how many missed dates it leaves out (A49). */
+export async function getFreeCash({ includeDrafts = false } = {}) {
+  const [cash, missed] = await Promise.all([
+    supabase.rpc("wb_free_cash", { p_include_drafts: includeDrafts }),
+    supabase.from("wb_planned_unmatched").select("planned_item_id", { count: "exact", head: true }),
+  ]);
+  for (const r of [cash, missed]) if (r.error) fail("Couldn't load free cash", r.error);
+  const row = Array.isArray(cash.data) ? cash.data[0] : cash.data;
+  return { ...(row || {}), include_drafts: includeDrafts, missed_dates: missed.count ?? 0 };
+}
+
+/** The true cost card: wb_true_cost, with the burn months it is worked from (as get_wb_true_cost). */
+export async function getTrueCost() {
+  const [cost, months] = await Promise.all([
+    supabase.from("wb_true_cost").select("*").maybeSingle(),
+    supabase.from("wb_burn_rate").select("month, included, project_excluded, matched_excluded, subscription_excluded")
+      .order("month").limit(12),
+  ]);
+  for (const r of [cost, months]) if (r.error) fail("Couldn't load the true cost", r.error);
+  return { ...(cost.data || {}), burn_months: months.data || [] };
+}

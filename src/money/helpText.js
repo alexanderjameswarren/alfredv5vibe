@@ -347,9 +347,46 @@ export const HELP = {
     todo: "To keep the record instead, ask Claude to cancel a one-off or give a repeating item an end date.",
   },
 
-  // --- Free cash and true cost (Phase 3 step 5); reserved until Overview shows them in step 9 (A22) ---
+  // --- Overview: the money to-do list (Phase 3 step 9, A49–A52). The numbers come from the
+  // wb_action_items defaults; see ACTION_* and CASH_FLOW_DAYS in ruleNumbers.js (A15). ---
+  "overview.funds_transfer": {
+    title: "Funds transfer required",
+    what: "The projection drops below your safety floor, so money needs to move from the reserve before that day.",
+    included: "The first projected day below the floor, how far below it is that day, and the biggest payment behind it. The path to that day starts from today's balance and lists every planned payment, deposit and subscription charge in date order, with everyday spending at the burn rate as one line a week and the projected balance after each day. The first line under the floor is highlighted.",
+    leftOut: "\"What if\" drafts, and the reserve itself, which the projection never counts.",
+    todo: "Move the amount shown from the reserve before the date, or ask Claude about delaying one of the payments listed.",
+  },
+  "overview.todo": {
+    title: "To do",
+    what: "Everything waiting on you in money, in one list.",
+    included: "Planned dates past their match window and subscriptions more than 7 days late; what is waiting in Review; card bills, and cards whose statement and due days are not set; accounts to check; subscriptions to review; rules to look at; and open intentions and inbox items in the Money context.",
+    leftOut: "Red flags, which have their own cards above, and what is merely coming up soon.",
+    todo: "Tap a row to open it. Card days and rule fixes are done by asking Claude.",
+  },
+  "overview.major_expenses": {
+    title: "Major expenses",
+    what: "The big payments heading your way.",
+    included: "Planned payments and subscription charges over $1,000 in the next 60 days, less anything already paid. \"What if\" drafts are listed and marked.",
+    leftOut: "Smaller payments, money coming in, and what-ifs in the total.",
+    todo: "Make sure the cash is there by each date.",
+  },
+  "overview.next_days": {
+    title: "Next 14 days",
+    what: "Every planned payment, income and subscription charge due in the next 14 days.",
+    included: "Planned items less what is already paid, and subscription charges. Payments over $1,000 are in bold. A date already past but still inside its match window is marked late. In, Out and Net add up the list.",
+    leftOut: "Everyday spending, which the burn rate covers, and dates already overdue, which are in To do.",
+    todo: "Nothing, unless something is wrong or you mean to cancel it first.",
+  },
+  "overview.cash_flow": {
+    title: "Cash flow",
+    what: "Money in less money out: what happened, what the plan expects, and a typical month.",
+    included: "Last 30 days: settled money in less money out on your spending accounts and cards. Next 30 days: how much the projected balance changes. Typical month: expected income less the monthly true cost. When a typical month is short, the line underneath says how many months the reserve covers.",
+    leftOut: "Moves between your own accounts and card payments, pending charges, and what-if drafts.",
+    todo: "A red typical month means savings cover the gap each month.",
+  },
+
+  // --- Free cash and true cost (Phase 3 step 5). Spendable cash and free cash stay reserved: the step 9 Overview shows neither (A52). ---
   "overview.burn_rate": {
-    reserved: true,
     title: "Burn rate",
     what: "What everyday spending costs you in a typical month.",
     included: "Spending and fees, less refunds, in the last 3 full months. It is the middle month of the three (the median), with the average shown beside it.",
@@ -373,7 +410,6 @@ export const HELP = {
     todo: "If it is low, look at the date of the lowest point and the bills due just before it.",
   },
   "overview.reserve_cash": {
-    reserved: true,
     title: "Reserve",
     what: "Money set aside in the reserve account.",
     included: "The reserve account's latest balance.",
@@ -381,15 +417,13 @@ export const HELP = {
     todo: "Move money in or out of it deliberately. The app never assumes you will spend it.",
   },
   "overview.safety_floor": {
-    reserved: true,
     title: "Safety floor",
     what: "The cash you always want to keep, which free cash never counts as spendable.",
-    included: "The amount you set in settings.",
+    included: "The amount you set with Claude.",
     leftOut: "None of it ever counts towards free cash.",
-    todo: "Change it in settings. Until a floor is set, free cash is shown with a note that it has no floor.",
+    todo: "Ask Claude to change it (it shows old against new before saving). Until a floor is set, nothing is checked against it.",
   },
   "overview.true_cost": {
-    reserved: true,
     title: "Monthly true cost",
     what: "What running the household really costs in an average month, compared with the income you expect.",
     included: "The burn rate, plus subscriptions converted to a month (yearly ÷ 12, weekly × 52 ÷ 12), plus repeating planned bills such as insurance or property tax spread over the year the same way. Expected income is your repeating planned income, converted the same way.",

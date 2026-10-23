@@ -46,6 +46,7 @@ export default function MoneyPage() {
   const from = location.state?.from;
   const st = location.state || {};
   const backFromTransaction = from === "review" ? MONEY_REVIEW_PATH
+    : from === "overview" ? MONEY_PATH
     : st.subscriptionId ? moneySubscriptionPath(st.subscriptionId)
     : st.plannedItemId ? moneyPlannedItemPath(st.plannedItemId)
     : st.projectId ? moneyProjectPath(st.projectId)
@@ -54,13 +55,15 @@ export default function MoneyPage() {
   const backStateFromTransaction = st.plannedItemId && (st.itemProjectId || st.itemFrom)
     ? { ...(st.itemProjectId ? { projectId: st.itemProjectId } : {}), ...(st.itemFrom ? { from: st.itemFrom } : {}) }
     : undefined;
-  const backFromItem = from === "review" ? MONEY_REVIEW_PATH : st.projectId ? moneyProjectPath(st.projectId) : MONEY_PLAN_PATH;
+  const backFromItem = from === "review" ? MONEY_REVIEW_PATH : from === "overview" ? MONEY_PATH
+    : st.projectId ? moneyProjectPath(st.projectId) : MONEY_PLAN_PATH;
 
   let body;
   if (route.adding) {
     body = <ManualAccountForm onCancel={() => go(MONEY_ACCOUNTS_PATH)} onCreated={(id) => go(moneyAccountPath(id))} />;
   } else if (route.accountId) {
-    body = <AccountDetailView accountId={route.accountId} onBack={() => go(MONEY_ACCOUNTS_PATH)}
+    body = <AccountDetailView accountId={route.accountId} onBack={() => go(from === "overview" ? MONEY_PATH : MONEY_ACCOUNTS_PATH)}
+      backTitle={from === "overview" ? "Back to Overview" : "Back to Accounts"}
       onOpenTransaction={(id) => go(moneyTransactionPath(id))} />;
   } else if (route.transactionId) {
     body = <TransactionDetailView transactionId={route.transactionId}
@@ -96,7 +99,7 @@ export default function MoneyPage() {
   } else if (route.tab === "net-worth") {
     body = <NetWorthScreen />;
   } else {
-    body = <OverviewScreen onOpenAccounts={() => go(MONEY_ACCOUNTS_PATH)} />;
+    body = <OverviewScreen onNavigate={(path, state) => navigate(path, state ? { state } : undefined)} />;
   }
 
   return (
