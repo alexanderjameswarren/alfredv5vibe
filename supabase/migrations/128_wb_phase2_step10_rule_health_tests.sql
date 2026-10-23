@@ -1,6 +1,9 @@
 -- Purpose: Warren Buffet Phase 2 Step 10 tests for wb_rule_health: never_fires (with the 14-day, quarterly/annual-notes and long-interval skips), too_broad (3+ distinct normalized payees on a merchant with a rule; "AMAZON MKTPL*AB12" and "AMAZON MKTPL*CD34" are one payee), often_overridden (at least 2 and 25% of hits; tag swap and tag removal), duplicate_rules, rule_missing and merchant_no_category.
 -- Kind: test (writes invented fixtures, then rolls everything back: nothing persists, not even audit rows)
 -- Applied: YES — run 2026-10-13 by Alex after 127: 17/17 checks passed, rolled back by design. Safe to re-run any time.
+-- Edited 2026-10-23 for 155 (WB Phase 3 step 10a, A54): rule r3 is now 60 days old, because never_fires no longer
+-- flags a rule with no match at 14 days but at 1.5 times its expected interval (45 days by default).
+-- Edited again for the floor fix (A55): the often_overridden detail now reads "tag swapped on 1, removed on 1 (of 4)".
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md).
 -- Every name and amount below is invented ("ZZ test" fixtures). No real financial data.
@@ -59,7 +62,8 @@ begin
   insert into public.wb_rules (user_id, context_id, name, match, add_tag_ids, created_by)
   values (v_user, v_ctx, 'ZZ r2', jsonb_build_object('merchant_id', m[2]), array[t_a], 'claude') returning id into r2;
   insert into public.wb_rules (user_id, context_id, name, match, add_tag_ids, created_by, created_at)
-  values (v_user, v_ctx, 'ZZ r3', jsonb_build_object('merchant_id', m[3]), array[t_a], 'claude', now() - interval '30 days') returning id into r3;
+  -- 60 days: past the 45 days (1.5 x the 30-day default) a rule with no match now gets (A54); 30 was past the old 14.
+  values (v_user, v_ctx, 'ZZ r3', jsonb_build_object('merchant_id', m[3]), array[t_a], 'claude', now() - interval '60 days') returning id into r3;
   insert into public.wb_rules (user_id, context_id, name, match, add_tag_ids, created_by, created_at, notes)
   values (v_user, v_ctx, 'ZZ r4', jsonb_build_object('merchant_id', m[4]), array[t_a], 'claude', now() - interval '30 days', 'Annual renewal') returning id into r4;
   insert into public.wb_rules (user_id, context_id, name, match, add_tag_ids, created_by)
@@ -114,7 +118,7 @@ begin
     'too_broad_not_one_payee', not exists (select 1 from public.wb_rule_health where finding = 'too_broad' and merchant_id = m[2]),
     'too_broad_normalizes_payees', not exists (select 1 from public.wb_rule_health where finding = 'too_broad' and merchant_id = m[10]),
     'too_broad_needs_a_rule', not exists (select 1 from public.wb_rule_health where finding = 'too_broad' and merchant_id = m[7]),
-    'overridden_two_of_four', (select n = 2 and of_n = 4 and detail = '1 tag swapped, 1 tag removed'
+    'overridden_two_of_four', (select n = 2 and of_n = 4 and detail = 'tag swapped on 1, removed on 1 (of 4)'
                                from public.wb_rule_health where finding = 'often_overridden' and rule_id = r1),
     'overridden_needs_two', not exists (select 1 from public.wb_rule_health where finding = 'often_overridden' and rule_id = r2),
     'rule_missing_three', (select n = 3 from public.wb_rule_health where finding = 'rule_missing' and merchant_id = m[7]),

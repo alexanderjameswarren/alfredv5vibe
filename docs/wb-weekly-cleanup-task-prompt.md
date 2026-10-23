@@ -6,9 +6,11 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
 - **Schedule:** weekly, **Sunday 18:00 America/Los_Angeles**. That is after Saturday's sync, so
   the item is waiting at the start of the week.
 - **App / job:** `warren_buffet` / `wb_weekly_cleanup` (schedule row `f457ee6e-4e76-4ea0-9791-ec91b1383cf8`).
-- **Tools:** Alfred connector only. It needs **mcp v153 or later**, which has
-  `get_wb_rule_health` returning `{ counts_by_finding, items }` and `acknowledge_wb_rule_health`.
-- **Spec:** `docs/technical-spec-warren_buffet_p2-m4t.md`, Step 10 and §4.9.
+- **Tools:** Alfred connector only. It needs **mcp v160 or later**: `get_wb_rule_health` returning
+  `{ counts_by_finding, items }`, `acknowledge_wb_rule_health`, and `get_wb_action_items` with the
+  fee-flag rules (note, refund) that the Overview uses, so the two never disagree.
+- **Spec:** `docs/technical-spec-warren_buffet_p2-m4t.md`, Step 10 and §4.9; Phase 3
+  `docs/technical-spec-warren_buffet_p3-q5k.md` A25, A40, A53 and A54 (step 10).
 - **Edit rule:** change this file, then paste it into the task. Never edit the task alone.
 
 > ## 🛑 A CHANGE TO THIS FILE DOES NOTHING UNTIL IT IS PASTED INTO THE TASK
@@ -17,7 +19,7 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
 > version, and Step 9 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-10-14a`
+> ### `PROMPT VERSION: 2026-10-23a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -41,7 +43,7 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
    Step 2 reads that, and Step 8 records `manual: true`. Check three things:
    - a `platform_runs` row for `warren_buffet` / `wb_weekly_cleanup` closed `ok`;
    - one inbox item, or none on a quiet week;
-   - a final report that shows `PROMPT VERSION: 2026-10-14a`.
+   - a final report that shows `PROMPT VERSION: 2026-10-23a`.
 
 ## The record and the notification are SEPARATE
 
@@ -60,20 +62,22 @@ A quiet week raises nothing. A signal that fires on the normal case teaches its 
 ---
 
 You are running the weekly Money cleanup for Alex and Elise's household finances in Alfred.
-`PROMPT VERSION: 2026-10-14a`. Follow these steps in order. **Do not improvise.**
+`PROMPT VERSION: 2026-10-23a`. Follow these steps in order. **Do not improvise.**
 
 ### The rules that override everything else
 
 1. **YOU PROPOSE; YOU NEVER FIX.** The only tools you may call that write anything are
    `create_platform_run`, `update_platform_run` and `create_inbox_item`. **Never** call a tool that
-   creates or changes rules, tags, merchants, subscriptions, transactions or reminders, even when
-   the fix looks obvious. Every fix goes into the item as a proposed tool call for Alex to approve.
+   creates or changes rules, tags, merchants, subscriptions, transactions, planned items, matches or
+   reminders, even when the fix looks obvious. **Never call `mark_wb_reviewed`**, not even with a
+   note. Every fix goes into the item as a proposed tool call for Alex to approve.
 2. **NEVER IMPROVISE.** If you hit anything this prompt does not cover, **STOP** and report what you
    saw.
 3. **REPORT WHAT YOU READ, NOT WHAT YOU INTENDED.** Every name, count and date you write is copied
    from a tool response. If you do not have it, write `unknown`.
-4. **NO DOLLAR AMOUNTS** in the item, except where a decision needs one. That means only an overdue
-   subscription's expected price or a subscription due for review, and only as its current price.
+4. **NO DOLLAR AMOUNTS** in the item, except where a decision needs one. That means only: a flagged
+   fee's amount (and its refund, if one came); the amount still due on an overdue or late planned
+   item; an overdue subscription's price; and a subscription due for review, as its current price.
    Never write balances, totals or spending.
 5. **WHEN A CALL FAILS, QUOTE THE ERROR VERBATIM.**
 
@@ -112,22 +116,31 @@ whatever happens.
    - Also keep the **oldest 5 items**: date, merchant or clean description, and reason. **No
      amounts.**
    - If it errors, STOP with `failure_kind: "review_queue_read"`.
-3. **Overdue subscriptions:** `get_wb_subscriptions` with `status: "active"`, `overdue_only: true`,
-   `limit: 50`.
-   - Keep `id`, `name`, `days_past_expected`, `next_expected_on`, `last_charged_on`,
-     `current_price`.
-   - If it errors, STOP with `failure_kind: "subscriptions_read"`.
+3. **Flags, overdue and late:** `get_wb_action_items` with no arguments. It is the same list the
+   Overview shows, so copy from it and never recompute.
+   - **Flags:** every row of `flags`. Keep `type`, `severity`, `title`, `amount`, `on`, `note`,
+     `refund` (amount and on, when present), `link_kind` and `link_id`.
+     A `card_charge` with `severity: "info"` had a refund; it still waits for a note.
+   - **Overdue:** every row of `overdue`: planned dates past their match window (`missed_date`), overdue
+     one-offs (`overdue_one_off`), and subscriptions more than 7 days late (`overdue_subscription`).
+     Keep `type`, `title`, `amount` (the amount still due), `on`, `todo`, `link_kind`, `link_id`.
+   - **Late:** every row of `coming_up` with `late: true`. These are past due but still inside their
+     match window. Keep the same fields. **Overdue plus late is every missed date**; list both.
+   - Ignore the other sections; the Overview has them.
+   - If it errors, STOP with `failure_kind: "action_items_read"`.
 4. **Reviews due:** `get_wb_subscriptions` with `status: "active"`, `limit: 50`.
    - Keep the rows whose `review_date` is on or before `review_horizon`, past dates included:
      `id`, `name`, `review_date`, `term_end_date`, `auto_renew`, `current_price`.
-   - If the response is truncated, STOP with `failure_kind: "read_truncated"`.
+   - If the response is truncated, STOP with `failure_kind: "read_truncated"`. If it errors, STOP with
+     `failure_kind: "subscriptions_read"`.
 
 ### Step 4 — Is it a quiet week?
 
-It is a **quiet week** when **all four** hold:
+It is a **quiet week** when **all five** hold:
 - no rule-health rows;
 - the review queue is empty;
-- no overdue subscriptions;
+- no flags;
+- no overdue and no late rows;
 - no reviews due.
 
 On a quiet week, go to Step 8 and close `ok` with `quiet: true`. **Create no item.**
@@ -154,8 +167,8 @@ instead of fixed:
 
 It hides the finding until its count grows past today's. **Never call it yourself.**
 
-- **never_fires** — "Rule **<rule_name>** (<merchant_name>) has never matched since <date in
-  detail>."
+- **never_fires** — "Rule **<rule_name>** (<merchant_name>): <detail>." The detail gives the last
+  match (or the creation date) and how often it was expected.
   - Propose: `update_wb_rule({"rule_id": "<rule_id>", "active": false})`.
   - Or, if the merchant's patterns are wrong: `get_wb_merchants({"search": "<merchant_name>"})`.
 - **too_broad** — "<merchant_name> has <n> different payees: <the payees from detail>. One
@@ -179,6 +192,25 @@ It hides the finding until its count grows past today's. **Never call it yoursel
   - Propose: `get_wb_transactions({"merchant_id": "<merchant_id>", "limit": 5})`.
   - Then: `create_wb_rule_from_transaction({"transaction_id": "<one of them>", "set_kind": "spend", "add_tag_ids": ["<Category tag>"]})`.
 
+**Flags and overdue rows get their own lines** (no "If this is fine" line; they clear themselves
+once dealt with):
+- **A fee flag** (`card_charge`) — "<title>: <amount> on <on><if refund: ", refund received <refund
+  amount> on <refund on>"><if note: ". Note: <note>">."
+  - To close it, once Alex has written the note:
+    `mark_wb_reviewed({"transaction_ids": ["<link_id>"], "note": "<Alex's note>"})`.
+    A refund alone never closes it.
+- **A card bill past due** (`card_bill`) — "<title>." Pay it; there is no call to propose.
+- **A missed date or overdue one-off** (`missed_date`, `overdue_one_off`, and late planned rows) —
+  "<title>: <amount> still due.<if late: " Late, still inside its match window.">"
+  - Propose: `get_wb_missed_dates({"planned_item_id": "<link_id>"})` to see it.
+  - Then, if the payment posted: `create_wb_planned_match({"planned_item_id": "<link_id>", "transaction_id": "<…>"})`;
+    or, if it was never going to be paid here:
+    `mark_wb_missed_dates_not_needed({"dates": [{"planned_item_id": "<link_id>", "occurrence_on": "<on, repeating only>", "reason": "<…>"}]})`.
+- **A late or overdue subscription** (`overdue_subscription`, and late subscription rows) — "<title>,
+  price <amount>."
+  - If it was cancelled: `upsert_wb_subscription({"id": "<link_id>", "status": "cancelled"})`
+  - If it is prepaid: `upsert_wb_subscription({"id": "<link_id>", "term_end_date": "<YYYY-MM-DD>"})`
+
 ### Step 7 — Create ONE inbox item
 
 Call `create_inbox_item`, with `captured_text` of exactly this shape. **Leave out any section with
@@ -187,8 +219,14 @@ nothing in it.** Keep each section's heading and order.
 ```
 Money cleanup — week of <local_date>
 
-<one line: how many findings, queue items, overdue and reviews due>
+<one line: how many flags, overdue and late, findings, queue items and reviews due>
 <if previous_item_id: "Last week's item is still open: <previous_item_id>.">
+
+FLAGS (<count>)
+<Step 6 flag lines, red ones first, each with its proposed call>
+
+OVERDUE AND LATE (<count>)
+<Step 6 overdue lines, oldest first, then the late ones, each with its proposed calls>
 
 RULE FIXES (<count>)<if acknowledged_hidden > 0: " — <acknowledged_hidden> acknowledged, not shown">
 <Step 6 lines, grouped by finding in this order: often_overridden, duplicate_rules, too_broad, rule_missing, merchant_no_category, never_fires;
@@ -197,11 +235,6 @@ RULE FIXES (<count>)<if acknowledged_hidden > 0: " — <acknowledged_hidden> ack
 REVIEW QUEUE (<total>)
 <count by reason, one line each>. Oldest: <the 5 oldest, date · merchant · reason>.
 Work through it in Money → Review.
-
-OVERDUE SUBSCRIPTIONS (<count>)
-- <name>: expected <next_expected_on>, <days_past_expected> days late (last charged <last_charged_on>, price <current_price>).
-  If it was cancelled: upsert_wb_subscription({"id": "<id>", "status": "cancelled"})
-  If it is prepaid: upsert_wb_subscription({"id": "<id>", "term_end_date": "<YYYY-MM-DD>"})
 
 REVIEWS DUE (<count>)
 - <name>: review <review_date><, prepaid to term_end_date><, auto-renews yes/no>, price <current_price>.
@@ -224,14 +257,14 @@ errors, STOP with `failure_kind: "inbox_write"`.
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `ok` unless a step said STOP; then `failed`.
 - **`details`**, always:
-  - `local_date`, `prompt_version: "2026-10-14a"` and `manual` (true or false, from Step 2);
-  - `rule_health` (the counts by finding), `review_queue_total`, `overdue_count`,
-    `reviews_due_count`;
+  - `local_date`, `prompt_version: "2026-10-23a"` and `manual` (true or false, from Step 2);
+  - `rule_health` (the counts by finding), `review_queue_total`, `flags_count`, `overdue_count`,
+    `late_count`, `reviews_due_count`;
   - then one of `inbox_item_id` or `quiet: true`;
   - also `previous_item_id` and `inbox_read_failed` when they apply.
 - **On `failed`:** `error_message` is the verbatim error, and `details.failure_kind` is one of
-  `rule_health_read`, `review_queue_read`, `subscriptions_read`, `read_truncated`, `inbox_write`,
-  `run_open`, `unknown`. **Never downgrade a failure to `ok` to get past a rejected close.**
+  `rule_health_read`, `review_queue_read`, `action_items_read`, `subscriptions_read`, `read_truncated`,
+  `inbox_write`, `run_open`, `unknown`. **Never downgrade a failure to `ok` to get past a rejected close.**
 
 **On `failed`, also** call `create_inbox_item` with `source_type: "task"`, the same
 `source_metadata`, and this `captured_text`:
@@ -247,7 +280,7 @@ Run: <run id>
 ### Step 9 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-14a`;
+- `PROMPT VERSION: 2026-10-23a`;
 - the run id and its status, and `manual: true` or `manual: false`;
 - the counts from Step 8;
 - the inbox item id, or "quiet week, no item";

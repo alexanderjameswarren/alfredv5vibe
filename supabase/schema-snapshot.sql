@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 11:14, through migration 153 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 11:53, through migration 154 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -11865,7 +11865,15 @@ COMMENT ON COLUMN "public"."wb_tag_exclusions"."removed_by" IS 'The signed-in us
 
 CREATE OR REPLACE VIEW "public"."wb_rule_health_all" WITH ("security_invoker"='true') AS
  WITH "findings" AS (
-         WITH "rule_merchant" AS (
+         WITH "today" AS (
+                 SELECT (("now"() AT TIME ZONE 'America/Los_Angeles'::"text"))::"date" AS "d"
+                ), "params" AS (
+                 SELECT 1.5 AS "factor",
+                    30 AS "floor_days",
+                    30 AS "default_days",
+                    91 AS "quarter_days",
+                    365 AS "annual_days"
+                ), "rule_merchant" AS (
                  SELECT "r"."id",
                     "r"."user_id",
                     "r"."context_id",
@@ -11883,6 +11891,7 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health_all" WITH ("security_invoker"='t
                     "r"."created_at",
                     "r"."updated_at",
                     "r"."created_from_transaction_id",
+                    "r"."set_project_id",
                     (("r"."match" ->> 'merchant_id'::"text"))::"uuid" AS "merchant_id"
                    FROM "public"."wb_rules" "r"
                   WHERE "r"."active"
@@ -11890,9 +11899,31 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health_all" WITH ("security_invoker"='t
                  SELECT "r"."id" AS "rule_id",
                     "x"."id" AS "transaction_id",
                     "x"."kind",
-                    "x"."kind_source"
+                    "x"."kind_source",
+                    ((COALESCE("x"."posted_at", "x"."transacted_at") AT TIME ZONE 'America/Los_Angeles'::"text"))::"date" AS "d"
                    FROM ("rule_merchant" "r"
                      JOIN "public"."wb_transactions" "x" ON ((("r"."id" = ANY ("x"."matched_rule_ids")) AND (NOT "x"."pending"))))
+                ), "rule_interval" AS (
+                 SELECT "r"."id" AS "rule_id",
+                    (COALESCE((( SELECT "min"(
+                                CASE
+                                    WHEN ("s"."interval_unit" = 'month'::"text") THEN (("s"."interval_count")::numeric * 30.4)
+                                    ELSE (("s"."interval_count" * 7))::numeric
+                                END) AS "min"
+                           FROM "public"."wb_subscriptions" "s"
+                          WHERE (("s"."merchant_id" = "r"."merchant_id") AND ("s"."status" <> 'cancelled'::"text") AND ("s"."interval_count" IS NOT NULL))))::double precision, ( SELECT "percentile_cont"((0.5)::double precision) WITHIN GROUP (ORDER BY (("g"."gap")::double precision)) AS "percentile_cont"
+                           FROM ( SELECT ("dd"."d" - "lag"("dd"."d") OVER (ORDER BY "dd"."d")) AS "gap"
+                                   FROM ( SELECT DISTINCT "h"."d"
+   FROM "hits" "h"
+  WHERE ("h"."rule_id" = "r"."id")) "dd") "g"
+                          WHERE ("g"."gap" IS NOT NULL)), (
+                        CASE
+                            WHEN (COALESCE("r"."notes", ''::"text") ~* '(annual|yearly)'::"text") THEN "p"."annual_days"
+                            WHEN (COALESCE("r"."notes", ''::"text") ~* 'quarter'::"text") THEN "p"."quarter_days"
+                            ELSE NULL::integer
+                        END)::double precision, ("p"."default_days")::double precision))::numeric AS "days"
+                   FROM ("rule_merchant" "r"
+                     CROSS JOIN "params" "p")
                 ), "overrides" AS (
                  SELECT "h"."rule_id",
                     "h"."transaction_id",
@@ -11907,7 +11938,10 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health_all" WITH ("security_invoker"='t
                     (("r"."set_kind" IS NOT NULL) AND ("h"."kind_source" = ANY (ARRAY['claude'::"text", 'manual'::"text"])) AND ("h"."kind" IS DISTINCT FROM "r"."set_kind")) AS "kind_changed",
                     (("cardinality"("r"."add_tag_ids") > 0) AND (( SELECT "count"(*) AS "count"
                            FROM "public"."wb_splits" "s"
-                          WHERE ("s"."transaction_id" = "h"."transaction_id")) > 1)) AS "re_split"
+                          WHERE ("s"."transaction_id" = "h"."transaction_id")) > 1)) AS "re_split",
+                    (("r"."set_project_id" IS NOT NULL) AND (EXISTS ( SELECT 1
+                           FROM "public"."wb_splits" "s"
+                          WHERE (("s"."transaction_id" = "h"."transaction_id") AND ("s"."project_source" = ANY (ARRAY['claude'::"text", 'manual'::"text"])) AND ("s"."project_id" IS DISTINCT FROM "r"."set_project_id"))))) AS "project_changed"
                    FROM ("hits" "h"
                      JOIN "rule_merchant" "r" ON (("r"."id" = "h"."rule_id")))
                 ), "payee_keys" AS (
@@ -11929,12 +11963,21 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health_all" WITH ("security_invoker"='t
             "m"."name" AS "merchant_name",
             0 AS "n",
             NULL::integer AS "of_n",
-            "format"('No match since it was created on %s.'::"text", (("r"."created_at" AT TIME ZONE 'America/Los_Angeles'::"text"))::"date") AS "detail"
-           FROM ("rule_merchant" "r"
+            "format"('%s; expected about every %s.'::"text",
+                CASE
+                    WHEN ("r"."last_hit_at" IS NULL) THEN "format"('No match since it was created on %s'::"text", (("r"."created_at" AT TIME ZONE 'America/Los_Angeles'::"text"))::"date")
+                    ELSE "format"('Last match on %s'::"text", (("r"."last_hit_at" AT TIME ZONE 'America/Los_Angeles'::"text"))::"date")
+                END,
+                CASE
+                    WHEN ("round"("ri"."days") <= (1)::numeric) THEN 'day'::"text"
+                    ELSE ("round"("ri"."days") || ' days'::"text")
+                END) AS "detail"
+           FROM (((("rule_merchant" "r"
+             JOIN "rule_interval" "ri" ON (("ri"."rule_id" = "r"."id")))
+             CROSS JOIN "today")
+             CROSS JOIN "params" "p")
              LEFT JOIN "public"."wb_merchants" "m" ON (("m"."id" = "r"."merchant_id")))
-          WHERE (("r"."hit_count" = 0) AND ("r"."created_at" < ("now"() - '14 days'::interval)) AND (COALESCE("r"."notes", ''::"text") !~* '(quarter|annual|yearly)'::"text") AND (NOT (EXISTS ( SELECT 1
-                   FROM "public"."wb_subscriptions" "s"
-                  WHERE (("s"."merchant_id" = "r"."merchant_id") AND ("s"."status" <> 'cancelled'::"text") AND ((("s"."interval_unit" = 'month'::"text") AND ("s"."interval_count" >= 3)) OR (("s"."interval_unit" = 'week'::"text") AND ("s"."interval_count" >= 13))))))))
+          WHERE (("today"."d" - COALESCE((("r"."last_hit_at" AT TIME ZONE 'America/Los_Angeles'::"text"))::"date", (("r"."created_at" AT TIME ZONE 'America/Los_Angeles'::"text"))::"date")) > GREATEST(("ceil"(("p"."factor" * "ri"."days")))::integer, "p"."floor_days"))
         UNION ALL
          SELECT 'too_broad'::"text",
             NULL::"uuid",
@@ -11958,33 +12001,42 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health_all" WITH ("security_invoker"='t
             "m"."name",
             "o"."n",
             "o"."of_n",
-            "concat_ws"(', '::"text",
+            ("concat_ws"(', '::"text",
                 CASE
-                    WHEN ("o"."swaps" > 0) THEN "format"('%s tag swapped'::"text", "o"."swaps")
+                    WHEN ("o"."swaps" > 0) THEN "format"('tag swapped on %s'::"text", "o"."swaps")
                     ELSE NULL::"text"
                 END,
                 CASE
-                    WHEN ("o"."removals" > 0) THEN "format"('%s tag removed'::"text", "o"."removals")
+                    WHEN ("o"."removals" > 0) THEN "format"('%s on %s'::"text",
+                    CASE
+                        WHEN ("o"."swaps" > 0) THEN 'removed'::"text"
+                        ELSE 'tag removed'::"text"
+                    END, "o"."removals")
                     ELSE NULL::"text"
                 END,
                 CASE
-                    WHEN ("o"."kinds" > 0) THEN "format"('%s kind changed'::"text", "o"."kinds")
+                    WHEN ("o"."kinds" > 0) THEN "format"('kind changed on %s'::"text", "o"."kinds")
                     ELSE NULL::"text"
                 END,
                 CASE
-                    WHEN ("o"."splits" > 0) THEN "format"('%s re-split'::"text", "o"."splits")
+                    WHEN ("o"."splits" > 0) THEN "format"('re-split on %s'::"text", "o"."splits")
                     ELSE NULL::"text"
-                END) AS "concat_ws"
+                END,
+                CASE
+                    WHEN ("o"."projects" > 0) THEN "format"('project changed on %s'::"text", "o"."projects")
+                    ELSE NULL::"text"
+                END) || "format"(' (of %s)'::"text", "o"."of_n"))
            FROM (("rule_merchant" "r"
              LEFT JOIN "public"."wb_merchants" "m" ON (("m"."id" = "r"."merchant_id")))
-             JOIN LATERAL ( SELECT ("count"(*) FILTER (WHERE ("ov"."tag_swap" OR "ov"."tag_removed" OR "ov"."kind_changed" OR "ov"."re_split")))::integer AS "n",
+             JOIN LATERAL ( SELECT ("count"(*) FILTER (WHERE ("ov"."tag_swap" OR "ov"."tag_removed" OR "ov"."kind_changed" OR "ov"."re_split" OR "ov"."project_changed")))::integer AS "n",
                     (( SELECT "count"(*) AS "count"
                            FROM "hits" "h"
                           WHERE ("h"."rule_id" = "r"."id")))::integer AS "of_n",
                     ("count"(*) FILTER (WHERE "ov"."tag_swap"))::integer AS "swaps",
                     ("count"(*) FILTER (WHERE "ov"."tag_removed"))::integer AS "removals",
                     ("count"(*) FILTER (WHERE "ov"."kind_changed"))::integer AS "kinds",
-                    ("count"(*) FILTER (WHERE "ov"."re_split"))::integer AS "splits"
+                    ("count"(*) FILTER (WHERE "ov"."re_split"))::integer AS "splits",
+                    ("count"(*) FILTER (WHERE "ov"."project_changed"))::integer AS "projects"
                    FROM "overrides" "ov"
                   WHERE ("ov"."rule_id" = "r"."id")) "o" ON (true))
           WHERE (("o"."n" >= 2) AND (("o"."n" * 4) >= "o"."of_n"))
@@ -12060,7 +12112,7 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health_all" WITH ("security_invoker"='t
 ALTER VIEW "public"."wb_rule_health_all" OWNER TO "postgres";
 
 
-COMMENT ON VIEW "public"."wb_rule_health_all" IS 'App: Warren Buffet. Every rule-health finding (see wb_rule_health) with subject_id (the rule, else the merchant) and its acknowledgement: acknowledged is true while n has not grown past acked_n, with ack_reason and acked_at. security_invoker, so wb_ RLS applies.';
+COMMENT ON VIEW "public"."wb_rule_health_all" IS 'App: Warren Buffet. Every rule-health finding (see wb_rule_health) with subject_id (the rule, else the merchant) and its acknowledgement: acknowledged is true while n has not grown past acked_n, with ack_reason and acked_at. never_fires (A16, A54, A55): an active rule quiet for more than both 1.5 times its expected interval and 30 days, counted from its last match or, when it never matched, from its creation; the interval is the merchant''s most frequent subscription interval, else the median gap between its matches, else 365 or 91 days when its notes say annual or quarterly, else 30. detail gives the date and the interval ("expected about every day" or "every N days"). often_overridden counts tag swaps and removals, kind changes, re-splits, and a project the rule set that was changed or removed by hand; detail reads "tag swapped on 2, removed on 2 (of 5)". security_invoker, so wb_ RLS applies.';
 
 
 
@@ -12080,7 +12132,7 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health" WITH ("security_invoker"='true'
 ALTER VIEW "public"."wb_rule_health" OWNER TO "postgres";
 
 
-COMMENT ON VIEW "public"."wb_rule_health" IS 'App: Warren Buffet. One row per finding not acknowledged (finding, rule_id, rule_name, merchant_id, merchant_name, n, of_n, detail): never_fires, too_broad (merchant-level: 3+ distinct normalized payees on a merchant with a rule), often_overridden (n of of_n hits beaten by hand, at least 2 and 25%), duplicate_rules, rule_missing, merchant_no_category. An acknowledged finding (wb_rule_health_acks) is hidden until its n grows past the acknowledged n; wb_rule_health_all has them all. Read by get_wb_rule_health and the weekly cleanup task, which proposes fixes and never writes them. security_invoker, so wb_ RLS applies.';
+COMMENT ON VIEW "public"."wb_rule_health" IS 'App: Warren Buffet. One row per finding not acknowledged (finding, rule_id, rule_name, merchant_id, merchant_name, n, of_n, detail): never_fires (quiet for more than both 1.5 times the rule''s expected interval and 30 days, A54, A55), too_broad (merchant-level: 3+ distinct normalized payees on a merchant with a rule), often_overridden (n of of_n hits beaten by hand, at least 2 and 25%, a changed project included), duplicate_rules, rule_missing, merchant_no_category. An acknowledged finding (wb_rule_health_acks) is hidden until its n grows past the acknowledged n; wb_rule_health_all has them all. Read by get_wb_rule_health, wb_action_items and the weekly cleanup task, which proposes fixes and never writes them. security_invoker, so wb_ RLS applies.';
 
 
 

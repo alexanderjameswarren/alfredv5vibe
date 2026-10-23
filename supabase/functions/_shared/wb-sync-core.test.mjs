@@ -277,6 +277,18 @@ test("mapAccount sets only sync-owned columns", () => {
   assert.equal(row.last4, "4321");
 });
 
+test("mapAccount drops the replacement characters a broken symbol arrives as", () => {
+  const map = (name, org = "Example Bank") =>
+    core.mapAccount({ id: "ACT-2", name, org: { name: org } }, { user_id: "u", context_id: "c" }, "2026-10-06T00:00:00.000Z");
+  const row = map("EXAMPLE SIGNATURE�� CARD (4321)", "Example� Bank");
+  assert.equal(row.name, "EXAMPLE SIGNATURE CARD (4321)");
+  assert.equal(row.last4, "4321");
+  assert.equal(row.institution, "Example Bank");
+  assert.equal(map("Plain Card").name, "Plain Card");
+  assert.equal(map("��").name, "(unnamed account)");
+  assert.equal(core.cleanName("  Two   spaces�here "), "Two spaces here");
+});
+
 test("chunks: remainder, exact multiple, empty, bad size", () => {
   assert.deepEqual(core.chunks([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
   assert.deepEqual(core.chunks([1, 2, 3, 4], 2), [[1, 2], [3, 4]]);

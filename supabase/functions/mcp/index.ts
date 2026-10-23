@@ -3446,9 +3446,9 @@ export function createMcpServer(token: string) {
       description:
         "Cleanup findings for rules and merchants. Returns { counts_by_finding, acknowledged_hidden, items }, one item per finding (finding, rule_id, rule_name, merchant_id, merchant_name, n, of_n, detail). " +
         "Findings acknowledged as deliberate (acknowledge_wb_rule_health) are left out until their n grows past the acknowledged n; include_acknowledged: true shows them too, with ack_reason. " +
-        "never_fires: an active rule with no match, older than 14 days (quarterly or annual rules and long-interval subscriptions are skipped). " +
+        "never_fires: an active rule quiet for more than both 1.5 times its expected interval and 30 days, counted from its last match (or its creation, if it never matched); the interval is the merchant's subscription interval, else the median gap between its matches, else 365 or 91 days when its notes say annual or quarterly, else 30 days. detail gives the date and the interval (\"expected about every day\" or \"every N days\"). " +
         "too_broad: a merchant with a rule whose charges carry 3 or more distinct payees (normalized: lowercase, cut at the first *, no digits), listed in detail; maybe two merchants share it. " +
-        "often_overridden: a rule beaten by hand on at least 2 and at least 25% of its hits (tag swapped, tag removed, kind changed, re-split). " +
+        "often_overridden: a rule beaten by hand on at least 2 and at least 25% of its hits (tag swapped, tag removed, kind changed, re-split, or the project it set changed or removed); detail reads like \"tag swapped on 2, removed on 2 (of 5)\". " +
         "duplicate_rules: a merchant with 2 or more active rules. rule_missing: a merchant tagged by hand 3 or more times with no rule. merchant_no_category: spend at a merchant never carries a Category. " +
         WB_RULES + "Read-only: propose fixes, do not apply them unasked. Tier 1.",
       inputSchema: {

@@ -435,10 +435,10 @@ export const HELP = {
   "rule_health.never_fires": {
     reserved: true,
     title: "Never fires",
-    what: "A rule that has never matched a single transaction.",
-    included: "Active rules with no match at all, more than 14 days after they were made.",
-    leftOut: "Rules whose notes say quarterly, annual or yearly, and rules for a merchant with a subscription billed every 3 months or more.",
-    todo: "Delete it or widen it, or acknowledge it if it waits for a rare charge.",
+    what: "A rule that has stopped matching, or has not matched since it was made.",
+    included: "Active rules quiet for more than 1.5 times how often they should match and more than 30 days, counted from the last match, or from when the rule was made if it has never matched. How often comes from the merchant's subscription, else the usual gap between the rule's matches, else 365 days when its notes say annual or yearly and 91 when they say quarterly, else 30 days.",
+    leftOut: "Rules that are switched off, and rules still inside that time.",
+    todo: "Check whether the merchant now shows up under another name, then widen the rule or delete it. Acknowledge it if it waits for a rare charge.",
   },
   "rule_health.too_broad": {
     reserved: true,
@@ -452,7 +452,7 @@ export const HELP = {
     reserved: true,
     title: "Often overridden",
     what: "A rule that people keep correcting by hand.",
-    included: "A rule corrected on at least 2 of its matches and at least a quarter of them: a tag swapped or removed, a kind changed, or a re-split.",
+    included: "A rule corrected on at least 2 of its matches and at least a quarter of them: a tag swapped or removed, a kind changed, a re-split, or a project the rule set changed or removed.",
     leftOut: "Corrections to things the rule never set.",
     todo: "Change what the rule sets, or acknowledge it if the corrections are one-offs.",
   },

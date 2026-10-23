@@ -550,6 +550,10 @@ test("Warren Buffet Phase 2 descriptions state the sign rule, the manual rule an
   assert.match(desc("set_wb_transaction_subscription"), /never relinks/);
   assert.match(desc("get_wb_rule_health"), /propose fixes, do not apply them/);
   assert.match(desc("get_wb_rule_health"), /counts_by_finding, acknowledged_hidden, items/);
+  assert.match(desc("get_wb_rule_health"), /more than both 1\.5 times its expected interval and 30 days/);
+  assert.match(desc("get_wb_rule_health"), /tag swapped on 2, removed on 2 \(of 5\)/);
+  assert.match(desc("get_wb_rule_health"), /the project it set changed or removed/);
+  assert.doesNotMatch(desc("get_wb_rule_health"), /older than 14 days/);
   assert.match(desc("acknowledge_wb_rule_health"), /comes back by itself if its n grows/);
   assert.match(desc("bulk_create_wb_taxonomy"), /dry run: it returns what would be created/);
   assert.match(desc("bulk_create_wb_taxonomy"), /removed by hand or by Claude is never put back by rules/);
