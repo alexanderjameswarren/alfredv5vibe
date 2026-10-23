@@ -76,6 +76,7 @@ import {
   updateReminderTool,
 } from "../_shared/tools/reminders.ts";
 import { getAppsTool, checkSourceApp } from "../_shared/tools/apps.ts";
+import { getGroupsTool } from "../_shared/tools/groups.ts";
 import {
   getWbAccountsTool,
   getWbBalanceHistoryTool,
@@ -513,6 +514,7 @@ const getExecutionHistoryTool = defineTool({
     const result = await getExecutionHistory(ctx.db, {
       intent_id: args.intent_id as string | undefined,
       context_id: args.context_id as string | undefined,
+      item_id: args.item_id as string | undefined,
       date_from: args.date_from as string | undefined,
       date_to: args.date_to as string | undefined,
       limit: LIMIT,
@@ -1113,9 +1115,12 @@ export function createMcpServer(token: string) {
     {
       title: "Get Execution History",
       description:
-        "Get execution history showing when intents were acted on. Use this to find when a recipe was last cooked, when a workout was done, etc. Can filter by intent, context, or date range.",
+        "Get execution history showing when intents were acted on. Use this to find when a recipe was last cooked, when a workout was done, etc. Can filter by intent, item, context, or date range. " +
+        "Each row has status and outcome; is_completion is true only for status closed + outcome done. outcome skipped is a date passed over (or a recipe skipped in a menu cook): history, never a completion, so it never counts as last done. " +
+        "Menus (get_groups): a cook is one execution on the menu's own intention (group_id set, item_ids empty) plus one per recipe with item_ids [recipe], intent_id and event_id null, and parent_execution_id = the menu's execution. Filter by item_id to find a recipe's cooks inside menus as well as on its own; event_date on a recipe row is the menu's date. [v23]",
       inputSchema: {
         intent_id: z.string().optional().describe("Filter by specific intent ID"),
+        item_id: z.string().optional().describe("Filter by item ID: its intentions' executions and any execution carrying it in item_ids (a recipe's cooks inside menus)"),
         context_id: z.string().optional().describe("Filter by context ID"),
         date_from: z.string().optional().describe("Start date filter (YYYY-MM-DD)"),
         date_to: z.string().optional().describe("End date filter (YYYY-MM-DD)"),
@@ -1130,7 +1135,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get Intents",
       description:
-        "List intentions and item-intents (GTD tasks/reusable actions). Use to see active intents for briefings, recurrence review, or context planning. Returns intent rows with their status and resolved context name.",
+        "List intentions and item-intents (GTD tasks/reusable actions). Use to see active intents for briefings, recurrence review, or context planning. Returns intent rows with their status and resolved context name. A row with group_id set is a group's own intention (see get_groups): it carries that menu's or project's dates and is shown in the app as the group, not as an intention.",
       inputSchema: {
         context_id: z.string().optional().describe("Filter by context ID"),
         search_text: z.string().optional().describe("Search text to match against intent text (ILIKE)"),
@@ -1149,7 +1154,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get Events",
       description:
-        "List scheduled events (an intent placed on a date). Use for 'what's on today / this week' briefings. Returns events with resolved intent text and context name.",
+        "List scheduled events (an intent placed on a date). Use for 'what's on today / this week' briefings. Returns events with resolved intent text and context name. An event with group_id set is a group's date (a menu or project, see get_groups); for a menu, item_ids are its recipes frozen at scheduling.",
       inputSchema: {
         date_from: z.string().optional().describe("Start date filter (YYYY-MM-DD, inclusive)"),
         date_to: z.string().optional().describe("End date filter (YYYY-MM-DD, inclusive)"),
@@ -1160,6 +1165,24 @@ export function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(getEventsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_groups",
+    {
+      title: "Get Groups",
+      description:
+        "List live groups: menus (execution_mode together: cooked as one, each recipe recorded under the menu's execution), projects and series (separately: members are worked through their own intentions). " +
+        "Each row: id, name (derived from members when name_is_derived), type { id, label, execution_mode }, context_id and context_name, status, pinned, last_completed_at (rolled up from members for projects), own_intention_id and scheduled_date (the group's own intention and its live date, or null), and members in position order (type item|intention, id, name, status). " +
+        "Filter by context_id, status, or group_type (a type label such as Menu or Project, singular or plural). Results are capped (default 20, max 50); the NOTE says when there are more. Tier 1.",
+      inputSchema: {
+        context_id: z.string().optional().describe("Filter by context ID"),
+        status: z.array(z.enum(["someday", "active", "background", "closed"])).optional().describe("Filter by status (groups matching ANY of these)"),
+        group_type: z.string().optional().describe("Filter by group type label, e.g. 'Menu' or 'Project' (singular or plural, any case)"),
+        limit: z.number().optional().describe("Max results to return (default 20, hard cap 50)"),
+      },
+    },
+    async (args) => runToolForMcp(getGroupsTool, args, token),
   );
 
   server.registerTool(
