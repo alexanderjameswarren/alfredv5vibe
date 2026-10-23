@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 14:39, through migration 162 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 15:01, through migration 163 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -3332,16 +3332,34 @@ CREATE OR REPLACE FUNCTION "public"."platform_search_items"("p_context_id" "text
     AS $$
   with words as (
     -- Words split on spaces and common punctuation, with LIKE's wildcards and escape character made literal.
-    -- Null when there is no search text.
-    select array_agg(replace(replace(replace(w, '\', '\\'), '%', '\%'), '_', '\_')) as ws
+    select distinct replace(replace(replace(w, '\', '\\'), '%', '\%'), '_', '\_') as w
       from regexp_split_to_table(coalesce(p_search_text, ''), '[\s,;:.!?()\[\]{}"]+') as w
      where w <> ''
+  ),
+  note_hits as materialized (
+    -- Each word's notes, read once (under the notes policy once per note, not once per item).
+    select wd.w, n.target_type, n.target_id, n.execution_id
+      from words wd
+      join notes n on n.body ilike '%' || wd.w || '%'
+  ),
+  note_items as materialized (
+    -- The items those notes belong to: on the item, on one of its intentions, or on an execution that carried it.
+    select h.w, h.target_id as item_id from note_hits h where h.target_type = 'item'
+    union
+    select h.w, t.item_id
+      from note_hits h join intents t on h.target_type = 'intention' and t.id = h.target_id
+     where t.item_id is not null
+    union
+    select h.w, e.item_id
+      from note_hits h
+      join executions x on x.id = h.execution_id
+     cross join lateral jsonb_array_elements_text(x.item_ids) as e(item_id)
   ),
   filtered as (
     select i.id, i.name, i.description, i.context_id, i.tags, i.is_capture_target,
            i.created_at, i.status, i.closed_reason, i.last_completed_at, i.archived,
-           coalesce((select bool_and(i.name ilike '%' || w || '%') from unnest((select ws from words)) as w), false)
-             as name_match
+           (exists (select 1 from words)
+            and not exists (select 1 from words wd where not (i.name ilike '%' || wd.w || '%'))) as name_match
       from items i
      where (case coalesce(p_archived, 'exclude')
               when 'include' then true
@@ -3352,18 +3370,12 @@ CREATE OR REPLACE FUNCTION "public"."platform_search_items"("p_context_id" "text
        and (not coalesce(p_no_context, false) or i.context_id is null)
        and (p_tags is null or array_length(p_tags, 1) is null or i.tags && p_tags)
        and (p_status is null or array_length(p_status, 1) is null or i.status = any(p_status))
-       and ((select ws from words) is null
-            or not exists (
-                 select 1 from unnest((select ws from words)) as w
-                  where not (
-                    i.name ilike '%' || w || '%'
-                    or coalesce(i.description, '') ilike '%' || w || '%'
-                    or exists (select 1 from notes n
-                                where n.body ilike '%' || w || '%'
-                                  and ((n.target_type = 'item' and n.target_id = i.id)
-                                       or (n.target_type = 'intention'
-                                           and n.target_id in (select t.id from intents t where t.item_id = i.id))
-                                       or n.execution_id in (select x.id from executions x where x.item_ids ? i.id))))))
+       and not exists (
+             select 1 from words wd
+              where not (
+                i.name ilike '%' || wd.w || '%'
+                or coalesce(i.description, '') ilike '%' || wd.w || '%'
+                or exists (select 1 from note_items ni where ni.w = wd.w and ni.item_id = i.id)))
   ),
   page as (
     select * from filtered
@@ -3388,7 +3400,7 @@ $$;
 ALTER FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[], "p_offset" integer, "p_archived" "text", "p_no_context" boolean) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[], "p_offset" integer, "p_archived" "text", "p_no_context" boolean) IS 'Alfred: the reader behind get_items and search_items. Items the caller can see (RLS: own, or in a shared context), filtered by context (or no context), archived (exclude, include, only), tags (any-of), status (any-of) and search text before the page window. Search text is split into words; every word must appear in the name, the description, or a note on the item, its intentions or its executions; %, _ and \ match literally. Rows whose name holds every word come first, then by name. Returns { rows, total } with status, closed_reason and last_completed_at. Security invoker since migration 163.';
+COMMENT ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[], "p_offset" integer, "p_archived" "text", "p_no_context" boolean) IS 'Alfred: the reader behind get_items and search_items. Items the caller can see (RLS: own, or in a shared context), filtered by context (or no context), archived (exclude, include, only), tags (any-of), status (any-of) and search text before the page window. Search text is split into words; every word must appear in the name, the description, or a note on the item, its intentions or its executions; %, _ and \ match literally. Notes are matched once per word and mapped to items (migration 164), not re-scanned per item. Rows whose name holds every word come first, then by name. Returns { rows, total }. Security invoker.';
 
 
 
