@@ -18,6 +18,12 @@ import {
   SquareKanban,
   ListOrdered,
   Boxes,
+  Dumbbell,
+  BookOpen,
+  Wrench,
+  Plane,
+  Sprout,
+  ShoppingBasket,
 } from "lucide-react";
 
 // --- Alfred's icon vocabulary (Step 12.10) ----------------------------------
@@ -80,9 +86,20 @@ export const OBJECT_ICONS = {
  * these titles actually use.
  */
 // Restructure P5: a group wears its TYPE's icon (group_types.icon names one of
-// these). Boxes is the fallback; folder and layers are taken by context and
-// collection.
-export const GROUP_TYPE_ICONS = { UtensilsCrossed, SquareKanban, ListOrdered, Boxes };
+// these; Settings offers exactly this list). Boxes is the fallback; folder and
+// layers are taken by context and collection.
+export const GROUP_TYPE_ICONS = {
+  UtensilsCrossed,
+  SquareKanban,
+  ListOrdered,
+  Boxes,
+  Dumbbell,
+  BookOpen,
+  Wrench,
+  Plane,
+  Sprout,
+  ShoppingBasket,
+};
 
 export function GroupTypeIcon({ icon, className = "w-4 h-4", align = "center" }) {
   const Glyph = GROUP_TYPE_ICONS[icon] || Boxes;

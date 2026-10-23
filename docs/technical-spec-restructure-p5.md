@@ -103,12 +103,16 @@ Extends `executions_last_completed()`: on a closed, done execution (and on its d
 
 ### Screens
 
-**Context page**
-- Create button from the context's default group type ("Create Menu", "Create Project", "Create Series"); contexts with no default show "Add Group".
-- Browse tabs on **every** context that has at least one group: All / <type plural> / Items. **No Reference tab** (is_reference stays UI-less). Contexts with no groups show no tabs.
-- Sort: status first, then last executed; groups and items interleaved in All.
+**Context page** (settled with Alex 2026-10-23, step 11)
+- Groups live **inside** the existing items-and-intentions section, not a section of their own like Collections. The heading names what it holds, e.g. "Items, intentions and menus" (the plural of each group type present).
+- Underline tabs inside that section, as the inbox's source tabs: All, then one tab per group type present (e.g. Menus), then Items; each with a count. Shown only when the context has at least one live group; a context with no groups looks exactly as before. **No Reference tab** (is_reference stays UI-less).
+- **No status sort.** The status chips filter by status (their counts include groups); the "Sort by" dropdown and its direction arrow sort everything, groups and items mixed. Default stays "Last modified". The dropdown gains "Last done" (last_completed_at; never-done rows last in either direction).
+- Search matches a group's real or derived name and its live members' names. The tag filter matches a group through its live members' tags.
+- A create button beside Add Item and Add Intention, named from the context's default group type ("Create Menu", "Create Project", "Create Series"), opening the group create page for this context; a context with no default type shows "Add Group".
+- The context edit page has a "Default group type" picker (this context's types, plus None).
+- Archived groups appear in the context's Archived section with archived items.
 
-**Group row in lists** — type icon, name, status chip, context, the "when" line from its intention, then "N recipes · last cooked <date>" (use the type's plural and a neutral "last executed" for non-recipe types), teal in-progress marker for projects with a running member.
+**Group row in lists** — type icon, name, then the standard row lines: status chip and context; the "when" line ("Not scheduled" until step 13); then "N recipes · last cooked <date>" for menus and "N members · last done <date>" for other types. No action buttons on group rows until steps 13–14. Tapping opens the group detail page. Teal in-progress marker for projects with a running member (step 15).
 
 **Group detail page** — copies the item/intention detail pages:
 - Header: type icon, name, Copy icon, status chip, record links, schedule line from its intention, reminder line as on intentions.

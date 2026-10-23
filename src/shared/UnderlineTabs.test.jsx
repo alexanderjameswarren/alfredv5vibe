@@ -144,8 +144,9 @@ describe("the row itself", () => {
 describe("every underline tab row goes through this component", () => {
   const alfred = alfredSource();
 
-  it("has all three call sites", () => {
-    expect(alfred.split("<UnderlineTabs").length - 1).toBe(3);
+  it("has all four call sites", () => {
+    // Home, the Recycle Bin, the Inbox, and the context page's group tabs (Restructure P5).
+    expect(alfred.split("<UnderlineTabs").length - 1).toBe(4);
   });
 
   it("leaves no hand-rolled tab row behind", () => {

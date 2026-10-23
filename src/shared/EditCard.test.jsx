@@ -73,10 +73,11 @@ describe("every full-screen edit form uses the shared card", () => {
   const alfred = alfredSource();
   const inbox = sourceOf("InboxDetailView.jsx");
 
-  it("has exactly the five call sites", () => {
-    // ItemCard, IntentionCard, ContextForm and the group edit page (Restructure P5) in
-    // Alfred's folders; the inbox detail page in its own file.
-    expect(alfred.split("<EditCard").length - 1).toBe(4);
+  it("has exactly the six call sites", () => {
+    // ItemCard, IntentionCard, ContextForm, the group edit page and the Settings
+    // group-type form (Restructure P5) in Alfred's folders; the inbox detail page in
+    // its own file.
+    expect(alfred.split("<EditCard").length - 1).toBe(5);
     expect(inbox.split("<EditCard").length - 1).toBe(1);
   });
 
@@ -101,7 +102,7 @@ describe("every full-screen edit form uses the shared card", () => {
       ...alfred.matchAll(/<EditCard[^>]*>/gs),
       ...inbox.matchAll(/<EditCard[^>]*>/gs),
     ];
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(6);
     for (const [call] of calls) {
       expect(call).not.toMatch(/className="[^"]*\b(?:rounded|shadow|border)/);
       expect(call).not.toMatch(/className="[^"]*\bp[xytblr]?-\d/);
@@ -116,9 +117,9 @@ describe("every full-screen edit form uses the shared card", () => {
 
   it("keeps every pinned footer inside a card, except the two with no card", () => {
     // A footer inside an EditCard gets its inset from context. One outside gets [0, 0],
-    // which is right only for the two add-to-collection pages. Six with the group edit
-    // page's footer, which sits inside its card.
-    expect(alfred.split("<PinnedFooter").length - 1).toBe(6);
+    // which is right only for the two add-to-collection pages. Seven with the group edit
+    // page's and the Settings group-type form's footers, both inside their cards.
+    expect(alfred.split("<PinnedFooter").length - 1).toBe(7);
     expect(inbox.split("<PinnedFooter").length - 1).toBe(1);
     // Neither file states an inset any more; the card is the only source.
     for (const source of [alfred, inbox]) {

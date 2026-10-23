@@ -10,6 +10,8 @@ import {
   intentionDetailPath,
   recordIdFromPath,
   RECORD_VIEW,
+  groupDetailPath,
+  groupNewPath,
 } from "./viewPaths";
 import RecordLinkScreen from "./records/RecordLinkScreen";
 import { archivedCaptureTarget } from "./utils/remindersApi";
@@ -258,6 +260,8 @@ export default function Alfred() {
   const [editContextOnOpen, setEditContextOnOpen] = useState(false);
   // The group the bare /groups/detail shows: the one last opened (Back from a member).
   const [selectedGroupId, setSelectedGroupId] = useState(null);
+  // Each context page's selected tab (All / a group type / Items and intentions).
+  const [contextRowTabs, setContextRowTabs] = useState({});
   // "Moved to Active" after a write the 088 triggers may answer. Before the
   // action hooks, which take `watchStatus`.
   const { notice, showNotice } = useNotice();
@@ -1380,6 +1384,13 @@ export default function Alfred() {
             }}
             onArchiveCollection={archiveCollection}
             onDirtyChange={setUnsavedChanges}
+            groups={itemGroups.filter((g) => g.contextId === selectedContextId)}
+            groupTypes={groupTypes}
+            groupMembers={groupMembers}
+            onViewGroupDetail={(id) => navigate(groupDetailPath(id), { state: { fromApp: true } })}
+            onOpenCreateGroup={() => navigate(groupNewPath(selectedContextId), { state: { fromApp: true } })}
+            rowTab={contextRowTabs[selectedContextId]}
+            onRowTabChange={(tab) => setContextRowTabs((prev) => ({ ...prev, [selectedContextId]: tab }))}
           />
         )}
 
@@ -1796,7 +1807,9 @@ export default function Alfred() {
         {view === "money" && <MoneyPage />}
 
         {/* Settings View */}
-        {view === "settings" && <SettingsScreen />}
+        {view === "settings" && (
+          <SettingsScreen groupTypesProps={{ groupTypes, itemGroups, setGroupTypes }} />
+        )}
 
         {/* Recycle Bin View */}
         {view === "recycle" && (

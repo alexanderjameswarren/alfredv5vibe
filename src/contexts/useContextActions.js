@@ -32,6 +32,8 @@ export function useContextActions({
     pinned = false,
     defaultCollectionId = null,
     appId = null,
+    // Restructure P5. Undefined (callers without the picker) keeps what is stored.
+    defaultGroupTypeId = undefined,
   ) {
     return withLoading('Saving context...', async () => {
       // The <select> uses "" for "none", but default_collection_id is a FK to
@@ -64,6 +66,8 @@ export function useContextActions({
             pinned,
             defaultCollectionId: defaultCollection,
             appId: app,
+            // "" is None; default_group_type_id is a FK, so empty must be null.
+            ...(defaultGroupTypeId !== undefined ? { defaultGroupTypeId: defaultGroupTypeId || null } : {}),
           }
         : {
             id: uid(),

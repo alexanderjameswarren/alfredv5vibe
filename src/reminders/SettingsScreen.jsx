@@ -1,15 +1,18 @@
 import React from "react";
 import NotificationSettings from "../NotificationSettings";
 import NotificationDiagnostics from "../NotificationDiagnostics";
+import GroupTypesSettings from "../groups/GroupTypesSettings";
 
 // The settings page, moved out of Alfred.jsx unchanged apart from the
 // `view === "settings"` test, which stays in Alfred around this component.
-export default function SettingsScreen() {
+// Restructure P5: group types are managed here (`groupTypesProps`).
+export default function SettingsScreen({ groupTypesProps = null }) {
   return (
     <div>
       <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Settings</h2>
       <NotificationSettings />
       <NotificationDiagnostics />
+      {groupTypesProps && <GroupTypesSettings {...groupTypesProps} />}
       <div className="mt-4 p-4 sm:p-6 bg-card border border-border rounded-lg">
         <p className="text-muted-foreground">More settings coming soon...</p>
       </div>

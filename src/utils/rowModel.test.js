@@ -1,4 +1,4 @@
-import { buildRows, listRows, pickIntentionForItem, rowSearchFields, ROW_ACCESSORS } from "./rowModel";
+import { buildGroupRows, buildRows, listRows, pickIntentionForItem, rowSearchFields, rowTabs, rowsForTab, sortByLastDone, ROW_ACCESSORS } from "./rowModel";
 
 const DAILY = { type: "fixed", frequency: "daily", interval: 1 };
 const ONCE = { type: "once" };
@@ -178,5 +178,96 @@ describe("row sort, rank and search", () => {
   it("searches the item's fields and every intention's text", () => {
     const [row] = buildRows({ items: [item("fan")], intents: [intent("replace motor", "fan")] });
     expect(rowSearchFields(row, (i) => [i.name])).toEqual(["fan", "replace motor"]);
+  });
+});
+
+// Restructure P5 step 11: groups in the same list.
+describe("group rows", () => {
+  const menuType = { id: "menu", labelPlural: "Menus", executionMode: "together" };
+  const projType = { id: "proj", labelPlural: "Projects", executionMode: "separately" };
+  const groupItems = [
+    { id: "rice", name: "Rice", tags: ["side"] },
+    { id: "beans", name: "Beans", tags: ["protein"] },
+    { id: "gone", name: "Gone", tags: ["hidden"], archived: true },
+  ];
+  const members = [
+    { id: "a", groupId: "g1", memberType: "item", memberId: "rice", position: 1 },
+    { id: "b", groupId: "g1", memberType: "item", memberId: "beans", position: 2 },
+    { id: "c", groupId: "g1", memberType: "item", memberId: "gone", position: 3 },
+    { id: "d", groupId: "g1", memberType: "item", memberId: "salsa", position: 4, removedAt: "t" },
+  ];
+  const groups = [
+    { id: "g1", groupTypeId: "menu", name: null, status: "active", updatedAt: "2026-10-02", lastCompletedAt: "2026-10-20" },
+    { id: "g2", groupTypeId: "proj", name: "Kitchen remodel", status: "someday", updatedAt: "2026-10-05" },
+    { id: "g3", groupTypeId: "menu", name: "Old", archived: true },
+  ];
+  const groupRows = () =>
+    buildGroupRows({ groups, groupTypes: [menuType, projType], members, items: groupItems, intents: [] });
+  const all = (sortKey = "updated", sortDir = "desc", extra = {}) =>
+    listRows({
+      rows: [
+        ...buildRows({ items: [{ id: "pot", name: "Pot", updatedAt: "2026-10-03", lastCompletedAt: "2026-10-10" }] }),
+        ...groupRows(),
+      ],
+      itemFields: (i) => [i.name],
+      statuses: ["someday", "active", "background", "closed"],
+      sortKey,
+      sortDir,
+      ...extra,
+    });
+
+  it("one row per live group, named and tagged from live members", () => {
+    const [menu, project] = groupRows();
+    expect(groupRows()).toHaveLength(2);
+    expect(menu).toMatchObject({ kind: "group", name: "Rice + Beans", memberCount: 2, tags: ["side", "protein"] });
+    expect(project).toMatchObject({ name: "Kitchen remodel", memberCount: 0, tags: [] });
+  });
+
+  it("search finds a group by its derived name or a member's name", () => {
+    const names = (search) => all("title", "asc", { search }).visibleRows.map((r) => r.name);
+    expect(names("rice + beans")).toEqual(["Rice + Beans"]);
+    expect(names("beans")).toEqual(["Rice + Beans"]);
+    expect(names("gone")).toEqual([]);
+  });
+
+  it("the tag filter matches a group through its live members' tags", () => {
+    expect(all("title", "asc", { filterTag: "protein" }).visibleRows.map((r) => r.name)).toEqual(["Rice + Beans"]);
+    expect(all("title", "asc", { filterTag: "hidden" }).visibleRows).toEqual([]);
+  });
+
+  it("status counts include groups", () => {
+    expect(all().statusCounts).toMatchObject({ active: 1, someday: 2 });
+  });
+
+  it("sorts groups and items mixed, by Last modified and by Last done (never done = oldest)", () => {
+    expect(all("updated", "desc").visibleRows.map((r) => r.name)).toEqual(["Kitchen remodel", "Pot", "Rice + Beans"]);
+    expect(all("done", "desc").visibleRows.map((r) => r.name)).toEqual(["Rice + Beans", "Pot", "Kitchen remodel"]);
+    // Oldest first: the never-done project comes first.
+    expect(all("done", "asc").visibleRows.map((r) => r.name)).toEqual(["Kitchen remodel", "Pot", "Rice + Beans"]);
+  });
+
+  it("on the same Last done day a group comes before its items, then by name", () => {
+    const sameDay = "2026-10-21T18:00:00";
+    const rows = [
+      { kind: "item", name: "Beans", lastCompletedAt: "2026-10-21T19:30:00" },
+      { kind: "item", name: "Apple pie", lastCompletedAt: sameDay },
+      { kind: "group", name: "Rice + Beans", lastCompletedAt: "2026-10-21T17:00:00" },
+      { kind: "item", name: "Never" },
+    ];
+    expect(sortByLastDone(rows, "desc").map((r) => r.name)).toEqual(["Rice + Beans", "Apple pie", "Beans", "Never"]);
+    expect(sortByLastDone(rows, "asc").map((r) => r.name)).toEqual(["Never", "Rice + Beans", "Apple pie", "Beans"]);
+  });
+
+  it("tabs: none without groups; All, one per type, Items and intentions, with counts", () => {
+    expect(rowTabs(buildRows({ items: [item("pot")] }))).toEqual([]);
+    const rows = all().visibleRows;
+    expect(rowTabs(rows).map((t) => [t.key, t.label, t.count])).toEqual([
+      ["all", "All", 3],
+      ["type:proj", "Projects", 1],
+      ["type:menu", "Menus", 1],
+      ["items", "Items and intentions", 1],
+    ]);
+    expect(rowsForTab(rows, "type:menu").map((r) => r.name)).toEqual(["Rice + Beans"]);
+    expect(rowsForTab(rows, "items").map((r) => r.name)).toEqual(["Pot"]);
   });
 });

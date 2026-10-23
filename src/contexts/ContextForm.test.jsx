@@ -111,3 +111,31 @@ describe("Archive Context", () => {
     expect(screen.queryByRole("button", { name: "Archive Context" })).toBeNull();
   });
 });
+
+// Restructure P5: group types are shared; a context only picks its default.
+describe("Default group type", () => {
+  const TYPES = [
+    { id: "series", labelSingular: "Series" },
+    { id: "menu", labelSingular: "Menu" },
+    { id: "proj", labelSingular: "Project" },
+  ];
+
+  it("lists every type by name alone, plus None", () => {
+    renderForm({ ...CONTEXT, defaultGroupTypeId: "series" }, { groupTypes: TYPES });
+    const picker = screen.getByLabelText("Default group type");
+    expect(picker).toHaveValue("series");
+    expect(within(picker).getAllByRole("option").map((o) => o.textContent)).toEqual(["None", "Menu", "Project", "Series"]);
+  });
+
+  it("saves the pick as the eighth argument, None as empty", () => {
+    const { onSave } = renderForm({ ...CONTEXT, defaultGroupTypeId: "series" }, { groupTypes: TYPES });
+    fireEvent.change(screen.getByLabelText("Default group type"), { target: { value: "menu" } });
+    fireEvent.click(screen.getByText("Save"));
+    expect(onSave.mock.calls[0][7]).toBe("menu");
+  });
+
+  it("is not on the new-context form", () => {
+    renderForm(null, { groupTypes: TYPES });
+    expect(screen.queryByLabelText("Default group type")).toBeNull();
+  });
+});
