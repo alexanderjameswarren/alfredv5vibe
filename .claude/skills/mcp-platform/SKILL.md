@@ -56,11 +56,10 @@ This one call replaces ~40 lines of RLS boilerplate, grants, and audit-trigger a
 
 From 2026-10-30, Supabase stops granting new objects to the API roles by default. This project has also stopped giving anon and PUBLIC anything by default. So every migration grants explicitly, in the same file that creates the object:
 
-- **Table:** `register_table` grants select/insert/update/delete to `authenticated` and `service_role`, and usage on the table's own sequences. It strips anon and PUBLIC. Nothing more to write.
-- **View:** create it `with (security_invoker = true)`, then:
+- **Table:** `register_table` calls `platform.grant_table` (migration 162). That grants select, insert, update and delete to `authenticated` and `service_role`, and usage on the table's own sequences. It strips anon and PUBLIC. Nothing more to write.
+- **View:** create it `with (security_invoker = true)`, then in the same migration:
   ```sql
-  revoke all on public.my_view from public, anon;
-  grant select on public.my_view to authenticated;   -- plus service_role if a server job reads it
+  select platform.grant_table('public.my_view');   -- same explicit grants; select only for a materialized view
   ```
 - **Function:**
   ```sql
