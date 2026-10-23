@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 13:16, through migration 157 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 13:47, through migration 159 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -41,10 +41,13 @@ RULES FOR ANY NEW TABLE:
   2. Full signature (all params p_-prefixed):
        select platform.register_table(
          ''public.my_table'',
-         p_policy_mode => ''owner'',  -- ''none'' when the table has no user_id column
-         p_audited     => true,       -- false ONLY for high-volume append-only telemetry
-         p_exempt      => false,      -- true only for contract-exempt tables (e.g. allowed_emails)
-         p_notes       => ''App: what this table is''
+         p_policy_mode     => ''owner'',  -- ''none'' when the table has no user_id column
+         p_audited         => true,       -- false ONLY for high-volume append-only telemetry
+         p_exempt          => false,      -- true only for contract-exempt tables (e.g. allowed_emails)
+         p_notes           => ''App: what this table is'',
+         p_mcp_read        => ''visible'', -- ''hidden'' keeps MCP read tools out; null keeps the current setting
+         p_secret_columns  => null,       -- columns MCP reads never return (credentials)
+         p_cleared_columns => null        -- credential-looking names that are not secrets
        );
      Pass ''public.'' explicitly — the param is regclass and an unqualified name
      resolves via search_path, which works in the SQL editor but drifts elsewhere.
@@ -56,6 +59,12 @@ RULES FOR ANY NEW TABLE:
        exists (select 1 from parent p where p.id = child.parent_id and p.user_id = auth.uid())
      register_table still enables RLS, grants, anon-strip, and audit — only the
      policy is yours.
+  4. MCP read settings. Every column is readable by Claude unless declared secret.
+     A column whose name looks like a credential (a part named token, secret, key,
+     password, endpoint, p256dh or auth) must be in p_secret_columns or
+     p_cleared_columns, or conformance fails. Long text needs no declaration: list
+     reads preview it, and heavy jsonb is returned only when records are fetched by
+     ids. Change settings later with platform.set_read_settings().
 
 RULES FOR ANY NEW MCP TOOL:
   1. Build it with defineTool() from _shared/platform.ts. Never import the Supabase
@@ -270,7 +279,7 @@ begin
   select string_agg(
            format('  %s: %s', table_name,
              concat_ws('; ', issue_registry, issue_rls, issue_policy,
-                             issue_grant, issue_audit, issue_docs)),
+                             issue_grant, issue_audit, issue_docs, issue_read)),
            E'\n' order by table_name)
     into v_out
     from platform.conformance_failures;
@@ -286,6 +295,25 @@ ALTER FUNCTION "platform"."check_conformance"() OWNER TO "postgres";
 
 COMMENT ON FUNCTION "platform"."check_conformance"() IS 'Human/model-readable conformance report. Surfaced as the check_platform_conformance
 MCP tool and run as the final step of every migration block.';
+
+
+
+CREATE OR REPLACE FUNCTION "platform"."is_credential_name"("p_column" "text") RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE
+    AS $$
+  select exists (
+           select 1 from unnest(string_to_array(lower(p_column), '_')) as part
+            where part in ('token', 'tokens', 'secret', 'secrets', 'key', 'keys', 'password', 'passwords',
+                           'endpoint', 'p256dh', 'auth'))
+      or lower(p_column) like '%password%'
+      or lower(p_column) like '%secret%';
+$$;
+
+
+ALTER FUNCTION "platform"."is_credential_name"("p_column" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "platform"."is_credential_name"("p_column" "text") IS 'True when a column name looks like a credential: any underscore-separated part is token, secret, key, password, endpoint, p256dh or auth (plurals too), or the name contains password or secret. Whole parts, so author and keyword pass. A flagged column must be declared secret or cleared in platform.registry.';
 
 
 
@@ -335,7 +363,43 @@ Schedule via pg_cron or call opportunistically from a low-traffic tool.';
 
 
 
-CREATE OR REPLACE FUNCTION "platform"."register_table"("p_table" "regclass", "p_policy_mode" "text" DEFAULT 'owner'::"text", "p_audited" boolean DEFAULT true, "p_exempt" boolean DEFAULT false, "p_notes" "text" DEFAULT NULL::"text") RETURNS "text"
+CREATE OR REPLACE FUNCTION "platform"."read_settings_issue"("p_table" "text") RETURNS "text"
+    LANGUAGE "sql" STABLE
+    AS $$
+  with r as (
+    select * from platform.registry where table_name = p_table
+  ),
+  cols as (
+    select a.attname::text as name
+      from pg_attribute a
+     where a.attrelid = to_regclass(p_table) and a.attnum > 0 and not a.attisdropped
+  )
+  select nullif(concat_ws('; ',
+    case when r.mcp_read is null then
+      'NO READ SETTINGS — pass p_mcp_read to register_table() or call platform.set_read_settings()' end,
+    (select 'UNKNOWN COLUMN in secret_columns or cleared_columns: ' || string_agg(x, ', ' order by x)
+       from unnest(r.secret_columns || r.cleared_columns) as x
+      where x not in (select name from cols)),
+    (select 'BOTH SECRET AND CLEARED: ' || string_agg(x, ', ' order by x)
+       from unnest(r.secret_columns) as x
+      where x = any(r.cleared_columns)),
+    (select 'CREDENTIAL-LIKE COLUMN neither secret nor cleared: ' || string_agg(name, ', ' order by name)
+       from cols
+      where platform.is_credential_name(name)
+        and name <> all(r.secret_columns || r.cleared_columns))
+  ), '')
+  from r;
+$$;
+
+
+ALTER FUNCTION "platform"."read_settings_issue"("p_table" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "platform"."read_settings_issue"("p_table" "text") IS 'The read-settings problem for one registered table (schema-qualified name), or null. Feeds platform.conformance.read_issue.';
+
+
+
+CREATE OR REPLACE FUNCTION "platform"."register_table"("p_table" "regclass", "p_policy_mode" "text" DEFAULT 'owner'::"text", "p_audited" boolean DEFAULT true, "p_exempt" boolean DEFAULT false, "p_notes" "text" DEFAULT NULL::"text", "p_mcp_read" "text" DEFAULT NULL::"text", "p_secret_columns" "text"[] DEFAULT NULL::"text"[], "p_cleared_columns" "text"[] DEFAULT NULL::"text"[]) RETURNS "text"
     LANGUAGE "plpgsql" SECURITY DEFINER
     AS $$
 declare
@@ -345,9 +409,13 @@ declare
   v_uid_type text;
   v_expr     text;
   v_policy   text;
+  v_bad      text;
 begin
   if p_policy_mode not in ('owner', 'none') then
     raise exception 'register_table: policy_mode must be ''owner'' or ''none'', got %', p_policy_mode;
+  end if;
+  if p_mcp_read is not null and p_mcp_read not in ('visible', 'hidden') then
+    raise exception 'register_table: mcp_read must be ''visible'' or ''hidden'', got %', p_mcp_read;
   end if;
 
   select n.nspname, c.relname
@@ -361,6 +429,14 @@ begin
   end if;
 
   v_full := v_schema || '.' || v_name;
+
+  select string_agg(x, ', ') into v_bad
+    from unnest(coalesce(p_secret_columns, '{}') || coalesce(p_cleared_columns, '{}')) as x
+   where not exists (select 1 from pg_attribute a
+                      where a.attrelid = p_table and a.attname = x and a.attnum > 0 and not a.attisdropped);
+  if v_bad is not null then
+    raise exception 'register_table: % has no column(s) % (named in p_secret_columns or p_cleared_columns)', v_full, v_bad;
+  end if;
 
   -- (a) RLS always on
   execute format('alter table %I.%I enable row level security', v_schema, v_name);
@@ -404,42 +480,52 @@ begin
          for each row execute function platform.audit_row()', v_schema, v_name);
   end if;
 
-  -- (e) Record it
+  -- (e) Record it. Null read settings keep what is recorded; a new row gets visible and empty lists.
   insert into platform.registry
-    (table_name, policy_mode, audited, exempt, contract_version, notes, registered_at)
+    (table_name, policy_mode, audited, exempt, contract_version, notes, registered_at,
+     mcp_read, secret_columns, cleared_columns)
   values
-    (v_full, p_policy_mode, p_audited, p_exempt, 1, p_notes, now())
+    (v_full, p_policy_mode, p_audited, p_exempt, 1, p_notes, now(),
+     coalesce(p_mcp_read, 'visible'), coalesce(p_secret_columns, '{}'), coalesce(p_cleared_columns, '{}'))
   on conflict (table_name) do update set
     policy_mode      = excluded.policy_mode,
     audited          = excluded.audited,
     exempt           = excluded.exempt,
     contract_version = excluded.contract_version,
     notes            = coalesce(excluded.notes, platform.registry.notes),
-    registered_at    = now();
+    registered_at    = now(),
+    mcp_read         = coalesce(p_mcp_read, platform.registry.mcp_read, 'visible'),
+    secret_columns   = coalesce(p_secret_columns, platform.registry.secret_columns),
+    cleared_columns  = coalesce(p_cleared_columns, platform.registry.cleared_columns);
 
-  return format('registered %s (policy=%s, audited=%s, exempt=%s, anon stripped)',
-                v_full, p_policy_mode, p_audited, p_exempt);
+  return format('registered %s (policy=%s, audited=%s, exempt=%s, anon stripped, mcp_read=%s)',
+                v_full, p_policy_mode, p_audited, p_exempt,
+                (select mcp_read from platform.registry where table_name = v_full));
 end;
 $$;
 
 
-ALTER FUNCTION "platform"."register_table"("p_table" "regclass", "p_policy_mode" "text", "p_audited" boolean, "p_exempt" boolean, "p_notes" "text") OWNER TO "postgres";
+ALTER FUNCTION "platform"."register_table"("p_table" "regclass", "p_policy_mode" "text", "p_audited" boolean, "p_exempt" boolean, "p_notes" "text", "p_mcp_read" "text", "p_secret_columns" "text"[], "p_cleared_columns" "text"[]) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "platform"."register_table"("p_table" "regclass", "p_policy_mode" "text", "p_audited" boolean, "p_exempt" boolean, "p_notes" "text") IS 'THE PAVED PATH. Every new table''s migration must end with a call to this.
+COMMENT ON FUNCTION "platform"."register_table"("p_table" "regclass", "p_policy_mode" "text", "p_audited" boolean, "p_exempt" boolean, "p_notes" "text", "p_mcp_read" "text", "p_secret_columns" "text"[], "p_cleared_columns" "text"[]) IS 'THE PAVED PATH. Every new table''s migration must end with a call to this.
 Enables RLS, creates the type-aware owner policy, grants DML to authenticated,
 STRIPS ALL privileges from anon, attaches the audit trigger, and records the
-table in platform.registry.
+table in platform.registry with its MCP read settings.
 
   select platform.register_table(''public.ken_items'');
   select platform.register_table(''public.items'', ''none'');
   select platform.register_table(''public.allowed_emails'', ''none'', false, true);
+  select platform.register_table(''public.push_subscriptions'',
+           p_secret_columns => array[''endpoint'', ''p256dh'', ''auth_key'']);
+
+Read settings: p_mcp_read (''visible'' or ''hidden''), p_secret_columns (never
+returned by MCP reads) and p_cleared_columns (credential-looking names judged
+safe). Null keeps what the registry already has; a new table is visible with
+empty lists. Every column is readable unless declared secret.
 
 If a table genuinely needs pre-auth anon SELECT (like allowed_emails), grant it
-explicitly AFTER registering — register_table always removes anon access first.
-
-Table name is resolved from pg_class/pg_namespace, never regclass::text (which
-drops the schema when it is on the search_path).';
+explicitly AFTER registering — register_table always removes anon access first.';
 
 
 
@@ -485,6 +571,52 @@ Find candidates with:
   select id, table_name, op, occurred_at from platform.audit_log
    where actor = ''claude'' and occurred_at > now() - interval ''1 hour''
    order by id desc;';
+
+
+
+CREATE OR REPLACE FUNCTION "platform"."set_read_settings"("p_table" "regclass", "p_mcp_read" "text" DEFAULT NULL::"text", "p_secret_columns" "text"[] DEFAULT NULL::"text"[], "p_cleared_columns" "text"[] DEFAULT NULL::"text"[]) RETURNS "text"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    AS $$
+declare
+  v_full text;
+  v_bad  text;
+begin
+  select n.nspname || '.' || c.relname into v_full
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+   where c.oid = p_table;
+
+  if not exists (select 1 from platform.registry where table_name = v_full) then
+    raise exception 'set_read_settings: % is not registered; call platform.register_table() first', v_full;
+  end if;
+  if p_mcp_read is not null and p_mcp_read not in ('visible', 'hidden') then
+    raise exception 'set_read_settings: mcp_read must be ''visible'' or ''hidden'', got %', p_mcp_read;
+  end if;
+
+  select string_agg(x, ', ') into v_bad
+    from unnest(coalesce(p_secret_columns, '{}') || coalesce(p_cleared_columns, '{}')) as x
+   where not exists (select 1 from pg_attribute a
+                      where a.attrelid = p_table and a.attname = x and a.attnum > 0 and not a.attisdropped);
+  if v_bad is not null then
+    raise exception 'set_read_settings: % has no column(s) %', v_full, v_bad;
+  end if;
+
+  update platform.registry
+     set mcp_read        = coalesce(p_mcp_read, mcp_read, 'visible'),
+         secret_columns  = coalesce(p_secret_columns, secret_columns),
+         cleared_columns = coalesce(p_cleared_columns, cleared_columns)
+   where table_name = v_full;
+
+  return format('read settings for %s: %s', v_full,
+    (select format('mcp_read=%s secret=%s cleared=%s', mcp_read, secret_columns, cleared_columns)
+       from platform.registry where table_name = v_full));
+end;
+$$;
+
+
+ALTER FUNCTION "platform"."set_read_settings"("p_table" "regclass", "p_mcp_read" "text", "p_secret_columns" "text"[], "p_cleared_columns" "text"[]) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "platform"."set_read_settings"("p_table" "regclass", "p_mcp_read" "text", "p_secret_columns" "text"[], "p_cleared_columns" "text"[]) IS 'Change a registered table''s MCP read settings without re-running register_table''s RLS, grant and audit work. Null keeps the current value. Raises on an unregistered table or a column name that does not exist.';
 
 
 
@@ -2338,11 +2470,14 @@ begin
       obj_description('platform'::regnamespace::oid, 'pg_namespace'),
     'registered_tables', (
       select coalesce(jsonb_agg(jsonb_build_object(
-                'table',       r.table_name,
-                'policy_mode', r.policy_mode,
-                'audited',     r.audited,
-                'exempt',      r.exempt,
-                'notes',       r.notes
+                'table',           r.table_name,
+                'policy_mode',     r.policy_mode,
+                'audited',         r.audited,
+                'exempt',          r.exempt,
+                'mcp_read',        r.mcp_read,
+                'secret_columns',  r.secret_columns,
+                'cleared_columns', r.cleared_columns,
+                'notes',           r.notes
               ) order by r.table_name), '[]'::jsonb)
         from platform.registry r
     ),
@@ -2937,6 +3072,58 @@ ALTER FUNCTION "public"."platform_check_conformance"() OWNER TO "postgres";
 COMMENT ON FUNCTION "public"."platform_check_conformance"() IS 'MCP-facing wrapper for platform.check_conformance. Surfaced as the
 check_platform_conformance tool and run as the final step of every migration
 block. Returns CONFORMANT or a per-table list of contract violations.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."platform_read_settings"("p_table" "text" DEFAULT NULL::"text") RETURNS "jsonb"
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public', 'platform', 'pg_temp'
+    AS $$
+  select coalesce(jsonb_agg(t.obj order by t.name), '[]'::jsonb)
+    from (
+      select c.relname::text as name,
+             jsonb_build_object(
+               'table', c.relname::text,
+               'columns', (
+                 select coalesce(jsonb_agg(jsonb_build_object(
+                          'name', a.attname::text, 'type', format_type(a.atttypid, a.atttypmod)) order by a.attnum), '[]'::jsonb)
+                   from pg_attribute a
+                  where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+                    and a.attname <> all(r.secret_columns)),
+               'secret_columns', to_jsonb(r.secret_columns),
+               'heavy_columns', (
+                 select coalesce(jsonb_agg(a.attname::text order by a.attnum), '[]'::jsonb)
+                   from pg_attribute a
+                   join pg_stats s
+                     on s.schemaname = n.nspname and s.tablename = c.relname
+                    and s.attname = a.attname and not s.inherited
+                  where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+                    and a.atttypid = 'jsonb'::regtype
+                    and s.avg_width > 1000
+                    and a.attname <> all(r.secret_columns)),
+               'has_context_id', exists (select 1 from pg_attribute a
+                                          where a.attrelid = c.oid and a.attname = 'context_id'
+                                            and a.attnum > 0 and not a.attisdropped),
+               'has_archived', exists (select 1 from pg_attribute a
+                                        where a.attrelid = c.oid and a.attname = 'archived'
+                                          and a.attnum > 0 and not a.attisdropped),
+               'has_status', exists (select 1 from pg_attribute a
+                                      where a.attrelid = c.oid and a.attname = 'status'
+                                        and a.attnum > 0 and not a.attisdropped)
+             ) as obj
+        from platform.registry r
+        join pg_class c on c.oid = to_regclass(r.table_name)
+        join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+       where r.mcp_read = 'visible'
+         and (p_table is null or c.relname = p_table)
+    ) t;
+$$;
+
+
+ALTER FUNCTION "public"."platform_read_settings"("p_table" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."platform_read_settings"("p_table" "text") IS 'MCP read access (spec docs/technical-spec-mcp-read-access.md): for every visible registered public table, or the one named, the readable columns (secret columns removed), secret_columns, heavy_columns (jsonb with pg_stats avg_width over 1000 bytes: left out of list reads, returned by ids) and has_context_id / has_archived / has_status. Reads the catalog and pg_stats only, never row data, so it reveals nothing RLS hides. Security definer because PostgREST does not expose the platform schema.';
 
 
 
@@ -7810,7 +7997,11 @@ CREATE TABLE IF NOT EXISTS "platform"."registry" (
     "exempt" boolean DEFAULT false NOT NULL,
     "contract_version" integer DEFAULT 1 NOT NULL,
     "notes" "text",
-    "registered_at" timestamp with time zone DEFAULT "now"() NOT NULL
+    "registered_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "mcp_read" "text",
+    "secret_columns" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "cleared_columns" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    CONSTRAINT "registry_mcp_read_check" CHECK (("mcp_read" = ANY (ARRAY['visible'::"text", 'hidden'::"text"])))
 );
 
 
@@ -7832,6 +8023,18 @@ public-read by design and has no user_id). Exempt tables are excluded from failu
 
 
 
+COMMENT ON COLUMN "platform"."registry"."mcp_read" IS 'visible = MCP read tools (get_records and the shared read helper) may read this table, through RLS; hidden = they may not. Null = not yet decided, which conformance reports. New tables default to visible.';
+
+
+
+COMMENT ON COLUMN "platform"."registry"."secret_columns" IS 'Columns never returned by any MCP read: platform_read_settings() leaves them out of the readable column list. Names only; values never leave the database.';
+
+
+
+COMMENT ON COLUMN "platform"."registry"."cleared_columns" IS 'Columns whose names look like credentials (see platform.is_credential_name) but were reviewed and are not secret, e.g. sam_songs.key_signature.';
+
+
+
 CREATE OR REPLACE VIEW "platform"."conformance" AS
  SELECT ((("n"."nspname")::"text" || '.'::"text") || ("c"."relname")::"text") AS "table_name",
     "c"."relrowsecurity" AS "rls_enabled",
@@ -7848,7 +8051,11 @@ CREATE OR REPLACE VIEW "platform"."conformance" AS
     COALESCE("r"."exempt", false) AS "exempt",
     "r"."audited" AS "declared_audited",
     "r"."policy_mode" AS "declared_policy_mode",
-    "r"."contract_version"
+    "r"."contract_version",
+        CASE
+            WHEN ("r"."table_name" IS NOT NULL) THEN "platform"."read_settings_issue"("r"."table_name")
+            ELSE NULL::"text"
+        END AS "read_issue"
    FROM (("pg_class" "c"
      JOIN "pg_namespace" "n" ON (("n"."oid" = "c"."relnamespace")))
      LEFT JOIN "platform"."registry" "r" ON (("r"."table_name" = ((("n"."nspname")::"text" || '.'::"text") || ("c"."relname")::"text"))))
@@ -7893,9 +8100,10 @@ CREATE OR REPLACE VIEW "platform"."conformance_failures" AS
         CASE
             WHEN (NOT "documented") THEN 'UNDOCUMENTED — no COMMENT ON TABLE; Claude cannot see design intent'::"text"
             ELSE NULL::"text"
-        END AS "issue_docs"
+        END AS "issue_docs",
+    "read_issue" AS "issue_read"
    FROM "platform"."conformance"
-  WHERE ((NOT "exempt") AND ((NOT "registered") OR (NOT "rls_enabled") OR ("policy_count" = 0) OR (NOT "granted_select") OR (NOT "documented") OR ("registered" AND "declared_audited" AND (NOT "audited")) OR ("registered" AND (NOT "declared_audited") AND "audited") OR ((NOT "registered") AND (NOT "audited"))));
+  WHERE ((NOT "exempt") AND ((NOT "registered") OR (NOT "rls_enabled") OR ("policy_count" = 0) OR (NOT "granted_select") OR (NOT "documented") OR ("registered" AND "declared_audited" AND (NOT "audited")) OR ("registered" AND (NOT "declared_audited") AND "audited") OR ((NOT "registered") AND (NOT "audited")) OR ("read_issue" IS NOT NULL)));
 
 
 ALTER VIEW "platform"."conformance_failures" OWNER TO "postgres";
@@ -7906,8 +8114,10 @@ human-readable reason per column. EMPTY RESULT = FULLY CONFORMANT.
 
 Audit status is checked against the registry declaration, so a table registered
 with audited => false (high-volume telemetry) is conformant while unaudited, and
-would become non-conformant if a trigger appeared on it. Run after every migration
-and in post-deploy CI.';
+would become non-conformant if a trigger appeared on it. issue_read reports
+missing MCP read settings, unknown column names in them, and credential-looking
+columns that are neither secret nor cleared. Run after every migration and in
+post-deploy CI.';
 
 
 
@@ -15963,6 +16173,12 @@ GRANT ALL ON FUNCTION "public"."platform_check_call_budget"("p_tool" "text", "p_
 REVOKE ALL ON FUNCTION "public"."platform_check_conformance"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."platform_check_conformance"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."platform_check_conformance"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."platform_read_settings"("p_table" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."platform_read_settings"("p_table" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."platform_read_settings"("p_table" "text") TO "service_role";
 
 
 
