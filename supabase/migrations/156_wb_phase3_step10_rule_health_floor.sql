@@ -1,6 +1,6 @@
 -- Purpose: Warren Buffet Phase 3, Step 10a fix (Alex, 2026-10-23, run tag warren_buffet_p3-q5k-s27-h8wq; spec A54, A55). wb_rule_health_all as in 155, with a 30-day floor on never_fires (flagged only when the days since the last match, or since creation, exceed both 1.5 times the expected interval and 30 days), the rule-health numbers named in one params row, and plainer detail wording: "expected about every day" for an interval of 1, and often_overridden as "tag swapped on 2, removed on 2 (of 5)". wb_rule_health is restated over it, columns unchanged.
 -- Kind: schema change (two replaced views)
--- Applied: NO
+-- Applied: YES, 2026-10-23 (conformant; tests 5_ 17/17, 128 17/17)
 --
 -- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md).
 -- Spec: docs/technical-spec-warren_buffet_p3-q5k.md A16, A54 and A55.

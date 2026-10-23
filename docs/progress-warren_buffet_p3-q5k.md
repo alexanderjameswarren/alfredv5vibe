@@ -17,8 +17,8 @@ No amounts in this file. The safety floor is never written into the repo.
 | 8c | Planning skill `.claude/skills/wb-planning/SKILL.md` (A44); scripted planning conversation in a fresh thread. **Notes from 8b:** (a) for bills whose amount varies (fuel, utilities), suggest a wider amount_tolerance before backdating, or only some payments qualify; (b) when backdating moves the due day, tell Alex the new day | done, 2026-10-20 (all six fresh-thread tests passed; two fixes to the skill, see log) |
 | 8d | Slimmer app (A44, A46, A47): 8d-1 the delete function; 8d-2 the Plan overview (read-only missed dates); 8d-3 project detail; 8d-4 item detail (Remove match, Delete item); 8d-5 the full Review card; 8d-6 the single-part project picker; help. **No add or edit forms, and no split-editor picker** | 8d-1 done 2026-10-21 (146 applied, tests 12/12); 8d-2 and 8d-3 tested 2026-10-21; 8d-4 done 2026-10-22 (fixes re-tested); 8d-5 and 8d-6 tested 2026-10-22. **8d done 2026-10-22, live** (merge 4bd3d97; the live Plan tab matches local testing) |
 | 9 | Overview numbers, plus Action Items and Dropping below the floor (A49). Data first, then mockups in claude.ai, then the UI | 9a and 9b done 2026-10-23: 150 and 151 applied (live tests 40/40 and 21/21; A51); 9c done (mcp v159, fresh-thread check passed); 9d built (moneyApi reads, unit-tested); 9e live 2026-10-23 (A52, A53; checkpoint 1d583db, merged as ffeb7cc); 9f done 2026-10-23 (mcp v160, fresh-thread check passed). **Step 9 done** |
-| 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed. **Also: a sync encoding check.** A SimpleFIN account name arrives as "VISA SIGNATURE�� CARD", with the ® garbled (found 2026-10-23); find where wb-sync decodes it | **10a, 10b, 10c and the A55 fix done** 2026-10-23: 155 and 156 live (tests 17/17 and 17/17), mcp v162, wb-sync v8; the fresh thread confirmed the new findings. July: no change needed (A54). **Left: 10d**, pasting the 2026-10-23a weekly prompt into the scheduled task |
-| 11 | Phase 3 review | not started |
+| 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed. **Also: a sync encoding check.** A SimpleFIN account name arrives as "VISA SIGNATURE�� CARD", with the ® garbled (found 2026-10-23); find where wb-sync decodes it | **Done 2026-10-23.** 10a, 10b, 10c and the A55 fix: 155 and 156 live (tests 17/17 and 17/17), mcp v162, wb-sync v8. 10d: prompt 2026-10-23b pasted and run, and the full review came out in the Overview's order (A56). July: no change needed (A54) |
+| 11 | Phase 3 review | in progress 2026-10-23. Two fixes built (A57): the unfinished-titles SQL is pending, and the weekly prompt is 2026-10-23c. The independent review is done (see log), and its findings wait on Alex's decisions |
 
 ## Log
 
@@ -875,6 +875,95 @@ All six tests passed in a fresh claude.ai thread with the skill loaded. No amoun
   - no auth: 401.
   Released `db:deploy`; no `db:` claims are held.
 - **10a, 10b, 10c and the A55 fix are done. 10d is left:** Alex pastes the 2026-10-23a prompt into the Money cleanup task and runs it once by hand.
+
+### Step 10d: prompt 2026-10-23b (2026-10-23, run tag `warren_buffet_p3-q5k-s30-k9fd`, A56)
+- The checkpoint is merged (main 819a9fe). I yielded `supabase/functions/mcp/index.ts` to restructure_p5-h7m: it matched main.
+- **Diagnosis of the first 10d run:** the paste took. The run (`cd56cccd-…`) recorded `prompt_version: "2026-10-23a"` and the new `flags_count` and `late_count`. 23a read only the flags, overdue and late rows from `get_wb_action_items` and told the task to ignore the other sections, so the review left them out by design.
+  - The run was also recorded as `manual: false` because the starting message didn't say it was manual.
+- **2026-10-23b** follows the Overview's order (A56): funds transfer, flags, To do, major expenses and cash flow, then rule fixes, the review queue and reviews due.
+  - Amounts with $ and commas, every record id as an alfredv5vibe link, and the often_overridden detail as given.
+  - The reserve account's name comes from `get_wb_accounts`.
+  - Every field the prompt reads exists in the live tools.
+- Next: Alex pastes everything below "THE PROMPT" into the task and runs it once by hand, saying it is manual.
+
+### Step 10 done; step 11 review (2026-10-23, run tag `warren_buffet_p3-q5k-s31-v4ha`)
+- **10d passed:** the 2026-10-23b run gave the full review in the Overview's order. **Step 10 done.**
+- **Fixes (A57):**
+  - `supabase/migrations/_pending_warren_buffet_p3-q5k_unfinished_titles.sql` is `wb_action_items` as in 153, plus the "…" on titles that stop mid-line.
+  - Tests: `supabase/tests/warren_buffet_p3/6_unfinished_titles_tests.sql`, 7 checks. PGlite passes all 19 test files.
+  - Prompt 2026-10-23c: past-due reviews show only in TO DO.
+- Yielded `mcp/index.ts` and `index.test.mjs` to restructure_p5-h7m; both matched main.
+- **The independent review** (a fresh agent, read-only). Findings, most severe first; none fixed yet:
+  1. A one-off at stage paid with no confirmed match still shows in coming_up, big_bites and causes. Causes also leave out overdue one-offs.
+  2. The amount to move from the reserve: the card shows `shortfall_then`, but the todo text and the tool description say `shortfall_at_low`.
+  3. Late repeating dates inside their match window are not in the projection, and pending suggestions mean double counting with the burn rate. Both are design gaps (A25).
+  4. Any same-amount credit counts as a fee's refund, and refunds count as card-bill payments.
+  5. `next_30_projected` covers 31 days.
+  6. A match made by hand can leave a stale suggestion.
+  7. A past-due card bill shows twice, in flags and in To do.
+  8. Default privileges give anon and public execute on every wb_ function, and anon select on some views. Harmless today, because anon has no table grants, but those grants are now the only lock. Also, `wb_delete_planned_item` still has service_role.
+  9. Smaller items: stale "never suggested a match" text on the item page; no help on the red flags; the reserve is the total of all reserve accounts; 156's header still says "Applied: NO"; the interval uses `min`; test scripts 134–144 sit in `migrations/`; `getFreeCash` and `getTrueCost` are unused; `days_sooner` is null when only one side crosses the floor.
+- A42 to A56 are reflected, except partly A43, A46, A49, A52, A53 and A54 (see findings).
+
+### Step 11 fixes built, not deployed (2026-10-23, run tag `warren_buffet_p3-q5k-s32-c6rn`, A58)
+- **Migrations (pending):**
+  - `_pending_warren_buffet_p3-q5k_step11_fixes.sql`: `wb_cash_projection`, `wb_confirm_planned_match` and `wb_action_items` (the A57 titles folded in). Findings 1 to 7.
+  - `_pending_warren_buffet_p3-q5k_grants.sql`: finding 8.
+  - `_pending_warren_buffet_p3-q5k_unfinished_titles.sql` was deleted (folded in).
+- **Tests:** `6_unfinished_titles_tests.sql` became `6_step11_fixes_tests.sql`, with 33 checks, including the 7 title checks. `2_` and `4_` now check `shortfall_30d`, a path that runs to the 30-day low, refund-kind credits, the 30-day next_30, and a past-due bill in flags only. PGlite: all 19 files pass.
+- **App:** the Overview card shows `shortfall_30d`, "Lowest … on …" and a path to `low_30d_on`. The red flags have help (`overview.red_flags`, with the 90 days). The item page now says "None: matched by amount and date". The help is checked against `c_move_days` and `c_flag_days`.
+- **Tools:** `get_wb_free_cash` gives `days_sooner` when only one side crosses (counted to the day after `horizon_end`), plus `days_sooner_at_least`.
+- **Docs:** skill sections 6 and 11, prompt 2026-10-23d, 156's header (applied), spec A58 and §6 Later phase.
+- **Tests:** app 2974/2974, scripts/lib 239/239, p3 tools 26/26.
+- **Still to do:**
+  - **mcp descriptions:** `index.ts` and `index.test.mjs` are held by restructure_p5-h7m. The text changes were given in this step's report.
+  - Then gitsync, the drift check, the claims, the numbering, Alex's runs and an mcp deploy.
+
+### Step 11 numbered 158 and 159 (2026-10-23, run tag `warren_buffet_p3-q5k-s33-n2gy`)
+- **gitsync:** a21229a..dea84b4, restructure_p5-h7m finished. **No drift:**
+  - 157 replaces only `platform_search_executions`;
+  - the index.ts changes are execution history and `get_groups`;
+  - nothing touches a wb_ object.
+- **Claimed with "Step 11 A58":**
+  - `mcp/index.ts`, `index.test.mjs`, 158 and 159;
+  - the three 11a `db:fn:` items;
+  - the 11b `db:fn:` and `db:table:` items.
+  - Not `db:deploy`.
+- **Numbered:** `158_wb_phase3_step11_fixes.sql` and `159_wb_phase3_step11_grants.sql`, matching the pending files except for the header.
+  - **The pending files are not deleted yet:** the guard blocked the `rm`, which I had chained with an `ls` of the folder. Waiting for Alex.
+- **mcp descriptions** are applied in index.ts and index.test.mjs: get_wb_free_cash, flags, card_bills and below_floor.
+- **Tests:**
+  - mcp plus p3: 60/60, with 140 tools;
+  - PGlite with 157 to 159: 19/19 files;
+  - app: 3019/3019;
+  - scripts/lib: 239/239.
+- **Live:** mcp v163, deployed from restructure_p5-h7m; wb-sync v8.
+  - The live tools read no field that 158 drops, and every caller keeps its grant under 159.
+  - **Gap:** the live app's Overview reads `shortfall_then`, so after 158 it shows "Move — …" until src/money is merged.
+
+### 158 live; 159's check fixed (2026-10-23, run tag `warren_buffet_p3-q5k-s34-f7te`)
+- **158 is live and conformant.**
+- **159 failed in the editor on its final check:** `r.grantee` should be `g.grantee`.
+  - The revokes and the commit run before that SELECT, so they most likely applied.
+  - Re-running is safe, since every statement is a revoke.
+- **Why PGlite missed it:** the harness cuts each schema file at `commit;`, so it never ran a check after the commit.
+  - Fixed 159, then ran 158 and 159 whole in PGlite, 159 twice in a row: no errors.
+- **Deleted** the two `_pending_` files, one `rm` each, as Alex allowed.
+
+### 159 live; mcp v164 (2026-10-23, run tag `warren_buffet_p3-q5k-s35-q8mb`)
+- **Alex ran the SQL:**
+  - 159: conformant; nothing left to public or anon; wb_delete_planned_item granted to authenticated and postgres only.
+  - Tests: `6_` 33/33, `2_` 39/39, `4_` 29/29.
+  - Grants check: clean. The Phase 1 and 2 leftovers are recorded in spec §6.
+- **Claims:** released the 11a and 11b `db:` claims.
+  - Claimed `db:deploy` ("Step 11c mcp redeploy"). Live was v163, from restructure_p5-h7m.
+  - Deployed **mcp v164** from this tree: 140 tools, `get_groups` kept, and the new descriptions (registration tests 34/34). Unauthenticated calls get 401.
+  - Released `db:deploy`; no `db:` claims are held.
+- **Left:**
+  - the fresh-thread check of the live descriptions;
+  - the local Overview check;
+  - the checkpoint;
+  - pasting prompt 2026-10-23d.
 
 ## Later
 

@@ -341,10 +341,23 @@ test("what-if: with and without, difference, days_sooner, dates counted; writes 
   assert.equal(w.with.first_below_floor_on, "2031-06-07");
   assert.equal(w.difference, -20);
   assert.equal(w.days_sooner, 3);
+  assert.equal(w.days_sooner_at_least, false);
   assert.deepEqual(w.items.map((i) => [i.dates_counted, i.first_on, i.outside_horizon]),
     [[1, "2031-06-03", false], [2, "2031-06-03", false], [0, null, true]]);
   assert.equal(r.free_cash, -20);
   assert.equal("affordable" in w, false);
+});
+
+test("what-if: one side crossing counts to the day after the horizon, as a lower bound", async () => {
+  const mk = () => fakeDb(undefined, (fn) => fn === "wb_free_cash"
+    ? { data: [{ free_cash: 0, safety_floor: 5 }], error: null } : { data: projRows(10), error: null });
+  // Without: lowest 10, never below 5. With -30 on Jun 8: first below on Jun 8; the horizon ends Jun 10.
+  const out = (await run(m.getWbFreeCashTool, { what_if: [{ amount: -30, date: "2031-06-08" }] }, mk())).what_if;
+  assert.deepEqual([out.without.first_below_floor_on, out.with.first_below_floor_on, out.days_sooner, out.days_sooner_at_least],
+    [null, "2031-06-08", 3, true]);
+  // Neither side crosses: null.
+  const none = (await run(m.getWbFreeCashTool, { what_if: [{ amount: 30, date: "2031-06-08" }] }, mk())).what_if;
+  assert.deepEqual([none.days_sooner, none.days_sooner_at_least], [null, false]);
 });
 
 test("what-if: a past one-off counts today; inputs checked", async () => {

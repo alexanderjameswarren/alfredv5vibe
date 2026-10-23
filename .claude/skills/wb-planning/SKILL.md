@@ -80,7 +80,9 @@ Use `get_wb_free_cash` with `what_if`. It writes nothing.
 - **What to report:**
   - `what_if.without` and `what_if.with`: free_cash, the low balance (`low_balance`) and its date (`low_on`), and the first date below the floor (`first_below_floor_on`);
   - `difference`;
-  - `days_sooner`: how many days earlier the floor is crossed. Negative means later.
+  - `days_sooner`: how many days earlier the floor is crossed. Negative means later. When only one
+    side crosses, the other counts as the day after `horizon_end` and `days_sooner_at_least` is true:
+    say "at least". Null when neither crosses.
 - **Never say "affordable" or give a yes or no.** Free cash can already be negative, because the
   reserve is left out on purpose. Describe the change, and let Alex decide.
 - **Flags:** an item with `outside_horizon: true` was not counted (its date is past the horizon); say so. A past one-off counts today.
@@ -127,8 +129,11 @@ There is no delete tool, on purpose: deleting would lose matches and history.
 
 ## 11. "What needs my attention?"
 
-- Use `get_wb_action_items`. Lead with the red flags and `below_floor` (the first day under the
-  floor, and `shortfall_at_low`: the amount to move from the reserve), then the rest by section.
+- Use `get_wb_action_items`. Lead with the red flags and `below_floor`, then the rest by section.
+  - **The amount to move is `shortfall_30d`, and no other figure:** the floor less the lowest balance
+    in the next 30 days (`low_30d_balance` on `low_30d_on`), moved by `first_below_on`. A dip later
+    than 30 days is not in it.
+  - **A past-due card bill is a red flag only**, not a card bill to pay.
 - Give each row's link (`link_kind`, `link_id`) and its `todo`.
 - **It only reads.** Never mark, match, confirm or change anything from it without asking Alex first.
 - **To close a fee flag:** ask Alex for the note, then call `mark_wb_reviewed` with that one charge's

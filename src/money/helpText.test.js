@@ -69,6 +69,8 @@ test("numbers in the wording match the code", () => {
   says("overview.cash_flow", `Last ${N.CASH_FLOW_DAYS} days`);
   says("overview.cash_flow", `Next ${N.CASH_FLOW_DAYS} days`);
   says("overview.todo", `more than ${N.OVERDUE_GRACE_DAYS} days late`);
+  says("overview.funds_transfer", `lowest projected balance in the next ${N.FUNDS_TRANSFER_DAYS} days`);
+  says("overview.red_flags", `last ${N.FLAG_DAYS} days`);
 });
 
 test("the yearly and weekly conversions are what monthlyEquivalent does", () => {
@@ -126,6 +128,8 @@ test("the JS mirrors match the SQL that really runs", () => {
   expect(num(actions, /p_big_days\s+int\s+default (\d+)/)).toEqual([N.ACTION_BIG_DAYS]);
   expect(num(actions, /c_flow_days\s+constant int := (\d+)/)).toEqual([N.CASH_FLOW_DAYS]);
   expect(num(actions, /c_sub_grace\s+constant int := (\d+)/)).toEqual([N.OVERDUE_GRACE_DAYS]);
+  expect(num(actions, /c_move_days\s+constant int := (\d+)/)).toEqual([N.FUNDS_TRANSFER_DAYS]);
+  expect(num(actions, /c_flag_days\s+constant int := (\d+)/)).toEqual([N.FLAG_DAYS]);
 });
 
 test("the SQL monthly equivalent is the JS rule (A12)", () => {

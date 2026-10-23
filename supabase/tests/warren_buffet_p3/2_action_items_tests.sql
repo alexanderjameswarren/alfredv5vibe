@@ -147,9 +147,11 @@ begin
     'flag_card_past_due', (select e ->> 'type' = 'card_bill' from jsonb_array_elements(pg_temp.zz_rows(r, 'flags', cA::text)) e));
 
   -- ---------------------------------------------------------------- card bills
-  row := pg_temp.zz_rows(r, 'card_bills', cA::text) -> 0;
+  -- A58: a past-due bill is a flag, and only a flag.
+  row := pg_temp.zz_rows(r, 'flags', cA::text) -> 0;
   checks := checks || jsonb_build_object(
-    'card_past_due_red', row ->> 'severity' = 'red' and row ->> 'on' = '2031-06-15',
+    'card_past_due_red', row ->> 'severity' = 'red' and row ->> 'on' = '2031-06-15'
+                         and jsonb_array_length(pg_temp.zz_rows(r, 'card_bills', cA::text)) = 0,
     'card_amount_is_statement_less_paid', (row ->> 'amount')::numeric = -300 and (row ->> 'statement_balance')::numeric = -500
                                           and (row ->> 'paid_since')::numeric = 200 and row ->> 'statement_on' = '2031-06-01',
     'card_minimum_autopay_says_so', row ->> 'todo' like '%only the minimum%',
@@ -175,13 +177,12 @@ begin
   -- ---------------------------------------------------------------- below the floor
   checks := checks || jsonb_build_object(
     'below_first_day', r -> 'below_floor' ->> 'first_below_on' = '2031-06-26',
-    'below_shortfall_then', (r -> 'below_floor' ->> 'shortfall_then')::numeric = 1,
-    'below_shortfall_at_low', (r -> 'below_floor' ->> 'shortfall_at_low')::numeric
-                              = round(c26 + 1 - (r -> 'below_floor' ->> 'low_balance')::numeric, 2),
+    'below_shortfall_30d', (r -> 'below_floor' ->> 'shortfall_30d')::numeric
+                           = round(c26 + 1 - (r -> 'below_floor' ->> 'low_30d_balance')::numeric, 2),
     'below_causes_include_bite', exists (select 1 from jsonb_array_elements(r -> 'below_floor' -> 'causes') e
                                          where e ->> 'link_id' = p_bite::text and (e ->> 'amount')::numeric = -50000),
     'below_causes_not_after', not exists (select 1 from jsonb_array_elements(r -> 'below_floor' -> 'causes') e
-                                          where (e ->> 'on')::date > date '2031-06-26'),
+                                          where (e ->> 'on')::date > (r -> 'below_floor' ->> 'low_30d_on')::date),
     'below_reserve_line', r -> 'below_floor' ? 'reserve_balance');
   update public.wb_settings set safety_floor = null where context_id = v_ctx;
   rf := public.wb_action_items(14, 1000, 60, t);

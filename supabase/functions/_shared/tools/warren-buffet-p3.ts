@@ -333,14 +333,18 @@ export const getWbFreeCashTool = defineTool({
     });
     const without = lowPoint(rows, floor);
     const withItems = lowPoint(rows, floor, extra);
-    const sooner = without.first_below_floor_on && withItems.first_below_floor_on
-      ? daysBetween(withItems.first_below_floor_on, without.first_below_floor_on) : null;
+    // A side that never crosses counts as crossing the day after the horizon, so days_sooner is then a lower bound (A58).
+    const past = addDays(end, 1);
+    const w0 = without.first_below_floor_on, w1 = withItems.first_below_floor_on;
+    const sooner = w0 || w1 ? daysBetween(w1 ?? past, w0 ?? past) : null;
+    const soonerAtLeast = !!(w0 || w1) && !(w0 && w1);
     return {
       ...base,
       what_if: {
         without, with: withItems,
         difference: without.free_cash === null || withItems.free_cash === null ? null : cents(withItems.free_cash - without.free_cash),
         days_sooner: sooner,
+        days_sooner_at_least: soonerAtLeast,
         horizon_end: end,
         items: counted,
       },

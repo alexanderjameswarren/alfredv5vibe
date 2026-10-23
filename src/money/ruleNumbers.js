@@ -43,3 +43,6 @@ export const ACTION_DAYS = 14;
 export const ACTION_BIG_AMOUNT = 1000;
 export const ACTION_BIG_DAYS = 60;
 export const CASH_FLOW_DAYS = 30;
+// wb_action_items c_move_days (A58) and c_flag_days (A53). Help: overview.funds_transfer, overview.red_flags.
+export const FUNDS_TRANSFER_DAYS = 30;
+export const FLAG_DAYS = 90;

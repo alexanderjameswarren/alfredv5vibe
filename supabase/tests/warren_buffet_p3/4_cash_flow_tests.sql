@@ -109,7 +109,8 @@ begin
   f_refunded := pg_temp.zz_txn(ec, t - 20, -17, 'ANNUAL FEE');
   x_refund := pg_temp.zz_txn(ec, t - 10, 17, 'ANNUAL FEE REVERSAL');            -- the same amount back: info, not cleared
   f_ref_handled := pg_temp.zz_txn(ec, t - 25, -23, 'LATE FEE');
-  perform pg_temp.zz_txn(ec, t - 12, 23, 'LATE FEE REVERSAL');                  -- refunded and handled: gone
+  a := pg_temp.zz_txn(ec, t - 12, 23, 'LATE FEE REVERSAL');                     -- refunded and handled: gone
+  update public.wb_transactions set kind = 'refund' where id in (x_refund, a);   -- A58: only refund-kind credits refund
   update public.wb_transactions set reviewed = true, notes = 'ZZ refund checked' where id = f_ref_handled;
   f_elsewhere := pg_temp.zz_txn(ec, t - 20, -18, 'LATE FEE');
   perform pg_temp.zz_txn(ec2, t - 10, 18, 'ZZ CREDIT');                         -- on another account: does not
@@ -165,9 +166,10 @@ begin
     'path_in_date_order', not exists (select 1 from jsonb_array_elements(path) with ordinality x(e, n)
                                       join jsonb_array_elements(path) with ordinality y(f, m) on m = n + 1
                                       where (f ->> 'on')::date < (e ->> 'on')::date),
-    'path_stops_at_first_below', not exists (select 1 from jsonb_array_elements(path) e where (e ->> 'on')::date > t + 3),
+    'path_stops_at_the_30_day_low', not exists (select 1 from jsonb_array_elements(path) e
+                                                where (e ->> 'on')::date > (r -> 'below_floor' ->> 'low_30d_on')::date),
     'path_keeps_causes', jsonb_typeof(r -> 'below_floor' -> 'causes') = 'array');
-  select max(p.closing) filter (where p.day = t + 30) - max(p.opening) filter (where p.day = t) into v_next
+  select max(p.closing) filter (where p.day = t + 29) - max(p.opening) filter (where p.day = t) into v_next
   from public.wb_cash_projection(false, t) p;
   select net_monthly into v_typ from public.wb_true_cost;
 

@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 12:16, through migration 156 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 13:16, through migration 157 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -4668,16 +4668,21 @@ ALTER FUNCTION "public"."update_updated_at"() OWNER TO "postgres";
 CREATE OR REPLACE FUNCTION "public"."wb_action_items"("p_days" integer DEFAULT 14, "p_big_amount" numeric DEFAULT 1000, "p_big_days" integer DEFAULT 60, "p_today" "date" DEFAULT NULL::"date") RETURNS "jsonb"
     LANGUAGE "plpgsql" STABLE
     SET "search_path" TO 'public', 'pg_temp'
-    AS $$
+    AS $_$
 declare
   -- If you change 14, 1000 or 60 (the defaults above), 90, 30, 2 or 7, update the Overview help entries
-  -- in src/money/helpText.js and ruleNumbers.js (ACTION_* and CASH_FLOW_DAYS), and their test.
+  -- in src/money/helpText.js and ruleNumbers.js (ACTION_*, CASH_FLOW_DAYS and FUNDS_TRANSFER_DAYS), and their test.
   c_flag_days     constant int := 90;   -- card fees and interest looked back over (A53)
   c_manual_stale  constant int := 30;   -- a hand-entered balance older than this needs checking
   c_synced_stale  constant int := 2;    -- as STALE_ACCOUNT_DAYS in moneyFormat.js
   c_sub_grace     constant int := 7;    -- as wb_subscription_overview.overdue (OVERDUE_GRACE_DAYS)
   c_flow_days     constant int := 30;   -- the Cash flow card's two windows, back and ahead
+  c_move_days     constant int := 30;   -- the funds transfer window: the lowest balance in the next 30 days (A58)
   c_title_max     constant int := 120;
+  -- A title that stops mid-line (A57), as UNFINISHED in src/money/OverviewScreen.jsx.
+  c_unfinished    constant text := '([,;:–—-]|\m(and|or|but|to|the|of|with|for|a|an|if|so|then|because|on|in|at|by|from))\s*$';
+  -- A credit that is a card payment, whatever kind processing gave it (A58).
+  c_payment_words constant text := '(payment|thank you|autopay|autopmt|pymt)';
   c_money         constant text := 'muvitejhrgt3rgi8t6q';
   v_today   date := coalesce(p_today, (now() at time zone 'America/Los_Angeles')::date);
   v_flags   jsonb := '[]';
@@ -4685,6 +4690,9 @@ declare
   v_attn    jsonb := '[]';
   v_below   jsonb;
   v_cash    jsonb;
+  v_row     jsonb;
+  v_path    jsonb;
+  v_causes  jsonb;
   card      record;
   v_close   date;
   v_due     date;
@@ -4693,6 +4701,7 @@ declare
   v_month   date;
   v_floor   numeric;
   v_first   record;
+  v_low30   record;
   v_low     record;
   v_last30  numeric;
   v_next30  numeric;
@@ -4742,14 +4751,16 @@ begin
     end if;
     continue when v_owed = 0;
 
+    -- Payments to the card since the close. A refund is not a payment (A58), unless it reads like one.
     select coalesce(sum(x.amount), 0) into v_paid
     from public.wb_transactions x
     where x.account_id = card.id and not x.pending and x.amount > 0
+      and (coalesce(x.kind, '') <> 'refund' or concat_ws(' ', x.description, x.payee) ~* c_payment_words)
       and (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date > v_close
       and (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date <= v_today;
     continue when v_paid >= v_owed;
 
-    v_cards := v_cards || jsonb_build_object(
+    v_row := jsonb_build_object(
       'type', 'card_bill',
       'severity', case when v_due < v_today then 'red' when v_due <= v_today + p_days then 'amber' else 'info' end,
       'title', case when v_due < v_today then format('%s bill is past due', card.label)
@@ -4760,21 +4771,48 @@ begin
       'amount', -round(v_owed - v_paid, 2), 'on', v_due, 'link_kind', 'account', 'link_id', card.id,
       'statement_on', v_close, 'statement_balance', -round(v_owed, 2), 'paid_since', round(v_paid, 2),
       'autopay', card.autopay);
+    -- A past-due bill is a flag, and only a flag (A58).
     if v_due < v_today then
-      v_flags := v_flags || (v_cards -> -1);
+      v_flags := v_flags || v_row;
+    else
+      v_cards := v_cards || v_row;
     end if;
   end loop;
 
-  -- ---------------------------------------------------------------- flags: card interest and fees (A53)
+  -- ---------------------------------------------------------------- flags: card interest and fees (A53, A58)
   -- Looked back c_flag_days. A flag clears only when the charge is marked handled: reviewed, with a
-  -- note (the transaction page's own fields). A credit of the same amount on the same card, on or after
-  -- it, turns the flag info and is shown as refund; it never clears it alone.
+  -- note (the transaction page's own fields). A refund turns a flag info but never clears it alone. A
+  -- refund is a refund-kind credit of the same amount on the same card, on or after the fee: never a
+  -- paired transfer or a payment, and each credit refunds one fee at most (paired in date order).
   v_flags := (
-    select coalesce(jsonb_agg(f order by f ->> 'on' desc), '[]'::jsonb)
+    with fees as (
+      select x.id, x.account_id, x.amount, x.description, x.clean_description, x.notes, x.reviewed, c.d,
+             coalesce(a.display_name, a.name) as label,
+             row_number() over (partition by x.account_id, x.amount order by c.d, x.id) as rn
+      from public.wb_transactions x
+      join public.wb_accounts a on a.id = x.account_id
+      cross join lateral (select (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date as d) c
+      where a.role in ('credit_card', 'emergency_credit')
+        and not x.pending and x.amount < 0
+        and c.d between v_today - c_flag_days and v_today
+        and concat_ws(' ', x.description, x.payee) ~* '(interest charge|finance charge|late fee|late payment|annual fee|over ?limit fee|returned payment)'
+    ),
+    credits as (
+      select r.id, r.account_id, r.amount, c.d,
+             row_number() over (partition by r.account_id, r.amount order by c.d, r.id) as rn
+      from public.wb_transactions r
+      cross join lateral (select (coalesce(r.posted_at, r.transacted_at) at time zone 'America/Los_Angeles')::date as d) c
+      where not r.pending and r.amount > 0
+        and r.transfer_pair_id is null
+        and coalesce(r.kind, '') = 'refund'
+        and concat_ws(' ', r.description, r.payee) !~* c_payment_words
+        and r.account_id in (select f.account_id from fees f)
+    )
+    select coalesce(jsonb_agg(z.f order by z.f ->> 'on' desc), '[]'::jsonb)
     from (
       select jsonb_build_object(
                'type', 'card_charge', 'severity', case when cr.id is null then 'red' else 'info' end,
-               'title', format('%s on %s', initcap(coalesce(nullif(x.clean_description, ''), x.description)), coalesce(a.display_name, a.name)),
+               'title', format('%s on %s', initcap(coalesce(nullif(x.clean_description, ''), x.description)), x.label),
                'todo', case when cr.id is null
                             then 'A card charged interest or a fee. Check the due date was not missed, and pay in full to stop it. When it is dealt with, write a note on the charge and tick Reviewed.'
                             else 'The refund came. Write a note on the charge and tick Reviewed to clear this.' end,
@@ -4782,22 +4820,11 @@ begin
                'refund', case when cr.id is not null then jsonb_build_object(
                            'amount', cr.amount, 'on', cr.d, 'link_kind', 'transaction', 'link_id', cr.id) end,
                'amount', x.amount,
-               'on', c.d,
+               'on', x.d,
                'link_kind', 'transaction', 'link_id', x.id) as f
-      from public.wb_transactions x
-      join public.wb_accounts a on a.id = x.account_id
-      cross join lateral (select (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date as d) c
-      left join lateral (
-        select r.id, r.amount, (coalesce(r.posted_at, r.transacted_at) at time zone 'America/Los_Angeles')::date as d
-        from public.wb_transactions r
-        where r.account_id = x.account_id and not r.pending and r.amount = -x.amount
-          and (coalesce(r.posted_at, r.transacted_at) at time zone 'America/Los_Angeles')::date >= c.d
-        order by coalesce(r.posted_at, r.transacted_at) limit 1) cr on true
-      where a.role in ('credit_card', 'emergency_credit')
-        and not x.pending and x.amount < 0
-        and c.d between v_today - c_flag_days and v_today
-        and concat_ws(' ', x.description, x.payee) ~* '(interest charge|finance charge|late fee|late payment|annual fee|over ?limit fee|returned payment)'
-        and not (x.reviewed and nullif(btrim(x.notes), '') is not null)
+      from fees x
+      left join credits cr on cr.account_id = x.account_id and cr.amount = -x.amount and cr.rn = x.rn and cr.d >= x.d
+      where not (x.reviewed and nullif(btrim(x.notes), '') is not null)
     ) z
   ) || v_flags;
 
@@ -4872,86 +4899,72 @@ begin
     ) x
   );
 
-  -- ---------------------------------------------------------------- below the floor (A49): read the projection, copy none of it
+  -- ---------------------------------------------------------------- below the floor (A49, A58): read the projection, copy none of it
+  -- The amount to move is the shortfall at the lowest projected balance in the next c_move_days days
+  -- (today through today + c_move_days - 1), by the first day below. Shown only when the balance goes
+  -- below the floor within those days; first_below_on is null otherwise.
   select s.safety_floor into v_floor from public.wb_settings s order by s.created_at limit 1;
   select * into v_low from public.wb_free_cash(false, v_today);
   if v_floor is null then
-    v_below := jsonb_build_object('floor_missing', true, 'floor', null, 'first_below_on', null, 'causes', '[]'::jsonb,
+    v_below := jsonb_build_object('floor_missing', true, 'floor', null, 'window_days', c_move_days,
+      'first_below_on', null, 'shortfall_30d', null, 'causes', '[]'::jsonb, 'path', '[]'::jsonb,
       'todo', 'Ask Claude to set a safety floor; until then nothing is checked against it.');
   else
     select p.day, p.closing into v_first
     from public.wb_cash_projection(false, v_today) p
-    where p.closing < v_floor
+    where p.day < v_today + c_move_days and p.closing < v_floor
     order by p.day limit 1;
-    v_below := jsonb_build_object(
-      'floor_missing', false,
-      'floor', v_floor,
-      'first_below_on', v_first.day,
-      'closing_then', v_first.closing,
-      'shortfall_then', case when v_first.day is not null then round(v_floor - v_first.closing, 2) end,
-      'low_balance', v_low.low_balance,
-      'low_on', v_low.low_on,
-      'shortfall_at_low', case when v_low.low_balance < v_floor then round(v_floor - v_low.low_balance, 2) else 0 end,
-      'reserve_balance', v_low.reserve_cash,
-      'severity', case when v_first.day is null then 'info' when v_first.day <= v_today + p_days then 'red' else 'amber' end,
-      'todo', case when v_first.day is null then 'Nothing to do: the projection stays above the floor.'
-                   else 'Move the shortfall at the low point from the reserve before the first day below, or delay one of the payments listed.' end,
-      'causes', case when v_first.day is null then '[]'::jsonb else (
-        select coalesce(jsonb_agg(c order by (c ->> 'amount')::numeric), '[]'::jsonb)
-        from (
-          select jsonb_build_object('type', 'planned', 'title', pi.name, 'amount', public.wb_planned_left(o.amount, (
-                   select sum(abs(pm.amount_applied)) from public.wb_planned_matches pm
-                   where pm.planned_item_id = o.planned_item_id and pm.status = 'confirmed'
-                     and pm.occurrence_on is not distinct from case when o.recurring then o.occurrence_on end), pi.amount_tolerance),
-                   'on', o.occurrence_on, 'link_kind', 'planned_item', 'link_id', pi.id) as c
-          from public.wb_planned_occurrences(v_today, v_first.day, false) o
-          join public.wb_planned_items pi on pi.id = o.planned_item_id
-          where o.amount < 0
-          union all
-          select jsonb_build_object('type', 'subscription', 'title', so.name, 'amount', so.amount,
-                   'on', so.occurrence_on, 'link_kind', 'subscription', 'link_id', so.subscription_id)
-          from public.wb_subscription_occurrences(v_today, v_first.day, v_today) so
-          union all
-          select jsonb_build_object('type', 'burn', 'title', 'Everyday spending at the burn rate',
-                   'amount', round(sum(p.burn), 2), 'on', null, 'link_kind', null, 'link_id', null)
-          from public.wb_cash_projection(false, v_today) p
-          where p.day <= v_first.day
-        ) z
-        where (c ->> 'amount')::numeric < 0
-      ) end,
-      -- The path to the first day below (A53): the starting balance, then every planned item,
-      -- subscription and deposit in date order, and the burn rate as one row per week. balance is the
+    select p.day, p.closing into v_low30
+    from public.wb_cash_projection(false, v_today) p
+    where p.day < v_today + c_move_days
+    order by p.closing, p.day limit 1;
+
+    if v_first.day is not null then
+      -- The path to the lowest day (A53): the starting balance, then every planned item, deposit and
+      -- subscription charge in date order, and the burn rate as one row per week. balance is the
       -- projection's closing that day; below marks a balance under the floor. The planned rows are the
-      -- projection's own: due dates less what is confirmed, and an overdue one-off on today.
-      'path', case when v_first.day is null then '[]'::jsonb else (
+      -- projection's own: due dates less what is confirmed or suggested, an overdue one-off on today, and
+      -- a late repeating date on today (A58).
+      v_path := (
         with proj as (
           select p.day, p.opening, p.closing, p.burn
           from public.wb_cash_projection(false, v_today) p
-          where p.day <= v_first.day
+          where p.day <= v_low30.day
         ),
         ev as (
           select o.occurrence_on as d, pi.name as title, public.wb_planned_left(o.amount, (
                    select sum(abs(pm.amount_applied)) from public.wb_planned_matches pm
-                   where pm.planned_item_id = o.planned_item_id and pm.status = 'confirmed'
+                   where pm.planned_item_id = o.planned_item_id and pm.status in ('confirmed', 'suggested')
                      and pm.occurrence_on is not distinct from case when o.recurring then o.occurrence_on end),
                    pi.amount_tolerance) as amount,
                  'planned' as type, 'planned_item' as link_kind, pi.id::text as link_id, 1 as ord
-          from public.wb_planned_occurrences(v_today, v_first.day, false) o
+          from public.wb_planned_occurrences(v_today, v_low30.day, false) o
           join public.wb_planned_items pi on pi.id = o.planned_item_id
           where o.recurring or o.stage <> 'paid'
           union all
           select v_today, pi.name || ' (overdue)', public.wb_planned_left(pi.amount, (
                    select sum(abs(pm.amount_applied)) from public.wb_planned_matches pm
-                   where pm.planned_item_id = pi.id and pm.status = 'confirmed'), pi.amount_tolerance),
+                   where pm.planned_item_id = pi.id and pm.status in ('confirmed', 'suggested')), pi.amount_tolerance),
                  'planned', 'planned_item', pi.id::text, 1
           from public.wb_planned_items pi
           where pi.interval_count is null and pi.due_on < v_today
             and pi.stage not in ('paid', 'cancelled', 'draft')
           union all
-          select so.occurrence_on, so.name, so.amount, 'subscription', 'subscription', so.subscription_id::text, 1
-          from public.wb_subscription_occurrences(v_today, v_first.day, v_today) so
+          select v_today, pi.name || ' (late)', public.wb_planned_left(o.amount, (
+                   select sum(abs(pm.amount_applied)) from public.wb_planned_matches pm
+                   where pm.planned_item_id = o.planned_item_id and pm.status in ('confirmed', 'suggested')
+                     and pm.occurrence_on = o.occurrence_on), pi.amount_tolerance),
+                 'planned', 'planned_item', pi.id::text, 1
+          from public.wb_planned_occurrences(v_today - 366, v_today - 1, false) o
+          join public.wb_planned_items pi on pi.id = o.planned_item_id
+          where o.recurring and v_today - o.occurrence_on <= pi.match_window_days
+            and not exists (select 1 from public.wb_planned_skips sk
+                            where sk.planned_item_id = o.planned_item_id and sk.occurrence_on = o.occurrence_on)
           union all
-          -- One row per week from today, on the week's last day (or the first day below).
+          select so.occurrence_on, so.name, so.amount, 'subscription', 'subscription', so.subscription_id::text, 1
+          from public.wb_subscription_occurrences(v_today, v_low30.day, v_today) so
+          union all
+          -- One row per week from today, on the week's last day (or the lowest day).
           select max(pr.day), 'Everyday spending at the burn rate', round(sum(pr.burn), 2), 'burn', null, null, 2
           from proj pr
           group by (pr.day - v_today) / 7
@@ -4967,8 +4980,40 @@ begin
                   order by e.d, e.ord, e.amount, e.title), '[]'::jsonb)
         from ev e
         join proj pr on pr.day = e.d
-        where e.amount <> 0
-      ) end);
+        where e.amount <> 0);
+      -- The causes are the path's payments out, and the burn over the same days as one row (A58).
+      v_causes := (
+        select coalesce(jsonb_agg(c order by (c ->> 'amount')::numeric), '[]'::jsonb)
+        from (
+          select e as c from jsonb_array_elements(v_path) e
+          where e ->> 'type' in ('planned', 'subscription') and (e ->> 'amount')::numeric < 0
+          union all
+          select jsonb_build_object('type', 'burn', 'title', 'Everyday spending at the burn rate',
+                   'amount', sum((e ->> 'amount')::numeric), 'on', null, 'link_kind', null, 'link_id', null)
+          from jsonb_array_elements(v_path) e
+          where e ->> 'type' = 'burn'
+          having sum((e ->> 'amount')::numeric) < 0
+        ) z);
+    end if;
+
+    v_below := jsonb_build_object(
+      'floor_missing', false,
+      'floor', v_floor,
+      'window_days', c_move_days,
+      'first_below_on', v_first.day,
+      'closing_then', v_first.closing,
+      'low_30d_on', case when v_first.day is not null then v_low30.day end,
+      'low_30d_balance', case when v_first.day is not null then v_low30.closing end,
+      'shortfall_30d', case when v_first.day is not null then round(v_floor - v_low30.closing, 2) end,
+      'reserve_balance', v_low.reserve_cash,
+      'severity', case when v_first.day is null then 'info' when v_first.day <= v_today + p_days then 'red' else 'amber' end,
+      'todo', case when v_first.day is null
+                   then format('Nothing to do: the projection stays above the floor for the next %s days.', c_move_days)
+                   else format('Move %s from the reserve by %s, or delay one of the payments listed.',
+                               to_char(round(v_floor - v_low30.closing, 2), 'FM$999,999,999,990.00'),
+                               to_char(v_first.day, 'Mon FMDD')) end,
+      'causes', coalesce(v_causes, '[]'::jsonb),
+      'path', coalesce(v_path, '[]'::jsonb));
   end if;
 
   -- ---------------------------------------------------------------- cash flow (A52): in less out, back, ahead and typical
@@ -4983,8 +5028,9 @@ begin
     and not (a.role = 'credit_card' and coalesce(x.kind, '') = 'transfer')
     and (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date
         between v_today - (c_flow_days - 1) and v_today;
-  -- The projection's balance on day c_flow_days, less its opening today (no drafts).
-  select max(p.closing) filter (where p.day = v_today + c_flow_days) - max(p.opening) filter (where p.day = v_today)
+  -- The projection's change over the next c_flow_days days, today included (A58): its closing on the
+  -- last of those days less its opening today (no drafts).
+  select max(p.closing) filter (where p.day = v_today + c_flow_days - 1) - max(p.opening) filter (where p.day = v_today)
   into v_next30
   from public.wb_cash_projection(false, v_today) p;
   select t.net_monthly into v_typical from public.wb_true_cost t;
@@ -5043,7 +5089,8 @@ begin
         where s.overdue
       ) x),
 
-    -- big: money out larger than p_big_amount, so the app and Claude can bold it (A52).
+    -- big: money out larger than p_big_amount, so the app and Claude can bold it (A52). A one-off at
+    -- stage paid is never coming due (A58), as in the projection.
     'coming_up', (
       select coalesce(jsonb_agg(r order by r ->> 'on', r ->> 'title'), '[]'::jsonb)
       from (
@@ -5061,7 +5108,7 @@ begin
                    where pm.planned_item_id = o.planned_item_id and pm.status = 'confirmed'
                      and pm.occurrence_on is not distinct from case when o.recurring then o.occurrence_on end),
                    pi.amount_tolerance) as left_amt) z
-        where z.left_amt <> 0
+        where z.left_amt <> 0 and (o.recurring or o.stage <> 'paid')
         union all
         -- Past due, still inside the match window: late, not yet overdue.
         select jsonb_build_object('type', case when u.recurring then 'planned_repeating' else 'planned_one_off' end,
@@ -5106,7 +5153,7 @@ begin
                    where pm.planned_item_id = o.planned_item_id and pm.status = 'confirmed'
                      and pm.occurrence_on is not distinct from case when o.recurring then o.occurrence_on end),
                    pi.amount_tolerance) as left_amt) z
-        where z.left_amt < 0 and -z.left_amt > p_big_amount
+        where z.left_amt < 0 and -z.left_amt > p_big_amount and (o.recurring or o.stage <> 'paid')
         union all
         select jsonb_build_object('type', 'subscription', 'severity', case when so.occurrence_on <= v_today + p_days then 'amber' else 'info' end,
                  'title', so.name, 'what_if', false, 'todo', 'Make sure the cash is there by the date.',
@@ -5118,12 +5165,14 @@ begin
     'card_bills', v_cards,
     'needs_attention', v_attn,
 
-    -- Alfred's own tables, read through their RLS like any other select.
+    -- Alfred's own tables, read through their RLS like any other select. A title that stops mid-line
+    -- ends with "…" (A57), as one cut at c_title_max does.
     'money_intentions', (
       select coalesce(jsonb_agg(r order by (r ->> 'severity') = 'amber' desc, r ->> 'title'), '[]'::jsonb)
       from (
         select jsonb_build_object('type', 'intention', 'severity', case when i.status = 'active' then 'amber' else 'info' end,
-                 'title', i.text, 'todo', 'Open it in Alfred.', 'status', i.status,
+                 'title', case when i.text ~* c_unfinished then rtrim(i.text) || '…' else i.text end,
+                 'todo', 'Open it in Alfred.', 'status', i.status,
                  'amount', null, 'on', i.target_start_date, 'link_kind', 'intention', 'link_id', i.id) as r
         from public.intents i
         where i.context_id = c_money and i.is_intention is true and not coalesce(i.archived, false) and i.status <> 'closed'
@@ -5133,6 +5182,7 @@ begin
       from (
         select jsonb_build_object('type', 'inbox_item', 'severity', 'info',
                  'title', case when length(t.full_title) > c_title_max then left(t.full_title, c_title_max - 1) || '…'
+                               when t.full_title ~* c_unfinished then rtrim(t.full_title) || '…'
                                else t.full_title end,
                  'todo', 'Triage it in the inbox.',
                  'amount', null, 'on', (b.created_at at time zone 'America/Los_Angeles')::date,
@@ -5146,13 +5196,13 @@ begin
     'cash_flow', v_cash
   );
 end;
-$$;
+$_$;
 
 
 ALTER FUNCTION "public"."wb_action_items"("p_days" integer, "p_big_amount" numeric, "p_big_days" integer, "p_today" "date") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."wb_action_items"("p_days" integer, "p_big_amount" numeric, "p_big_days" integer, "p_today" "date") IS 'Warren Buffet: the money to-do list, one JSON object (spec A49 to A53). Sections: flags (card interest and fees in the last 90 days, red until the charge is reviewed with a note (shown as note), when it clears; a credit of the same amount on that card turns it info with refund (amount, on, link) but does not clear it; and a card bill past due and unpaid), reconcile (review queue counts by reason), overdue (wb_planned_unmatched past the match window, and subscriptions more than 7 days late), coming_up (planned items less what is covered, A45, and subscriptions, in the next p_days; dates past due but not yet overdue come first, with late true and amber; big true for money out over p_big_amount), big_bites (payments out of more than p_big_amount in the next p_big_days, what-ifs included and marked), card_bills (from statement_close_day, payment_due_day and autopay: the balance on the last close day less card payments since; a card with no days set asks for them), needs_attention (sync problems, stale or missing balances, subscriptions to review or confirm, accounts with no role, rule health), money_intentions and money_inbox (Alfred records in the Money context, as RLS allows; a title longer than 120 characters is cut and ends with an ellipsis), below_floor (the first projected day under the safety floor, the shortfall then and at the low point, the payments up to it as causes, and path: the starting balance, every dated event and a weekly burn row up to that day, each with the projected balance after it and below when it is under the floor; read from wb_cash_projection, wb_free_cash and the occurrence helpers), and cash_flow (money in less money out: last_30_actual from settled spending-cash and card rows, leaving out paired transfers and transfers received on a card; next_30_projected, the projection''s change over the next 30 days; typical_month, wb_true_cost.net_monthly; runway_months, the reserve over a monthly shortfall, null when typical_month is not negative). Every row has type, severity (red, amber, info), title, todo, amount, on and a link (link_kind, link_id). Security invoker; read by the app and get_wb_action_items.';
+COMMENT ON FUNCTION "public"."wb_action_items"("p_days" integer, "p_big_amount" numeric, "p_big_days" integer, "p_today" "date") IS 'Warren Buffet: the money to-do list, one JSON object (spec A49 to A53, A57, A58). Sections: flags (card interest and fees in the last 90 days, red until the charge is reviewed with a note (shown as note), when it clears; a refund-kind credit of the same amount on that card, used once and never a transfer or a payment, turns it info with refund (amount, on, link) but does not clear it; and a card bill past due and unpaid, which is then left out of card_bills), reconcile (review queue counts by reason), overdue (wb_planned_unmatched past the match window, and subscriptions more than 7 days late), coming_up (planned items less what is covered, A45, never a one-off at stage paid, and subscriptions, in the next p_days; dates past due but not yet overdue come first, with late true and amber; big true for money out over p_big_amount), big_bites (payments out of more than p_big_amount in the next p_big_days, what-ifs included and marked, no paid one-offs), card_bills (from statement_close_day, payment_due_day and autopay: the balance on the last close day less card payments since, refunds not counted; a card with no days set asks for them), needs_attention (sync problems, stale or missing balances, subscriptions to review or confirm, accounts with no role, rule health), money_intentions and money_inbox (Alfred records in the Money context, as RLS allows; a title longer than 120 characters is cut, and a title that stops mid-line is kept, both ending with an ellipsis), below_floor (when the projection goes below the safety floor in the next 30 days, window_days: first_below_on, the "by" date, and closing_then; low_30d_on and low_30d_balance, the lowest day in those 30 days; shortfall_30d, the amount to move from the reserve, floor less that low; path, the starting balance, every dated event and a weekly burn row up to the low day, each with the projected balance after it and below when it is under the floor; causes, the path''s payments out and its burn; first_below_on and shortfall_30d are null when the 30 days stay above the floor), and cash_flow (money in less money out: last_30_actual from settled spending-cash and card rows, leaving out paired transfers and transfers received on a card; next_30_projected, the projection''s change over the next 30 days, today included; typical_month, wb_true_cost.net_monthly; runway_months, the reserve over a monthly shortfall, null when typical_month is not negative). Every row has type, severity (red, amber, info), title, todo, amount, on and a link (link_kind, link_id). Security invoker; read by the app and get_wb_action_items.';
 
 
 
@@ -5694,28 +5744,42 @@ begin
   return query
   with days as (select generate_series(v_today, v_end, interval '1 day')::date as d),
   planned as (
-    -- Due dates in the horizon, less what is already confirmed against each (A5), 0 within tolerance (A45).
+    -- Due dates in the horizon, less what is confirmed or suggested against each (A5, A58): a suggested
+    -- match is a payment that has posted, so it is already in the balance. 0 within tolerance (A45).
     select o.occurrence_on as d,
            public.wb_planned_left(o.amount, (
              select sum(abs(pm.amount_applied)) from public.wb_planned_matches pm
-             where pm.planned_item_id = o.planned_item_id and pm.status = 'confirmed'
+             where pm.planned_item_id = o.planned_item_id and pm.status in ('confirmed', 'suggested')
                and pm.occurrence_on is not distinct from case when o.recurring then o.occurrence_on end),
              pi.amount_tolerance) as amt
     from public.wb_planned_occurrences(v_today, v_end, p_include_drafts) o
     join public.wb_planned_items pi on pi.id = o.planned_item_id
     where o.recurring or o.stage <> 'paid'
     union all
-    -- An overdue one-off with something still unpaid counts on day 1 (A7). Missed dates of
-    -- recurring items do not (A25); the weekly cleanup lists them as unmatched.
+    -- An overdue one-off with something still unpaid counts on day 1 (A7).
     select v_today,
            public.wb_planned_left(pi.amount, (
              select sum(abs(pm.amount_applied)) from public.wb_planned_matches pm
-             where pm.planned_item_id = pi.id and pm.status = 'confirmed'), pi.amount_tolerance)
+             where pm.planned_item_id = pi.id and pm.status in ('confirmed', 'suggested')), pi.amount_tolerance)
     from public.wb_planned_items pi
     where pi.interval_count is null
       and pi.due_on < v_today
       and pi.stage not in ('paid', 'cancelled')
       and (p_include_drafts or pi.stage <> 'draft')
+    union all
+    -- A late repeating date counts on day 1 too (A58, as A24 does for subscriptions): past due, still
+    -- inside its match window, and not marked Not needed. Older missed dates still do not (A25).
+    select v_today,
+           public.wb_planned_left(o.amount, (
+             select sum(abs(pm.amount_applied)) from public.wb_planned_matches pm
+             where pm.planned_item_id = o.planned_item_id and pm.status in ('confirmed', 'suggested')
+               and pm.occurrence_on = o.occurrence_on), pi.amount_tolerance)
+    from public.wb_planned_occurrences(v_today - 366, v_today - 1, p_include_drafts) o
+    join public.wb_planned_items pi on pi.id = o.planned_item_id
+    where o.recurring
+      and v_today - o.occurrence_on <= pi.match_window_days
+      and not exists (select 1 from public.wb_planned_skips sk
+                      where sk.planned_item_id = o.planned_item_id and sk.occurrence_on = o.occurrence_on)
   ),
   subs as (
     select so.occurrence_on as d, so.amount from public.wb_subscription_occurrences(v_today, v_end, v_today) so
@@ -5743,7 +5807,7 @@ $$;
 ALTER FUNCTION "public"."wb_cash_projection"("p_include_drafts" boolean, "p_today" "date") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."wb_cash_projection"("p_include_drafts" boolean, "p_today" "date") IS 'Warren Buffet: spending cash day by day from p_today across the horizon (wb_settings.horizon_months, else 12). Starts from spending_cash balances minus what is owed on credit_card and emergency_credit accounts (unused credit never counts; balances as of p_today). Each day adds planned income and bills on their due dates less what is confirmed against them (nothing when what is left is within the item''s amount_tolerance, A45), subscription charges, and the burn rate spread evenly (median x 12 / 365). An overdue one-off with something unpaid counts on day 1; a missed recurring date does not. Drafts (stage draft, or is_draft) only when p_include_drafts. Security invoker.';
+COMMENT ON FUNCTION "public"."wb_cash_projection"("p_include_drafts" boolean, "p_today" "date") IS 'Warren Buffet: spending cash day by day from p_today across the horizon (wb_settings.horizon_months, else 12). Starts from spending_cash balances minus what is owed on credit_card and emergency_credit accounts (unused credit never counts; balances as of p_today). Each day adds planned income and bills on their due dates less what is confirmed or suggested against them (a suggestion is a payment that has posted; nothing when what is left is within the item''s amount_tolerance, A45, A58), subscription charges, and the burn rate spread evenly (median x 12 / 365). On day 1 it also counts an overdue one-off with something unpaid (A7) and a repeating date past due but still inside its match window and not marked Not needed (A58); older missed repeating dates do not count (A25). Drafts (stage draft, or is_draft) only when p_include_drafts. Security invoker.';
 
 
 
@@ -5828,9 +5892,10 @@ CREATE OR REPLACE FUNCTION "public"."wb_confirm_planned_match"("p_match_id" "uui
     SET "search_path" TO 'public', 'pg_temp'
     AS $$
 declare
-  m      record;
-  pi     record;
-  v_paid boolean := false;
+  m         record;
+  pi        record;
+  v_paid    boolean := false;
+  n_removed int := 0;
 begin
   if p_action not in ('confirm', 'reject') then
     raise exception 'wb_confirm_planned_match: action must be confirm or reject' using errcode = '22023';
@@ -5857,6 +5922,14 @@ begin
       amount_applied = case when p_amount is null then amount_applied else sign(pi.amount) * abs(p_amount) end
   where id = p_match_id;
 
+  -- A58: the other suggestions for this date of this item, and for this payment part, go, so a later
+  -- confirm cannot match the same date or the same payment twice.
+  delete from public.wb_planned_matches x
+  where x.status = 'suggested' and x.id <> p_match_id
+    and ((x.planned_item_id = m.planned_item_id and x.occurrence_on is not distinct from m.occurrence_on)
+         or x.split_id = m.split_id);
+  get diagnostics n_removed = row_count;
+
   -- A one-off covered by confirmed matches (within its tolerance, A45) is paid. Never set back automatically.
   if pi.interval_count is null and pi.stage <> 'paid'
      and public.wb_planned_left(pi.amount, (select sum(abs(x.amount_applied)) from public.wb_planned_matches x
@@ -5865,7 +5938,7 @@ begin
     update public.wb_planned_items set stage = 'paid' where id = pi.id;
     v_paid := true;
   end if;
-  return jsonb_build_object('status', 'confirmed', 'stage_paid', v_paid);
+  return jsonb_build_object('status', 'confirmed', 'stage_paid', v_paid, 'suggestions_removed', n_removed);
 end;
 $$;
 
@@ -5873,7 +5946,7 @@ $$;
 ALTER FUNCTION "public"."wb_confirm_planned_match"("p_match_id" "uuid", "p_action" "text", "p_amount" numeric) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."wb_confirm_planned_match"("p_match_id" "uuid", "p_action" "text", "p_amount" numeric) IS 'Warren Buffet: confirm or reject one suggested planned match. confirm may lower the amount for a part-payment (p_amount, taken with the planned item''s sign); the trigger refuses more than the split. Confirming the last part of a one-off (covered within its amount_tolerance) sets its stage to paid; nothing sets it back automatically. A rejected match is never suggested again. Security invoker.';
+COMMENT ON FUNCTION "public"."wb_confirm_planned_match"("p_match_id" "uuid", "p_action" "text", "p_amount" numeric) IS 'Warren Buffet: confirm or reject one suggested planned match. confirm may lower the amount for a part-payment (p_amount, taken with the planned item''s sign); the trigger refuses more than the split. On confirm, the other suggestions for the same item and date, and for the same split, are deleted (A58; suggestions_removed counts them). Confirming the last part of a one-off (covered within its amount_tolerance) sets its stage to paid; nothing sets it back automatically. A rejected match is never suggested again. Used by the app, by update_wb_planned_match and by create_wb_planned_match. Security invoker.';
 
 
 
@@ -16106,13 +16179,13 @@ GRANT ALL ON FUNCTION "public"."wb_bulk_create"("p_payload" "jsonb", "p_context_
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_burn_rate_on"("p_today" "date") TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_burn_rate_on"("p_today" "date") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_burn_rate_on"("p_today" "date") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_burn_rate_on"("p_today" "date") TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_cash_projection"("p_include_drafts" boolean, "p_today" "date") TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_cash_projection"("p_include_drafts" boolean, "p_today" "date") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_cash_projection"("p_include_drafts" boolean, "p_today" "date") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_cash_projection"("p_include_drafts" boolean, "p_today" "date") TO "service_role";
 
@@ -16124,7 +16197,7 @@ GRANT ALL ON FUNCTION "public"."wb_clean_description"("p_raw" "text", "p_strip_l
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_confirm_planned_match"("p_match_id" "uuid", "p_action" "text", "p_amount" numeric) TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_confirm_planned_match"("p_match_id" "uuid", "p_action" "text", "p_amount" numeric) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_confirm_planned_match"("p_match_id" "uuid", "p_action" "text", "p_amount" numeric) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_confirm_planned_match"("p_match_id" "uuid", "p_action" "text", "p_amount" numeric) TO "service_role";
 
@@ -16138,7 +16211,6 @@ GRANT ALL ON FUNCTION "public"."wb_default_kind"("p_account_role" "text", "p_amo
 
 REVOKE ALL ON FUNCTION "public"."wb_delete_planned_item"("p_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_delete_planned_item"("p_id" "uuid") TO "authenticated";
-GRANT ALL ON FUNCTION "public"."wb_delete_planned_item"("p_id" "uuid") TO "service_role";
 
 
 
@@ -16154,7 +16226,7 @@ GRANT ALL ON FUNCTION "public"."wb_fix_plan"("p_transaction_id" "uuid", "p_patte
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_free_cash"("p_include_drafts" boolean, "p_today" "date") TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_free_cash"("p_include_drafts" boolean, "p_today" "date") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_free_cash"("p_include_drafts" boolean, "p_today" "date") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_free_cash"("p_include_drafts" boolean, "p_today" "date") TO "service_role";
 
@@ -16190,7 +16262,7 @@ GRANT ALL ON FUNCTION "public"."wb_link_subscription"("p_transaction_ids" "uuid"
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_monthly_equivalent"("p_amount" numeric, "p_interval_count" integer, "p_interval_unit" "text") TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_monthly_equivalent"("p_amount" numeric, "p_interval_count" integer, "p_interval_unit" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_monthly_equivalent"("p_amount" numeric, "p_interval_count" integer, "p_interval_unit" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_monthly_equivalent"("p_amount" numeric, "p_interval_count" integer, "p_interval_unit" "text") TO "service_role";
 
@@ -16202,31 +16274,31 @@ GRANT ALL ON FUNCTION "public"."wb_pair_decision"("p_forward" integer, "p_revers
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_planned_left"("p_amount" numeric, "p_paid" numeric, "p_tolerance" numeric) TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_planned_left"("p_amount" numeric, "p_paid" numeric, "p_tolerance" numeric) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_planned_left"("p_amount" numeric, "p_paid" numeric, "p_tolerance" numeric) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_planned_left"("p_amount" numeric, "p_paid" numeric, "p_tolerance" numeric) TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_planned_matches_fill"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_planned_matches_fill"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_planned_matches_fill"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_planned_matches_fill"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_planned_occurrences"("p_from" "date", "p_to" "date", "p_include_drafts" boolean) TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_planned_occurrences"("p_from" "date", "p_to" "date", "p_include_drafts" boolean) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_planned_occurrences"("p_from" "date", "p_to" "date", "p_include_drafts" boolean) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_planned_occurrences"("p_from" "date", "p_to" "date", "p_include_drafts" boolean) TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_planned_skips_fill"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_planned_skips_fill"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_planned_skips_fill"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_planned_skips_fill"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric, "p_today" "date") TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric, "p_today" "date") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric, "p_today" "date") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric, "p_today" "date") TO "service_role";
 
@@ -16292,13 +16364,13 @@ GRANT ALL ON FUNCTION "public"."wb_splits_copy_owner"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_splits_fill_project_source"() TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_splits_fill_project_source"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_splits_fill_project_source"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_splits_fill_project_source"() TO "service_role";
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_subscription_occurrences"("p_from" "date", "p_to" "date", "p_today" "date") TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_subscription_occurrences"("p_from" "date", "p_to" "date", "p_today" "date") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_subscription_occurrences"("p_from" "date", "p_to" "date", "p_today" "date") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_subscription_occurrences"("p_from" "date", "p_to" "date", "p_today" "date") TO "service_role";
 
@@ -16334,7 +16406,7 @@ GRANT ALL ON FUNCTION "public"."wb_suggest_pattern"("p_payee" "text", "p_clean" 
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_suggest_planned_matches"("p_transaction_ids" "uuid"[], "p_planned_item_ids" "uuid"[]) TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_suggest_planned_matches"("p_transaction_ids" "uuid"[], "p_planned_item_ids" "uuid"[]) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_suggest_planned_matches"("p_transaction_ids" "uuid"[], "p_planned_item_ids" "uuid"[]) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_suggest_planned_matches"("p_transaction_ids" "uuid"[], "p_planned_item_ids" "uuid"[]) TO "service_role";
 
@@ -16382,7 +16454,7 @@ GRANT ALL ON FUNCTION "public"."wb_transfer_match"("p_a_account" "uuid", "p_a_am
 
 
 
-GRANT ALL ON FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") TO "anon";
+REVOKE ALL ON FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid") TO "service_role";
 
@@ -16658,7 +16730,6 @@ GRANT ALL ON TABLE "public"."wb_account_latest" TO "service_role";
 
 
 
-GRANT SELECT,MAINTAIN ON TABLE "public"."wb_burn_rate" TO "anon";
 GRANT ALL ON TABLE "public"."wb_burn_rate" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_burn_rate" TO "service_role";
 
@@ -16709,7 +16780,6 @@ GRANT ALL ON TABLE "public"."wb_projects" TO "service_role";
 
 
 
-GRANT SELECT,MAINTAIN ON TABLE "public"."wb_planned_unmatched" TO "anon";
 GRANT ALL ON TABLE "public"."wb_planned_unmatched" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_planned_unmatched" TO "service_role";
 
@@ -16725,7 +16795,6 @@ GRANT ALL ON TABLE "public"."wb_splits" TO "service_role";
 
 
 
-GRANT SELECT,MAINTAIN ON TABLE "public"."wb_project_summary" TO "anon";
 GRANT ALL ON TABLE "public"."wb_project_summary" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_project_summary" TO "service_role";
 
@@ -16771,13 +16840,11 @@ GRANT ALL ON TABLE "public"."wb_tag_exclusions" TO "service_role";
 
 
 
-GRANT SELECT,MAINTAIN ON TABLE "public"."wb_rule_health_all" TO "anon";
 GRANT ALL ON TABLE "public"."wb_rule_health_all" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_rule_health_all" TO "service_role";
 
 
 
-GRANT SELECT,MAINTAIN ON TABLE "public"."wb_rule_health" TO "anon";
 GRANT ALL ON TABLE "public"."wb_rule_health" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_rule_health" TO "service_role";
 
@@ -16788,7 +16855,6 @@ GRANT ALL ON TABLE "public"."wb_spending_by_tag" TO "service_role";
 
 
 
-GRANT SELECT,MAINTAIN ON TABLE "public"."wb_subscription_outflows" TO "anon";
 GRANT ALL ON TABLE "public"."wb_subscription_outflows" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_subscription_outflows" TO "service_role";
 
@@ -16810,7 +16876,6 @@ GRANT ALL ON TABLE "public"."wb_transaction_list" TO "service_role";
 
 
 
-GRANT SELECT,MAINTAIN ON TABLE "public"."wb_true_cost" TO "anon";
 GRANT ALL ON TABLE "public"."wb_true_cost" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_true_cost" TO "service_role";
 

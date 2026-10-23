@@ -352,9 +352,16 @@ export const HELP = {
   "overview.funds_transfer": {
     title: "Funds transfer required",
     what: "The projection drops below your safety floor, so money needs to move from the reserve before that day.",
-    included: "The first projected day below the floor, how far below it is that day, and the biggest payment behind it. The path to that day starts from today's balance and lists every planned payment, deposit and subscription charge in date order, with everyday spending at the burn rate as one line a week and the projected balance after each day. The first line under the floor is highlighted.",
-    leftOut: "\"What if\" drafts, and the reserve itself, which the projection never counts.",
+    included: "The amount is how far the lowest projected balance in the next 30 days falls below the floor, so one move covers the whole month. The date is the first day below the floor. The path starts from today's balance and runs to that lowest day, listing every planned payment, deposit and subscription charge in date order, late and overdue ones on today, with everyday spending at the burn rate as one line a week and the projected balance after each day. The first line under the floor is highlighted.",
+    leftOut: "\"What if\" drafts, one-offs already marked paid, the reserve itself, which the projection never counts, and dips more than 30 days away.",
     todo: "Move the amount shown from the reserve before the date, or ask Claude about delaying one of the payments listed.",
+  },
+  "overview.red_flags": {
+    title: "Red flags",
+    what: "Card fees and interest charged on your cards and credit lines, and card bills past their due date.",
+    included: "Fees and interest from the last 90 days. A fee turns green when a refund of the same amount comes back on the same card afterwards: a credit marked as a refund, not a payment or a move between your own accounts, and each refund counts for one fee only.",
+    leftOut: "Fees older than 90 days, and a fee once it is marked Reviewed with a note saying how it was handled.",
+    todo: "Call about the fee, then open it, tick Reviewed and add a note. A past-due bill clears once the payment posts.",
   },
   "overview.todo": {
     title: "To do",
