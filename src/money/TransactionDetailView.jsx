@@ -4,11 +4,27 @@ import AlwaysDoThisSheet from "./AlwaysDoThisSheet";
 import SplitEditor from "./SplitEditor";
 import HelpButton, { HelpAfter } from "./HelpButton";
 import {
-  applyTags, findPairCandidates, getKindRule, getTagTree, getTransactionDetail, saveNotes, setKind, setReviewed,
-  setTransferPair,
+  applyTags, findPairCandidates, getKindRule, getProjectChoices, getTagTree, getTransactionDetail, saveNotes, setKind, setReviewed,
+  setTransactionProject, setTransferPair,
 } from "./moneyApi";
 import { useLoad } from "./useMoneyData";
 import { KIND_LABELS, KIND_ORDER, exclusionLabel, formatDay, formatMoney, tagOptions } from "./moneyFormat";
+
+const PROJECT_STATUS = { on_hold: "on hold", done: "done", cancelled: "cancelled" };
+
+/** Active projects, plus the payment's own project whatever its status, so it never vanishes from the list. */
+export function projectOptions(projects, currentId) {
+  return (projects || []).filter((p) => p.status === "active" || p.id === currentId);
+}
+
+/** Who set the project, as the Kind line says who set the kind. A hand removal sticks (A17). */
+export function projectSourceLabel(split) {
+  const src = split?.project_source;
+  if (!split?.project_id) {
+    return src === "manual" || src === "claude" ? `Taken off by ${src === "manual" ? "hand" : "Claude"}; no rule puts one back` : "No project";
+  }
+  return src === "rule" ? "Set by a rule" : src === "claude" ? "Set by Claude" : "Set by hand";
+}
 
 /** Live working for Kind: who set it and, when a rule did, which rule. */
 export function KindWorking({ txn }) {
@@ -110,8 +126,8 @@ function PairPicker({ txn, onPaired, onCancel }) {
 
 export default function TransactionDetailView({ transactionId, onBack, onOpenTransaction }) {
   const { data, error, loading, reload } = useLoad(async () => {
-    const [txn, tree] = await Promise.all([getTransactionDetail(transactionId), getTagTree()]);
-    return { txn, tree };
+    const [txn, tree, projects] = await Promise.all([getTransactionDetail(transactionId), getTagTree(), getProjectChoices()]);
+    return { txn, tree, projects };
   }, [transactionId]);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState(null);
@@ -195,6 +211,27 @@ export default function TransactionDetailView({ transactionId, onBack, onOpenTra
           <p className="text-xs text-muted-foreground mt-1">
             {txn.kind_source === "manual" ? "Set by hand" : txn.kind_source === "claude" ? "Set by Claude" : txn.kind_source === "rule" ? "Set by a rule" : "Worked out automatically"}
           </p>
+        </section>
+
+        <section className={SECTION}>
+          <p className="mb-1 whitespace-nowrap">
+            <label htmlFor="txn-project" className="font-medium">Project</label>
+            <HelpButton helpKey="transaction.project" />
+          </p>
+          {single ? (
+            <>
+              <select id="txn-project" value={txn.splits[0].project_id || ""} disabled={busy}
+                onChange={(e) => act(() => setTransactionProject(txn, e.target.value || null))} className={FIELD}>
+                <option value="">No project</option>
+                {projectOptions(data.projects, txn.splits[0].project_id).map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}{p.status !== "active" ? ` (${PROJECT_STATUS[p.status] || p.status})` : ""}</option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground mt-1">{projectSourceLabel(txn.splits[0])}</p>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">Split payment: ask Claude to put each part on a project.</p>
+          )}
         </section>
 
         <section className={SECTION}>

@@ -15,9 +15,20 @@ jest.mock("./moneyApi", () => ({
   replaceSplits: jest.fn(),
   getFixPlan: jest.fn(),
   applyFix: jest.fn(),
+  getProjectChoices: jest.fn(),
+  setTransactionProject: jest.fn(),
 }));
 const api = require("./moneyApi");
 const TransactionDetailView = require("./TransactionDetailView").default;
+const { projectOptions, projectSourceLabel } = require("./TransactionDetailView");
+
+beforeEach(() => {
+  api.getProjectChoices.mockResolvedValue([
+    { id: "p1", name: "ZZ Claim", status: "active" },
+    { id: "p2", name: "ZZ Old", status: "done" },
+  ]);
+  api.setTransactionProject.mockResolvedValue();
+});
 
 const TREE = {
   groups: [
@@ -89,4 +100,33 @@ it("shows a refusal in plain words", async () => {
   render(<TransactionDetailView transactionId="t1" onBack={() => {}} onOpenTransaction={() => {}} />);
   fireEvent.change(await screen.findByLabelText("Kind"), { target: { value: "fee" } });
   expect(await screen.findByRole("alert")).toHaveTextContent("Unpair it first.");
+});
+
+it("project picker: put a single-part payment on a project, or take it off", async () => {
+  render(<TransactionDetailView transactionId="t1" onBack={() => {}} onOpenTransaction={() => {}} />);
+  const pick = await screen.findByLabelText("Project");
+  expect([...pick.options].map((o) => o.textContent)).toEqual(["No project", "ZZ Claim"]);
+  expect(screen.getByText("No project", { selector: "p" })).toBeInTheDocument();
+  fireEvent.change(pick, { target: { value: "p1" } });
+  await waitFor(() => expect(api.setTransactionProject).toHaveBeenCalledWith(expect.objectContaining({ id: "t1" }), "p1"));
+  api.getTransactionDetail.mockResolvedValue({ ...TXN, splits: [{ ...TXN.splits[0], project_id: "p1", project_source: "manual" }] });
+  fireEvent.change(await screen.findByLabelText("Project"), { target: { value: "" } });
+  await waitFor(() => expect(api.setTransactionProject).toHaveBeenLastCalledWith(expect.objectContaining({ id: "t1" }), null));
+});
+
+it("project picker: a split payment says ask Claude instead", async () => {
+  api.getTransactionDetail.mockResolvedValue({ ...TXN, splits: [{ id: "a", amount: -10, tags: [] }, { id: "b", amount: -14, tags: [] }] });
+  render(<TransactionDetailView transactionId="t1" onBack={() => {}} onOpenTransaction={() => {}} />);
+  expect(await screen.findByText(/Split payment: ask Claude/)).toBeInTheDocument();
+  expect(screen.queryByLabelText("Project")).not.toBeInTheDocument();
+});
+
+it("project picker: keeps a done project that is set, and says who set it", () => {
+  const projects = [{ id: "p1", name: "A", status: "active" }, { id: "p2", name: "B", status: "done" }];
+  expect(projectOptions(projects, "p2").map((p) => p.id)).toEqual(["p1", "p2"]);
+  expect(projectOptions(projects, null).map((p) => p.id)).toEqual(["p1"]);
+  expect(projectSourceLabel({ project_id: "p1", project_source: "rule" })).toBe("Set by a rule");
+  expect(projectSourceLabel({ project_id: "p1", project_source: "manual" })).toBe("Set by hand");
+  expect(projectSourceLabel({ project_id: null, project_source: "manual" })).toMatch(/Taken off by hand; no rule puts one back/);
+  expect(projectSourceLabel({ project_id: null, project_source: null })).toBe("No project");
 });
