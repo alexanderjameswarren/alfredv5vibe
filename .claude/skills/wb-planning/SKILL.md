@@ -124,3 +124,13 @@ There is no delete tool, on purpose: deleting would lose matches and history.
   draft and nothing is paid yet).
 - **Putting payments on a project:** `set_wb_transaction_project` (up to 25 single-part payments).
 - **A single future cost needs no project:** just a planned item.
+
+## 11. "What needs my attention?"
+
+- Use `get_wb_action_items`. Lead with the red flags and `below_floor` (the first day under the
+  floor, and `shortfall_at_low`: the amount to move from the reserve), then the rest by section.
+- Give each row's link (`link_kind`, `link_id`) and its `todo`.
+- **It only reads.** Never mark, match, confirm or change anything from it without asking Alex first.
+- **Card bills come from the card's statement and due days** (`update_wb_account`:
+  `statement_close_day`, `payment_due_day`, `autopay`, taken from the statement), never from a
+  planned item: free cash already counts card balances.
