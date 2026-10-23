@@ -68,6 +68,7 @@ import CollectionDetailScreen from "./collections/CollectionDetailScreen";
 import GroupEditRoute from "./groups/GroupEditRoute";
 import { GroupsProvider } from "./groups/GroupsContext";
 import { useGroupActions } from "./groups/useGroupActions";
+import { isRecipeRun, shownRuns } from "./groups/menuRun";
 import { buildGroupRows } from "./utils/rowModel";
 import CollectionHistoryScreen from "./collections/CollectionHistoryScreen";
 import ItemAddToCollectionScreen from "./collections/ItemAddToCollectionScreen";
@@ -412,6 +413,9 @@ export default function Alfred() {
     toggleCollectionItem,
     startNowFromItem,
     startNowFromIntention,
+    startMenuNow,
+    setRecipeSkipped,
+    logMenuDone,
   } = useExecutionActions({
     user,
     view,
@@ -437,6 +441,10 @@ export default function Alfred() {
     setItems,
     notify,
     offerUndoFor,
+    itemGroups,
+    setItemGroups,
+    groupTypes,
+    groupMembers,
   });
   const {
     handleCapture,
@@ -1098,7 +1106,12 @@ export default function Alfred() {
 
   const activeCollections = collections.filter((c) => !c.archived);
   const pinnedCollections = activeCollections.filter((c) => c.pinned);
-  const allLiveExecutions = [...activeExecutions, ...pausedExecutions];
+  // Restructure P5 step 14: a recipe's run inside a menu is never a running card or
+  // row anywhere; the menu's run stands for it. Every list below reads these.
+  const shownActiveExecutions = shownRuns(activeExecutions);
+  const shownPausedExecutions = shownRuns(pausedExecutions);
+  const allLiveExecutions = [...shownActiveExecutions, ...shownPausedExecutions];
+  const liveRecipeRuns = [...activeExecutions, ...pausedExecutions].filter(isRecipeRun);
 
   // Intentions: every live intention. Which of them show is the status chips'
   // call (088), not a hidden "no live event" rule, which this used to be.
@@ -1242,8 +1255,8 @@ export default function Alfred() {
           <HomeScreen
             executionTab={executionTab}
             setExecutionTab={setExecutionTab}
-            activeExecutions={activeExecutions}
-            pausedExecutions={pausedExecutions}
+            activeExecutions={shownActiveExecutions}
+            pausedExecutions={shownPausedExecutions}
             allLiveExecutions={allLiveExecutions}
             todayEvents={todayEvents}
             visibleTodayEvents={visibleTodayEvents}
@@ -1435,6 +1448,7 @@ export default function Alfred() {
             onViewGroupDetail={(id) => navigate(groupDetailPath(id), { state: { fromApp: true } })}
             onOpenCreateGroup={() => navigate(groupNewPath(selectedContextId), { state: { fromApp: true } })}
             onScheduleGroup={groupActions.scheduleGroup}
+            onStartGroupNow={startMenuNow}
             rowTab={contextRowTabs[selectedContextId]}
             onRowTabChange={(tab) => setContextRowTabs((prev) => ({ ...prev, [selectedContextId]: tab }))}
           />
@@ -1586,6 +1600,11 @@ export default function Alfred() {
             deleteClosedExecution={deleteClosedExecution}
             pauseExecution={pauseExecution}
             makeExecutionActive={makeExecutionActive}
+            // Step 14: the cooking page's recipe sections.
+            menuLists={{ groups: itemGroups, groupTypes, members: groupMembers }}
+            recipeRuns={liveRecipeRuns}
+            liveExecutions={allLiveExecutions}
+            setRecipeSkipped={setRecipeSkipped}
             // Back from these lands on Home (Active/Paused/Today), one tap from
             // the run: "execution-detail" as a return view has no id in its path.
             onViewIntention={(id) => viewIntentionDetail(id, "home")}
@@ -1749,6 +1768,8 @@ export default function Alfred() {
             setUnsavedChanges={setUnsavedChanges}
             groupActions={groupActions}
             onCloseRecords={closeRecords}
+            onStartGroupNow={startMenuNow}
+            onLogMenu={logMenuDone}
           />
         )}
 

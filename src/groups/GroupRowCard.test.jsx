@@ -37,6 +37,18 @@ test("buttons sit beside the text, as on item and intention rows", () => {
   expect(actions.parentElement).toHaveClass("flex-col", "sm:flex-row", "sm:items-center", "sm:justify-between");
 });
 
+test("a menu row starts its cook, or continues the open one", () => {
+  const onStartNow = jest.fn();
+  const onOpenExecution = jest.fn();
+  const { rerender } = render(<GroupRowCard row={base} onStartNow={onStartNow} onOpenExecution={onOpenExecution} />);
+  fireEvent.click(screen.getByRole("button", { name: "Start Now" }));
+  expect(onStartNow).toHaveBeenCalledWith("g");
+  const open = { id: "x", status: "active" };
+  rerender(<GroupRowCard row={{ ...base, open }} onStartNow={onStartNow} onOpenExecution={onOpenExecution} />);
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  expect(onOpenExecution).toHaveBeenCalledWith(open);
+});
+
 test("no handlers, no buttons (Home's pinned cards)", () => {
   render(<GroupRowCard row={base} />);
   expect(screen.queryByRole("button", { name: /Schedule|Close/ })).toBeNull();

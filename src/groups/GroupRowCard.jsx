@@ -1,5 +1,5 @@
 import React from "react";
-import { Pin } from "lucide-react";
+import { Pin, Play } from "lucide-react";
 import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
 import { RowMetaLine } from "../shared/TagChips";
 import ScheduledLine from "../shared/ScheduledLine";
@@ -31,7 +31,7 @@ export function groupRowSummary(row) {
  * name; status and context; when (its own intention's live date, step 13); the
  * member count and dates. Schedule and Close (step 13). Tapping opens the group.
  */
-export default function GroupRowCard({ row, contextName, onOpen, onSchedule, onClose, closeBlocked }) {
+export default function GroupRowCard({ row, contextName, onOpen, onSchedule, onClose, closeBlocked, onStartNow, onOpenExecution }) {
   const closedTitle = closedBlockTitle(row.group, "group");
   const moveBlocked = row.open?.status === "active" ? RUN_ACTIVE_MOVE_REASON : null;
   const liveDate = row.event ? String(row.event.time).slice(0, 10) : null;
@@ -69,8 +69,25 @@ export default function GroupRowCard({ row, contextName, onOpen, onSchedule, onC
           </div>
           <span className="text-xs text-muted-foreground mt-1 block">{groupRowSummary(row)}</span>
         </div>
-        {(onSchedule || onClose) && (
+        {(onSchedule || onClose || onStartNow) && (
           <div data-row-actions className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
+            {/* Step 14: a menu row starts (or continues) its cook. */}
+            {onStartNow && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (row.open) onOpenExecution?.(row.open);
+                  else onStartNow(row.group.id);
+                }}
+                disabled={Boolean(closedTitle)}
+                title={closedTitle || undefined}
+                className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] whitespace-nowrap bg-success hover:bg-success-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Play className="w-4 h-4" />
+                {row.open ? "Continue" : "Start Now"}
+              </button>
+            )}
             {onSchedule && (
               <span onClick={(e) => e.stopPropagation()} title={closedTitle || moveBlocked || undefined}>
                 <SchedulePopover

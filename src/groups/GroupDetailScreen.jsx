@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Archive, ArchiveRestore, ArrowLeft, CalendarPlus, Settings } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, CalendarPlus, Play, Settings } from "lucide-react";
 import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
 import CopyButton from "../shared/CopyButton";
 import { recordCopyText } from "../shared/copyRecord";
@@ -16,14 +16,15 @@ import { getTodayDate } from "../utils/eventDates";
 import { closedBlockTitle, liveEventsFor, recordActions, statusOf, STATUS_LABELS } from "../utils/status";
 import { ArchivedNotice, ArchivedPill, restoreAction } from "../shared/archivedRecord";
 import RecordLinks from "../shared/RecordLinks";
-import ActionBar, { archiveAction, closeAction } from "../shared/ActionBar";
+import ActionBar, { archiveAction, closeAction, logAction } from "../shared/ActionBar";
+import LogMenuDialog from "./LogMenuDialog";
 import { ACTION_BUTTON } from "../shared/actionButton";
 import RowList from "../shared/RowList";
 import NoteTimeline from "../notes/NoteTimeline";
 import RecentCompletions from "../notes/RecentCompletions";
 import { useRecordNotes } from "../notes/useRecordNotes";
 import { friendlyDate } from "../inbox/CaptureMeta";
-import { groupIntention, groupTypeOf, removedMembers } from "./groupModel";
+import { groupIntention, groupTypeOf, liveMembers, removedMembers } from "./groupModel";
 import { groupTitle, memberRows, recentRemovals } from "./groupDetail";
 import ArchiveGroupDialog from "./ArchiveGroupDialog";
 
@@ -56,8 +57,12 @@ export default function GroupDetailScreen({
   onSchedule,
   onSetStatus,
   onCloseRecords,
+  // Step 14: (groupId) Start Now on a menu; 14b: (groupId, { note, completedOn, doneIds }) => Promise<boolean>.
+  onStartNow,
+  onLogMenu,
   rowListProps,
 }) {
+  const [logging, setLogging] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [restoreError, setRestoreError] = useState("");
   const [busyId, setBusyId] = useState(null);
@@ -79,6 +84,7 @@ export default function GroupDetailScreen({
   const hasHistory = removedMembers(group.id, lists).length > 0;
   const plural = (type?.labelPlural || "members").toLowerCase();
   const noun = (type?.labelSingular || "group").toLowerCase();
+  const together = type?.executionMode === "together";
 
   const actions = recordActions(ownIntention, events, executions);
   const liveEvents = ownIntention ? liveEventsFor(events, ownIntention.id) : [];
@@ -207,6 +213,22 @@ export default function GroupDetailScreen({
             group.archived
               ? [restoreAction(onUnarchive)]
               : [
+                  // Step 14: a menu (together type) cooks through Start Now; Continue while one is open.
+                  together && onStartNow && {
+                    key: "start",
+                    pinned: true,
+                    menu: null,
+                    button: (
+                      <button
+                        onClick={() => (actions.open ? onOpenExecution?.(actions.open) : onStartNow(group.id))}
+                        disabled={Boolean(closedTitle)}
+                        className={`${ACTION_BUTTON} bg-success hover:bg-success-hover text-white disabled:opacity-50 disabled:cursor-not-allowed`}
+                      >
+                        <Play className="w-4 h-4" />
+                        {actions.primaryLabel}
+                      </button>
+                    ),
+                  },
                   onSchedule && {
                     key: "schedule",
                     pinned: true,
@@ -223,6 +245,8 @@ export default function GroupDetailScreen({
                       />
                     ),
                   },
+                  // Step 14b: a menu not closed and not cooking now.
+                  together && onLogMenu && !closedTitle && !actions.open && { key: "log", ...logAction(() => setLogging(true)) },
                   {
                     key: "edit",
                     menu: { label: "Edit", icon: Settings, onClick: onEdit },
@@ -330,12 +354,25 @@ export default function GroupDetailScreen({
 
       {/* Executions on the group's own intention carry its group_id (migration 148). */}
       {ownIntention ? (
-        <RecentCompletions intentId={ownIntention.id} onOpenExecution={onOpenExecution} />
+        // A menu lists each cook with its recipes' tally (step 14b).
+        <RecentCompletions intentId={ownIntention.id} onOpenExecution={onOpenExecution} cooks={together} />
       ) : (
         <section className="mb-6" aria-label="Recent executions">
           <h3 className="text-lg font-medium mb-3">Recent executions</h3>
           <p className="text-sm text-muted-foreground">None yet</p>
         </section>
+      )}
+
+      {logging && (
+        <LogMenuDialog
+          recipes={liveMembers(group.id, lists).filter((m) => m.memberType === "item").map((m) => ({ id: m.record.id, name: m.name }))}
+          onCancel={() => setLogging(false)}
+          onLog={async (entry) => {
+            const ok = await onLogMenu(group.id, entry);
+            if (ok) setLogging(false);
+            return ok;
+          }}
+        />
       )}
 
       {confirmArchive && (

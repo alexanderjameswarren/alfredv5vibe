@@ -8,7 +8,11 @@ import { currentUserId, listExecutionNotes, saveNote } from "./notesApi";
  * Every other note (earlier ones, other people's) is the page's list, from
  * useRecordNotes.
  */
-export function useExecutionNotes({ executionId, intentId }) {
+// `target`: { type, id } the note is on (Restructure P5: a menu run's note is on the
+// group, a recipe's on the item); the intention when not given.
+export function useExecutionNotes({ executionId, intentId, target = null }) {
+  const targetType = target?.type || "intention";
+  const targetId = target ? target.id : intentId;
   const [mineId, setMineId] = useState(null);
   const [draft, setDraftState] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -46,7 +50,7 @@ export function useExecutionNotes({ executionId, intentId }) {
   // Resolves true when the text is saved (or nothing needed saving).
   const save = useCallback(
     (text = draftRef.current) => {
-      if (!loaded || !intentId) return Promise.resolve(true);
+      if (!loaded || !targetId) return Promise.resolve(true);
       const run = queue.current.then(async () => {
         const before = mine.current?.body || "";
         if (text.trim() === before.trim()) return true;
@@ -55,8 +59,8 @@ export function useExecutionNotes({ executionId, intentId }) {
           mine.current = await saveNote({
             id: mine.current?.id,
             body: text,
-            targetType: "intention",
-            targetId: intentId,
+            targetType,
+            targetId,
             executionId,
           });
           setMineId(mine.current?.id || null);
@@ -71,7 +75,7 @@ export function useExecutionNotes({ executionId, intentId }) {
       queue.current = run;
       return run;
     },
-    [loaded, intentId, executionId],
+    [loaded, targetType, targetId, executionId],
   );
 
   // Leaving by any route (bottom dock, a link) still saves what was typed.

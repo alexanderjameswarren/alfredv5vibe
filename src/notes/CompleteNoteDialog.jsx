@@ -16,9 +16,10 @@ import CancelButton from "../shared/CancelButton";
 // onComplete(text, nextDate, completedOn).
 // `title` and `confirmLabel`: "Complete" on the execution page; Log Execution
 // passes "Log execution" and "Log" (Step 8).
+// `children`: shown above the note (a menu's recipe ticks, Restructure P5 step 14b).
 export default function CompleteNoteDialog({
   initialNote = "", onComplete, onCancel, next = null, completion = null,
-  title = "Complete", confirmLabel = "Complete", confirmIcon: ConfirmIcon = Check,
+  title = "Complete", confirmLabel = "Complete", confirmIcon: ConfirmIcon = Check, children = null,
 }) {
   const today = completion?.today || next?.today;
   const [text, setText] = useState(initialNote);
@@ -100,6 +101,7 @@ export default function CompleteNoteDialog({
               ))}
           </div>
         )}
+        {children}
         <label htmlFor="complete-note" className="block text-sm font-medium text-foreground mb-2">
           Note (optional)
         </label>

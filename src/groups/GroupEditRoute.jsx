@@ -40,6 +40,9 @@ export default function GroupEditRoute({
   // Step 13: useGroupActions' writers, and closeRecords for Close.
   groupActions,
   onCloseRecords,
+  // Step 14: Start Now and (14b) Log Execution on a menu.
+  onStartGroupNow,
+  onLogMenu,
   onOpenExecution,
   rowListProps,
 }) {
@@ -138,6 +141,8 @@ export default function GroupEditRoute({
         onSchedule={groupActions.scheduleGroup}
         onSetStatus={groupActions.setGroupStatus}
         onCloseRecords={onCloseRecords}
+        onStartNow={onStartGroupNow}
+        onLogMenu={onLogMenu}
         rowListProps={rowListProps}
       />
     );
