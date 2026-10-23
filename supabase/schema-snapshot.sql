@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 07:26, through migration 151 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 08:29, through migration 151 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -4422,6 +4422,31 @@ supabase/migrations/080_sam_warmup_ladder_min_two_rungs.sql does.';
 
 
 
+CREATE OR REPLACE FUNCTION "public"."set_archived_at"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+begin
+  if tg_op = 'INSERT' then
+    -- A re-inserted row (Undo of a delete) may carry its old date; keep it.
+    new.archived_at := case when new.archived is true then coalesce(new.archived_at, now()) end;
+  elsif coalesce(new.archived, false) is distinct from coalesce(old.archived, false) then
+    new.archived_at := case when new.archived is true then now() end;
+  else
+    new.archived_at := old.archived_at;
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."set_archived_at"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."set_archived_at"() IS 'Restructure P5. BEFORE INSERT OR UPDATE trigger on every table with an archived column: archived_at is now() when archived turns true, null when it turns false, and otherwise unchanged (a client cannot set it directly). Restores are not dated here; platform.audit_log has them.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."stamp_song_edited"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $$
@@ -8047,7 +8072,8 @@ CREATE TABLE IF NOT EXISTS "public"."contexts" (
     "archived" boolean DEFAULT false NOT NULL,
     "default_collection_id" "text",
     "app_id" "text",
-    "default_group_type_id" "text"
+    "default_group_type_id" "text",
+    "archived_at" timestamp with time zone
 );
 
 
@@ -8093,6 +8119,10 @@ COMMENT ON COLUMN "public"."contexts"."app_id" IS 'The app this context belongs 
 
 
 COMMENT ON COLUMN "public"."contexts"."default_group_type_id" IS 'Restructure P5. The group type the context page''s create button uses ("Create Menu"). Null = "Add Group". On type delete, set null.';
+
+
+
+COMMENT ON COLUMN "public"."contexts"."archived_at" IS 'When this row was archived; null while it is not. Set only by the set_archived_at trigger. Archived lists sort by it, newest first.';
 
 
 
@@ -8543,7 +8573,8 @@ CREATE TABLE IF NOT EXISTS "public"."events" (
     "updated_at" timestamp with time zone DEFAULT "now"(),
     "created_at" timestamp with time zone DEFAULT "now"(),
     "source_inbox_id" "text",
-    "group_id" "text"
+    "group_id" "text",
+    "archived_at" timestamp with time zone
 );
 
 
@@ -8569,6 +8600,10 @@ COMMENT ON COLUMN "public"."events"."source_inbox_id" IS 'The public.inbox row t
 
 
 COMMENT ON COLUMN "public"."events"."group_id" IS 'Restructure P5. Set (by events_group_freeze) when the event is on a group''s intention.';
+
+
+
+COMMENT ON COLUMN "public"."events"."archived_at" IS 'When this row was archived; null while it is not. Set only by the set_archived_at trigger. Archived lists sort by it, newest first.';
 
 
 
@@ -8713,6 +8748,7 @@ CREATE TABLE IF NOT EXISTS "public"."inbox" (
     "suggested_status" "text" DEFAULT 'someday'::"text" NOT NULL,
     "source_app" "text",
     "outcome" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "archived_at" timestamp with time zone,
     CONSTRAINT "inbox_archive_reason_check" CHECK ((("archive_reason" IS NULL) OR ("archive_reason" = ANY (ARRAY['discarded'::"text", 'processed'::"text"])))),
     CONSTRAINT "inbox_archive_reason_needs_archived" CHECK ((("archive_reason" IS NULL) OR ("archived" IS TRUE))),
     CONSTRAINT "inbox_outcome_shape" CHECK ("public"."inbox_outcome_valid"("outcome")),
@@ -8794,6 +8830,10 @@ COMMENT ON COLUMN "public"."inbox"."outcome" IS 'Every record this capture becam
 
 
 
+COMMENT ON COLUMN "public"."inbox"."archived_at" IS 'When this row was archived; null while it is not. Set only by the set_archived_at trigger. Archived lists sort by it, newest first.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."intents" (
     "id" "text" NOT NULL,
     "text" "text" NOT NULL,
@@ -8817,6 +8857,7 @@ CREATE TABLE IF NOT EXISTS "public"."intents" (
     "closed_reason" "text",
     "status_written_at" timestamp with time zone DEFAULT "now"(),
     "group_id" "text",
+    "archived_at" timestamp with time zone,
     CONSTRAINT "intents_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
     CONSTRAINT "intents_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
 );
@@ -8883,6 +8924,10 @@ COMMENT ON COLUMN "public"."intents"."group_id" IS 'Restructure P5. Set on a gro
 
 
 
+COMMENT ON COLUMN "public"."intents"."archived_at" IS 'When this row was archived; null while it is not. Set only by the set_archived_at trigger. Archived lists sort by it, newest first.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."item_collections" (
     "id" "text" NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -8894,7 +8939,8 @@ CREATE TABLE IF NOT EXISTS "public"."item_collections" (
     "created_at" timestamp with time zone DEFAULT "now"(),
     "pinned" boolean DEFAULT false,
     "updated_at" timestamp with time zone DEFAULT "now"(),
-    "archived" boolean DEFAULT false NOT NULL
+    "archived" boolean DEFAULT false NOT NULL,
+    "archived_at" timestamp with time zone
 );
 
 
@@ -8928,6 +8974,10 @@ COMMENT ON COLUMN "public"."item_collections"."items" IS 'jsonb array of item id
 COMMENT ON COLUMN "public"."item_collections"."archived" IS 'Soft delete. Collections are never hard-deleted: the cascade to
    collection_items and collection_item_removals would destroy removal
    history, which is the recovery mechanism for accidental removals.';
+
+
+
+COMMENT ON COLUMN "public"."item_collections"."archived_at" IS 'When this row was archived; null while it is not. Set only by the set_archived_at trigger. Archived lists sort by it, newest first.';
 
 
 
@@ -8988,6 +9038,7 @@ CREATE TABLE IF NOT EXISTS "public"."item_groups" (
     "archived" boolean DEFAULT false NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "archived_at" timestamp with time zone,
     CONSTRAINT "item_groups_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
     CONSTRAINT "item_groups_name_check" CHECK ((("name" IS NULL) OR ("btrim"("name") <> ''::"text"))),
     CONSTRAINT "item_groups_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
@@ -9041,6 +9092,10 @@ COMMENT ON COLUMN "public"."item_groups"."archived" IS 'Should not have existed.
 
 
 
+COMMENT ON COLUMN "public"."item_groups"."archived_at" IS 'When this row was archived; null while it is not. Set only by the set_archived_at trigger. Archived lists sort by it, newest first.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."items" (
     "id" "text" NOT NULL,
     "name" "text" NOT NULL,
@@ -9060,6 +9115,7 @@ CREATE TABLE IF NOT EXISTS "public"."items" (
     "last_completed_at" timestamp with time zone,
     "closed_reason" "text",
     "status_written_at" timestamp with time zone DEFAULT "now"(),
+    "archived_at" timestamp with time zone,
     CONSTRAINT "items_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
     CONSTRAINT "items_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
 );
@@ -9118,6 +9174,10 @@ COMMENT ON COLUMN "public"."items"."closed_reason" IS 'Restructure P4. Why it wa
 
 
 COMMENT ON COLUMN "public"."items"."status_written_at" IS 'Restructure P4. Server time of the last status change, always now(); owned by status_guard, client writes ignored. Measures the 10-minute Undo window for closed -> someday, since status_changed_at may hold an app-supplied past date.';
+
+
+
+COMMENT ON COLUMN "public"."items"."archived_at" IS 'When this row was archived; null while it is not. Set only by the set_archived_at trigger. Archived lists sort by it, newest first.';
 
 
 
@@ -10058,6 +10118,7 @@ CREATE TABLE IF NOT EXISTS "public"."sam_snippets" (
     "updated_at" timestamp with time zone DEFAULT "now"(),
     "archived" boolean DEFAULT false NOT NULL,
     "warmup_ladder" "jsonb",
+    "archived_at" timestamp with time zone,
     CONSTRAINT "sam_snippets_warmup_ladder_valid" CHECK ("public"."sam_warmup_ladder_is_valid"("warmup_ladder"))
 );
 
@@ -10094,6 +10155,10 @@ item''s accuracy target" (85% off-plan). consecutive on a rung means that rung''
 be met as a streak WITHIN ONE SESSION — a stop or a pause ends the session and the streak with it.
 Validated by sam_warmup_ladder_is_valid(). Ladder PROGRESS is never stored: it lives in memory for
 the session, and pressing Warm up always restarts at rung one.';
+
+
+
+COMMENT ON COLUMN "public"."sam_snippets"."archived_at" IS 'When this row was archived; null while it is not. Set only by the set_archived_at trigger. Archived lists sort by it, newest first.';
 
 
 
@@ -10355,6 +10420,7 @@ CREATE TABLE IF NOT EXISTS "public"."sam_songs" (
     "goal_effective_bpm" integer GENERATED ALWAYS AS (("round"(((("goal_bpm" * "goal_playback_speed"))::numeric / 100.0)))::integer) STORED,
     "goal_set_at" timestamp with time zone,
     "warmup_ladder" "jsonb",
+    "archived_at" timestamp with time zone,
     CONSTRAINT "sam_songs_difficulty_tier_check" CHECK ((("difficulty_tier" IS NULL) OR (("song_type" = 'simplified'::"text") AND (("difficulty_tier" >= 1) AND ("difficulty_tier" <= 9))))),
     CONSTRAINT "sam_songs_goal_bpm_check" CHECK ((("goal_bpm" IS NULL) OR ("goal_bpm" > 0))),
     CONSTRAINT "sam_songs_goal_playback_speed_check" CHECK (("goal_playback_speed" > 0)),
@@ -10473,6 +10539,10 @@ warm-up for this song. A rung''s null accuracy_target means "use the plan item''
 (85% off-plan). consecutive on a rung means that rung''s target_passes must be met as a streak
 WITHIN ONE SESSION — a stop or a pause ends the session and the streak with it. Validated by
 sam_warmup_ladder_is_valid(). Ladder progress is never stored.';
+
+
+
+COMMENT ON COLUMN "public"."sam_songs"."archived_at" IS 'When this row was archived; null while it is not. Set only by the set_archived_at trigger. Archived lists sort by it, newest first.';
 
 
 
@@ -13700,6 +13770,42 @@ CREATE OR REPLACE TRIGGER "sam_songs_mark_goal_set" BEFORE UPDATE OF "goal_bpm",
 
 
 
+CREATE OR REPLACE TRIGGER "set_archived_at" BEFORE INSERT OR UPDATE ON "public"."contexts" FOR EACH ROW EXECUTE FUNCTION "public"."set_archived_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_archived_at" BEFORE INSERT OR UPDATE ON "public"."events" FOR EACH ROW EXECUTE FUNCTION "public"."set_archived_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_archived_at" BEFORE INSERT OR UPDATE ON "public"."inbox" FOR EACH ROW EXECUTE FUNCTION "public"."set_archived_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_archived_at" BEFORE INSERT OR UPDATE ON "public"."intents" FOR EACH ROW EXECUTE FUNCTION "public"."set_archived_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_archived_at" BEFORE INSERT OR UPDATE ON "public"."item_collections" FOR EACH ROW EXECUTE FUNCTION "public"."set_archived_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_archived_at" BEFORE INSERT OR UPDATE ON "public"."item_groups" FOR EACH ROW EXECUTE FUNCTION "public"."set_archived_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_archived_at" BEFORE INSERT OR UPDATE ON "public"."items" FOR EACH ROW EXECUTE FUNCTION "public"."set_archived_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_archived_at" BEFORE INSERT OR UPDATE ON "public"."sam_snippets" FOR EACH ROW EXECUTE FUNCTION "public"."set_archived_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_archived_at" BEFORE INSERT OR UPDATE ON "public"."sam_songs" FOR EACH ROW EXECUTE FUNCTION "public"."set_archived_at"();
+
+
+
 CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."contexts" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
 
 
@@ -15743,6 +15849,12 @@ GRANT ALL ON FUNCTION "public"."sam_songs_mark_goal_set"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."sam_warmup_ladder_is_valid"("p_ladder" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."sam_warmup_ladder_is_valid"("p_ladder" "jsonb") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."sam_warmup_ladder_is_valid"("p_ladder" "jsonb") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."set_archived_at"() TO "anon";
+GRANT ALL ON FUNCTION "public"."set_archived_at"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."set_archived_at"() TO "service_role";
 
 
 
