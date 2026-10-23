@@ -65,7 +65,10 @@ year. If it is unclear which year a payment counts for, ask Alex; do not guess.
 ## 5. Merchants
 
 - Link a `merchant_id` (from `get_wb_merchants`) whenever the payee is clear. An item with no
-  merchant is never suggested a match.
+  merchant, such as a check or a deposit, is suggested any posted payment with the same sign and
+  amount (within its tolerance, exact at 0) inside its window that has no confirmed match.
+  Payments with no merchant come first, and a transfer between our own accounts is never
+  suggested.
 - **Be careful with generic bill-pay merchants**, such as a bank's online bill pay or a payment
   app that pays many payees. Linking one would suggest every bill paid through it. Prefer the real
   payee's merchant; if only the generic one exists, say so and ask, or leave the merchant empty.
@@ -121,3 +124,13 @@ There is no delete tool, on purpose: deleting would lose matches and history.
   draft and nothing is paid yet).
 - **Putting payments on a project:** `set_wb_transaction_project` (up to 25 single-part payments).
 - **A single future cost needs no project:** just a planned item.
+
+## 11. "What needs my attention?"
+
+- Use `get_wb_action_items`. Lead with the red flags and `below_floor` (the first day under the
+  floor, and `shortfall_at_low`: the amount to move from the reserve), then the rest by section.
+- Give each row's link (`link_kind`, `link_id`) and its `todo`.
+- **It only reads.** Never mark, match, confirm or change anything from it without asking Alex first.
+- **Card bills come from the card's statement and due days** (`update_wb_account`:
+  `statement_close_day`, `payment_due_day`, `autopay`, taken from the statement), never from a
+  planned item: free cash already counts card balances.

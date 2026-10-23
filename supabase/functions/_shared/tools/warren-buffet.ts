@@ -47,7 +47,10 @@ export const ROLE_GROUP: Record<string, string> = {
 export const UPDATABLE_FIELDS = [
   "display_name", "owner", "role", "credit_limit", "reward_unit", "reward_value_per_unit",
   "expires_on", "active_from", "active_until", "is_hidden", "notes",
+  "statement_close_day", "payment_due_day", "autopay",
 ] as const;
+export const CARD_AUTOPAY = ["none", "minimum", "full"] as const;
+const CARD_FIELDS = ["statement_close_day", "payment_due_day", "autopay"] as const;
 export const SYNC_OWNED_FIELDS = [
   "source", "external_id", "institution", "name", "last4", "currency", "last_synced_at",
   "user_id", "context_id", "created_at", "updated_at",
@@ -56,7 +59,7 @@ export const SYNC_OWNED_FIELDS = [
 const ACCOUNT_COLUMNS =
   "id, source, institution, name, display_name, last4, owner, role, currency, credit_limit, " +
   "reward_unit, reward_value_per_unit, expires_on, active_from, active_until, is_hidden, " +
-  "last_synced_at, notes, context_id, created_at, updated_at";
+  "last_synced_at, notes, statement_close_day, payment_due_day, autopay, context_id, created_at, updated_at";
 const LATEST_COLUMNS =
   "account_id, source, institution, label, display_name, name, last4, owner, role, currency, " +
   "credit_limit, reward_unit, reward_value_per_unit, expires_on, is_hidden, last_synced_at, " +
@@ -127,6 +130,15 @@ export function oneOf<T extends string>(T: string, key: string, v: unknown, allo
 export function optBool(T: string, key: string, v: unknown): boolean | null {
   if (absent(v)) return null;
   if (typeof v !== "boolean") throw new Error(`${T}: ${key} must be true or false.`);
+  return v;
+}
+
+/** A card's statement or due day: 1 to 31 (a short month uses its last day), or null to clear. */
+export function dayOfMonth(T: string, key: string, v: unknown): number | null {
+  if (absent(v)) return null;
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 31) {
+    throw new Error(`${T}: ${key} must be a whole number from 1 to 31 (a short month uses its last day), or null to clear. Got ${JSON.stringify(v)}. Nothing was changed.`);
+  }
   return v;
 }
 
@@ -433,15 +445,29 @@ export const updateWbAccountTool = defineTool({
       patch.is_hidden = hidden;
     }
     if (args.notes !== undefined) patch.notes = optText(T, "notes", args.notes);
+    if (args.statement_close_day !== undefined) patch.statement_close_day = dayOfMonth(T, "statement_close_day", args.statement_close_day);
+    if (args.payment_due_day !== undefined) patch.payment_due_day = dayOfMonth(T, "payment_due_day", args.payment_due_day);
+    if (args.autopay !== undefined) {
+      if (args.autopay !== null && !(CARD_AUTOPAY as readonly unknown[]).includes(args.autopay)) {
+        throw new Error(`${T}: autopay must be one of ${CARD_AUTOPAY.join(", ")}, or null to clear. Got ${JSON.stringify(args.autopay)}. Nothing was changed.`);
+      }
+      patch.autopay = args.autopay;
+    }
     if (Object.keys(patch).length === 0) {
       throw new Error(`${T}: nothing to change. Pass at least one of ${UPDATABLE_FIELDS.join(", ")}.`);
     }
 
     const { data: current, error: readError } = await ctx.db
-      .from("wb_accounts").select("id, active_from, active_until").eq("id", id).maybeSingle();
+      .from("wb_accounts").select("id, role, active_from, active_until").eq("id", id).maybeSingle();
     if (readError) throw new Error(describeDbError(T, readError));
     if (!current) throw new Error(`${T}: no account ${id} that you can see. Nothing was changed.`);
-    const cur = current as { active_from: string | null; active_until: string | null };
+    const cur = current as { role: string | null; active_from: string | null; active_until: string | null };
+    // Card bill days only mean something on a credit card; clearing them is always allowed.
+    const role = "role" in patch ? patch.role : cur.role;
+    const cardSet = CARD_FIELDS.filter((k) => patch[k] !== undefined && patch[k] !== null);
+    if (cardSet.length && role !== "credit_card") {
+      throw new Error(`${T}: ${cardSet.join(", ")} ${cardSet.length > 1 ? "are" : "is"} for credit cards only; this account's role is ${role}. Nothing was changed.`);
+    }
     checkRange(
       T,
       "active_from" in patch ? patch.active_from as string | null : cur.active_from,

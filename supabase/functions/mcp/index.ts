@@ -127,6 +127,7 @@ import {
   markWbMissedDatesNotNeededTool,
   setWbTransactionProjectTool,
   unconfirmWbPlannedMatchTool,
+  getWbActionItemsTool,
   updateWbPlannedMatchTool,
   updateWbSettingsTool,
   upsertWbPlannedItemTool,
@@ -2929,7 +2930,7 @@ export function createMcpServer(token: string) {
     {
       title: "Update Money Account",
       description:
-        "Edit the human columns of one account, by id: display_name, owner, role, credit_limit, reward_unit, reward_value_per_unit, expires_on, active_from, active_until, is_hidden, notes. Pass null to clear a field (except role and is_hidden). What the sync owns (name, institution, last4, currency, source) cannot be edited. " +
+        "Edit the human columns of one account, by id: display_name, owner, role, credit_limit, reward_unit, reward_value_per_unit, expires_on, active_from, active_until, is_hidden, notes, and for credit cards statement_close_day, payment_due_day and autopay (read by get_wb_action_items for card bills; take them from the statement, never guess). Pass null to clear a field (except role and is_hidden). What the sync owns (name, institution, last4, currency, source) cannot be edited. " +
         WB_ROLE_NOTE + "history_rollup accounts count only from active_from to active_until, and never without active_until; active_from may not be after active_until. Returns the updated account. Audited and reversible. Tier 2.",
       inputSchema: {
         id: z.string().describe("The account's id (get_wb_accounts, field account_id)."),
@@ -2944,6 +2945,9 @@ export function createMcpServer(token: string) {
         active_until: z.string().nullable().optional().describe("history_rollup: last date it counts (the day before synced history starts), YYYY-MM-DD."),
         is_hidden: z.boolean().optional().describe("Hide from lists. Display only; does not change totals."),
         notes: z.string().nullable().optional().describe("Free-text context Claude reads before analysis."),
+        statement_close_day: z.number().nullable().optional().describe("Credit cards: day of the month the statement closes, 1 to 31 (a short month uses its last day). null clears it."),
+        payment_due_day: z.number().nullable().optional().describe("Credit cards: day of the month the statement balance is due, 1 to 31. null clears it."),
+        autopay: z.enum(["none", "minimum", "full"]).nullable().optional().describe("Credit cards: what the bank pays automatically on the due day. null clears it."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(updateWbAccountTool, args, token),
@@ -3800,6 +3804,32 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(unconfirmWbPlannedMatchTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_action_items",
+    {
+      title: "Get Money Action Items",
+      description:
+        "The money to-do list, one object: use it for \"what needs my attention?\". Every row has type, severity (red, amber, info), title, todo (what to do about it), amount, on (its date), and a link: link_kind (planned_item, subscription, account, transaction, review_reason, intention, inbox_item, merchant) with link_id. Sections:\n" +
+        "- flags: red. Card interest, late fees and finance charges in the last 30 days, and a card bill past due and unpaid.\n" +
+        "- reconcile: counts of what waits in Review, by reason (count; link_id is the reason).\n" +
+        "- overdue: planned dates past their match window that no payment covers, and subscription charges more than 7 days late.\n" +
+        "- coming_up: planned items (less what is already paid) and subscription charges in the next `days`. Rows with late true are past due but not yet overdue, and come first.\n" +
+        "- big_bites: payments out over big_amount in the next big_days; what_if true marks a draft, which free cash leaves out.\n" +
+        "- card_bills: from each card's statement_close_day, payment_due_day and autopay: the statement balance less card payments since, due on the next due day. card_days_missing means the days are not set yet (update_wb_account). Card bills are never planned items: free cash already counts card balances.\n" +
+        "- needs_attention: bank sync problems, stale or missing balances, subscriptions to review or confirm, accounts with no role, rule health.\n" +
+        "- money_intentions and money_inbox: open intentions and unprocessed inbox items in the Money context.\n" +
+        "- below_floor: an object, not rows. first_below_on is the first projected day under the safety floor, and shortfall_then the gap that day. shortfall_at_low is the amount to move from the reserve (reserve_balance) to stay above the floor at the low point (low_on, low_balance). causes are the payments up to that day. floor_missing true means no floor is set.\n" +
+        "Lead with red rows and below_floor. This reads only: never mark, match or change anything from it without asking Alex. " +
+        WB_SIGN + "Tier 1.",
+      inputSchema: {
+        days: z.number().optional().describe("Days ahead for coming_up, 1 to 90. Default 14."),
+        big_amount: z.number().optional().describe("Dollars; payments out larger than this are big_bites. Default 1000."),
+        big_days: z.number().optional().describe("Days ahead for big_bites, 1 to 366. Default 60."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbActionItemsTool, args, token),
   );
 
   // --- Drive Mix (docs/technical-spec-drive_mix-v7r.md §5) ---

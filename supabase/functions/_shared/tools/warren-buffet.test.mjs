@@ -209,6 +209,33 @@ test("update_wb_account refusals", async () => {
   await assert.rejects(m.updateWbAccountTool.handler({ id: "zz", notes: "n" }, { db: none }), /no account zz/);
 });
 
+test("update_wb_account sets and clears card bill days", async () => {
+  const card = fakeDb(() => acct({ role: "credit_card" }));
+  await m.updateWbAccountTool.handler({ id: "a1", statement_close_day: 31, payment_due_day: 1, autopay: "full" }, { db: card });
+  assert.deepEqual(card.op("wb_accounts", "update")[0][1],
+    { statement_close_day: 31, payment_due_day: 1, autopay: "full", context_id: MONEY });
+  const other = fakeDb(() => acct({ role: "spending_cash" }));
+  await m.updateWbAccountTool.handler({ id: "a1", statement_close_day: null, payment_due_day: null, autopay: null }, { db: other });
+  assert.deepEqual(other.op("wb_accounts", "update")[0][1],
+    { statement_close_day: null, payment_due_day: null, autopay: null, context_id: MONEY });
+  const becoming = fakeDb(() => acct({ role: "unassigned" }));
+  await m.updateWbAccountTool.handler({ id: "a1", role: "credit_card", payment_due_day: 15 }, { db: becoming });
+  assert.equal(becoming.op("wb_accounts", "update")[0][1].payment_due_day, 15);
+});
+
+test("update_wb_account card day refusals", async () => {
+  const db = fakeDb(() => acct({ role: "credit_card" }));
+  for (const v of [0, 32, 1.5, "15"]) {
+    await assert.rejects(m.updateWbAccountTool.handler({ id: "a1", payment_due_day: v }, { db }), /whole number from 1 to 31/);
+  }
+  await assert.rejects(m.updateWbAccountTool.handler({ id: "a1", autopay: "always" }, { db }),
+    /autopay must be one of none, minimum, full, or null/);
+  const cash = fakeDb(() => acct({ role: "spending_cash" }));
+  await assert.rejects(m.updateWbAccountTool.handler({ id: "a1", statement_close_day: 5, autopay: "none" }, { db: cash }),
+    /statement_close_day, autopay are for credit cards only; this account's role is spending_cash/);
+  assert.equal(writes(db).length + writes(cash).length, 0);
+});
+
 // --- create_wb_manual_account ----------------------------------------------
 
 test("create_wb_manual_account inserts a manual row in the Money context", async () => {
