@@ -316,6 +316,8 @@ check would count it as a migration that never changes the schema. Number them i
 run order (`1_verify.sql`, `2_failure_test.sql`), make each one runnable whole (no
 "select this part"), and claim them like any other file.
 
+Every migration that creates a table, view or function grants it explicitly in the same file, and gives anon nothing. See Rule 2b in `.claude/skills/mcp-platform/SKILL.md`.
+
 ### Do not pick the number until the last moment
 
 **Write new SQL under a temporary name first:**
