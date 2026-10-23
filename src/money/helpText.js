@@ -57,8 +57,8 @@ export const HELP = {
   "review.planned_match": {
     title: "Suggested match",
     what: "The app thinks this payment settles one of your planned items. It is only a suggestion until you confirm it.",
-    included: "A settled payment at the planned item's merchant, in the same direction (money out for a bill, money in for income), for an amount within the item's tolerance, dated within the item's window either side of its due date. For a repeating item, each due date is checked on its own.",
-    leftOut: "Pending charges; planned items with no merchant, drafts, and cancelled or paid items; payments you already turned down; and payments for less than the planned amount, beyond its tolerance (match those by hand once the planning tools arrive).",
+    included: "A settled payment in the same direction (money out for a bill, money in for income), for an amount within the item's tolerance (exactly the amount when the tolerance is 0), dated within the item's window either side of its due date. It must be at the planned item's merchant; for an item with no merchant, any payment not already matched counts, and one with no merchant, such as a check or a deposit, comes first. For a repeating item, each due date is checked on its own.",
+    leftOut: "Pending charges; drafts, and cancelled or paid items; transfers between your own accounts; payments you already turned down; and payments for less than the planned amount, beyond its tolerance (match those by hand once the planning tools arrive).",
     todo: "Confirm it to count the payment against the planned item. If only part of this payment is for the planned item, lower the amount before confirming. Or tap \"Not this one\", and it will not be suggested again.",
   },
   "review.match_card": {

@@ -15,8 +15,8 @@ No amounts in this file. The safety floor is never written into the repo.
 | 8a | Plan tab database (spec §3.8; decisions A34–A41) | done, 2026-10-19 (140 applied, 141 48/48; live CONFORMANT, 68 tables) |
 | 8b | **Tools first (A42, A43).** New tools: project summary, missed dates, mark not needed, unconfirm (tier 2, `paid_not_covered`). Changed: the free cash what-if (tier 1, writes nothing), `backdated_from`, `project_names`, `over_matched`. Needs `mcp/index.ts`. **Live mcp must still be v155 before deploying; if higher, stop and ask** | done, 2026-10-20: live on **mcp v157** (138 tools), with the tolerance fix (A45; 143 applied, 144 24/24); re-check and fresh-thread batches passed |
 | 8c | Planning skill `.claude/skills/wb-planning/SKILL.md` (A44); scripted planning conversation in a fresh thread. **Notes from 8b:** (a) for bills whose amount varies (fuel, utilities), suggest a wider amount_tolerance before backdating, or only some payments qualify; (b) when backdating moves the due day, tell Alex the new day | done, 2026-10-20 (all six fresh-thread tests passed; two fixes to the skill, see log) |
-| 8d | Slimmer app (A44, A46, A47): 8d-1 the delete function; 8d-2 the Plan overview (read-only missed dates); 8d-3 project detail; 8d-4 item detail (Remove match, Delete item); 8d-5 the full Review card; 8d-6 the single-part project picker; help. **No add or edit forms, and no split-editor picker** | 8d-1 done 2026-10-21 (146 applied, tests 12/12); 8d-2 and 8d-3 tested 2026-10-21; 8d-4 done 2026-10-22 (fixes re-tested); 8d-5 and 8d-6 tested 2026-10-22. **8d done 2026-10-22** |
-| 9 | Overview numbers | not started |
+| 8d | Slimmer app (A44, A46, A47): 8d-1 the delete function; 8d-2 the Plan overview (read-only missed dates); 8d-3 project detail; 8d-4 item detail (Remove match, Delete item); 8d-5 the full Review card; 8d-6 the single-part project picker; help. **No add or edit forms, and no split-editor picker** | 8d-1 done 2026-10-21 (146 applied, tests 12/12); 8d-2 and 8d-3 tested 2026-10-21; 8d-4 done 2026-10-22 (fixes re-tested); 8d-5 and 8d-6 tested 2026-10-22. **8d done 2026-10-22, live** (merge 4bd3d97; the live Plan tab matches local testing) |
+| 9 | Overview numbers, plus Action Items and Dropping below the floor (A49). Data first, then mockups in claude.ai, then the UI | 9a and 9b done 2026-10-23: 150 and 151 applied (live tests 40/40 and 21/21; A51); 9c–9e not started |
 | 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed | not started |
 | 11 | Phase 3 review | not started |
 
@@ -669,6 +669,46 @@ All six tests passed in a fresh claude.ai thread with the skill loaded. No amoun
   - Afterwards Alex reset the test payment's `project_source` to null, and checked that both values are null.
   - The split-payment message is covered by tests; it was not checked by hand.
 - **Step 8d is done.** Checkpoint: every 8d path in the working tree, with no `--release-db`, because no db: claims are held.
+
+### Step 9a drafted (2026-10-22, run tags `warren_buffet_p3-q5k-s16-v7ea` plan, `-s17-a8tm` 9a)
+- The data plan was approved as A50. restructure_p5-h7m has released `mcp/index.ts`; it is claimed only at 9c, after a gitsync.
+- `_pending_…_action_items.sql`:
+  - the three card columns on `wb_accounts`, with checks and comments;
+  - `wb_action_items` (A50), with execute for authenticated only and service_role revoked too;
+  - the A15 comment on the 14, 1000, 60, 30 and 2 that the 9e help will state;
+  - it ends with the conformance check.
+- `supabase/tests/warren_buffet_p3/2_action_items_tests.sql`: 40 rolled-back checks, covering every section, row shape and severity. They include:
+  - a fee flag (an older fee is left out);
+  - a card with no days, a card past due and unpaid (statement less payments, minimum autopay wording), a paid bill left out, and a card due soon;
+  - a big bite outside 14 days, and a what-if bite;
+  - the below-floor day, its shortfalls and its causes, and the missing-floor case;
+  - the needs-attention rows, the reconcile counts, an overdue one-off, and intentions and inbox items, with closed and archived ones left out.
+- **PGlite:** 40/40, and every earlier test file passes. The harness gained `intents` and `inbox` stubs and the real `platform_runs` columns; the harness lives in the scratchpad.
+- Next: Alex runs gitsync; drift check; claim `db:fn:wb_action_items` and `db:table:wb_accounts`; number the migration.
+
+### Step 9a numbered (2026-10-23, run tag `warren_buffet_p3-q5k-s17-k3wq`)
+- gitsync brought ed1eaf0..20c2ac7, including 149 (restructure-p5 group member removal). **Drift check: clear.** 149 touches no `wb_` object and none of the intents, inbox or contexts columns the function reads; the 147 and 148 changes were already live when those tables were read.
+- **Grants checked:** Claude's scheduled tasks use the MCP connector, which runs as authenticated; only the Edge Functions use the service client. The service_role revoke stays, and A50 notes what a future server-side reader would need. The 30-day stale threshold stays.
+- Claimed `db:fn:wb_action_items` and `db:table:wb_accounts`. Numbered **150_wb_phase3_step9a_action_items.sql** and deleted the `_pending_` file. The tests stay at `supabase/tests/warren_buffet_p3/2_action_items_tests.sql`.
+- PGlite: 40/40, and every earlier test file passes.
+
+### Step 9a applied; 9b query sent (2026-10-23, run tag `warren_buffet_p3-q5k-s18-p6zr`)
+- Alex ran 150 (conformant) and `2_action_items_tests.sql` (40/40).
+- Verified live: `wb_action_items` exists, plpgsql stable, security invoker; execute is revoked from public and granted to authenticated only; the three `wb_accounts` columns exist with their checks. `check_platform_conformance`: CONFORMANT, 71 tables.
+- 9b: one read-only call of `wb_action_items()` as Alex's user (role authenticated, JWT sub set, rolled back). The `db:` claims stay until it is checked.
+
+### Step 9b checked; fixes numbered 151 (2026-10-23, run tag `warren_buffet_p3-q5k-s18-u2fc`)
+- 9b ran live and was mostly as expected. **One real gap:** a cashed check and a mobile deposit, both planned items with no merchant, were never suggested a match, so the projection counted them twice. Claude matched both by hand.
+- Audible and Medium were not missing: both were charged on Oct 20 and renew on Nov 20. The late-row rule is built anyway (A51).
+- **151_wb_phase3_step9b_no_merchant_matches.sql** replaces `wb_suggest_planned_matches` (no-merchant items, A51) and `wb_action_items` (deposit todos, late rows in coming_up, an ellipsis on cut titles).
+- Tests: `supabase/tests/warren_buffet_p3/3_no_merchant_and_late_tests.sql`, 21 checks. They fail against 150 and pass in PGlite, where every earlier test file also passes.
+- Help (`review.planned_match`) and the planning skill no longer say a no-merchant item is never suggested.
+- Claimed `db:fn:wb_suggest_planned_matches`; main had not moved since the last gitsync.
+
+### Steps 9a and 9b done (2026-10-23, run tag `warren_buffet_p3-q5k-s18-h4yb`)
+- Alex ran 151 (conformant), `3_no_merchant_and_late_tests.sql` (21/21), and re-ran `2_action_items_tests.sql` (40/40).
+- Verified live: both functions carry the 151 bodies and comments and are security invoker; `wb_action_items` is still execute for authenticated only. `check_platform_conformance`: CONFORMANT, 71 tables.
+- Next: Alex checkpoints 9a and 9b, with `--release-db`; then 9c.
 
 ## Later
 
