@@ -46,6 +46,7 @@ export const VIEW_TO_PATH = {
   "group-new": "/groups/new",
   "group-edit": "/groups/edit",
   "group-history": "/groups/history",
+  "group-detail": "/groups/detail",
   settings: "/settings",
   recycle: "/recycle",
   timer: "/timer",
@@ -324,6 +325,16 @@ export function addRouteFromPath(pathname) {
 const GROUP_NEW_PREFIX = `${VIEW_TO_PATH["group-new"]}/context/`;
 const GROUP_EDIT_PREFIX = `${VIEW_TO_PATH["group-edit"]}/`;
 const GROUP_HISTORY_PREFIX = `${VIEW_TO_PATH["group-history"]}/`;
+const GROUP_DETAIL_PREFIX = `${VIEW_TO_PATH["group-detail"]}/`;
+
+/**
+ * The group detail page (step 10). The bare /groups/detail is how Back returns
+ * from a member's page (setView has no id); Alfred then shows the group it last
+ * opened, as the bare intention-detail path does.
+ */
+export function groupDetailPath(groupId) {
+  return `${GROUP_DETAIL_PREFIX}${encodeURIComponent(groupId)}`;
+}
 
 export function groupNewPath(contextId) {
   return `${GROUP_NEW_PREFIX}${encodeURIComponent(contextId)}`;
@@ -338,7 +349,7 @@ export function groupHistoryPath(groupId) {
   return `${GROUP_HISTORY_PREFIX}${encodeURIComponent(groupId)}`;
 }
 
-/** @returns {{view: "group-new", contextId: string}|{view: "group-edit"|"group-history", groupId: string}|null} */
+/** @returns {{view: "group-new", contextId: string}|{view: "group-edit"|"group-history"|"group-detail", groupId: string}|null} */
 export function groupRouteFromPath(pathname) {
   const path = normalizePath(pathname);
   const tail = (prefix) => {
@@ -352,6 +363,8 @@ export function groupRouteFromPath(pathname) {
   if (groupId) return { view: "group-edit", groupId };
   const historyId = tail(GROUP_HISTORY_PREFIX);
   if (historyId) return { view: "group-history", groupId: historyId };
+  const detailId = tail(GROUP_DETAIL_PREFIX);
+  if (detailId) return { view: "group-detail", groupId: detailId };
   return null;
 }
 

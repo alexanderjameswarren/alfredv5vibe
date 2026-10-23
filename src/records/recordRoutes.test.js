@@ -4,13 +4,14 @@ const res = (table, row) => ({ table, row: { id: "r1", ...row }, match_count: 1 
 const GENERIC = { kind: "generic" };
 
 // Loaded state: ids listed are present; inbox rows keyed by id.
-function makeLookup({ inbox = {}, items = [], intents = [], contexts = [], collections = [], targets = {} } = {}) {
+function makeLookup({ inbox = {}, items = [], intents = [], contexts = [], collections = [], groups = [], targets = {} } = {}) {
   return {
     inbox: (id) => inbox[id] || null,
     item: (id) => items.includes(id),
     intention: (id) => intents.includes(id),
     context: (id) => contexts.includes(id),
     collection: (id) => collections.includes(id),
+    group: (id) => groups.includes(id),
     archivedTarget: (id) => targets[id] || null,
   };
 }
@@ -21,6 +22,7 @@ const loaded = makeLookup({
   intents: ["r1", "it1"],
   contexts: ["r1"],
   collections: ["r1", "c1"],
+  groups: ["r1", "g1"],
 });
 const empty = makeLookup();
 
@@ -38,12 +40,14 @@ describe("recordDestination, rows loaded", () => {
     ["reminders", { intent_id: "it1" }, { kind: "path", path: "/intentions/detail/it1" }],
     ["notification_steps", { execution_id: "ex1" }, { kind: "path", path: "/schedule/execution/ex1" }],
     ["collection_items", { collection_id: "c1" }, { kind: "collection", id: "c1" }],
+    ["item_groups", {}, { kind: "path", path: "/groups/detail/r1" }],
+    ["item_group_members", { group_id: "g1" }, { kind: "path", path: "/groups/detail/g1" }],
   ])("%s %j", (table, row, expected) => {
     expect(recordDestination(res(table, row), loaded)).toEqual(expected);
   });
 
   it("maps every table it lists", () => {
-    expect(Object.keys(RECORD_SCREENS)).toHaveLength(11);
+    expect(Object.keys(RECORD_SCREENS)).toHaveLength(13);
   });
 });
 
@@ -84,6 +88,8 @@ describe("not in state goes generic, never a list", () => {
     ["clips", { inbox_id: "in1" }],
     ["reminders", { inbox_id: "in1", intent_id: "it1" }],
     ["collection_items", { collection_id: "c1" }],
+    ["item_groups", {}],
+    ["item_group_members", { group_id: "g1" }],
   ])("%s %j", (table, row) => {
     expect(recordDestination(res(table, row), empty)).toEqual(GENERIC);
   });

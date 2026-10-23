@@ -18,9 +18,10 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 7. Database: group_types (seeded, with icons and execution_mode), contexts.default_group_type_id, item_groups, item_group_members, intents.group_id (+ one live intention per group), events.group_id, executions.group_id (+ intent_id and event_id nullable), notes target 'group', last_completed_at / status triggers (status_guard on item_groups); register_table (policy 'none' + shared-context policy); conformance
 - [x] 8. Data layer: group queries, derived names, realtime
 - [x] 9. Group create/edit page (done 2026-10-22, with removal history) (search-and-add, drag reorder, type picker, pin, archive)
-- [ ] 10. Group detail page (header, buttons, members, notes, recent executions)
+- [x] 10. Group detail page (header, buttons, members, notes, recent executions)
 - [ ] 11. Context page: create button, browse tabs, group rows, sort
 - [ ] 12. Group chips on member rows and running cards; record-links order Context > Group > Item > Intention (incl. execution page); pinned groups on Home
+  - Apply bug mvjx4363b4bn4gezrys to item and intention detail pages: Archived pill, Restore as the only action, Edit hidden, edit page redirects.
 - [ ] 13. Scheduling a group through its intention (frozen item_ids on events); Close/Undo for groups
 - [ ] 14. Menu execution: Start Now together, per-recipe sections, sticky jump bar, skip a recipe, complete all, Log Execution
 - [ ] 15. Projects/series: dated member execution list, teal in-progress marker, last_completed_at roll-up
@@ -137,3 +138,35 @@ Each step stops for Alex's verification before the next. Database steps follow t
   - Bug fixed: Put back cleared `removed_at` on the removed row, which erased the history. `restoreMember` now inserts a new live row at the end and leaves the removed row as it is, the same as re-adding from the search. `GroupHistoryScreen.test.jsx` is new.
   - Yielded `supabase/functions/mcp/index.ts` to warren_buffet_p3-q5k (unchanged from main). Step 16 must re-claim it.
   - App 2818/2818, CLI 239/239.
+- 2026-10-22 Step 10 built; awaiting Alex's Chrome test.
+  - Re-claimed `src/records/recordRoutes.js` (+ test).
+  - Routes:
+    - `/groups/detail/:groupId` (`groupDetailPath`).
+    - The bare `/groups/detail` shows `selectedGroupId` (Alfred state, set when a group is shown), so Back from a member's item or intention page returns to the group, as the bare intention path does.
+    - A record id opens the group: `item_groups` and `item_group_members` in RECORD_SCREENS. `resolve_record` already finds item_groups, because it reads the registry, so no database change was needed.
+  - `src/groups/GroupDetailScreen.jsx`:
+    - Header: type icon, title (typed, else derived, else "Untitled menu"), CopyButton (`recordCopyText`), display-only StatusPill, and the context RecordLink.
+    - ActionBar with Edit, then Archive (red outline, confirm, Undo).
+    - Description; members as standard `RowList` rows in position order, with removed members hidden; Recently removed (latest per member that is not back, Put back) and View removal history; Notes (target 'group'); Recent executions (the group's own intention through `RecentCompletions`, else "None yet").
+  - `ArchiveGroupDialog.jsx` is now shared by the edit and detail pages.
+  - The edit page opened from the detail page returns to it (Save, Cancel, Back). Archiving from the edit page goes to the context; archiving from the detail page goes back where it came from.
+  - `groupDetail.js` holds `groupTitle`, `memberRows` and `recentRemovals`.
+  - Notes: `notesApi.listNotesForTargets` and `useRecordNotes` take `groupIds`.
+  - Tests: groupDetail (3), GroupDetailScreen (4), recordRoutes (+4 cases), viewPaths (+). App 2829/2829, CLI 239/239.
+- 2026-10-23 Step 10 done. Alex's Chrome test passed; two gaps fixed.
+  - Archived state:
+    - Item and intention detail pages show no archived banner or chip. Their only marker is the Notes notice ("This is archived, so notes cannot be added…"), which the group page already showed.
+    - The group page now adds an "Archived" pill beside the status and a line "This menu is archived. Restore it from the Recycle Bin" (the link opens the bin on its Groups tab).
+    - It hides Archive (on the edit page too) and Put back. Edit stays, as on items.
+  - Recycle bin (claimed `src/recycle/`):
+    - How it works today: one tab per type. `loadRecycleBin` pages archived rows; Restore sets archived false (an execution goes back to paused) and calls `refreshData`; permanent delete is a hard delete behind a `window.confirm` (`permanentDeleteWarning`), with special cascade wording for collections.
+    - Groups follow the same pattern: a new Groups tab (Boxes icon), rows with the type icon and derived name ("Project · Alfred"), restore, and delete.
+    - Delete wording: member list, removal history and notes go; the items and intentions stay.
+    - Restoring flips only `archived`, so members come back as they were.
+    - New `RecycleScreen.test.jsx`; GroupDetailScreen +2 tests.
+  - App 2832/2832, CLI 239/239.
+- 2026-10-23 Step 10 follow-up, bug mvjx4363b4bn4gezrys: archived records are not editable.
+  - An archived group's page keeps the Archived pill and "This … is archived." Its only action is a Restore button (secondary, ArchiveRestore icon), which un-archives in place. Edit, Archive and Put back are hidden; member rows are unchanged.
+  - `/groups/edit/:id` for an archived group redirects to its detail page. The history page shows no Put back while the group is archived.
+  - The Recycle Bin Groups tab is unchanged. The link from the page to the bin is gone (replaced by Restore).
+  - App 2833/2833, CLI 239/239.

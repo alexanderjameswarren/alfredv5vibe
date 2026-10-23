@@ -21,6 +21,15 @@ function Harness() {
   );
 }
 
+test("an archived group's history offers no Put back", () => {
+  render(
+    <GroupHistoryScreen groupName="P5 Test Project" groupId="g" groupMembers={[removed]} items={[]} intents={intents}
+      onBack={() => {}} onRestore={() => {}} archived />,
+  );
+  expect(screen.getByText("Retire the ai-enrich edge function")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Put back/ })).not.toBeInTheDocument();
+});
+
 test("Put back keeps the removal listed, now reading in the group again", async () => {
   render(<Harness />);
   fireEvent.click(screen.getByRole("button", { name: /Put back/ }));

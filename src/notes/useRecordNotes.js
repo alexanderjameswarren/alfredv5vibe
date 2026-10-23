@@ -2,17 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import { currentUserId, deleteNote, listExecutionNotes, listNotesForTargets, onNotesChanged, saveNote } from "./notesApi";
 
 /**
- * The note timeline for one item or intention. Item pages also pass the item's
+ * The note timeline for one item, intention or group. Item pages also pass the item's
  * intentions, so their general and execution notes join the same list.
  * `target` is where a new note goes. With `executionId` the list is that one
  * execution's notes, and new notes are written against it.
  */
-export function useRecordNotes({ target, itemIds = [], intentionIds = [], executionId = null }) {
+export function useRecordNotes({ target, itemIds = [], intentionIds = [], groupIds = [], executionId = null }) {
   const [notes, setNotes] = useState(null);
   const [userId, setUserId] = useState(null);
   const [error, setError] = useState(null);
   // Arrays from the caller are new every render; key the load on their contents.
-  const key = `${itemIds.join(",")}|${intentionIds.join(",")}|${executionId || ""}`;
+  const key = `${itemIds.join(",")}|${intentionIds.join(",")}|${groupIds.join(",")}|${executionId || ""}`;
 
   const load = useCallback(async () => {
     try {
@@ -20,7 +20,7 @@ export function useRecordNotes({ target, itemIds = [], intentionIds = [], execut
         currentUserId(),
         executionId
           ? listExecutionNotes(executionId).then((r) => [...r].reverse())
-          : listNotesForTargets({ itemIds, intentionIds }),
+          : listNotesForTargets(groupIds.length ? { itemIds, intentionIds, groupIds } : { itemIds, intentionIds }),
       ]);
       setUserId(uid);
       setNotes(rows);

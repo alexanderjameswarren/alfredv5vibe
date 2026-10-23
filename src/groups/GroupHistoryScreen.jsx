@@ -10,7 +10,8 @@ import { removedMembers } from "./groupModel";
  * at the end (as a collection's does) and keeps the removal listed. A removal
  * whose member is live again reads "in the group again", with no Put back.
  */
-export default function GroupHistoryScreen({ groupName, groupId, groupMembers, items, intents, onBack, onRestore }) {
+// `archived`: the group is archived, so nothing on it is changed here (bug mvjx4363b4bn4gezrys).
+export default function GroupHistoryScreen({ groupName, groupId, groupMembers, items, intents, onBack, onRestore, archived = false }) {
   const [busyId, setBusyId] = useState(null);
   const [error, setError] = useState("");
   const history = removedMembers(groupId, { members: groupMembers, items, intents });
@@ -61,7 +62,7 @@ export default function GroupHistoryScreen({ groupName, groupId, groupMembers, i
                     {already ? " · in the group again" : ""}
                   </p>
                 </div>
-                {record && !record.archived && !already && (
+                {record && !record.archived && !already && !archived && (
                   <button
                     type="button"
                     onClick={() => putBack(member)}

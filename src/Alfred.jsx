@@ -256,6 +256,8 @@ export default function Alfred() {
   const [editingContext, setEditingContext] = useState(null);
   // A context card's gear opens context detail straight on its edit page.
   const [editContextOnOpen, setEditContextOnOpen] = useState(false);
+  // The group the bare /groups/detail shows: the one last opened (Back from a member).
+  const [selectedGroupId, setSelectedGroupId] = useState(null);
   // "Moved to Active" after a write the 088 triggers may answer. Before the
   // action hooks, which take `watchStatus`.
   const { notice, showNotice } = useNotice();
@@ -642,6 +644,7 @@ export default function Alfred() {
     intention: (id) => intents.some((i) => i.id === id),
     context: (id) => contexts.some((c) => c.id === id),
     collection: (id) => collections.some((c) => c.id === id),
+    group: (id) => itemGroups.some((g) => g.id === id),
     archivedTarget: (id) => archivedCaptureTarget(id, { items, intents, events }),
   };
 
@@ -1645,13 +1648,38 @@ export default function Alfred() {
           />
         )}
 
-        {/* Group create/edit (Restructure P5): /groups/new/context/:id, /groups/edit/:id */}
-        {(view === "group-new" || view === "group-edit" || view === "group-history") && (
+        {/* Group pages (Restructure P5): /groups/new/context/:id, /groups/edit/:id,
+            /groups/history/:id, /groups/detail/:id */}
+        {(view === "group-new" || view === "group-edit" || view === "group-history" || view === "group-detail") && (
           <GroupEditRoute
+            view={view}
             currentPath={currentPath}
             contexts={contexts}
             items={items}
             intents={intents}
+            events={events}
+            executions={allLiveExecutions}
+            selectedGroupId={selectedGroupId}
+            setSelectedGroupId={setSelectedGroupId}
+            onOpenExecution={openExecution}
+            rowListProps={{
+              collections: activeCollections,
+              tagPool,
+              getIntentDisplay,
+              onUpdateIntent: updateIntent,
+              onUpdateItem: updateItem,
+              onSchedule: moveToPlanner,
+              onStartNow: startNowFromIntention,
+              onStartNowItem: startNowFromItem,
+              onScheduleItem: scheduleFromItem,
+              onViewItemDetail: (id) => viewItemDetail(id, "group-detail"),
+              onViewIntentionDetail: (id) => viewIntentionDetail(id, "group-detail"),
+              onUpdateEvent: updateEvent,
+              onActivate: activate,
+              onOpenExecution: openExecution,
+              onCancelExecution: cancelExecutionForEvent,
+              onCloseRecords: closeRecords,
+            }}
             groupTypes={groupTypes}
             itemGroups={itemGroups}
             groupMembers={groupMembers}
@@ -1772,7 +1800,14 @@ export default function Alfred() {
 
         {/* Recycle Bin View */}
         {view === "recycle" && (
-          <RecycleScreen contexts={contexts} intents={intents} {...recycleBin} />
+          <RecycleScreen
+            contexts={contexts}
+            intents={intents}
+            items={items}
+            groupMembers={groupMembers}
+            groupTypes={groupTypes}
+            {...recycleBin}
+          />
         )}
       </div>
 

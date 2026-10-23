@@ -1,10 +1,9 @@
 import React, { useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { Archive, ArrowLeft, GripVertical, Plus, X } from "lucide-react";
 import EditCard from "../shared/EditCard";
 import PinnedFooter from "../shared/PinnedFooter";
-import CancelButton from "../shared/CancelButton";
 import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
+import ArchiveGroupDialog from "./ArchiveGroupDialog";
 import { useDragReorder } from "../shared/useDragReorder";
 import { derivedGroupName, liveMembers, removedMembers } from "./groupModel";
 import { defaultTypeId } from "./groupSave";
@@ -310,38 +309,17 @@ export default function GroupEditScreen({
         </div>
       </EditCard>
 
-      {/* The Close pop-up's shape: portalled to the page root, main button and the
-          shared CancelButton side by side. */}
-      {confirmArchive &&
-        createPortal(
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={() => setConfirmArchive(false)}>
-            <div
-              role="dialog"
-              aria-label={`Archive ${label.toLowerCase()}`}
-              className="bg-background border border-border rounded-lg shadow-xl p-5 w-full max-w-sm mx-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-lg font-semibold mb-3">Archive this {label.toLowerCase()}?</h3>
-              <p className="text-sm">Its members are not touched.</p>
-              <div className="flex gap-2 mt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setConfirmArchive(false);
-                    if (onDirtyChange) onDirtyChange(false);
-                    onArchive();
-                  }}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 min-h-[44px] border-2 border-destructive text-destructive hover:bg-destructive/10 rounded-lg text-sm"
-                >
-                  <Archive className="w-4 h-4" aria-hidden="true" />
-                  Archive
-                </button>
-                <CancelButton onClick={() => setConfirmArchive(false)} />
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )}
+      {confirmArchive && (
+        <ArchiveGroupDialog
+          label={label}
+          onCancel={() => setConfirmArchive(false)}
+          onConfirm={() => {
+            setConfirmArchive(false);
+            if (onDirtyChange) onDirtyChange(false);
+            onArchive();
+          }}
+        />
+      )}
     </div>
   );
 }

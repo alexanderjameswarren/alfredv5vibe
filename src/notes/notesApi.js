@@ -27,11 +27,12 @@ export function completionsChanged() {
   changed(null);
 }
 
-/** Every note (general and execution) on these items and intentions, newest first. */
-export async function listNotesForTargets({ itemIds = [], intentionIds = [], limit = 100 }) {
+/** Every note (general and execution) on these items, intentions and groups, newest first. */
+export async function listNotesForTargets({ itemIds = [], intentionIds = [], groupIds = [], limit = 100 }) {
   const targets = [];
   if (itemIds.length) targets.push(`and(target_type.eq.item,target_id.in.(${itemIds.map(q).join(",")}))`);
   if (intentionIds.length) targets.push(`and(target_type.eq.intention,target_id.in.(${intentionIds.map(q).join(",")}))`);
+  if (groupIds.length) targets.push(`and(target_type.eq.group,target_id.in.(${groupIds.map(q).join(",")}))`);
   if (targets.length === 0) return [];
   const { data, error } = await supabase
     .from("notes")
