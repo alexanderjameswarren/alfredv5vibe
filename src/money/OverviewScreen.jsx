@@ -124,18 +124,18 @@ function FundsTransfer({ below, reserve, onNavigate }) {
         <HelpTitle helpKey="overview.funds_transfer" text="FUNDS TRANSFER REQUIRED" />
       </p>
       <p className="text-lg font-medium mt-1 text-foreground">
-        Move {formatMoney(below.shortfall_then)} from {reserveName} by {formatDay(below.first_below_on)}
+        Move {formatMoney(below.shortfall_30d)} from {reserveName} by {formatDay(below.first_below_on)}
       </p>
       <p className="text-sm mt-1">
         {biggest && <>Biggest: {biggest.title}, {formatMoney(biggest.amount)}{biggest.on ? ` on ${formatDay(biggest.on)}` : ""}. </>}
-        Projected {formatMoney(below.closing_then)} that day, against a floor of {formatMoney(below.floor)}
+        Lowest {formatMoney(below.low_30d_balance)} on {formatDay(below.low_30d_on)}, against a floor of {formatMoney(below.floor)}
         <HelpButton helpKey="overview.safety_floor" />
       </p>
       <div className="flex flex-wrap items-center gap-x-4 mt-2">
         {path && (
           <button type="button" className={TEXT_LINK} onClick={() => setOpen(!open)} aria-expanded={open}>
             {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-            Show the path to {formatDay(below.first_below_on)}
+            Show the path to {formatDay(below.low_30d_on)}
           </button>
         )}
         {reserve && (
@@ -180,11 +180,14 @@ function RedFlags({ flags, onNavigate }) {
     const colors = f.severity === "info" ? "bg-success-light text-success" : "bg-destructive-light text-destructive";
     return (
       <section key={`${f.link_id || f.type}-${i}`} className={`rounded-lg ${colors} p-4`}>
-        {target ? (
-          <button type="button" className="text-left font-medium underline min-h-[44px]" onClick={() => onNavigate(target.path, target.state)}>
-            {f.title}
-          </button>
-        ) : <p className="font-medium">{f.title}</p>}
+        <div className="flex items-center">
+          {target ? (
+            <button type="button" className="text-left font-medium underline min-h-[44px]" onClick={() => onNavigate(target.path, target.state)}>
+              {f.title}
+            </button>
+          ) : <p className="font-medium">{f.title}</p>}
+          <HelpButton helpKey="overview.red_flags" />
+        </div>
         {f.refund && (
           <p className="text-sm mt-1 text-foreground">
             {refund ? (

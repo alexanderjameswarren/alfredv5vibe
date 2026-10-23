@@ -478,7 +478,8 @@ test("Warren Buffet Step 9c descriptions explain the to-do list and the card fie
                    "money_intentions", "money_inbox", "below_floor"]) assert.match(d, new RegExp(`\\b${s}\\b`));
   assert.match(d, /link_kind/);
   assert.match(d, /todo \(what to do about it\)/);
-  assert.match(d, /shortfall_at_low is the amount to move from the reserve/);
+  assert.match(d, /shortfall_30d is the amount to move from the reserve/);
+  assert.doesNotMatch(d, /shortfall_then|shortfall_at_low/);
   assert.match(d, /never mark, match or change anything from it without asking/);
   assert.doesNotMatch(d, /do not retry/i);
   assert.match(desc("update_wb_account"), /statement_close_day, payment_due_day and autopay/);
@@ -503,6 +504,7 @@ test("Warren Buffet Step 8b descriptions say when to use each tool and its key r
   assert.match(desc("get_wb_free_cash"), /can we afford X/);
   assert.match(desc("get_wb_free_cash"), /This writes nothing/);
   assert.match(desc("get_wb_free_cash"), /days_sooner/);
+  assert.match(desc("get_wb_free_cash"), /days_sooner_at_least/);
   assert.doesNotMatch(desc("get_wb_free_cash"), /affordable/);
   assert.match(desc("unconfirm_wb_planned_match"), /never changes the planned item's stage by itself/);
   assert.match(desc("unconfirm_wb_planned_match"), /paid_not_covered/);

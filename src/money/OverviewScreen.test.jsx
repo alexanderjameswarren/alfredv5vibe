@@ -45,17 +45,17 @@ const ITEMS = {
   money_intentions: [row({ type: "intention", title: "ZZ call the bank", link_kind: "intention", link_id: "i1" })],
   money_inbox: [],
   below_floor: {
-    floor_missing: false, floor: 2500, first_below_on: "2031-07-09", closing_then: -500, shortfall_then: 3000,
-    low_balance: -900, low_on: "2032-01-22", shortfall_at_low: 3400, reserve_balance: 20000,
+    floor_missing: false, floor: 2500, window_days: 30, first_below_on: "2031-07-03", closing_then: 2000,
+    low_30d_on: "2031-07-09", low_30d_balance: -500, shortfall_30d: 3000, reserve_balance: 20000,
     causes: [
-      { type: "burn", title: "Everyday spending at the burn rate", amount: -6000, on: null, link_kind: null, link_id: null },
-      { type: "subscription", title: "ZZ home insurance", amount: -4000, on: "2031-07-09", link_kind: "subscription", link_id: "s2" },
+      { type: "burn", title: "Everyday spending at the burn rate", amount: -9500, on: null, link_kind: null, link_id: null },
+      { type: "subscription", title: "ZZ home insurance", amount: -2000, on: "2031-07-09", link_kind: "subscription", link_id: "s2" },
     ],
     path: [
       { type: "start", title: "Starting balance", amount: null, on: "2031-06-20", balance: 9000, below: false, link_kind: null, link_id: null },
       { type: "planned", title: "ZZ salary", amount: 2000, on: "2031-06-25", balance: 11000, below: false, link_kind: "planned_item", link_id: "p7" },
-      { type: "burn", title: "Everyday spending at the burn rate", amount: -6000, on: "2031-07-03", balance: 5000, below: false, link_kind: null, link_id: null },
-      { type: "subscription", title: "ZZ home insurance", amount: -4000, on: "2031-07-09", balance: -500, below: true, link_kind: "subscription", link_id: "s2" },
+      { type: "burn", title: "Everyday spending at the burn rate", amount: -9000, on: "2031-07-03", balance: 2000, below: true, link_kind: null, link_id: null },
+      { type: "subscription", title: "ZZ home insurance", amount: -2000, on: "2031-07-09", balance: -500, below: true, link_kind: "subscription", link_id: "s2" },
       { type: "burn", title: "Everyday spending at the burn rate", amount: -500, on: "2031-07-09", balance: -500, below: true, link_kind: null, link_id: null },
     ],
   },
@@ -81,8 +81,10 @@ const section = (name) => screen.getByRole("heading", { name: new RegExp(name) }
 
 it("asks for the funds transfer, names the biggest cause, and shows the path on request", async () => {
   const go = await show();
-  expect(screen.getByText("Move $3,000.00 from ZZ Savings by Jul 9, 2031")).toBeInTheDocument();
-  expect(screen.getByText(/Biggest: ZZ home insurance, -\$4,000\.00 on Jul 9, 2031/)).toBeInTheDocument();
+  // A58: the move is the 30-day low's shortfall, by the first day below; the path runs to the low.
+  expect(screen.getByText("Move $3,000.00 from ZZ Savings by Jul 3, 2031")).toBeInTheDocument();
+  expect(screen.getByText(/Biggest: ZZ home insurance, -\$2,000\.00 on Jul 9, 2031/)).toBeInTheDocument();
+  expect(screen.getByText(/Lowest -\$500\.00 on Jul 9, 2031, against a floor of \$2,500\.00/)).toBeInTheDocument();
   expect(screen.queryByText("Starting balance")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /See what causes it/ })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Show the path to Jul 9, 2031" }));
@@ -90,12 +92,12 @@ it("asks for the funds transfer, names the biggest cause, and shows the path on 
   expect([...rows].map((r) => r.textContent)).toEqual([
     "Jun 20, 2031Starting balance$9,000.00",
     "Jun 25, 2031ZZ salary+$2,000.00$11,000.00",
-    "Jul 3, 2031Everyday spending at the burn rate-$6,000.00$5,000.00",
-    "Jul 9, 2031ZZ home insuranceBelow the floor of $2,500.00-$4,000.00",
+    "Jul 3, 2031Everyday spending at the burn rateBelow the floor of $2,500.00-$9,000.00$2,000.00",
+    "Jul 9, 2031ZZ home insurance-$2,000.00",
     "Jul 9, 2031Everyday spending at the burn rate-$500.00-$500.00",
   ]);
-  expect(rows[3]).toHaveClass("bg-destructive-light");
-  expect(rows[4]).not.toHaveClass("bg-destructive-light");
+  expect(rows[2]).toHaveClass("bg-destructive-light");
+  expect(rows[3]).not.toHaveClass("bg-destructive-light");
   expect(within(rows[0]).queryByRole("button")).not.toBeInTheDocument();
   fireEvent.click(within(rows[3]).getByRole("button"));
   expect(go).toHaveBeenLastCalledWith(moneySubscriptionPath("s2"), undefined);
@@ -106,7 +108,7 @@ it("asks for the funds transfer, names the biggest cause, and shows the path on 
 it("hides the path link while the live function has no path yet", async () => {
   const { path: _p, ...older } = ITEMS.below_floor;
   await show({ ...ITEMS, below_floor: older });
-  expect(screen.getByText("Move $3,000.00 from ZZ Savings by Jul 9, 2031")).toBeInTheDocument();
+  expect(screen.getByText("Move $3,000.00 from ZZ Savings by Jul 3, 2031")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /Show the path/ })).not.toBeInTheDocument();
 });
 
@@ -216,7 +218,7 @@ it("keeps net worth when the action items fail to load", async () => {
 it("shows a day's balance once, on its last row", () => {
   const path = ITEMS.below_floor.path;
   expect(path.map((_, i) => showsBalance(path, i))).toEqual([true, true, true, false, true]);
-  expect(firstBelowIndex(path)).toBe(3);
+  expect(firstBelowIndex(path)).toBe(2);
 });
 
 it("ends an unfinished intention or inbox title with an ellipsis, and nothing else", () => {

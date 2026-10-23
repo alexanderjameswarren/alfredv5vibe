@@ -162,7 +162,7 @@ export default function PlannedItemDetailView({ plannedItemId, onBack, onOpenPro
               </button>
             </Fact>
           )}
-          <Fact label="Merchant">{data.item.merchant?.name || "None: never suggested a match"}</Fact>
+          <Fact label="Merchant">{data.item.merchant?.name || "None: matched by amount and date"}</Fact>
           {it.tax_year && <Fact label="Tax year">{it.tax_year}</Fact>}
           {it.notes && <Fact label="Notes"><span className="whitespace-pre-line">{it.notes}</span></Fact>}
         </dl>
