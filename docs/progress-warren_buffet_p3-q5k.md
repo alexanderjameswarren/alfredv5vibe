@@ -16,8 +16,8 @@ No amounts in this file. The safety floor is never written into the repo.
 | 8b | **Tools first (A42, A43).** New tools: project summary, missed dates, mark not needed, unconfirm (tier 2, `paid_not_covered`). Changed: the free cash what-if (tier 1, writes nothing), `backdated_from`, `project_names`, `over_matched`. Needs `mcp/index.ts`. **Live mcp must still be v155 before deploying; if higher, stop and ask** | done, 2026-10-20: live on **mcp v157** (138 tools), with the tolerance fix (A45; 143 applied, 144 24/24); re-check and fresh-thread batches passed |
 | 8c | Planning skill `.claude/skills/wb-planning/SKILL.md` (A44); scripted planning conversation in a fresh thread. **Notes from 8b:** (a) for bills whose amount varies (fuel, utilities), suggest a wider amount_tolerance before backdating, or only some payments qualify; (b) when backdating moves the due day, tell Alex the new day | done, 2026-10-20 (all six fresh-thread tests passed; two fixes to the skill, see log) |
 | 8d | Slimmer app (A44, A46, A47): 8d-1 the delete function; 8d-2 the Plan overview (read-only missed dates); 8d-3 project detail; 8d-4 item detail (Remove match, Delete item); 8d-5 the full Review card; 8d-6 the single-part project picker; help. **No add or edit forms, and no split-editor picker** | 8d-1 done 2026-10-21 (146 applied, tests 12/12); 8d-2 and 8d-3 tested 2026-10-21; 8d-4 done 2026-10-22 (fixes re-tested); 8d-5 and 8d-6 tested 2026-10-22. **8d done 2026-10-22, live** (merge 4bd3d97; the live Plan tab matches local testing) |
-| 9 | Overview numbers, plus Action Items and Dropping below the floor (A49). Data first, then mockups in claude.ai, then the UI | 9a and 9b done 2026-10-23: 150 and 151 applied (live tests 40/40 and 21/21; A51); 9c–9e not started |
-| 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed | not started |
+| 9 | Overview numbers, plus Action Items and Dropping below the floor (A49). Data first, then mockups in claude.ai, then the UI | 9a and 9b done 2026-10-23: 150 and 151 applied (live tests 40/40 and 21/21; A51); 9c done (mcp v159, fresh-thread check passed); 9d–9e not started |
+| 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed. **Also: a sync encoding check.** A SimpleFIN account name arrives as "VISA SIGNATURE�� CARD", with the ® garbled (found 2026-10-23); find where wb-sync decodes it | not started |
 | 11 | Phase 3 review | not started |
 
 ## Log
@@ -709,6 +709,27 @@ All six tests passed in a fresh claude.ai thread with the skill loaded. No amoun
 - Alex ran 151 (conformant), `3_no_merchant_and_late_tests.sql` (21/21), and re-ran `2_action_items_tests.sql` (40/40).
 - Verified live: both functions carry the 151 bodies and comments and are security invoker; `wb_action_items` is still execute for authenticated only. `check_platform_conformance`: CONFORMANT, 71 tables.
 - Next: Alex checkpoints 9a and 9b, with `--release-db`; then 9c.
+
+### Step 9c built, deploy held (2026-10-23, run tag `warren_buffet_p3-q5k-s19-c5nt`)
+- Checkpoint 3af1d26 was merged as 8653a5b. Main brought no function changes, so no gitsync was needed. Claimed `mcp/index.ts` and its test.
+- **`get_wb_action_items`** (tier 1): calls `wb_action_items` with `days`, `big_amount` and `big_days` passed only when given, and returns the object bare. Its description covers every section, the row links and todo, and `shortfall_at_low` as the amount to move from the reserve.
+- **`update_wb_account`** gains `statement_close_day` and `payment_due_day` (1 to 31 or null) and `autopay` (none, minimum, full or null). A value can be set only on a credit card; clearing is always allowed.
+- Skill section 11 "What needs my attention?" added. Tests: warren-buffet 26, p3 25, mcp index 33, all pass; 139 tools registered.
+- **Deploy held:** live mcp is v158, not v157. It was deployed 2026-10-20 16:02 PT from the main checkout, most likely by inbox_atomic-q7d (dfeaa5b, `clipboard.ts`), and that commit is already in this worktree. Waiting for Alex.
+
+### Step 9c deployed: mcp v159 (2026-10-23, run tag `warren_buffet_p3-q5k-s19-m8xr`)
+- Alex confirmed v158 was inbox_atomic-q7d's deploy, and its code (dfeaa5b) is in this worktree. Main had moved to f8ca380 (restructure_p5) with no change under `supabase/functions/`, so no gitsync was needed.
+- Claimed `db:deploy` and deployed mcp at 07:29 PT: **v159**, verify_jwt false as before.
+- No auth: 401. A bogus token lists the tools, as before; a tool call with it is refused ("Invalid JWT").
+- Live: 139 tools, including `get_wb_action_items`; `update_wb_account` takes `statement_close_day`, `payment_due_day` and `autopay`.
+- `db:deploy` is held until the fresh-thread checks come back.
+
+### Step 9c done (2026-10-23, run tag `warren_buffet_p3-q5k-s19-r7qd`)
+- Fresh claude.ai thread on v159, both checks passed.
+  - `get_wb_action_items` led with the Visa 3782 interest flag and below_floor, linked every row, listed both "set days" card rows, and changed nothing.
+  - `update_wb_account` refused a due day of 32 and card days on a checking account, then set and cleared the three Visa 3782 fields, which are null again.
+- Released `db:deploy`. Yielded `warren-buffet-p2.ts` (unchanged) to mcp_read_gaps-t8k. That thread also waits on `mcp/index.ts`, `index.test.mjs`, `warren-buffet.ts` and `warren-buffet-p3.ts`, which free up after the 9c checkpoint.
+- For step 10: a card's SimpleFIN name arrives as "VISA SIGNATURE�� CARD" (the ® garbled). Add a sync encoding check; not fixed now.
 
 ## Later
 

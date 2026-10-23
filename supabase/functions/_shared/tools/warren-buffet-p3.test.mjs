@@ -66,6 +66,7 @@ test("tiers", () => {
     get_wb_true_cost: 1, get_wb_cash_projection: 1, upsert_wb_project: 2, upsert_wb_planned_item: 2,
     create_wb_planned_match: 3, update_wb_planned_match: 2, set_wb_transaction_project: 2, update_wb_settings: 3,
     get_wb_project_summary: 1, get_wb_missed_dates: 1, mark_wb_missed_dates_not_needed: 2, unconfirm_wb_planned_match: 2,
+    get_wb_action_items: 1,
   });
   assert.equal(typeof m.createWbPlannedMatchTool.propose, "function");
   assert.equal(typeof m.updateWbSettingsTool.propose, "function");
@@ -439,4 +440,30 @@ test("unconfirm: confirmed only; the hint when paid_not_covered; never writes th
   const rec = await run(m.unconfirmWbPlannedMatchTool, { match_id: id(5) },
     mk("confirmed", { status: "rejected", stage: null, paid_not_covered: false }));
   assert.equal("hint" in rec, false);
+});
+
+// --- get_wb_action_items ----------------------------------------------------
+
+test("get_wb_action_items passes only the args given and returns the object bare", async () => {
+  const obj = { today: "2031-06-20", flags: [], below_floor: { floor_missing: true } };
+  const db = fakeDb(undefined, () => ({ data: obj, error: null }));
+  assert.deepEqual(await run(m.getWbActionItemsTool, {}, db), obj);
+  await run(m.getWbActionItemsTool, { days: 30, big_amount: 2500.5, big_days: 90 }, db);
+  assert.deepEqual(db.rpcs, [
+    ["wb_action_items", {}],
+    ["wb_action_items", { p_days: 30, p_big_amount: 2500.5, p_big_days: 90 }],
+  ]);
+  assert.equal(writes(db).length, 0);
+});
+
+test("get_wb_action_items refusals and errors", async () => {
+  const db = fakeDb();
+  await assert.rejects(run(m.getWbActionItemsTool, { days: 0 }, db), /days must be a whole number from 1 to 90/);
+  await assert.rejects(run(m.getWbActionItemsTool, { big_amount: -5 }, db), /big_amount must be a positive number/);
+  await assert.rejects(run(m.getWbActionItemsTool, { big_days: 400 }, db), /big_days must be a whole number from 1 to 366/);
+  assert.equal(db.rpcs.length, 0);
+  const bad = fakeDb(undefined, () => ({ data: null, error: { message: "timeout" } }));
+  const err = await run(m.getWbActionItemsTool, {}, bad).catch((e) => e.message);
+  assert.match(err, /could not read the action items: timeout/);
+  assert.doesNotMatch(err, /retry/i);
 });

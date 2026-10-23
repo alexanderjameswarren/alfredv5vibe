@@ -315,14 +315,16 @@ test("the tool count is 72 after the job-search tools", () => {
   // 2026-10-19, +4 for Warren Buffet Phase 3 Step 8b: planning in claude.ai.
   const EXPECTED_ADDED_WB_8B = ["get_wb_project_summary", "get_wb_missed_dates", "mark_wb_missed_dates_not_needed",
     "unconfirm_wb_planned_match"];
+  // 2026-10-23, +1 for Warren Buffet Phase 3 Step 9c: the money to-do list.
+  const EXPECTED_ADDED_WB_9C = ["get_wb_action_items"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
-                      ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B]) {
+                      ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 138,
-    `expected 138 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 139,
+    `expected 139 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -446,7 +448,7 @@ test("Warren Buffet Phase 3 schemas advertise exactly the args their handlers re
     rest = rest.replace(body, "");
   }
   const blocks = rest.split("defineTool({").slice(1);
-  assert.equal(blocks.length, 17, `expected 17 tools in warren-buffet-p3.ts, found ${blocks.length}`);
+  assert.equal(blocks.length, 18, `expected 18 tools in warren-buffet-p3.ts, found ${blocks.length}`);
   const tiers = {};
   for (const b of blocks) {
     const name = /name:\s*"([^"]+)"/.exec(b)[1];
@@ -463,7 +465,21 @@ test("Warren Buffet Phase 3 schemas advertise exactly the args their handlers re
     get_wb_true_cost: 1, get_wb_cash_projection: 1, upsert_wb_project: 2, upsert_wb_planned_item: 2,
     create_wb_planned_match: 3, update_wb_planned_match: 2, set_wb_transaction_project: 2, update_wb_settings: 3,
     get_wb_project_summary: 1, get_wb_missed_dates: 1, mark_wb_missed_dates_not_needed: 2, unconfirm_wb_planned_match: 2,
+    get_wb_action_items: 1,
   });
+});
+
+test("Warren Buffet Step 9c descriptions explain the to-do list and the card fields", () => {
+  const desc = (n) => registered.find((r) => r.name === n).cfg.description;
+  const d = desc("get_wb_action_items");
+  for (const s of ["flags", "reconcile", "overdue", "coming_up", "big_bites", "card_bills", "needs_attention",
+                   "money_intentions", "money_inbox", "below_floor"]) assert.match(d, new RegExp(`\\b${s}\\b`));
+  assert.match(d, /link_kind/);
+  assert.match(d, /todo \(what to do about it\)/);
+  assert.match(d, /shortfall_at_low is the amount to move from the reserve/);
+  assert.match(d, /never mark, match or change anything from it without asking/);
+  assert.doesNotMatch(d, /do not retry/i);
+  assert.match(desc("update_wb_account"), /statement_close_day, payment_due_day and autopay/);
 });
 
 test("Warren Buffet Step 8b descriptions say when to use each tool and its key rule", () => {

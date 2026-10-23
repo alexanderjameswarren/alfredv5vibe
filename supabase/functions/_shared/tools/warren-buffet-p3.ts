@@ -20,6 +20,7 @@
 //   get_wb_missed_dates         tier 1 — past due dates not fully matched
 //   mark_wb_missed_dates_not_needed tier 2 — up to 25 missed dates marked Not needed, or undone
 //   unconfirm_wb_planned_match  tier 2 — remove a confirmed match; never changes the stage
+//   get_wb_action_items         tier 1 — the money to-do list (wb_action_items), every section in one object
 //
 // get_wb_free_cash takes an optional what_if list (A43): free cash with and without
 // hypothetical items, writing nothing.
@@ -904,5 +905,35 @@ export const unconfirmWbPlannedMatchTool = defineTool({
     if (error) throw new Error(dbError(T, error));
     const res = (data ?? {}) as Obj;
     return { match_id: id, planned_item_name: name, ...res, ...(res.paid_not_covered ? { hint: SET_BACK_HINT } : {}) };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// get_wb_action_items — tier 1 (Step 9c, A49, A50, A51)
+// ---------------------------------------------------------------------------
+// One object from wb_action_items, so no limit applies. Arguments left out keep the
+// SQL defaults (14 days, 1000, 60 days).
+
+export const getWbActionItemsTool = defineTool({
+  name: "get_wb_action_items",
+  tier: 1,
+  handler: async (args: Obj, ctx) => {
+    const T = "get_wb_action_items";
+    const params: Obj = {};
+    const days = optInt(T, "days", args.days, 1, 90);
+    if (days !== null) params.p_days = days;
+    if (!absent(args.big_amount)) {
+      const big = args.big_amount;
+      if (typeof big !== "number" || !Number.isFinite(big) || big <= 0 || big >= 1e9) {
+        throw new Error(`${T}: big_amount must be a positive number of dollars. Got ${JSON.stringify(big)}.`);
+      }
+      params.p_big_amount = cents(big);
+    }
+    const bigDays = optInt(T, "big_days", args.big_days, 1, 366);
+    if (bigDays !== null) params.p_big_days = bigDays;
+    const { data, error } = await ctx.db.rpc("wb_action_items", params);
+    if (error) throw new Error(`${T}: could not read the action items: ${error.message ?? "database error"}.`);
+    if (!data) throw new Error(`${T}: the database returned no action items.`);
+    return data as Obj;
   },
 });
