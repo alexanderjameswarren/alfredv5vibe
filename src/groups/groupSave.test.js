@@ -152,9 +152,13 @@ test("clearing the name stores null, so the derived name shows", async () => {
   expect(groupDisplayName(group, lists)).toBe("Rice");
 });
 
-test("the type defaults to the context's default, then its first type", () => {
-  const groupTypes = [{ id: "proj", contextId: "alfred" }, { id: "menu", contextId: "recipes" }, { id: "menu2", contextId: "recipes" }];
-  expect(defaultTypeId("recipes", { contexts: [{ id: "recipes", defaultGroupTypeId: "menu2" }], groupTypes })).toBe("menu2");
-  expect(defaultTypeId("recipes", { contexts: [{ id: "recipes" }], groupTypes })).toBe("menu");
-  expect(defaultTypeId("home", { contexts: [], groupTypes })).toBe("proj");
+test("the type defaults to the context's default, else the first by name (types are shared)", () => {
+  const groupTypes = [
+    { id: "proj", labelSingular: "Project" },
+    { id: "menu", labelSingular: "Menu" },
+    { id: "series", labelSingular: "Series" },
+  ];
+  expect(defaultTypeId("alex", { contexts: [{ id: "alex", defaultGroupTypeId: "menu" }], groupTypes })).toBe("menu");
+  expect(defaultTypeId("home", { contexts: [{ id: "home" }], groupTypes })).toBe("menu");
+  expect(defaultTypeId("home", { contexts: [{ id: "home", defaultGroupTypeId: "deleted" }], groupTypes })).toBe("menu");
 });

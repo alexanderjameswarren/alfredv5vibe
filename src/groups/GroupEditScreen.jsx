@@ -6,7 +6,7 @@ import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
 import ArchiveGroupDialog from "./ArchiveGroupDialog";
 import { useDragReorder } from "../shared/useDragReorder";
 import { derivedGroupName, liveMembers, removedMembers } from "./groupModel";
-import { defaultTypeId } from "./groupSave";
+import { defaultTypeId, sortTypes } from "./groupSave";
 import MemberPicker, { memberKey } from "./MemberPicker";
 
 const DRAFT_ID = "__draft__";
@@ -142,10 +142,9 @@ export default function GroupEditScreen({
               className="w-full px-3 py-2 min-h-[44px] border border-border rounded text-base"
             >
               {!groupTypeId && <option value="">Pick a type</option>}
-              {groupTypes.map((t) => (
+              {sortTypes(groupTypes).map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.labelSingular}
-                  {contextName(t.contextId) ? ` (${contextName(t.contextId)})` : ""}
                 </option>
               ))}
             </select>

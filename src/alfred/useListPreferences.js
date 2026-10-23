@@ -10,6 +10,7 @@ import {
   EVENT_SORT_OPTIONS,
   INBOX_SORT_OPTIONS,
   NAMED_RECORD_SORT_OPTIONS,
+  CONTEXT_DETAIL_SORT_OPTIONS,
   INTENTION_SORT_OPTIONS,
 } from "../utils/listSortOptions";
 
@@ -60,7 +61,8 @@ export function useListPreferences() {
   // Intentions offer identical choices — only what "Name" reads differs — so a
   // single row drives Items, Intentions and Collections alike. The default is
   // the order Items always had here; Intentions and Collections had none.
-  const contextDetailSort = useSortPreference("alfred.sort.context-detail", NAMED_RECORD_SORT_OPTIONS, "updated");
+  // Restructure P5: plus "Last done"; groups sort mixed with items under the same order.
+  const contextDetailSort = useSortPreference("alfred.sort.context-detail", CONTEXT_DETAIL_SORT_OPTIONS, "updated");
   // One chip row per page; Context detail's drives its items and intentions alike.
   const intentionsStatus = useStatusFilter("intentions");
   const contextDetailStatus = useStatusFilter("context-detail");

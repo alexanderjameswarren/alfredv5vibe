@@ -39,6 +39,13 @@ export const NAMED_RECORD_SORT_OPTIONS = [
   { value: "updated", label: "Last modified", defaultDir: "desc" },
 ];
 
+// Context detail (Restructure P5): the same three plus "Last done" (last_completed_at,
+// rowModel's `done` accessor). Never-done rows sort last in either direction.
+export const CONTEXT_DETAIL_SORT_OPTIONS = [
+  ...NAMED_RECORD_SORT_OPTIONS,
+  { value: "done", label: "Last done", defaultDir: "desc" },
+];
+
 export const NAMED_RECORD_ACCESSORS = {
   title: (r) => r.name,
   created: (r) => r.createdAt,

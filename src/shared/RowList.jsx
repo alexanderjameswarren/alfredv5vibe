@@ -1,6 +1,7 @@
 import React from "react";
 import IntentionCard from "../intentions/IntentionCard";
 import ItemCard from "../items/ItemCard";
+import GroupRowCard from "../groups/GroupRowCard";
 import useRowClose from "./useRowClose";
 
 /**
@@ -33,6 +34,8 @@ export default function RowList({
   onOpenExecution,
   onCancelExecution,
   onCloseRecords,
+  // Restructure P5: group rows (kind "group") open the group detail page.
+  onViewGroupDetail,
   reminderFor = () => null,
 }) {
   const rowClose = useRowClose({ events, executions, onCloseRecords });
@@ -40,7 +43,14 @@ export default function RowList({
     <>
       <div className="space-y-2">
         {rows.map((row) =>
-          row.intent ? (
+          row.kind === "group" ? (
+            <GroupRowCard
+              key={row.key}
+              row={row}
+              contextName={contexts?.find((c) => c.id === row.group.contextId)?.name}
+              onOpen={onViewGroupDetail}
+            />
+          ) : row.intent ? (
             <IntentionCard
               tagPool={tagPool}
               key={row.key}

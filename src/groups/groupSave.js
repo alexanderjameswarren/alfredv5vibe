@@ -1,13 +1,21 @@
 // Saving the group create/edit page (Restructure P5). `storage` and `newId` are
 // passed in so the logic is testable without Supabase.
 
-/** The type a new group in this context starts with: the context's default, else its first. */
+/**
+ * The type a new group in this context starts with: the context's default, else
+ * the first type by name. Types are shared across contexts (migration 150).
+ */
 export function defaultTypeId(contextId, { contexts = [], groupTypes = [] }) {
   const ctx = contexts.find((c) => c.id === contextId);
   if (ctx?.defaultGroupTypeId && groupTypes.some((t) => t.id === ctx.defaultGroupTypeId)) {
     return ctx.defaultGroupTypeId;
   }
-  return (groupTypes.find((t) => t.contextId === contextId) || groupTypes[0])?.id || null;
+  return sortTypes(groupTypes)[0]?.id || null;
+}
+
+/** Group types in name order, for every picker. */
+export function sortTypes(groupTypes = []) {
+  return [...groupTypes].sort((a, b) => String(a.labelSingular).localeCompare(String(b.labelSingular)));
 }
 
 /** The item_groups row the form writes. A blank name is null: derived at read time. */

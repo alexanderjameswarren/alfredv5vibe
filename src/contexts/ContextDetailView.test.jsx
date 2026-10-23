@@ -211,3 +211,64 @@ describe("ContextDetailView edit page", () => {
     expect(onBack).toHaveBeenCalled();
   });
 });
+
+// Restructure P5 step 11.
+describe("ContextDetailView: groups", () => {
+  const MENU = { id: "menu", contextId: "c1", labelSingular: "Menu", labelPlural: "Menus", icon: "UtensilsCrossed", executionMode: "together" };
+  const withGroups = {
+    context: { ...CTX, defaultGroupTypeId: "menu" },
+    groupTypes: [MENU],
+    groups: [
+      { id: "g1", groupTypeId: "menu", contextId: "c1", name: null, status: "active" },
+      { id: "g9", groupTypeId: "menu", contextId: "c1", name: "Old menu", archived: true, status: "closed" },
+    ],
+    groupMembers: [{ id: "m1", groupId: "g1", memberType: "item", memberId: "pot", position: 1 }],
+    allItems: ITEMS,
+  };
+
+  it("a context with no groups looks as before: no tabs, the old heading", () => {
+    renderRows();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.getByText("Items and intentions (3)")).toBeInTheDocument();
+  });
+
+  it("groups join the list, under a heading and tabs with counts", () => {
+    const onViewGroupDetail = jest.fn();
+    renderRows({ ...withGroups, onViewGroupDetail });
+    expect(screen.getByText("Items, intentions and menus (4)")).toBeInTheDocument();
+    expect(screen.getAllByRole("tab").map((t) => t.textContent.replace(/\s/g, ""))).toEqual(["All(4)", "Menus(1)", "Itemsandintentions(3)"]);
+    fireEvent.click(screen.getByRole("tab", { name: /Menus/ }));
+    expect(screen.getByText("1 recipe")).toBeInTheDocument();
+    expect(screen.queryByText("Call the plumber")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Stock pot"));
+    expect(onViewGroupDetail).toHaveBeenCalledWith("g1");
+  });
+
+  it("the create button is named from the default type, else Add Group", () => {
+    const onOpenCreateGroup = jest.fn();
+    const { unmount } = renderRows({ ...withGroups, onOpenCreateGroup });
+    fireEvent.click(screen.getByRole("button", { name: "Create Menu" }));
+    expect(onOpenCreateGroup).toHaveBeenCalled();
+    unmount();
+    renderRows({ onOpenCreateGroup });
+    expect(screen.getByRole("button", { name: "Add Group" })).toBeInTheDocument();
+  });
+
+  it("the tab is held by the caller, so it survives leaving and coming back", () => {
+    const onRowTabChange = jest.fn();
+    const { unmount } = renderRows({ ...withGroups, rowTab: "type:menu", onRowTabChange });
+    expect(screen.getByRole("tab", { name: /Menus/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByText("Call the plumber")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /Items and intentions/ }));
+    expect(onRowTabChange).toHaveBeenCalledWith("items");
+    unmount();
+    renderRows({ ...withGroups, rowTab: "items", onRowTabChange });
+    expect(screen.getByRole("tab", { name: /Items and intentions/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("archived groups are listed with the archived records", () => {
+    renderRows(withGroups);
+    fireEvent.click(screen.getByRole("button", { name: /Archived \(1\)/ }));
+    expect(screen.getByText("Old menu")).toBeInTheDocument();
+  });
+});

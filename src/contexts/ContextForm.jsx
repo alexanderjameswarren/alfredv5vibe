@@ -3,6 +3,7 @@ import EditCard from "../shared/EditCard";
 import PinnedFooter from "../shared/PinnedFooter";
 import AppSelect from "../apps/AppSelect";
 import useApps from "../apps/useApps";
+import { sortTypes } from "../groups/groupSave";
 
 /**
  * A context as the form holds it. The initial state and the dirty check both read
@@ -17,6 +18,7 @@ export function contextFormValues(editing) {
     pinned: editing?.pinned || false,
     defaultCollectionId: editing?.defaultCollectionId || "",
     appId: editing?.appId || "",
+    defaultGroupTypeId: editing?.defaultGroupTypeId || "",
   };
 }
 
@@ -24,6 +26,8 @@ export default function ContextForm({
   editing, onSave, onCancel, onDirtyChange, stickyFooter = false, collections = [],
   // Edit form only: archive, and what stops it (contexts never cascade).
   onArchive = null, archiveBlockers = [],
+  // Restructure P5: every group type (shared across contexts), for "Default group type".
+  groupTypes = [],
 }) {
   const initial = contextFormValues(editing);
   const [confirmArchive, setConfirmArchive] = useState(false);
@@ -35,14 +39,15 @@ export default function ContextForm({
   const [pinned, setPinned] = useState(initial.pinned);
   const [defaultCollectionId, setDefaultCollectionId] = useState(initial.defaultCollectionId);
   const [appId, setAppId] = useState(initial.appId);
+  const [defaultGroupTypeId, setDefaultGroupTypeId] = useState(initial.defaultGroupTypeId);
 
   useEffect(() => {
     if (!onDirtyChange) return;
-    const current = { name, shared, keywords, description, pinned, defaultCollectionId, appId };
+    const current = { name, shared, keywords, description, pinned, defaultCollectionId, appId, defaultGroupTypeId };
     const base = contextFormValues(editing);
     const isDirty = Object.keys(base).some((k) => current[k] !== base[k]);
     onDirtyChange(isDirty, "this context");
-  }, [name, shared, keywords, description, pinned, defaultCollectionId, appId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [name, shared, keywords, description, pinned, defaultCollectionId, appId, defaultGroupTypeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => { if (onDirtyChange) onDirtyChange(false); };
@@ -126,6 +131,31 @@ export default function ContextForm({
 
         <AppSelect id="context-app" apps={apps} value={appId} onChange={setAppId} />
 
+        {/* Restructure P5: names the context page's create button ("Create Menu"). */}
+        {editing && (
+          <div>
+            <label htmlFor="context-default-group-type" className="block text-sm font-medium text-foreground mb-1">
+              Default group type
+            </label>
+            <select
+              id="context-default-group-type"
+              value={defaultGroupTypeId}
+              onChange={(e) => setDefaultGroupTypeId(e.target.value)}
+              className="w-full px-3 py-2 min-h-[44px] border border-border rounded text-base"
+            >
+              <option value="">None</option>
+              {sortTypes(groupTypes).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.labelSingular}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground mt-1">
+              Names the create button on this context's page. None shows "Add Group".
+            </p>
+          </div>
+        )}
+
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -156,7 +186,7 @@ export default function ContextForm({
             onClick={() => {
               if (name.trim()) {
                 if (onDirtyChange) onDirtyChange(false);
-                onSave(name, shared, keywords, description, pinned, defaultCollectionId, appId);
+                onSave(name, shared, keywords, description, pinned, defaultCollectionId, appId, defaultGroupTypeId);
               }
             }}
             className="px-4 py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"

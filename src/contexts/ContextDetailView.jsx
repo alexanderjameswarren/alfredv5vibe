@@ -3,14 +3,16 @@ import { ArrowLeft, ChevronDown, Plus, Settings } from "lucide-react";
 import { sortRows } from "../utils/sortOrders";
 import { matchesQuery } from "../utils/search";
 import {
-  NAMED_RECORD_SORT_OPTIONS,
+  CONTEXT_DETAIL_SORT_OPTIONS,
   NAMED_RECORD_ACCESSORS,
   itemSearchFields,
 } from "../utils/listSortOptions";
-import { buildRows, hasOpenRun, listRows } from "../utils/rowModel";
+import { buildGroupRows, buildRows, hasOpenRun, listRows, rowTabs, rowsForTab } from "../utils/rowModel";
 import RowList from "../shared/RowList";
+import UnderlineTabs from "../shared/UnderlineTabs";
 import InProgressSection from "../executions/InProgressSection";
-import ObjectIcon from "../shared/ObjectIcon";
+import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
+import { groupDisplayName } from "../groups/groupModel";
 import StatusFilterChips from "../shared/StatusFilterChips";
 import {
   DEFAULT_STATUS_FILTER,
@@ -85,8 +87,22 @@ export default function ContextDetailView({
   // Arrived from a context card's gear: open on the edit page, and say so once.
   openInEdit = false,
   onEditOpened,
+  // Restructure P5 (step 11): this context's groups (archived ones included) and
+  // what names and counts them.
+  groups = [],
+  groupTypes = [],
+  groupMembers = [],
+  onViewGroupDetail,
+  onOpenCreateGroup,
+  // The selected tab, held by Alfred per context so Back from a record keeps it
+  // (as the inbox's source tab is). Falls back to local state when not given.
+  rowTab: heldTab,
+  onRowTabChange,
 }) {
   const [rowsExpanded, setRowsExpanded] = useState(true);
+  const [localTab, setLocalTab] = useState("all");
+  const rowTab = heldTab ?? localTab;
+  const setRowTab = onRowTabChange || setLocalTab;
   const [archivedExpanded, setArchivedExpanded] = useState(false);
   // The one context edit form (Restructure P4): a full page, as item detail's
   // edit is, reached from Edit here or from a context card's gear (`openInEdit`).
@@ -117,6 +133,7 @@ export default function ContextDetailView({
         <ContextForm
           editing={context}
           collections={collections}
+          groupTypes={groupTypes}
           stickyFooter
           onSave={async (...args) => {
             await onSaveContext(context, ...args);
@@ -142,8 +159,14 @@ export default function ContextDetailView({
   // counts match what the list shows.
   const sortBy = (rows, accessors) =>
     rankByStatus(sortRows(rows, sort.sortKey, accessors, sort.sortDir));
-  const rows = buildRows({ items, intents, events, openExecutions: executions });
-  const { visibleRows, statusCounts: statusCountsHere, tagCountRows, total } = listRows({
+  // Groups sit in the same list (Restructure P5), sorted and filtered with the rest.
+  const memberLists = { members: groupMembers, items: allItems.length ? allItems : items, intents: allIntents || intents };
+  const liveGroups = groups.filter((g) => !g.archived);
+  const rows = [
+    ...buildRows({ items, intents, events, openExecutions: executions }),
+    ...buildGroupRows({ groups: liveGroups, groupTypes, ...memberLists }),
+  ];
+  const { visibleRows: filteredRows, statusCounts: statusCountsHere, tagCountRows, total } = listRows({
     rows,
     openExecutions: executions,
     search,
@@ -153,11 +176,31 @@ export default function ContextDetailView({
     sortKey: sort.sortKey,
     sortDir: sort.sortDir,
   });
+  // Tabs only once the context has a live group; their counts follow the filters.
+  const tabs = liveGroups.length > 0 ? rowTabs(filteredRows) : [];
+  const activeTab = tabs.some((t) => t.key === rowTab) ? rowTab : "all";
+  const visibleRows = rowsForTab(filteredRows, activeTab);
+  const typePlurals = [...new Set(rows.filter((r) => r.kind === "group").map((r) => (r.type?.labelPlural || "groups").toLowerCase()))];
+  const sectionTitle =
+    typePlurals.length === 0
+      ? "Items and intentions"
+      : `Items, intentions${typePlurals.length > 1 ? `, ${typePlurals.slice(0, -1).join(", ")}` : ""} and ${typePlurals[typePlurals.length - 1]}`;
+  const defaultType = groupTypes.find((t) => t.id === context.defaultGroupTypeId);
+  const createGroupLabel = createGroupButtonLabel(defaultType);
   // "n of m" whenever anything is hidden, by search or by a chip.
   const countLabel = (shown, total) => (shown === total ? `${total}` : `${shown} of ${total}`);
   const archivedRows = [
     ...archivedItems.map((r) => ({ kind: "item", id: r.id, label: r.name, row: r })),
     ...archivedIntents.map((r) => ({ kind: "intention", id: r.id, label: getIntentDisplay(r), row: r })),
+    ...groups
+      .filter((g) => g.archived)
+      .map((g) => ({
+        kind: "group",
+        id: g.id,
+        label: groupDisplayName(g, memberLists) || "Untitled group",
+        icon: groupTypes.find((t) => t.id === g.groupTypeId)?.icon,
+        row: g,
+      })),
   ].sort((a, b) =>
     String(b.row.statusChangedAt || b.row.updatedAt || "").localeCompare(
       String(a.row.statusChangedAt || a.row.updatedAt || ""),
@@ -226,18 +269,18 @@ export default function ContextDetailView({
         onOpen={onOpenExecution}
       />
 
-      {(items.length > 0 || intents.length > 0 || contextCollections.length > 0) && (
+      {(items.length > 0 || intents.length > 0 || liveGroups.length > 0 || contextCollections.length > 0) && (
         <ListToolbar
           query={search}
           onQueryChange={onSearchChange}
           searchLabel="Search this context"
           sortId="context-detail-sort"
-          sortOptions={NAMED_RECORD_SORT_OPTIONS}
+          sortOptions={CONTEXT_DETAIL_SORT_OPTIONS}
           sort={sort}
           className="mb-3"
         />
       )}
-      {(items.length > 0 || intents.length > 0) && (
+      {(items.length > 0 || intents.length > 0 || liveGroups.length > 0) && (
         <StatusFilterChips
           counts={statusCountsHere}
           selected={statusFilter.selected}
@@ -253,9 +296,9 @@ export default function ContextDetailView({
               className="flex items-center gap-2 text-base sm:text-lg font-medium text-foreground"
             >
               <ChevronDown className={`w-4 h-4 transition-transform ${rowsExpanded ? "" : "-rotate-90"}`} />
-              Items and intentions ({countLabel(visibleRows.length, total)})
+              {sectionTitle} ({countLabel(filteredRows.length, total)})
             </button>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 onClick={() => onOpenAddItem()}
                 className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
@@ -270,11 +313,29 @@ export default function ContextDetailView({
                 <Plus className="w-4 h-4" />
                 Add Intention
               </button>
+              {onOpenCreateGroup && (
+                <button
+                  onClick={() => onOpenCreateGroup()}
+                  className="flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 min-h-[44px] bg-primary hover:bg-primary-hover text-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200 text-sm sm:text-base"
+                >
+                  <Plus className="w-4 h-4" />
+                  {createGroupLabel}
+                </button>
+              )}
             </div>
           </div>
 
           {rowsExpanded && (
             <>
+              {tabs.length > 0 && (
+                <UnderlineTabs
+                  ariaLabel="Show items, intentions or groups"
+                  tabs={tabs.map(({ key, label, count }) => ({ key, label, count }))}
+                  activeKey={activeTab}
+                  onSelect={setRowTab}
+                  className="gap-4 sm:gap-6 mb-3"
+                />
+              )}
               {/* Counts rows the search and status chips let through. */}
               <TagFilter
                 entities={tagCountRows}
@@ -288,7 +349,7 @@ export default function ContextDetailView({
                   {rows.length === 0 ? "Nothing in this context yet" : "Everything here is in progress"}
                 </p>
               ) : searching && visibleRows.length === 0 ? (
-                <NoMatches noun="items or intentions" query={search} />
+                <NoMatches noun={liveGroups.length > 0 ? "items, intentions or groups" : "items or intentions"} query={search} />
               ) : visibleRows.length === 0 ? (
                 <p className="text-muted-foreground text-sm">Nothing matches the filters above</p>
               ) : (
@@ -315,6 +376,7 @@ export default function ContextDetailView({
                   onOpenExecution={onOpenExecution}
                   onCancelExecution={onCancelExecution}
                   onCloseRecords={onCloseRecords}
+                  onViewGroupDetail={onViewGroupDetail}
                 />
               )}
             </>
@@ -377,14 +439,22 @@ export default function ContextDetailView({
                   <li key={`${r.kind}-${r.id}`}>
                     <button
                       onClick={() =>
-                        r.kind === "item" ? onViewItemDetail?.(r.id) : onViewIntentionDetail?.(r.id)
+                        r.kind === "item"
+                          ? onViewItemDetail?.(r.id)
+                          : r.kind === "group"
+                            ? onViewGroupDetail?.(r.id)
+                            : onViewIntentionDetail?.(r.id)
                       }
                       className="w-full flex items-center gap-2 px-3 py-2 min-h-[44px] text-left bg-card border border-border rounded-lg hover:border-primary transition-colors"
                     >
-                      <ObjectIcon
-                        type={r.kind === "item" ? "item" : "intention"}
-                        className="w-4 h-4 shrink-0 text-muted-foreground"
-                      />
+                      {r.kind === "group" ? (
+                        <GroupTypeIcon icon={r.icon} className="w-4 h-4 shrink-0 text-muted-foreground" />
+                      ) : (
+                        <ObjectIcon
+                          type={r.kind === "item" ? "item" : "intention"}
+                          className="w-4 h-4 shrink-0 text-muted-foreground"
+                        />
+                      )}
                       <span className="min-w-0 flex-1 truncate">{r.label}</span>
                       <span className="shrink-0 text-xs text-muted-foreground">
                         {STATUS_LABELS[statusOf(r.row)]}
@@ -399,6 +469,11 @@ export default function ContextDetailView({
       </div>
     </div>
   );
+}
+
+/** "Create Menu" from the context's default group type; "Add Group" when it has none. */
+export function createGroupButtonLabel(defaultType) {
+  return defaultType?.labelSingular ? `Create ${defaultType.labelSingular}` : "Add Group";
 }
 
 function archivedDate(row) {

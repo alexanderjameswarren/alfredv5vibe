@@ -19,7 +19,7 @@ Each step stops for Alex's verification before the next. Database steps follow t
 - [x] 8. Data layer: group queries, derived names, realtime
 - [x] 9. Group create/edit page (done 2026-10-22, with removal history) (search-and-add, drag reorder, type picker, pin, archive)
 - [x] 10. Group detail page (header, buttons, members, notes, recent executions)
-- [ ] 11. Context page: create button, browse tabs, group rows, sort
+- [x] 11. Context page: create button, browse tabs, group rows, sort
 - [ ] 12. Group chips on member rows and running cards; record-links order Context > Group > Item > Intention (incl. execution page); pinned groups on Home
   - Apply bug mvjx4363b4bn4gezrys to item and intention detail pages: Archived pill, Restore as the only action, Edit hidden, edit page redirects.
 - [ ] 13. Scheduling a group through its intention (frozen item_ids on events); Close/Undo for groups
@@ -170,3 +170,38 @@ Each step stops for Alex's verification before the next. Database steps follow t
   - `/groups/edit/:id` for an archived group redirects to its detail page. The history page shows no Put back while the group is archived.
   - The Recycle Bin Groups tab is unchanged. The link from the page to the bin is gone (replaced by Restore).
   - App 2833/2833, CLI 239/239.
+- 2026-10-23 Step 11 built; awaiting Alex's Chrome test. The spec's "Context page" section was rewritten to the decisions settled with Alex today.
+  - Claimed: `listSortOptions.js`, `useListPreferences.js`, `useContextActions.js`, `ContextForm.test.jsx` and `shared/UnderlineTabs.test.jsx` (its guard counts call sites, 3→4).
+  - `rowModel`:
+    - `buildGroupRows`: a group's tags and search names come from its live members; it also carries memberCount and lastCompletedAt.
+    - `ROW_ACCESSORS.done` (Last done); item and intention rows now carry lastCompletedAt.
+    - `rowSearchFields` covers groups.
+    - `rowTabs` / `rowsForTab`: All, one tab per type, then Items, with counts; none when there are no groups.
+  - Context page:
+    - Groups sit in the items-and-intentions list, with the heading "Items, intentions and menus".
+    - Tabs appear only when there is a live group; their counts follow the filters.
+    - Status chips count groups.
+    - Sort is mixed, under `CONTEXT_DETAIL_SORT_OPTIONS` (Name, Created, Last modified, Last done); the default is still Last modified.
+    - The "Create <Type>" or "Add Group" button opens `/groups/new/context/:id`.
+    - Archived groups are listed in the Archived section.
+  - `GroupRowCard`: type icon and name, status chip and context, "Not scheduled", then "N recipes · last cooked" (together types) or "N members · last done". No buttons. Opens the detail page.
+  - ContextForm has a "Default group type" picker (this context's types, plus None). `saveContextRecord` takes `defaultGroupTypeId`; leaving it undefined keeps the stored value.
+  - App 2843/2843, CLI 239/239.
+- 2026-10-23 Step 11 follow-ups. Alex's Chrome test of the first build passed.
+  1. Group rows end like item rows: "2 recipes · last done: Oct 21, 2026 · last updated: Oct 23, 2026"; empty dates are left out; other types say "N members".
+  2. The tab "Items" is now "Items and intentions".
+  3. Last done: `sortByLastDone` treats never done as the oldest (bottom when newest first, top when oldest first).
+  4. On the same local day, a group comes before items, then by name.
+  5. The selected tab is remembered per context in Alfred (`contextRowTabs`), so Back keeps it.
+  6. Group types are shared, migration `150_restructure_p5_shared_group_types.sql` (written, not applied):
+     - `group_types.context_id` is dropped. It was only read by the old policy, and an unused column would invite filtering by it.
+     - Read for every signed-in user; insert, update and delete for the owner only.
+     - `contexts.default_group_type_id` is kept.
+     - Client: type names stand alone (`sortTypes`); defaults are the context's default, else the first by name; the picker lists every type.
+     - The client works before and after 150.
+  7. Settings has a "Group types" section (`GroupTypesSettings`, `groupTypes.js`):
+     - The list shows the icon, names, mode and usage count.
+     - Add and Edit use the EditCard form: names, an icon from 10, and the mode in plain words.
+     - Delete appears only when no group uses the type, behind a confirm with CancelButton.
+  - Claimed: `src/reminders/SettingsScreen.jsx` (+ test), the 150 migration, and `db:table:group_types`. EditCard guard counts are now 5/6/7.
+  - App 2906/2906, CLI 239/239. One SAM test (`SamPlayer.plan`) failed once under load, then passed alone and on a full rerun.

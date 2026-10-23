@@ -4,6 +4,8 @@ import { itemActionTarget } from "./runNow";
 import { filterByStatus, liveEventsFor, statusCounts, statusOf, withTag } from "./status";
 import { sortRows } from "./sortOrders";
 import { matchesQuery } from "./search";
+import { toLocalDateString } from "./eventDates";
+import { groupDisplayName, groupTypeOf, liveMembers } from "../groups/groupModel";
 
 const unique = (values) => [...new Set(values)];
 
@@ -44,6 +46,8 @@ export function buildRows({ items = [], intents = [], events = [], openExecution
       name: item.name,
       createdAt: item.createdAt,
       updatedAt: latest([item, ...own].map((r) => r.updatedAt)),
+      // The item's own covers its intentions (executions_last_completed).
+      lastCompletedAt: item.lastCompletedAt || null,
     });
   }
 
@@ -61,24 +65,114 @@ export function buildRows({ items = [], intents = [], events = [], openExecution
       name: intent.text,
       createdAt: intent.createdAt,
       updatedAt: intent.updatedAt,
+      lastCompletedAt: intent.lastCompletedAt || null,
     });
   }
   return rows;
 }
 
+/**
+ * Restructure P5: one row per live group, for the same lists. A group has no tags
+ * of its own: it carries its live members' tags (for the tag filter) and their
+ * names (for search). `groups` is what the page shows; archived ones are left out.
+ */
+export function buildGroupRows({ groups = [], groupTypes = [], members = [], items = [], intents = [] }) {
+  return groups
+    .filter((g) => !g.archived)
+    .map((group) => {
+      const live = liveMembers(group.id, { members, items, intents });
+      return {
+        key: `group:${group.id}`,
+        kind: "group",
+        group,
+        type: groupTypeOf(group, groupTypes),
+        item: null,
+        intent: null,
+        intents: [],
+        event: null,
+        open: null,
+        status: statusOf(group),
+        tags: unique(live.flatMap((m) => m.record.tags || [])),
+        name: groupDisplayName(group, { members, items, intents }),
+        memberNames: live.map((m) => m.name),
+        memberCount: live.length,
+        createdAt: group.createdAt,
+        updatedAt: group.updatedAt,
+        lastCompletedAt: group.lastCompletedAt || null,
+      };
+    });
+}
+
 const latest = (dates) => dates.filter(Boolean).sort().pop() || null;
 
 // For sortRows. `updated` on an item row is the latest change to the item or
-// any of its intentions, and is the date the row's card shows.
+// any of its intentions, and is the date the row's card shows. "Last done" has
+// its own order, `sortByLastDone`.
 export const ROW_ACCESSORS = {
   title: (r) => r.name,
   created: (r) => r.createdAt,
   updated: (r) => r.updatedAt,
+  done: (r) => r.lastCompletedAt,
 };
 
-/** What a search matches on a row: the item's fields and every intention's text. */
+/**
+ * "Last done" (Restructure P5). Never done counts as the OLDEST: last when
+ * newest first, first when oldest first. A tie on the day puts a group before
+ * items, then name, so a cooked menu sits directly above its recipes.
+ */
+export function sortByLastDone(rows, dir = "desc") {
+  // The local day, as the row shows it.
+  const day = (r) => (r.lastCompletedAt ? toLocalDateString(new Date(r.lastCompletedAt)) : "");
+  return [...rows].sort((a, b) => {
+    const da = day(a);
+    const db = day(b);
+    if (da !== db) return (da < db ? -1 : 1) * (dir === "asc" ? 1 : -1);
+    const ga = a.kind === "group" ? 0 : 1;
+    const gb = b.kind === "group" ? 0 : 1;
+    if (ga !== gb) return ga - gb;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+}
+
+/**
+ * What a search matches on a row: the item's fields and every intention's text;
+ * on a group row, its name (typed or derived) and its live members' names.
+ */
 export function rowSearchFields(row, itemFields) {
+  if (row.kind === "group") return [row.name, ...(row.memberNames || [])];
   return [...(row.item ? itemFields(row.item) : []), ...row.intents.map((i) => i.text)];
+}
+
+/**
+ * The section's tabs (Restructure P5): All, one per group type present, then
+ * Items and intentions. None at all when there are no group rows. Counts are of `rows`.
+ */
+export function rowTabs(rows) {
+  const groupRows = rows.filter((r) => r.kind === "group");
+  if (groupRows.length === 0) return [];
+  const types = [];
+  for (const r of groupRows) {
+    const id = r.type?.id || "none";
+    if (!types.some((t) => t.id === id)) types.push({ id, label: r.type?.labelPlural || "Groups", icon: r.type?.icon });
+  }
+  return [
+    { key: "all", label: "All", count: rows.length },
+    ...types.map((t) => ({
+      key: `type:${t.id}`,
+      label: t.label,
+      icon: t.icon,
+      count: groupRows.filter((r) => (r.type?.id || "none") === t.id).length,
+    })),
+    { key: "items", label: "Items and intentions", count: rows.filter((r) => r.kind !== "group").length },
+  ];
+}
+
+/** The rows a tab shows. */
+export function rowsForTab(rows, tab) {
+  if (!tab || tab === "all") return rows;
+  if (tab === "items") return rows.filter((r) => r.kind !== "group");
+  const id = tab.slice("type:".length);
+  return rows.filter((r) => r.kind === "group" && (r.type?.id || "none") === id);
 }
 
 /** True while the row's item or any of its intentions has an open (active or paused) run. */
@@ -98,8 +192,9 @@ export function listRows({ rows, openExecutions = [], search = "", itemFields, f
   const listed = rows.filter((row) => !hasOpenRun(row, openExecutions));
   const searched = listed.filter((row) => matchesQuery(search, ...rowSearchFields(row, itemFields)));
   const tagged = withTag(searched, filterTag);
+  const shown = filterByStatus(tagged, statuses);
   return {
-    visibleRows: sortRows(filterByStatus(tagged, statuses), sortKey, ROW_ACCESSORS, sortDir),
+    visibleRows: sortKey === "done" ? sortByLastDone(shown, sortDir) : sortRows(shown, sortKey, ROW_ACCESSORS, sortDir),
     statusCounts: statusCounts(tagged),
     tagCountRows: filterByStatus(searched, statuses),
     total: listed.length,
