@@ -159,14 +159,24 @@ export interface Owner {
   context_id: string;
 }
 
+/**
+ * A name as SimpleFIN sends it, without the U+FFFD replacement characters a broken symbol arrives
+ * as (A54: "VISA SIGNATURE�� CARD", the ® lost before it reached us), and with spaces tidied.
+ */
+export function cleanName(s: string): string {
+  return s.replace(/�+/g, " ").replace(/\s+/g, " ").trim();
+}
+
 export function mapAccount(a: Obj, owner: Owner, syncedAt: string) {
   const org = (a.org ?? {}) as Obj;
-  const name = typeof a.name === "string" && a.name.trim() ? a.name : "(unnamed account)";
+  const raw = typeof a.name === "string" ? cleanName(a.name) : "";
+  const name = raw || "(unnamed account)";
+  const orgName = typeof org.name === "string" ? cleanName(org.name) || null : null;
   return {
     ...owner,
     source: "simplefin",
     external_id: String(a.id),
-    institution: (org.name as string) ?? (org.domain as string) ?? null,
+    institution: orgName ?? (org.domain as string) ?? null,
     name,
     last4: parseLast4(name),
     currency: typeof a.currency === "string" && /^[A-Z]{3}$/.test(a.currency) ? a.currency : "USD",
