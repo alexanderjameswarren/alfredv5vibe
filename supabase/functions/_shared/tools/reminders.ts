@@ -11,7 +11,7 @@
 // notify-dispatch sends them; these tools only write the rows.
 // ============================================================================
 
-import { clampLimit, defineTool, describeDbError, envelope } from "../platform.ts";
+import { defineTool, describeDbError, readTable } from "../platform.ts";
 
 export const REMINDER_STATES = ["scheduled", "sent", "cancelled", "no_subscription"] as const;
 
@@ -111,21 +111,23 @@ export const getRemindersTool = defineTool({
     }
     const inboxId = optionalId(T, "inbox_id", args.inbox_id);
     const intentId = optionalId(T, "intent_id", args.intent_id);
-    const LIMIT = clampLimit(args.limit as number | undefined);
 
-    let q = ctx.db.from("reminders").select(COLUMNS, { count: "exact" });
-    if (state !== "all") q = q.eq("state", state as string);
-    if (inboxId) q = q.eq("inbox_id", inboxId);
-    if (intentId) q = q.eq("intent_id", intentId);
-    // Pending: soonest first. Anything else: most recent first.
-    const { data, error, count } = await q
-      .order("due_at", { ascending: state === "scheduled" })
-      .limit(LIMIT);
-    if (error) throw new Error(`${T}: ${error.message}`);
-
-    const rows = data ?? [];
-    const total = count ?? rows.length;
-    return envelope(rows, { count: total, limit_applied: LIMIT, truncated: total > rows.length });
+    // Shared read (MCP read access S8b); text stays whole.
+    return await readTable(ctx, {
+      tool: T,
+      table: "reminders",
+      args,
+      filter: (query) => {
+        let q = query;
+        if (state !== "all") q = q.eq("state", state as string);
+        if (inboxId) q = q.eq("inbox_id", inboxId);
+        if (intentId) q = q.eq("intent_id", intentId);
+        return q;
+      },
+      // Pending: soonest first. Anything else: most recent first.
+      order: [{ column: "due_at", ascending: state === "scheduled" }],
+      fullText: ["text"],
+    });
   },
 });
 

@@ -8,10 +8,12 @@
 //                        their live members in position order.
 //
 // A null name is derived from live members ("Rice + Beans"), as the app does.
-// Every read goes through ctx.db (RLS); the list is bounded by clampLimit.
+// Every read goes through ctx.db (RLS). Since MCP read access S8 the list is the
+// shared readTable (limit, offset, ids, archived, no_context, include notes).
 // ============================================================================
 
-import { clampLimit, defineTool, envelope } from "../platform.ts";
+import { clampLimit, defineTool, readTable } from "../platform.ts";
+import { withNotes } from "./records.ts";
 
 export const NAME_JOINER = " + ";
 const STATUSES = ["someday", "active", "background", "closed"];
@@ -71,11 +73,13 @@ export function shapeGroups(
       id: g.id,
       name: g.name?.trim() || live.map((m) => m.name.trim()).filter(Boolean).join(NAME_JOINER) || "Untitled group",
       name_is_derived: !g.name?.trim(),
+      description: g.description ?? null,
       type: type ? { id: type.id, label: type.label_singular, execution_mode: type.execution_mode } : null,
       context_id: g.context_id ?? null,
       context_name: g.context_id ? contextOf.get(g.context_id)?.name ?? null : null,
       status: g.status ?? "someday",
       pinned: Boolean(g.pinned),
+      archived: Boolean(g.archived),
       last_completed_at: g.last_completed_at ?? null,
       own_intention_id: own?.id ?? null,
       scheduled_date: liveDate,
@@ -88,7 +92,6 @@ export const getGroupsTool = defineTool({
   name: "get_groups",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const LIMIT = clampLimit(args.limit as number | undefined);
     const status = (args.status as string[] | undefined)?.filter((s) => STATUSES.includes(s));
 
     const { data: types, error: typesError } = await ctx.db
@@ -102,45 +105,54 @@ export const getGroupsTool = defineTool({
       throw new Error(`get_groups: no group type is called ${JSON.stringify(args.group_type)}. Types: ${labels}.`);
     }
 
-    let query = ctx.db
-      .from("item_groups")
-      .select("id, name, group_type_id, context_id, status, pinned, last_completed_at", { count: "exact" })
-      .eq("archived", false)
-      .order("pinned", { ascending: false })
-      .order("updated_at", { ascending: false })
-      .limit(LIMIT);
-    if (args.context_id) query = query.eq("context_id", args.context_id as string);
-    if (status && status.length > 0) query = query.in("status", status);
-    if (typeIds) query = query.in("group_type_id", typeIds);
-    const { data: groups, error, count } = await query;
-    if (error) throw new Error(`get_groups: ${error.message}`);
-    const rows = groups ?? [];
-    if (rows.length === 0) return envelope([], { limit_applied: LIMIT, truncated: false, total: count ?? 0 });
+    // Shared read (platform.ts readTable): limit, offset, ids, archived (default: live
+    // groups only, as before), no_context, include notes, and the next-offset NOTE.
+    return await readTable(ctx, {
+      tool: "get_groups",
+      table: "item_groups",
+      args,
+      allowedIncludes: ["notes"],
+      filter: (query) => {
+        let q = query;
+        if (args.context_id) q = q.eq("context_id", args.context_id as string);
+        if (status && status.length > 0) q = q.in("status", status);
+        if (typeIds) q = q.in("group_type_id", typeIds);
+        return q;
+      },
+      order: [{ column: "pinned", ascending: false }, { column: "updated_at", ascending: false }],
+      attach: async (rows, opts) => {
+        const data = await shapePage(ctx.db, rows as Row[], types ?? []);
+        if (!opts.include.includes("notes")) return { rows: data };
+        return await withNotes(ctx.db, "group", data, opts.ids !== null);
+      },
+    });
+  },
+});
 
+/** Reads what shapeGroups needs for one page of groups, then shapes them. */
+// deno-lint-ignore no-explicit-any
+async function shapePage(db: any, rows: Row[], types: Row[]): Promise<Row[]> {
     const groupIds = rows.map((g: Row) => g.id);
     const contextIds = [...new Set(rows.map((g: Row) => g.context_id).filter(Boolean))];
     const [{ data: members }, { data: contexts }, { data: ownIntents }] = await Promise.all([
-      ctx.db.from("item_group_members").select("id, group_id, member_type, member_id, position, removed_at")
+      db.from("item_group_members").select("id, group_id, member_type, member_id, position, removed_at")
         .in("group_id", groupIds).is("removed_at", null),
-      contextIds.length ? ctx.db.from("contexts").select("id, name").in("id", contextIds) : Promise.resolve({ data: [] }),
-      ctx.db.from("intents").select("id, group_id").in("group_id", groupIds).eq("archived", false),
+      contextIds.length ? db.from("contexts").select("id, name").in("id", contextIds) : Promise.resolve({ data: [] }),
+      db.from("intents").select("id, group_id").in("group_id", groupIds).eq("archived", false),
     ]);
     const itemIds = (members ?? []).filter((m: Row) => m.member_type === "item").map((m: Row) => m.member_id);
     const intentIds = (members ?? []).filter((m: Row) => m.member_type === "intention").map((m: Row) => m.member_id);
     const ownIds = (ownIntents ?? []).map((i: Row) => i.id);
     const [{ data: items }, { data: intents }, { data: events }] = await Promise.all([
-      itemIds.length ? ctx.db.from("items").select("id, name, status, archived").in("id", itemIds) : Promise.resolve({ data: [] }),
-      intentIds.length ? ctx.db.from("intents").select("id, text, status, archived").in("id", intentIds) : Promise.resolve({ data: [] }),
+      itemIds.length ? db.from("items").select("id, name, status, archived").in("id", itemIds) : Promise.resolve({ data: [] }),
+      intentIds.length ? db.from("intents").select("id, text, status, archived").in("id", intentIds) : Promise.resolve({ data: [] }),
       ownIds.length
-        ? ctx.db.from("events").select("id, intent_id, time").in("intent_id", ownIds).eq("archived", false)
+        ? db.from("events").select("id, intent_id, time").in("intent_id", ownIds).eq("archived", false)
         : Promise.resolve({ data: [] }),
     ]);
 
-    const data = shapeGroups(rows, {
-      types: types ?? [], contexts: contexts ?? [], members: members ?? [], items: items ?? [],
+    return shapeGroups(rows, {
+      types, contexts: contexts ?? [], members: members ?? [], items: items ?? [],
       intents: intents ?? [], ownIntents: ownIntents ?? [], events: events ?? [],
     });
-    const total = count ?? data.length;
-    return envelope(data, { limit_applied: LIMIT, truncated: total > data.length, total });
-  },
-});
+}

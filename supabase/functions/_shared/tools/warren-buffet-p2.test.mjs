@@ -9,26 +9,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { loadTool, WB_SETTINGS, withSettings } from "./test-platform.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const dir = mkdtempSync(join(tmpdir(), "wb-p2-"));
-writeFileSync(join(dir, "platform.ts"), `
-export const defineTool = (o) => o;
-export const clampLimit = (n) => Math.min(n ?? 20, 50);
-export const envelope = (data, meta = {}) => ({ data, meta });
-export const describeDbError = (name, e) => name + " failed: " + e.message;
-`);
-const IMPORT = 'from "../platform.ts";';
-for (const f of ["warren-buffet.ts", "warren-buffet-p2.ts"]) {
-  const src = readFileSync(join(HERE, f), "utf-8");
-  if (!src.includes(IMPORT)) throw new Error(`${f} import line changed — update this test.`);
-  writeFileSync(join(dir, f), src.replace(IMPORT, 'from "./platform.ts";'));
-}
-const m = await import(pathToFileURL(join(dir, "warren-buffet-p2.ts")).href);
+// The real platform.ts runs (test-platform.mjs); defineTool returns its options.
+const m = await loadTool("warren-buffet-p2.ts");
 
 const MONEY = "muvitejhrgt3rgi8t6q";
 const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -50,11 +34,11 @@ function fakeDb(respond = () => ({ data: [], error: null, count: 0 }), rpc = () 
     });
     return b;
   };
-  return {
+  return withSettings({
     log, rpcs, from,
     rpc: (fn, params) => { rpcs.push([fn, params]); return Promise.resolve(rpc(fn, params)); },
     op: (table, name) => log.filter((q) => q.table === table).flatMap((q) => q.ops).filter((o) => o[0] === name),
-  };
+  }, WB_SETTINGS);
 }
 const has = (ops, name) => ops.some((o) => o[0] === name);
 const writes = (db) => db.log.filter((q) => has(q.ops, "insert") || has(q.ops, "update"));
@@ -191,8 +175,8 @@ test("known database refusals become plain sentences; unknown errors pass throug
   assert.match(m.dbError("t", { message: "wb_set_transfer_pair: both rows are on the same account" }), /two different accounts/);
   assert.match(m.dbError("t", { message: 'duplicate key value violates unique constraint "wb_merchants_name_key"' }), /merchant with that name/);
   assert.match(m.dbError("t", { message: "wb_apply_tags: two tags from one exclusive group", code: "23505" }), /only one tag/);
-  // Unknown: handed to the platform's describeDbError (stubbed here).
-  assert.equal(m.dbError("t", { message: "connection reset", code: "08006" }), "t failed: connection reset");
+  // Unknown: handed to the platform's describeDbError (the real one, with the code).
+  assert.equal(m.dbError("t", { message: "connection reset", code: "08006" }), "t failed: connection reset [08006]");
 });
 
 test("create_wb_rule needs an action, writes created_by claude, and warns without a merchant", async () => {

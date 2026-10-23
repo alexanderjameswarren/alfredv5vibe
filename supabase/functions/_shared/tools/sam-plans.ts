@@ -21,7 +21,7 @@
 // before anyone is asked to approve it.
 // ============================================================================
 
-import { defineTool, clampLimit, envelope } from "../platform.ts";
+import { defineTool, clampLimit, envelope, readTable } from "../platform.ts";
 import { ladderSummary, resolveLadder, warmupLadderErrors } from "./sam-warmup.ts";
 
 // deno-lint-ignore no-explicit-any
@@ -319,40 +319,43 @@ export const getSamPracticePlansTool = defineTool({
       }
     }
 
-    let q = ctx.db.from("sam_practice_plans").select(PLAN_COLS, { count: "exact" });
-    if (status) q = q.eq("status", status);
-    if (songId) q = q.in("id", planSongRows.map((r) => r.plan_id));
-    const { data, count, error } = await q
-      .order("created_at", { ascending: false })
-      .limit(LIMIT);
-    if (error) throw dbError(tool, "plans lookup", error);
-    const plans = (data ?? []) as unknown as Row[];
-    const meta = typeof count === "number" && count > plans.length
-      ? { limit_applied: LIMIT, truncated: true, total: count }
-      : { limit_applied: LIMIT, truncated: false };
-
-    if (!songId) return envelope(plans, meta);
-
-    // That song's plan-song row and items from each plan.
-    const planIds = plans.map((p) => p.id);
-    const { data: itemData, error: itemErr } = planIds.length
-      ? await ctx.db.from("sam_practice_plan_items").select(ITEM_COLS)
-          .eq("song_id", songId).in("plan_id", planIds).order("position")
-      : { data: [], error: null };
-    if (itemErr) throw dbError(tool, "plan items lookup", itemErr);
-    const items = (itemData ?? []) as Row[];
-    const snippets = await byId(ctx.db, tool, "sam_snippets", SNIPPET_COLS, items.map((i) => i.snippet_id));
-    const songs = await byId(ctx.db, tool, "sam_songs", SONG_COLS, [songId]);
-    const title = songs.get(songId)?.title ?? null;
-
-    const out = plans.map((p) => ({
-      ...p,
-      song: { ...planSongRows.find((r) => r.plan_id === p.id), song_title: title },
-      items: items
-        .filter((i) => i.plan_id === p.id)
-        .map((i) => ({ ...i, song_title: title, ...rangeOf(i.snippet_id, snippets) })),
-    }));
-    return envelope(out, meta);
+    // Shared read (MCP read access S8b). The plan's notes and instructions stay
+    // whole: the sam-practice skill reads them to review and to plan.
+    return await readTable(ctx, {
+      tool,
+      table: "sam_practice_plans",
+      args,
+      filter: (query) => {
+        let q = query;
+        if (status) q = q.eq("status", status);
+        if (songId) q = q.in("id", planSongRows.map((r) => r.plan_id));
+        return q;
+      },
+      order: [{ column: "created_at", ascending: false }],
+      fullText: ["day_note", "internal_notes", "review_instructions", "review_note"],
+      attach: async (rows) => {
+        if (!songId) return { rows };
+        const plans = rows as Row[];
+        // That song's plan-song row and items from each plan.
+        const planIds = plans.map((p) => p.id);
+        const { data: itemData, error: itemErr } = await ctx.db.from("sam_practice_plan_items").select(ITEM_COLS)
+          .eq("song_id", songId).in("plan_id", planIds).order("position");
+        if (itemErr) throw dbError(tool, "plan items lookup", itemErr);
+        const items = (itemData ?? []) as Row[];
+        const snippets = await byId(ctx.db, tool, "sam_snippets", SNIPPET_COLS, items.map((i) => i.snippet_id));
+        const songs = await byId(ctx.db, tool, "sam_songs", SONG_COLS, [songId]);
+        const title = songs.get(songId)?.title ?? null;
+        return {
+          rows: plans.map((p) => ({
+            ...p,
+            song: { ...planSongRows.find((r) => r.plan_id === p.id), song_title: title },
+            items: items
+              .filter((i) => i.plan_id === p.id)
+              .map((i) => ({ ...i, song_title: title, ...rangeOf(i.snippet_id, snippets) })),
+          })),
+        };
+      },
+    });
   },
 });
 
@@ -435,24 +438,32 @@ export const getSamGoalsTool = defineTool({
     const status = optionalEnum(tool, "status", args.status, GOAL_STATUSES);
     const kind = optionalEnum(tool, "kind", args.kind, GOAL_KINDS);
     const songId = optionalUuid(tool, "song_id", args.song_id);
-    // Default 50 here, not 20: the goals list is read whole.
-    const LIMIT = clampLimit((args.limit as number | undefined) ?? 50);
-
-    let q = ctx.db.from("sam_goals").select(GOAL_COLS, { count: "exact" });
-    if (status) q = q.eq("status", status);
-    if (kind) q = q.eq("kind", kind);
-    if (songId) q = q.eq("song_id", songId);
-    const { data, count, error } = await q.order("updated_at", { ascending: false }).limit(LIMIT);
-    if (error) throw dbError(tool, "goals lookup", error);
-    const goals = (data ?? []) as Row[];
-    const songs = await byId(ctx.db, tool, "sam_songs", SONG_COLS, goals.map((g) => g.song_id));
-    const rows = goals.map((g) => ({
-      ...g,
-      song_title: g.song_id ? songs.get(g.song_id as string)?.title ?? null : null,
-    }));
-    return envelope(rows, typeof count === "number" && count > rows.length
-      ? { limit_applied: LIMIT, truncated: true, total: count }
-      : { limit_applied: LIMIT, truncated: false });
+    // Default 50 here, not 20: the goals list is read whole. Shared read (MCP read
+    // access S8b); notes stay whole.
+    return await readTable(ctx, {
+      tool,
+      table: "sam_goals",
+      args: { ...args, limit: (args.limit as number | undefined) ?? 50 },
+      filter: (query) => {
+        let q = query;
+        if (status) q = q.eq("status", status);
+        if (kind) q = q.eq("kind", kind);
+        if (songId) q = q.eq("song_id", songId);
+        return q;
+      },
+      order: [{ column: "updated_at", ascending: false }],
+      fullText: ["notes"],
+      attach: async (rows) => {
+        const goals = rows as Row[];
+        const songs = await byId(ctx.db, tool, "sam_songs", SONG_COLS, goals.map((g) => g.song_id));
+        return {
+          rows: goals.map((g) => ({
+            ...g,
+            song_title: g.song_id ? songs.get(g.song_id as string)?.title ?? null : null,
+          })),
+        };
+      },
+    });
   },
 });
 

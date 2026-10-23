@@ -30,7 +30,7 @@
 // Sign rule: money in positive, money out negative. No real amounts in this file.
 // ============================================================================
 
-import { defineTool, envelope } from "../platform.ts";
+import { defineTool, envelope, readTable } from "../platform.ts";
 import {
   absent, checkRange, limitOf, listResult, MONEY_CONTEXT_ID, oneOf, optBool, optText, parseDate, parseMoney,
 } from "./warren-buffet.ts";
@@ -131,12 +131,16 @@ export const getWbProjectsTool = defineTool({
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_projects";
     const status = oneOf(T, "status", args.status, PROJECT_STATUSES);
-    const LIMIT = limitOf(T, args.limit);
-    let q = ctx.db.from("wb_projects").select(PROJECT_COLUMNS, { count: "exact" });
-    if (status) q = q.eq("status", status);
-    const { data, error, count } = await q.order("name").limit(LIMIT);
-    if (error) throw new Error(dbError(T, error));
-    return listResult(data ?? [], count, LIMIT);
+    limitOf(T, args.limit); // this tool's own message for a bad limit
+    // Shared read (MCP read access S8b); notes stay whole.
+    return await readTable(ctx, {
+      tool: T,
+      table: "wb_projects",
+      args,
+      filter: (q) => (status ? q.eq("status", status) : q),
+      order: [{ column: "name", ascending: true }],
+      fullText: ["notes"],
+    });
   },
 });
 
@@ -156,21 +160,32 @@ export const getWbPlannedItemsTool = defineTool({
     const to = parseDate(T, "due_to", args.due_to);
     checkRange(T, from, to, "due_from", "due_to");
     const includeDrafts = optBool(T, "include_drafts", args.include_drafts) ?? true;
-    const LIMIT = limitOf(T, args.limit);
+    limitOf(T, args.limit); // this tool's own message for a bad limit
 
-    let q = ctx.db.from("wb_planned_items").select(ITEM_COLUMNS, { count: "exact" });
-    if (projectId) q = q.eq("project_id", projectId);
-    if (stage) q = q.eq("stage", stage);
-    if (recurring === true) q = q.not("interval_count", "is", null);
-    if (recurring === false) q = q.is("interval_count", null);
-    if (from) q = q.gte("due_on", from);
-    if (to) q = q.lte("due_on", to);
-    if (!includeDrafts) q = q.eq("is_draft", false).or("stage.is.null,stage.neq.draft");
-    const { data, error, count } = await q.order("due_on").order("name").limit(LIMIT);
-    if (error) throw new Error(dbError(T, error));
-    const rows = (data ?? []) as unknown as Obj[];
-    const confirmed = await confirmedFor(T, ctx.db, rows.map((r) => r.id as string));
-    return listResult(rows.map((r) => annotateItem(r, confirmed)), count, LIMIT);
+    // Shared read (MCP read access S8b); each item is annotated with what is
+    // confirmed, as before; notes stay whole.
+    return await readTable(ctx, {
+      tool: T,
+      table: "wb_planned_items",
+      args,
+      filter: (query) => {
+        let q = query;
+        if (projectId) q = q.eq("project_id", projectId);
+        if (stage) q = q.eq("stage", stage);
+        if (recurring === true) q = q.not("interval_count", "is", null);
+        if (recurring === false) q = q.is("interval_count", null);
+        if (from) q = q.gte("due_on", from);
+        if (to) q = q.lte("due_on", to);
+        if (!includeDrafts) q = q.eq("is_draft", false).or("stage.is.null,stage.neq.draft");
+        return q;
+      },
+      order: [{ column: "due_on", ascending: true }, { column: "name", ascending: true }],
+      fullText: ["notes"],
+      attach: async (rows) => {
+        const confirmed = await confirmedFor(T, ctx.db, rows.map((r) => r.id as string));
+        return { rows: (rows as Obj[]).map((r) => annotateItem(r, confirmed)) };
+      },
+    });
   },
 });
 

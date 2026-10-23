@@ -17,7 +17,7 @@
 // Sign rule everywhere: money in positive, money out negative.
 // ============================================================================
 
-import { clampLimit, defineTool, describeDbError, envelope } from "../platform.ts";
+import { clampLimit, defineTool, describeDbError, envelope, readTable } from "../platform.ts";
 
 // The shared Money context (spec §2). Every write lands here.
 export const MONEY_CONTEXT_ID = "muvitejhrgt3rgi8t6q";
@@ -392,13 +392,18 @@ export const getWbHoldingsTool = defineTool({
       asOf = (latest as { as_of: string }).as_of;
     }
 
-    let q = ctx.db.from("wb_holding_snapshots").select(HOLDING_COLUMNS, { count: "exact" }).eq("as_of", asOf);
-    if (accountId) q = q.eq("account_id", accountId);
-    const { data, error, count } = await q
-      .order("market_value", { ascending: false, nullsFirst: false })
-      .limit(LIMIT);
-    if (error) throw new Error(describeDbError(T, error));
-    return listResult(data ?? [], count, LIMIT);
+    // Shared read (MCP read access S8b) for the chosen day.
+    return await readTable(ctx, {
+      tool: T,
+      table: "wb_holding_snapshots",
+      args,
+      filter: (query) => {
+        let q = query.eq("as_of", asOf);
+        if (accountId) q = q.eq("account_id", accountId);
+        return q;
+      },
+      order: [{ column: "market_value", ascending: false, nullsFirst: false }],
+    });
   },
 });
 

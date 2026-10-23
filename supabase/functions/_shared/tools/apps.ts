@@ -10,20 +10,22 @@
 // archive_inbox_item, so a bad app id reads the same everywhere.
 // ============================================================================
 
-import { clampLimit, defineTool, envelope } from "../platform.ts";
+import { defineTool, readTable } from "../platform.ts";
 
 export const APP_COLUMNS = "id, name, description, icon, path, button_name";
 
 export const getAppsTool = defineTool({
   name: "get_apps",
   tier: 1,
-  handler: async (_args: Record<string, unknown>, ctx) => {
-    // A small fixed list: the cap without an exposed limit, like get_contexts.
-    const LIMIT = clampLimit(50);
-    const { data, error } = await ctx.db.from("apps").select(APP_COLUMNS).order("name").limit(LIMIT);
-    if (error) throw new Error(`get_apps: ${error.message}`);
-    const rows = data ?? [];
-    return envelope(rows, { limit_applied: LIMIT, truncated: rows.length >= LIMIT });
+  handler: async (args: Record<string, unknown>, ctx) => {
+    // A small fixed list: up to 50 by default, by name. Shared read (MCP read access S8b).
+    return await readTable(ctx, {
+      tool: "get_apps",
+      table: "apps",
+      args: { ...args, limit: args.limit ?? 50 },
+      order: [{ column: "name", ascending: true }],
+      fullText: ["description"],
+    });
   },
 });
 

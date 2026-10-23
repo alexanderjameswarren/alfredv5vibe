@@ -242,7 +242,7 @@ There is a third case now: he genuinely applied to the SAME job twice, through t
 
 ## "What do I owe?" and check-ins
 
-- **What's owed:** `get_job_applications` with `open_only: true`. List the rows that have a `next_action`, soonest due first. `open_only` hides rejected, closed_no_response, withdrawn and passed; it keeps `considering`.
+- **What's owed:** `get_job_applications` with `open_only: true`. List the rows that have a `next_action`, soonest due first. `open_only` hides rejected, closed_no_response, withdrawn and passed; it keeps `considering`. It returns 20 at a time; when its NOTE says the list was cut, call it again with the `offset` the NOTE gives so nothing owed is missed.
 - **Still weighing:** `status: "considering"`. When he asks what he hasn't decided on, list these with their deadlines, soonest first.
 - **Overdue:** `overdue: true`. It returns only dates already past; something due today is due, not overdue.
 - **Going quiet:** when he asks for a review, list open rows still at `applied` that he applied to 30 or more days ago. **Ask** whether to mark each one `closed_no_response`. Never close them on your own. A late reply does happen, and a wrongly closed row understates that source's response rate.

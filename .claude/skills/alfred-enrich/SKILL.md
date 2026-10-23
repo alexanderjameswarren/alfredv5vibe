@@ -73,7 +73,7 @@ thread, never a reason to record it.
 ### Step 1: Identify Target Items
 
 **For initial enrichment:**
-- Use `get_inbox` with `ai_status: "not_started"` to find unenriched items
+- Use `get_inbox` with `ai_status: "not_started"` to find unenriched items. It returns 20 at a time, newest first; when its NOTE says the results were truncated, call it again with the `offset` the NOTE gives until it doesn't. `captured_text` always comes back whole.
 - **Drop every item whose `source_type` is `clipboard`, `cli` or `task`, and every `email` item that is a job listing or job alert** — see "What NOT to enrich" above. Do this before any research, so you never spend a lookup on an item you are going to skip
 - Process the rest sequentially
 
@@ -88,7 +88,7 @@ thread, never a reason to record it.
 
 1. **Call `get_contexts` first** to understand the user's organizational structure
 1a. **Call `get_apps` once per session** and keep the list: each app's `description` says what belongs to it. You use it to choose every capture's app (see "App" below)
-2. **Search for existing items** via `search_items` to avoid creating duplicates. If the captured text references something that already exists (like "make chicken tikka tonight"), find the existing item and use `suggested_item_id` to link to it rather than creating a new one
+2. **Search for existing items** via `search_items` to avoid creating duplicates. If the captured text references something that already exists (like "make chicken tikka tonight"), find the existing item and use `suggested_item_id` to link to it rather than creating a new one. Pass two or three distinctive words, not the whole capture: every word must appear in the item's name, description or notes, in any order. Closed items are left out unless you ask for them by `status`, and each result carries its `status` and `context_name`. Descriptions in the results are previews; use `get_items` with `ids` for a whole item
 3. **Check `get_tags`** and reuse the existing taxonomy. Read the counts as well as the names — a tag used many times is a real axis the user filters on; a tag used once is a mistake waiting to be cleaned up, not a precedent to follow
 4. **If the captured text contains a URL**, note this in your reasoning (you can't fetch URLs via MCP, but flag it for the user)
 

@@ -9,26 +9,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { loadTool, WB_SETTINGS, withSettings } from "./test-platform.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const dir = mkdtempSync(join(tmpdir(), "wb-p3-"));
-writeFileSync(join(dir, "platform.ts"), `
-export const defineTool = (o) => o;
-export const clampLimit = (n) => Math.min(n ?? 20, 50);
-export const envelope = (data, meta = {}) => ({ data, meta });
-export const describeDbError = (name, e) => name + " failed: " + e.message;
-`);
-const IMPORT = 'from "../platform.ts";';
-for (const f of ["warren-buffet.ts", "warren-buffet-p2.ts", "warren-buffet-p3.ts"]) {
-  const src = readFileSync(join(HERE, f), "utf-8");
-  if (!src.includes(IMPORT)) throw new Error(`${f} import line changed — update this test.`);
-  writeFileSync(join(dir, f), src.replace(IMPORT, 'from "./platform.ts";'));
-}
-const m = await import(pathToFileURL(join(dir, "warren-buffet-p3.ts")).href);
+// The real platform.ts runs (test-platform.mjs); defineTool returns its options.
+const m = await loadTool("warren-buffet-p3.ts");
 
 const MONEY = "muvitejhrgt3rgi8t6q";
 const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -49,11 +33,11 @@ function fakeDb(respond = () => ({ data: [], error: null, count: 0 }), rpc = () 
     });
     return b;
   };
-  return {
+  return withSettings({
     log, rpcs, from,
     rpc: (fn, params) => { rpcs.push([fn, params]); return Promise.resolve(rpc(fn, params)); },
     op: (table, name) => log.filter((q) => q.table === table).flatMap((q) => q.ops).filter((o) => o[0] === name),
-  };
+  }, WB_SETTINGS);
 }
 const has = (ops, name) => ops.some((o) => o[0] === name);
 const writes = (db) => db.log.filter((q) => has(q.ops, "insert") || has(q.ops, "update") || has(q.ops, "upsert") || has(q.ops, "delete"));
@@ -85,7 +69,7 @@ test("planned items: drafts marked, remaining from confirmed matches, bounded", 
   assert.equal(a.draft, false); assert.equal(a.confirmed_total, -40); assert.equal(a.remaining, -60);
   assert.equal(b.draft, true);
   assert.equal(c.draft, true); assert.equal(c.recurring, true); assert.equal("remaining" in c, false);
-  assert.deepEqual(db.op("wb_planned_items", "limit")[0], ["limit", 50]);
+  assert.deepEqual(db.op("wb_planned_items", "range")[0], ["range", 0, 49]);
   assert.deepEqual(db.op("wb_planned_matches", "in")[0], ["in", "planned_item_id", [id(1), id(2), id(3)]]);
 
   const db2 = fakeDb(() => ({ data: [], error: null, count: 0 }));

@@ -677,31 +677,34 @@ export async function getSamSongs(
       .select("id, title, artist, source, song_type, parent_song_id, audio_file_path, key_signature, time_signature, default_bpm, goal_bpm, goal_playback_speed, goal_effective_bpm, goal_set_at, warmup_ladder, source_xml_path, created_at, updated_at")
       .eq("archived", false)
       .order("title");
-
-    if (params.search_text) {
-      query = query.or(
-        `title.ilike.%${params.search_text}%,artist.ilike.%${params.search_text}%`
-      );
-    }
+    query = applySamSongFilters(query, params);
 
     const { data, error } = await query;
     if (error) return { error: error.message };
-
-    const songs = (data ?? []) as Record<string, unknown>[];
-    const repeats = await songsWithRepeats(client, songs.map((s) => s.id as string));
-    return {
-      data: songs.map((s) => ({
-        ...s,
-        has_audio: s.audio_file_path != null,
-        // Whether any bar is played more than once. A whole-song rollup over a
-        // song with repeats counts those bars twice, which is right for "how
-        // much did I play" and wrong for "how well do I know this bar".
-        has_repeats: repeats.get(s.id as string) ?? null,
-      })),
-    };
+    return { data: await decorateSamSongs(client, (data ?? []) as Record<string, unknown>[]) };
   } catch (e) {
     return { error: String(e) };
   }
+}
+
+/** get_sam_songs' search, pushed into any sam_songs query. */
+// deno-lint-ignore no-explicit-any
+export function applySamSongFilters(query: any, params: { search_text?: string }) {
+  if (!params.search_text) return query;
+  return query.or(`title.ilike.%${params.search_text}%,artist.ilike.%${params.search_text}%`);
+}
+
+/** has_audio and has_repeats on each song row. */
+export async function decorateSamSongs(client: SupabaseClient, songs: Record<string, unknown>[]) {
+  const repeats = await songsWithRepeats(client, songs.map((s) => s.id as string));
+  return songs.map((s) => ({
+    ...s,
+    has_audio: s.audio_file_path != null,
+    // Whether any bar is played more than once. A whole-song rollup over a
+    // song with repeats counts those bars twice, which is right for "how
+    // much did I play" and wrong for "how well do I know this bar".
+    has_repeats: repeats.get(s.id as string) ?? null,
+  }));
 }
 
 export async function getSamSessions(
@@ -717,12 +720,26 @@ export async function getSamSessions(
   }
 ): Promise<ToolResult> {
   try {
-    let query = client
-      .from("sam_sessions")
-      .select("id, song_id, snippet_id, plan_id, plan_item_id, started_at, ended_at, settings, summary")
-      .order("started_at", { ascending: false })
-      .limit(params.limit || 20);
+    const query = applySamSessionFilters(
+      client
+        .from("sam_sessions")
+        .select("id, song_id, snippet_id, plan_id, plan_item_id, started_at, ended_at, settings, summary")
+        .order("started_at", { ascending: false })
+        .limit(params.limit || 20),
+      params,
+    );
+    const { data: sessions, error } = await query;
+    if (error) return { error: error.message };
+    return { data: await nameSamRows(client, sessions ?? [], "session") };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
 
+/** get_sam_sessions' filters, pushed into any sam_sessions query before its limit. */
+// deno-lint-ignore no-explicit-any
+export function applySamSessionFilters(q0: any, params: Parameters<typeof getSamSessions>[1]) {
+    let query = q0;
     if (params.song_id) {
       query = query.eq("song_id", params.song_id);
     }
@@ -749,48 +766,7 @@ export async function getSamSessions(
       query = query.eq("plan_item_id", params.plan_item_id);
     }
 
-    const { data: sessions, error } = await query;
-    if (error) return { error: error.message };
-
-    // Join song titles
-    const songIds = [...new Set((sessions || []).map((s: { song_id: string | null }) => s.song_id).filter(Boolean))];
-    let songMap: Record<string, { title: string; artist: string | null }> = {};
-
-    if (songIds.length > 0) {
-      const { data: songs } = await client
-        .from("sam_songs")
-        .select("id, title, artist")
-        .in("id", songIds);
-      if (songs) {
-        songMap = Object.fromEntries(songs.map((s: { id: string; title: string; artist: string | null }) => [s.id, { title: s.title, artist: s.artist }]));
-      }
-    }
-
-    // Join snippet titles
-    const snippetIds = [...new Set((sessions || []).map((s: { snippet_id: string | null }) => s.snippet_id).filter(Boolean))];
-    let snippetMap: Record<string, string> = {};
-
-    if (snippetIds.length > 0) {
-      const { data: snippets } = await client
-        .from("sam_snippets")
-        .select("id, title")
-        .in("id", snippetIds);
-      if (snippets) {
-        snippetMap = Object.fromEntries(snippets.map((s: { id: string; title: string }) => [s.id, s.title]));
-      }
-    }
-
-    const results = (sessions || []).map((session: { song_id: string | null; snippet_id: string | null; [key: string]: unknown }) => ({
-      ...session,
-      song_title: session.song_id ? songMap[session.song_id]?.title || null : null,
-      song_artist: session.song_id ? songMap[session.song_id]?.artist || null : null,
-      snippet_title: session.snippet_id ? snippetMap[session.snippet_id] || null : null,
-    }));
-
-    return { data: results };
-  } catch (e) {
-    return { error: String(e) };
-  }
+    return query;
 }
 
 /**
@@ -837,15 +813,32 @@ export async function getSamPasses(
   }
 ): Promise<ToolResult> {
   try {
-    let query = client
-      .from("sam_passes")
-      // warmup_rung / warmup_target_percent: set when the pass was part of a
-      // warm-up ladder run, both null otherwise. The percent is of the target
-      // tempo, so 100 is the top rung — the only rung played at target.
-      .select("id, song_id, snippet_id, session_id, plan_id, plan_item_id, bpm, playback_speed, effective_bpm, hits, misses, notes_played, accuracy_percent, hand_mode, warmup_rung, warmup_target_percent, completed_at")
-      .order("completed_at", { ascending: false })
-      .limit(params.limit || 20);
+    const query = applySamPassFilters(
+      client
+        .from("sam_passes")
+        // warmup_rung / warmup_target_percent: set when the pass was part of a
+        // warm-up ladder run, both null otherwise. The percent is of the target
+        // tempo, so 100 is the top rung — the only rung played at target.
+        .select("id, song_id, snippet_id, session_id, plan_id, plan_item_id, bpm, playback_speed, effective_bpm, hits, misses, notes_played, accuracy_percent, hand_mode, warmup_rung, warmup_target_percent, completed_at")
+        .order("completed_at", { ascending: false })
+        .limit(params.limit || 20),
+      params,
+    );
+    const { data: passes, error } = await query;
+    if (error) return { error: error.message };
+    return { data: await nameSamRows(client, passes ?? [], "pass") };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
 
+/**
+ * get_sam_passes' filters, pushed into any sam_passes query before its limit:
+ * getSamPasses above, and the shared read in mcp/index.ts (MCP read access S8b).
+ */
+// deno-lint-ignore no-explicit-any
+export function applySamPassFilters(q0: any, params: Parameters<typeof getSamPasses>[1]) {
+    let query = q0;
     if (params.song_id) {
       query = query.eq("song_id", params.song_id);
     }
@@ -927,48 +920,50 @@ export async function getSamPasses(
       query = query.or("warmup_rung.is.null,warmup_target_percent.eq.100");
     }
 
-    const { data: passes, error } = await query;
-    if (error) return { error: error.message };
+    return query;
+}
 
-    const songIds = [...new Set((passes || []).map((p: { song_id: string | null }) => p.song_id).filter(Boolean))];
-    let songMap: Record<string, { title: string; artist: string | null }> = {};
-
-    if (songIds.length > 0) {
-      const { data: songs } = await client
-        .from("sam_songs")
-        .select("id, title, artist")
-        .in("id", songIds);
-      if (songs) {
-        songMap = Object.fromEntries(songs.map((s: { id: string; title: string; artist: string | null }) => [s.id, { title: s.title, artist: s.artist }]));
-      }
+/**
+ * Song (and snippet) names for SAM rows: song_title and song_artist on every
+ * kind; a pass also gets range_title, a session snippet_title.
+ */
+export async function nameSamRows(
+  client: SupabaseClient,
+  rows: Record<string, unknown>[],
+  kind: "pass" | "session" | "snippet",
+): Promise<Record<string, unknown>[]> {
+  const songIds = [...new Set(rows.map((r) => r.song_id as string | null).filter(Boolean))];
+  let songMap: Record<string, { title: string; artist: string | null }> = {};
+  if (songIds.length > 0) {
+    const { data: songs } = await client.from("sam_songs").select("id, title, artist").in("id", songIds);
+    if (songs) {
+      songMap = Object.fromEntries(songs.map((s: { id: string; title: string; artist: string | null }) => [s.id, { title: s.title, artist: s.artist }]));
     }
-
-    const snippetIds = [...new Set((passes || []).map((p: { snippet_id: string | null }) => p.snippet_id).filter(Boolean))];
-    let snippetMap: Record<string, string> = {};
-
-    if (snippetIds.length > 0) {
-      const { data: snippets } = await client
-        .from("sam_snippets")
-        .select("id, title")
-        .in("id", snippetIds);
-      if (snippets) {
-        snippetMap = Object.fromEntries(snippets.map((s: { id: string; title: string }) => [s.id, s.title]));
-      }
-    }
-
-    const results = (passes || []).map((pass: { song_id: string | null; snippet_id: string | null; [key: string]: unknown }) => ({
-      ...pass,
-      song_title: pass.song_id ? songMap[pass.song_id]?.title || null : null,
-      song_artist: pass.song_id ? songMap[pass.song_id]?.artist || null : null,
-      // Null snippet_id means the pass was the whole song, and saying so
-      // explicitly stops a reader treating it as an unresolved lookup.
-      range_title: pass.snippet_id ? snippetMap[pass.snippet_id] || null : "Whole song",
-    }));
-
-    return { data: results };
-  } catch (e) {
-    return { error: String(e) };
   }
+
+  const snippetIds = kind === "snippet" ? [] : [...new Set(rows.map((r) => r.snippet_id as string | null).filter(Boolean))];
+  let snippetMap: Record<string, string> = {};
+  if (snippetIds.length > 0) {
+    const { data: snippets } = await client.from("sam_snippets").select("id, title").in("id", snippetIds);
+    if (snippets) {
+      snippetMap = Object.fromEntries(snippets.map((s: { id: string; title: string }) => [s.id, s.title]));
+    }
+  }
+
+  return rows.map((r) => {
+    const songId = r.song_id as string | null;
+    const snippetId = r.snippet_id as string | null;
+    const named: Record<string, unknown> = {
+      ...r,
+      song_title: songId ? songMap[songId]?.title || null : null,
+      song_artist: songId ? songMap[songId]?.artist || null : null,
+    };
+    // Null snippet_id on a pass means the whole song, and saying so explicitly
+    // stops a reader treating it as an unresolved lookup.
+    if (kind === "pass") named.range_title = snippetId ? snippetMap[snippetId] || null : "Whole song";
+    if (kind === "session") named.snippet_title = snippetId ? snippetMap[snippetId] || null : null;
+    return named;
+  });
 }
 
 export async function getSamSnippets(
@@ -984,44 +979,25 @@ export async function getSamSnippets(
       .eq("archived", false)
       .order("song_id")
       .order("start_measure");
-
-    if (params.song_id) {
-      query = query.eq("song_id", params.song_id);
-    }
-
-    if (params.search_text) {
-      query = query.or(
-        `title.ilike.%${params.search_text}%,notes.ilike.%${params.search_text}%`
-      );
-    }
+    query = applySamSnippetFilters(query, params);
 
     const { data: snippets, error } = await query;
     if (error) return { error: error.message };
-
-    // Join song titles
-    const songIds = [...new Set((snippets || []).map((s: { song_id: string | null }) => s.song_id).filter(Boolean))];
-    let songMap: Record<string, { title: string; artist: string | null }> = {};
-
-    if (songIds.length > 0) {
-      const { data: songs } = await client
-        .from("sam_songs")
-        .select("id, title, artist")
-        .in("id", songIds);
-      if (songs) {
-        songMap = Object.fromEntries(songs.map((s: { id: string; title: string; artist: string | null }) => [s.id, { title: s.title, artist: s.artist }]));
-      }
-    }
-
-    const results = (snippets || []).map((snippet: { song_id: string | null; [key: string]: unknown }) => ({
-      ...snippet,
-      song_title: snippet.song_id ? songMap[snippet.song_id]?.title || null : null,
-      song_artist: snippet.song_id ? songMap[snippet.song_id]?.artist || null : null,
-    }));
-
-    return { data: results };
+    return { data: await nameSamRows(client, snippets ?? [], "snippet") };
   } catch (e) {
     return { error: String(e) };
   }
+}
+
+/** get_sam_snippets' filters, pushed into any sam_snippets query. */
+// deno-lint-ignore no-explicit-any
+export function applySamSnippetFilters(query: any, params: { song_id?: string; search_text?: string }) {
+  let q = query;
+  if (params.song_id) q = q.eq("song_id", params.song_id);
+  if (params.search_text) {
+    q = q.or(`title.ilike.%${params.search_text}%,notes.ilike.%${params.search_text}%`);
+  }
+  return q;
 }
 
 // ---- SAM Song Measures & Lyrics ----

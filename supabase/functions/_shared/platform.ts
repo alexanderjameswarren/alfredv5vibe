@@ -11,6 +11,8 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { crypto as stdCrypto } from "jsr:@std/crypto";
+import type { ReadOptions, ReadSettings } from "./platform-read.ts";
+import { applyReadOptions, capResponse, pageMeta, parseReadOptions, selectColumns, shapeRows } from "./platform-read.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,6 +36,10 @@ export interface EnvelopeMeta {
   // Consumed by the MCP wrapper to render "N of M" in the truncation NOTE
   // per docs/technical-spec-platform-layer.md § Tool house style.
   total?: number;
+  /** Offset of the next page, when there is one. Set by readTable. */
+  next_offset?: number;
+  /** What else was cut or left out (size cap, previews, heavy columns). */
+  notes?: string[];
 }
 
 export interface DefineToolOptions<Args, Result> {
@@ -334,7 +340,136 @@ export function envelope<T>(
   if (meta.truncated !== undefined) out.truncated = meta.truncated;
   if (meta.limit_applied !== undefined) out.limit_applied = meta.limit_applied;
   if (meta.total !== undefined) out.total = meta.total;
+  if (meta.next_offset !== undefined) out.next_offset = meta.next_offset;
+  if (meta.notes !== undefined && meta.notes.length > 0) out.notes = meta.notes;
   return { data, meta: out };
+}
+
+// ---------------------------------------------------------------------------
+// Shared reads — see docs/technical-spec-mcp-read-access.md
+// ---------------------------------------------------------------------------
+
+/**
+ * A visible table's read settings from public.platform_read_settings(): its
+ * readable columns (secret columns already removed by the database), heavy
+ * columns, and which of context_id / archived / status it has. Null when the
+ * table is hidden or not registered.
+ */
+export async function readSettings(ctx: Context, table: string): Promise<ReadSettings | null> {
+  const { data, error } = await ctx.db.rpc("platform_read_settings", { p_table: table });
+  if (error) throw new Error(describeDbError("platform_read_settings", error));
+  const list = (data ?? []) as ReadSettings[];
+  return list.find((s) => s.table === table) ?? null;
+}
+
+// deno-lint-ignore no-explicit-any
+type Query = any;
+type Row = Record<string, unknown>;
+
+export type Attach = (
+  rows: Row[],
+  opts: ReadOptions,
+  settings: ReadSettings,
+) => Promise<{ rows: Row[]; notes?: string[] }>;
+
+export interface ReadTableOptions {
+  /** Tool name, for error messages. */
+  tool: string;
+  table: string;
+  args: Record<string, unknown>;
+  /** Values the tool accepts in `include`. */
+  allowedIncludes?: string[];
+  /** Tool-specific filters, pushed into the query before the page window. */
+  filter?: (query: Query, settings: ReadSettings) => Query;
+  /** Sort order; default newest created_at first, then id. */
+  order?: { column: string; ascending: boolean; nullsFirst?: boolean }[];
+  /** Readable columns this tool does not return (e.g. a legacy column it replaces). */
+  omit?: string[];
+  /** Columns returned whole in list reads too, because callers have always relied on them. */
+  fullText?: string[];
+  /** Adds included content to the page's rows; may add notes for the caller. */
+  attach?: Attach;
+}
+
+/** readSettings, or an error naming the tables that can be read. */
+export async function requireSettings(ctx: Context, tool: string, table: string): Promise<ReadSettings> {
+  const settings = await readSettings(ctx, table);
+  if (settings) return settings;
+  const { data } = await ctx.db.rpc("platform_read_settings", {});
+  const names = ((data ?? []) as ReadSettings[]).map((s) => s.table).join(", ");
+  throw new Error(`${tool}: "${table}" is not a readable table. Readable tables: ${names}.`);
+}
+
+/**
+ * The second half of every shared read, for rows already fetched (by readTable,
+ * or by a tool's own RPC): previews, includes, the size cap and the page meta.
+ */
+export async function finishRead(o: {
+  rows: Row[];
+  total: number | null | undefined;
+  opts: ReadOptions;
+  settings: ReadSettings;
+  fullText?: string[];
+  attach?: Attach;
+}) {
+  const byIds = o.opts.ids !== null;
+  const shaped = shapeRows(o.rows, o.settings, { byIds, fullText: o.fullText });
+  const kept = new Set(o.fullText ?? []);
+  let rows = shaped.rows;
+  const extra: string[] = [];
+  if (o.attach && rows.length > 0) {
+    const attached = await o.attach(rows, o.opts, o.settings);
+    rows = attached.rows;
+    extra.push(...(attached.notes ?? []));
+  }
+
+  const capped = capResponse(rows);
+  const meta = pageMeta({
+    opts: o.opts,
+    returned: capped.rows.length,
+    total: o.total,
+    cutForSize: capped.cutForSize,
+    oversizedFirst: capped.oversizedFirst,
+    previewed: shaped.previewed,
+    omittedHeavy: (o.settings.heavy_columns ?? []).filter((c) => !kept.has(c)),
+  });
+  if (extra.length > 0) meta.notes = [...(meta.notes ?? []), ...extra];
+  return envelope(capped.rows, meta);
+}
+
+/**
+ * The shared list read every MCP read tool uses: settings from the database,
+ * the shared options (limit, offset, ids, include, archived, no_context),
+ * secret columns never selected, heavy columns only by ids, long values
+ * previewed in lists, a response-size cap, and the next offset in meta.
+ * Reads go through ctx.db, so RLS decides the rows.
+ */
+export async function readTable(ctx: Context, o: ReadTableOptions) {
+  const settings = await requireSettings(ctx, o.tool, o.table);
+  const opts = parseReadOptions(o.args, settings, o.allowedIncludes ?? []);
+  const byIds = opts.ids !== null;
+  const omit = new Set(o.omit ?? []);
+  // fullText columns are returned whole in lists too, so a heavy one stays selected.
+  const keep = new Set(o.fullText ?? []);
+  const selectable = { ...settings, heavy_columns: (settings.heavy_columns ?? []).filter((c) => !keep.has(c)) };
+  const columns = selectColumns(selectable, { byIds }).split(", ").filter((c) => !omit.has(c)).join(", ");
+
+  let query: Query = ctx.db.from(o.table).select(columns, { count: "exact" });
+  if (o.filter) query = o.filter(query, settings);
+  query = applyReadOptions(query, opts);
+  const names = new Set(settings.columns.map((c) => c.name));
+  const order = o.order ?? [
+    ...(names.has("created_at") ? [{ column: "created_at", ascending: false }] : []),
+    ...(names.has("id") ? [{ column: "id", ascending: true }] : []),
+  ];
+  for (const s of order) {
+    query = query.order(s.column, { ascending: s.ascending, ...(s.nullsFirst !== undefined ? { nullsFirst: s.nullsFirst } : {}) });
+  }
+
+  const { data, error, count } = await query;
+  if (error) throw new Error(describeDbError(o.tool, error));
+
+  return await finishRead({ rows: (data ?? []) as Row[], total: count, opts, settings, fullText: o.fullText, attach: o.attach });
 }
 
 function isEnvelope(v: unknown): v is { data: unknown; meta: EnvelopeMeta } {

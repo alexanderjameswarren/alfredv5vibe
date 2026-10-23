@@ -319,14 +319,17 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_WB_9C = ["get_wb_action_items"];
   // 2026-10-23, +1 for Restructure P5 Step 16: groups (menus, projects, series).
   const EXPECTED_ADDED_P5 = ["get_groups"];
+  // 2026-10-23, +1 for MCP read access S4: one read tool for every visible table.
+  const EXPECTED_ADDED_READ = ["get_records"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
-                      ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C, ...EXPECTED_ADDED_P5]) {
+                      ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C, ...EXPECTED_ADDED_P5,
+                      ...EXPECTED_ADDED_READ]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 140,
-    `expected 140 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 141,
+    `expected 141 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -348,6 +351,8 @@ test("the job-search surface is registered, and its schemas match its handlers",
     const t = registered.find((r) => r.name === name);
     assert.ok(t, `${name} not registered`);
     const advertised = Object.keys(t.cfg.inputSchema ?? {}).sort();
+    // A readTable tool reads the shared options through platform-read.ts, which validates them.
+    if (b.includes("readTable(")) for (const k of SHARED_READ_OPTIONS) if (advertised.includes(k)) read.add(k);
     assert.deepEqual(advertised, [...read].sort(),
       `${name}: schema advertises [${advertised}] but the handler reads [${[...read].sort()}]`);
   }
@@ -361,8 +366,45 @@ test("Restructure P3: get_apps and archive_inbox_item schemas match their handle
     const read = new Set([...block.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
     const t = registered.find((r) => r.name === name);
     assert.ok(t, `${name} not registered`);
+    // A readTable tool reads the shared options through platform-read.ts, not args.<key>.
+    if (block.includes("readTable(")) {
+      for (const k of SHARED_READ_OPTIONS) if (k in (t.cfg.inputSchema ?? {})) read.add(k);
+    }
     assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
   }
+});
+
+const SHARED_READ_OPTIONS = ["limit", "offset", "ids", "include", "archived", "no_context"];
+
+/** A readTable tool reads the shared options through platform-read.ts (which validates them), not args.<key>. */
+function addSharedRead(block, read, t) {
+  if (block.includes("readTable(")) for (const k of SHARED_READ_OPTIONS) if (k in (t.cfg.inputSchema ?? {})) read.add(k);
+}
+
+test("MCP read access S8: the Alfred list tools advertise the shared read options", () => {
+  const expected = {
+    get_items: ["context_id", "tags", "search_text", "status", ...SHARED_READ_OPTIONS],
+    search_items: ["query", "status", ...SHARED_READ_OPTIONS],
+    get_intents: ["context_id", "search_text", "tags", "include_archived", "recurring_only", "status", ...SHARED_READ_OPTIONS],
+    get_events: ["date_from", "date_to", "context_id", "intent_id", "include_archived", "limit", "offset", "ids", "archived", "no_context"],
+    get_collections: ["context_id", "limit", "offset", "ids", "archived", "no_context"],
+    get_inbox: ["ai_status", "source_type", "limit", "offset", "ids", "archived"],
+    get_contexts: ["shared", "limit", "offset", "ids", "archived"],
+  };
+  for (const [name, keys] of Object.entries(expected)) {
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...keys].sort(), name);
+  }
+});
+
+test("get_records advertises its own args plus the shared read options", () => {
+  const src = readFileSync(join(TOOLS, "records.ts"), "utf-8").split("export const getRecordsTool")[1];
+  const read = new Set([...src.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+  for (const shared of ["limit", "offset", "ids", "include", "archived", "no_context"]) read.add(shared);
+  const t = registered.find((r) => r.name === "get_records");
+  assert.ok(t, "get_records not registered");
+  assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort());
 });
 
 test("Restructure P3: source_app is advertised where it is accepted", () => {
@@ -381,6 +423,7 @@ test("reminder schemas advertise exactly the args their handlers read", () => {
     const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
     const t = registered.find((r) => r.name === name);
     assert.ok(t, `${name} not registered`);
+    addSharedRead(b, read, t);
     assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
   }
 });
@@ -396,6 +439,7 @@ test("Warren Buffet schemas advertise exactly the args their handlers read", () 
     const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
     const t = registered.find((r) => r.name === name);
     assert.ok(t, `${name} not registered`);
+    addSharedRead(b, read, t);
     assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
   }
   assert.deepEqual(tiers, {
@@ -427,6 +471,7 @@ test("Warren Buffet Phase 2 schemas advertise exactly the args their handlers re
     if (tiers[name] === 3) read.add("confirmed");
     const t = registered.find((r) => r.name === name);
     assert.ok(t, `${name} not registered`);
+    addSharedRead(b, read, t);
     assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
   }
   assert.deepEqual(tiers, {
@@ -460,6 +505,7 @@ test("Warren Buffet Phase 3 schemas advertise exactly the args their handlers re
     if (tiers[name] === 3) read.add("confirmed");
     const t = registered.find((r) => r.name === name);
     assert.ok(t, `${name} not registered`);
+    addSharedRead(b, read, t);
     assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
   }
   assert.deepEqual(tiers, {
@@ -597,6 +643,7 @@ test("Drive Mix schemas advertise exactly the args their handlers read, at the s
     if (tiers[name] === 3) read.add("confirmed");
     const t = registered.find((r) => r.name === name);
     assert.ok(t, `${name} not registered`);
+    addSharedRead(b, read, t);
     assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
   }
   assert.deepEqual(tiers, {
@@ -642,6 +689,8 @@ test("Ken schemas advertise exactly the args their handlers read", () => {
     const t = registered.find((r) => r.name === name);
     assert.ok(t, `${name} not registered`);
     const advertised = Object.keys(t.cfg.inputSchema ?? {}).sort();
+    // A readTable tool reads the shared options through platform-read.ts, which validates them.
+    if (b.includes("readTable(")) for (const k of SHARED_READ_OPTIONS) if (advertised.includes(k)) read.add(k);
     assert.deepEqual(advertised, [...read].sort(),
       `${name}: schema advertises [${advertised}] but the handler reads [${[...read].sort()}]`);
   }
@@ -692,6 +741,7 @@ test("SAM plan schemas advertise exactly the args their handlers read", () => {
     if (tier === 3) read.add("confirmed");
     const t = registered.find((r) => r.name === name);
     assert.ok(t, `${name} not registered`);
+    addSharedRead(b, read, t);
     const advertised = Object.keys(t.cfg.inputSchema ?? {}).sort();
     assert.deepEqual(advertised, [...read].sort(),
       `${name}: schema advertises [${advertised}] but the handler reads [${[...read].sort()}]`);
@@ -761,12 +811,20 @@ for (const [from, to] of [
   jobPlatformSrc = jobPlatformSrc.replace(from, to);
 }
 writeFileSync(join(JOB_DIR, "platform.ts"), jobPlatformSrc);
+writeFileSync(join(JOB_DIR, "platform-read.ts"),
+  readFileSync(join(HERE, "..", "_shared", "platform-read.ts"), "utf-8"));
 
-const JOB_IMPORT = 'import { clampLimit, defineTool, envelope } from "../platform.ts";';
+const JOB_IMPORT = 'import { clampLimit, defineTool, envelope, readTable } from "../platform.ts";';
 const jobSrc = readFileSync(join(TOOLS, "job-applications.ts"), "utf-8");
 if (!jobSrc.includes(JOB_IMPORT)) throw new Error("job-applications.ts import line changed — update this test.");
 writeFileSync(join(JOB_DIR, "job-applications.ts"),
-  jobSrc.replace(JOB_IMPORT, 'import { clampLimit, defineTool, envelope } from "./platform.ts";'));
+  jobSrc.replace(JOB_IMPORT, 'import { clampLimit, defineTool, envelope, readTable } from "./platform.ts";'));
+const JOB_SETTINGS = {
+  table: "job_applications",
+  columns: ["id", "user_id", "applied_on", "org", "role", "source", "fit", "effort", "status", "deadline", "next_action",
+    "next_action_due", "notes", "created_at", "posting_url", "duplicate_of", "source_inbox_id"].map((name) => ({ name, type: "text" })),
+  secret_columns: [], heavy_columns: [], has_context_id: false, has_archived: false, has_status: true,
+};
 
 globalThis.Deno ??= { env: { get: () => "stub" } };
 const jobs = await import(pathToFileURL(join(JOB_DIR, "job-applications.ts")).href);
@@ -795,9 +853,13 @@ function makeJobDb(rows = []) {
     );
   return {
     table,
-    rpc() { return Promise.resolve({ data: [{ allowed: true, message: "" }], error: null }); },
+    rpc(name) {
+      // The budget guard, and the read settings readTable asks for (get_job_applications).
+      if (name === "platform_read_settings") return Promise.resolve({ data: [JOB_SETTINGS], error: null });
+      return Promise.resolve({ data: [{ allowed: true, message: "" }], error: null });
+    },
     from() {
-      const st = { op: "select", payload: null, filters: [], orders: [], limit: null };
+      const st = { op: "select", payload: null, filters: [], orders: [], limit: null, range: null };
       const api = {
         select() { return api; },
         eq(c, v) { st.filters.push((r) => r[c] === v); return api; },
@@ -808,6 +870,7 @@ function makeJobDb(rows = []) {
         ilike(c, pat) { const re = ilikeRe(pat); st.filters.push((r) => re.test(String(r[c] ?? ""))); return api; },
         order(c, o = {}) { st.orders.push([c, o.ascending !== false]); return api; },
         limit(n) { st.limit = n; return api; },
+        range(a, b) { st.range = [a, b]; return api; },
         insert(p) { st.op = "insert"; st.payload = p; return api; },
         update(p) { st.op = "update"; st.payload = p; return api; },
         maybeSingle() { return run().then((r) => ({ ...r, data: r.data[0] ?? null })); },
@@ -846,8 +909,10 @@ function makeJobDb(rows = []) {
             })
             .map(([r]) => r);
         }
+        const count = matched.length;
         if (st.limit != null) matched = matched.slice(0, st.limit);
-        return Promise.resolve({ data: matched, error: null });
+        if (st.range) matched = matched.slice(st.range[0], st.range[1] + 1);
+        return Promise.resolve({ data: matched, error: null, count });
       }
       return api;
     },

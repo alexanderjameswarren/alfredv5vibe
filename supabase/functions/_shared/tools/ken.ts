@@ -9,7 +9,7 @@
 // that survive sharing one manifest with Alfred, SAM and DJ.
 // ============================================================================
 
-import { defineTool, clampLimit, envelope } from "../platform.ts";
+import { defineTool, clampLimit, envelope, readTable } from "../platform.ts";
 
 // Columns that are safe to list. tricky_fragments is deliberately absent —
 // it is heavy jsonb and is lazy-loaded by get_ken_lyric_fragments.
@@ -25,14 +25,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // double-quoted, with backslash and quote escaped.
 const pgrstQuote = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 
-// Truncation judged from the exact count, never rows.length >= limit: a result
-// of exactly `limit` rows is complete, and reporting it as cut makes the caller
-// distrust a whole read (the seed check fails on one by design).
-function listMeta(limit: number, rows: unknown[], count: number | null) {
-  return typeof count === "number" && count > rows.length
-    ? { limit_applied: limit, truncated: true, total: count }
-    : { limit_applied: limit, truncated: false };
-}
+// The list reads use readTable (platform.ts), which judges truncation from the
+// exact count, never rows.length >= limit: a result of exactly `limit` rows is
+// complete, and reporting it as cut makes the caller distrust a whole read (the
+// seed check fails on one by design).
 
 // ---------------------------------------------------------------------------
 // get_ken_quiz_batch — tier 1
@@ -308,18 +304,15 @@ export const getKenAreasTool = defineTool({
     // With source_refs the limit defaults to how many ids were passed.
     // source_ref is unique per user, so the result cannot exceed that — the
     // read cannot truncate, and there is nothing to page.
-    const LIMIT = clampLimit((args.limit as number | undefined) ?? sourceRefs?.length);
-
-    let q = ctx.db
-      .from("ken_areas")
-      .select("id, name, description, source_ref, priority, created_at", { count: "exact" });
-    if (sourceRefs) q = q.in("source_ref", sourceRefs);
-
-    const { data, error, count } = await q.order("name").limit(LIMIT);
-
-    if (error) throw new Error(`get_ken_areas: ${error.message}`);
-    const rows = data ?? [];
-    return envelope(rows, listMeta(LIMIT, rows, count));
+    // Shared read (MCP read access S8b); description stays whole.
+    return await readTable(ctx, {
+      tool: "get_ken_areas",
+      table: "ken_areas",
+      args: { ...args, limit: (args.limit as number | undefined) ?? sourceRefs?.length },
+      filter: (q) => (sourceRefs ? q.in("source_ref", sourceRefs) : q),
+      order: [{ column: "name", ascending: true }],
+      fullText: ["description"],
+    });
   },
 });
 
@@ -327,29 +320,29 @@ export const getKenItemsTool = defineTool({
   name: "get_ken_items",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const LIMIT = clampLimit(args.limit as number | undefined);
-
-    let q = ctx.db.from("ken_items").select(ITEM_COLS, { count: "exact" });
-
-    // Every filter is a predicate reaching Postgres, applied before the limit.
-    q = q.eq("status", (args.status as string | undefined) ?? "active");
-    if (args.area_id) q = q.eq("area_id", args.area_id as string);
-    if (args.subtopic) q = q.eq("subtopic", args.subtopic as string);
-    if (args.mode) q = q.eq("mode", args.mode as string);
-    if (Array.isArray(args.tags) && args.tags.length) {
-      q = q.overlaps("tags", args.tags as string[]); // tags is text[], not jsonb
-    }
-    if (args.search_text) {
-      q = q.ilike("prompt", `%${args.search_text as string}%`);
-    }
-
-    q = q.order("created_at", { ascending: false }).limit(LIMIT);
-
-    const { data, error, count } = await q;
-    if (error) throw new Error(`get_ken_items: ${error.message}`);
-
-    const rows = data ?? [];
-    return envelope(rows, listMeta(LIMIT, rows, count));
+    // Shared read (MCP read access S8b). prompt and ground_truth stay whole: Ken
+    // grades against ground_truth. tricky_fragments is left out, as before
+    // (get_ken_lyric_fragments reads it).
+    return await readTable(ctx, {
+      tool: "get_ken_items",
+      table: "ken_items",
+      args,
+      filter: (query) => {
+        // Every filter is a predicate reaching Postgres, applied before the limit.
+        let q = query.eq("status", (args.status as string | undefined) ?? "active");
+        if (args.area_id) q = q.eq("area_id", args.area_id as string);
+        if (args.subtopic) q = q.eq("subtopic", args.subtopic as string);
+        if (args.mode) q = q.eq("mode", args.mode as string);
+        if (Array.isArray(args.tags) && args.tags.length) {
+          q = q.overlaps("tags", args.tags as string[]); // tags is text[], not jsonb
+        }
+        if (args.search_text) q = q.ilike("prompt", `%${args.search_text as string}%`);
+        return q;
+      },
+      order: [{ column: "created_at", ascending: false }],
+      omit: ["tricky_fragments"],
+      fullText: ["prompt", "ground_truth"],
+    });
   },
 });
 
@@ -373,36 +366,29 @@ export const getKenMisconceptionsTool = defineTool({
   name: "get_ken_misconceptions",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const LIMIT = clampLimit(args.limit as number | undefined);
-
-    let q = ctx.db
-      .from("ken_misconceptions")
-      .select("id, item_id, related_item_id, subtopic, note, status, created_at, updated_at", {
-        count: "exact",
-      });
-
-    q = q.eq("status", (args.status as string | undefined) ?? "active");
-    if (args.item_id) {
-      // Either side of a confusion pair — the pair is the unit, so a read that
-      // sees only the anchor side is half-blind. Validated first because the
-      // value is interpolated into a PostgREST or() filter.
-      const itemId = args.item_id as string;
-      if (!UUID_RE.test(itemId)) {
-        throw new Error(
-          `get_ken_misconceptions: item_id must be a uuid, got ${JSON.stringify(itemId)}.`,
-        );
-      }
-      q = q.or(`item_id.eq.${itemId},related_item_id.eq.${itemId}`);
+    const itemId = args.item_id as string | undefined;
+    // Validated first because the value is interpolated into a PostgREST or() filter.
+    if (itemId && !UUID_RE.test(itemId)) {
+      throw new Error(
+        `get_ken_misconceptions: item_id must be a uuid, got ${JSON.stringify(itemId)}.`,
+      );
     }
-    if (args.subtopic) q = q.eq("subtopic", args.subtopic as string);
-
-    q = q.order("updated_at", { ascending: false }).limit(LIMIT);
-
-    const { data, error, count } = await q;
-    if (error) throw new Error(`get_ken_misconceptions: ${error.message}`);
-
-    const rows = data ?? [];
-    return envelope(rows, listMeta(LIMIT, rows, count));
+    // Shared read (MCP read access S8b); note stays whole.
+    return await readTable(ctx, {
+      tool: "get_ken_misconceptions",
+      table: "ken_misconceptions",
+      args,
+      filter: (query) => {
+        let q = query.eq("status", (args.status as string | undefined) ?? "active");
+        // Either side of a confusion pair — the pair is the unit, so a read that
+        // sees only the anchor side is half-blind.
+        if (itemId) q = q.or(`item_id.eq.${itemId},related_item_id.eq.${itemId}`);
+        if (args.subtopic) q = q.eq("subtopic", args.subtopic as string);
+        return q;
+      },
+      order: [{ column: "updated_at", ascending: false }],
+      fullText: ["note"],
+    });
   },
 });
 

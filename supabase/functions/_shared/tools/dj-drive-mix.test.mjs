@@ -3,29 +3,16 @@
 // Run:
 //   node --experimental-strip-types --test supabase/functions/_shared/tools/dj-drive-mix.test.mjs
 //
-// platform.ts is stubbed: defineTool returns its options, so handlers and
-// propose are called directly with a fake ctx.db.
+// The real platform.ts runs (test-platform.mjs): defineTool returns its options,
+// so handlers and propose are called directly with a fake ctx.db.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { loadTool, settingsFor, withSettings } from "./test-platform.mjs";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const dir = mkdtempSync(join(tmpdir(), "drive-mix-"));
-writeFileSync(join(dir, "platform.ts"), `
-export const defineTool = (o) => o;
-export const clampLimit = (n) => Math.min(n ?? 20, 50);
-export const envelope = (data, meta = {}) => ({ data, meta });
-export const describeDbError = (name, e) => name + " failed: " + e.message;
-`);
-const IMPORT = 'from "../platform.ts";';
-const src = readFileSync(join(HERE, "dj-drive-mix.ts"), "utf-8");
-if (!src.includes(IMPORT)) throw new Error("dj-drive-mix.ts import line changed — update this test.");
-writeFileSync(join(dir, "dj-drive-mix.ts"), src.replace(IMPORT, 'from "./platform.ts";'));
-const m = await import(pathToFileURL(join(dir, "dj-drive-mix.ts")).href);
+const m = await loadTool("dj-drive-mix.ts");
+const SONG_SETTINGS = settingsFor("drive_mix_songs", ["id", "user_id", "video_id", "title", "artist", "artist_key",
+  "decade", "genre", "status", "source", "retired_reason", "added_at", "thumbs", "thumbs_at"]);
 
 const VID = (n) => `vid${String(n).padStart(8, "0")}`; // 11 chars
 const ID = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -341,14 +328,15 @@ test("update_drive_mix_thumbs: latest wins, up revives only Alex's cuts", async 
 });
 
 test("get_drive_mix_songs filters by normalised artist_key and returns pool counts", async () => {
-  const db = fakeDb((table, ops) => has(ops, "limit")
+  const db = withSettings(fakeDb((table, ops) => has(ops, "range")
     ? { data: [{ id: ID(1) }], error: null, count: 3 }
-    : { data: null, error: null, count: 2 });
+    : { data: null, error: null, count: 2 }), [SONG_SETTINGS]);
   const out = await m.getDriveMixSongsTool.handler({ artist: "Bryan Adams", untagged: true, limit: 1 }, { db });
   const ops = db.chains[0].ops;
   assert.deepEqual(ops.filter((o) => o[0] === "eq"), [["eq", "artist_key", "bryan adams"]]);
   assert.deepEqual(has(ops, "or"), ["or", "decade.is.null,genre.is.null"]);
-  assert.deepEqual(out.meta, { count: 1, limit_applied: 1, truncated: true, total: 3 });
+  assert.deepEqual(has(ops, "range"), ["range", 0, 0]);
+  assert.deepEqual(out.meta, { count: 1, limit_applied: 1, truncated: true, total: 3, next_offset: 1 });
   assert.deepEqual(out.data.pool.by_status, { pending: 2, active: 2, retired: 2 });
   assert.deepEqual(out.data.pool.by_thumbs, { up: 2, down: 2 });
   assert.deepEqual(Object.keys(out.data.pool.active_eligible_by_slice),

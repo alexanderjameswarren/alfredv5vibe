@@ -18,6 +18,8 @@ const STUBS = [
   "const envelope = (data: any, meta: any = {}) => ({ data, meta });",
   "type Context = any;",
   "const defineTool = (o: any) => o;",
+  // get_apps reads through readTable; this file tests archive_inbox_item only (apps.test.mjs covers get_apps).
+  "const readTable = () => { throw new Error('readTable is not stubbed in clipboard.test.mjs'); };",
 ].join("\n");
 
 function probe(file, extra = []) {
@@ -25,6 +27,7 @@ function probe(file, extra = []) {
   for (const line of [
     'import { clampLimit, defineTool, envelope, type Context } from "../platform.ts";',
     'import { clampLimit, defineTool, envelope } from "../platform.ts";',
+    'import { defineTool, readTable } from "../platform.ts";',
   ]) src = src.replace(line, STUBS);
   for (const [from, to] of extra) src = src.replace(from, to);
   if (src.includes("../platform.ts") || src.includes("jsr:")) {

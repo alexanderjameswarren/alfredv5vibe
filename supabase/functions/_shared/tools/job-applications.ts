@@ -16,7 +16,7 @@
 // stamp — comes from `today()` below and never from the database's
 // CURRENT_DATE or from `new Date().toISOString()`.
 
-import { clampLimit, defineTool, envelope } from "../platform.ts";
+import { clampLimit, defineTool, envelope, readTable } from "../platform.ts";
 
 // Every column except user_id. RLS already scopes every read and write to the
 // owner, so the column carries no information the caller does not have, and
@@ -344,9 +344,24 @@ export const getJobApplicationsTool = defineTool({
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_job_applications";
-    const LIMIT = clampLimit(args.limit as number | undefined);
 
-    let q = ctx.db.from("job_applications").select(APP_COLS);
+    // Shared read (MCP read access S8b): limit, offset, ids, the next-offset NOTE
+    // over a counted total. notes and next_action stay whole: the job-search skill
+    // reads them to say what is owed.
+    return await readTable(ctx, {
+      tool: T,
+      table: "job_applications",
+      args,
+      filter: (query) => applyJobFilters(T, query, args),
+      order: [{ column: "applied_on", ascending: false }, { column: "created_at", ascending: false }],
+      fullText: ["notes", "next_action"],
+    });
+  },
+});
+
+// deno-lint-ignore no-explicit-any
+function applyJobFilters(T: string, query: any, args: Record<string, unknown>) {
+    let q = query;
 
     // ⚠️ EVERY FILTER GOES INTO THE QUERY, ABOVE THE LIMIT. Filtering the
     // returned page in the handler would read 20 rows and then hand back the 3
@@ -392,20 +407,8 @@ export const getJobApplicationsTool = defineTool({
       // no action owed, nothing to be late for.
       q = q.lt("next_action_due", today());
     }
-
-    const { data, error } = await q
-      .order("applied_on", { ascending: false })
-      .order("created_at", { ascending: false })
-      .limit(LIMIT);
-    if (error) throw dbError(T, "read", error);
-
-    const rows = (data ?? []) as Array<Record<string, unknown>>;
-    return envelope(rows, {
-      limit_applied: LIMIT,
-      truncated: rows.length >= LIMIT,
-    });
-  },
-});
+    return q;
+}
 
 // ---------------------------------------------------------------------------
 // create_job_application — tier 1

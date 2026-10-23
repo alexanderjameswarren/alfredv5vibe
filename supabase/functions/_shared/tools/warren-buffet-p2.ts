@@ -31,7 +31,7 @@
 // so each is one transaction. Sign rule: money in positive, money out negative.
 // ============================================================================
 
-import { defineTool, describeDbError, envelope } from "../platform.ts";
+import { defineTool, describeDbError, envelope, readTable } from "../platform.ts";
 import {
   absent, checkRange, escapeLike, limitOf, listResult, MONEY_CONTEXT_ID, nextDay, oneOf, optBool, optText,
   pacificMidnight, parseDate, parseMoney, requireId, searchTerm, WB_KINDS,
@@ -549,12 +549,16 @@ export const getWbMerchantsTool = defineTool({
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_merchants";
     const search = searchTerm(T, args.search);
-    const LIMIT = limitOf(T, args.limit);
-    let q = ctx.db.from("wb_merchants").select(MERCHANT_COLUMNS, { count: "exact" });
-    if (search) q = q.ilike("name", `%${escapeLike(search)}%`);
-    const { data, error, count } = await q.order("name").limit(LIMIT);
-    if (error) throw new Error(dbError(T, error));
-    return listResult(data ?? [], count, LIMIT);
+    limitOf(T, args.limit); // this tool's own message for a bad limit
+    // Shared read (MCP read access S8b); notes stay whole.
+    return await readTable(ctx, {
+      tool: T,
+      table: "wb_merchants",
+      args,
+      filter: (q) => (search ? q.ilike("name", `%${escapeLike(search)}%`) : q),
+      order: [{ column: "name", ascending: true }],
+      fullText: ["notes"],
+    });
   },
 });
 
@@ -628,13 +632,22 @@ export const getWbRulesTool = defineTool({
     const T = "get_wb_rules";
     const active = optBool(T, "active", args.active);
     const merchantId = optUuid(T, "merchant_id", args.merchant_id);
-    const LIMIT = limitOf(T, args.limit);
-    let q = ctx.db.from("wb_rules").select(RULE_COLUMNS, { count: "exact" });
-    if (active !== null) q = q.eq("active", active);
-    if (merchantId) q = q.eq("match->>merchant_id", merchantId);
-    const { data, error, count } = await q.order("priority").order("created_at").limit(LIMIT);
-    if (error) throw new Error(dbError(T, error));
-    return listResult(await describeRules(T, ctx.db, (data ?? []) as unknown as Obj[]), count, LIMIT);
+    limitOf(T, args.limit); // this tool's own message for a bad limit
+    // Shared read (MCP read access S8b); each rule is described as before; notes stay whole.
+    return await readTable(ctx, {
+      tool: T,
+      table: "wb_rules",
+      args,
+      filter: (query) => {
+        let q = query;
+        if (active !== null) q = q.eq("active", active);
+        if (merchantId) q = q.eq("match->>merchant_id", merchantId);
+        return q;
+      },
+      order: [{ column: "priority", ascending: true }, { column: "created_at", ascending: true }],
+      fullText: ["notes", "match"],
+      attach: async (rows) => ({ rows: await describeRules(T, ctx.db, rows as Obj[]) }),
+    });
   },
 });
 

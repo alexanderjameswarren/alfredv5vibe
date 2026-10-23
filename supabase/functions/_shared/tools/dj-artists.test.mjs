@@ -13,14 +13,25 @@ import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+// readTable stand-in over this file's in-memory db: get_dj_artists' filters and
+// order run for real; paging and previews are the real readTable's (records.test.mjs).
 const STUBS = [
   "const clampLimit = (n: number | undefined) => Math.min(n ?? 20, 50);",
   "const defineTool = (o: any) => o;",
+  "const readTable = async (ctx: any, o: any) => {",
+  "  let q = ctx.db.from(o.table).select('*', { count: 'exact' });",
+  "  if (o.filter) q = o.filter(q, {});",
+  "  for (const s of o.order ?? []) q = q.order(s.column, { ascending: s.ascending });",
+  "  const all = (await q).data ?? [];",
+  "  const limit = Math.min(o.args.limit ?? 20, 50);",
+  "  const data = all.slice(0, limit);",
+  "  return { data, meta: { total: all.length, limit_applied: limit, truncated: all.length > data.length } };",
+  "};",
 ].join("\n");
 
 const dir = mkdtempSync(join(tmpdir(), "dj-artists-"));
 const src = readFileSync(join(HERE, "dj-artists.ts"), "utf-8").replace(
-  'import { clampLimit, defineTool } from "../platform.ts";', STUBS);
+  'import { clampLimit, defineTool, readTable } from "../platform.ts";', STUBS);
 if (src.includes("../platform.ts")) throw new Error("import line changed — update this stub");
 writeFileSync(join(dir, "probe.ts"), src);
 const mod = await import(pathToFileURL(join(dir, "probe.ts")).href);
@@ -257,7 +268,7 @@ test("a complete artist list is NOT flagged truncated", async () => {
   const env = await getEnvelope(makeDb([{ name: "Weezer" }, { name: "Oasis" }]), {});
   assert.equal(env.data.returned, 2);
   assert.equal(env.data.total, 2);
-  assert.equal(env.meta.truncated, undefined);
+  assert.equal(env.meta.truncated, false);
 });
 
 test("truncation drops the END OF THE ALPHABET, which is why it hid", async () => {

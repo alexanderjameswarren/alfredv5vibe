@@ -40,13 +40,22 @@ At the end of every migration that creates a table, in the same file, call:
 
 ```sql
 select platform.register_table(
-  'my_table_name',
-  audited => true,   -- default true; set false only for high-volume event streams (e.g. sam_session_events)
-  exempt  => false   -- default false; only allowed_emails and similar shared reference tables are exempt
+  'public.my_table_name',
+  p_audited        => true,   -- default true; false only for high-volume event streams (e.g. sam_session_events)
+  p_exempt         => false,  -- default false; only allowed_emails and similar shared reference tables are exempt
+  p_secret_columns => null    -- credentials Claude must never read, e.g. array['api_token']
 );
 ```
 
 This one call replaces ~40 lines of RLS boilerplate, grants, and audit-trigger attachment. It also introspects `pg_attribute` to pick the right `user_id` policy expression (uuid vs text) — so tables inherit correct policies regardless of which type they use.
+
+**Read settings (migration 160).** A registered table is readable by Claude through `get_records` and every list tool, column by column, unless you say otherwise:
+
+- `p_mcp_read => 'hidden'` keeps MCP reads out of the whole table. The default is `'visible'`.
+- `p_secret_columns` lists columns no MCP read ever returns.
+- `p_cleared_columns` lists columns whose names look like credentials but aren't, e.g. `key_signature`. Conformance fails on any column with a credential-looking part in its name (token, secret, key, password, endpoint, p256dh, auth) unless it is in one of these two lists.
+- Long text needs no declaration: list reads preview it. Heavy jsonb is found automatically and returned only by ids.
+- Change the settings later with `platform.set_read_settings()`. Null keeps the current value.
 
 **If you don't call `register_table`, the table will show up in `platform.conformance_failures`** at the end of the migration block, and `check_platform_conformance` will refuse to return `CONFORMANT`.
 
@@ -92,13 +101,14 @@ Twenty tools that behave identically are lighter than twelve with their own conv
 ### Params
 
 - `limit`, `status`, `area_id`, `context_id` — same names across apps.
+- The shared read options, the same on every list tool (`_shared/platform-read.ts`): `limit` (default 20, cap 50), `offset`, `ids`, `include`, `archived` (`exclude` | `include` | `only`, where the table has it), and `no_context` (where it has `context_id`). In `mcp/index.ts`, advertise them with `...readOptions({...})`.
 - Reserved: `confirmed` (tier-3 gate — do not use for other purposes).
 
 ### Envelope (internal) vs MCP payload (external)
 
-- **Internal contract:** handlers return `{ data, meta: { count?, truncated?, limit_applied? } }` via the `envelope()` helper.
+- **Internal contract:** handlers return `{ data, meta: { count?, truncated?, limit_applied?, total?, next_offset?, notes? } }` via the `envelope()` helper.
 - **External MCP payload:** the wrapper emits `envelope.data` **directly** — bare array or bare object. The model does not see the envelope. `count` is derivable by counting; `limit_applied` only matters when something got cut.
-- **Truncation is the exception.** When `meta.truncated` is true, the MCP wrapper prepends an extra text block: `NOTE: results truncated to N of M. Narrow the query or request a specific subset.` This is the one field the model cannot infer — a clamped 50-row result looks identical to a genuine 50-row result, and the model will form a false belief.
+- **Truncation is the exception.** When `meta.truncated` is true, the MCP wrapper (`truncationNote`) prepends `NOTE: results truncated to N of M. Next page: offset=K. Narrow the query or request a specific subset.` Each entry in `meta.notes` adds a `NOTE:` line: a size cut, previews, heavy columns left out. This is the one thing the model cannot infer — a clamped 50-row result looks identical to a genuine 50-row result, and the model will form a false belief.
 - Do not introduce envelope-shaped payloads for new tools. Bare data is the house style for ALL apps (Alfred, Ken, Homer, …).
 
 ### Errors
@@ -117,7 +127,18 @@ Twenty tools that behave identically are lighter than twelve with their own conv
 
 ### Bounded reads
 
-No list query returns unbounded rows. Apply `clampLimit(requested)` (default 20, hard cap 50) server-side. Whether to expose a `limit` param is a separate decision: a tool over a small fixed collection (`get_contexts`, ~8 rows) gets the internal cap without the knob; `get_items` (270 rows) gets an exposed param.
+No list query returns unbounded rows. **A list of one table's rows goes through `readTable` (platform.ts)**, never a hand-rolled select. It provides:
+
+- the table's read settings from `platform_read_settings()`, so secret columns are never selected;
+- the shared options and an exact count, giving "N of M" and `next_offset`;
+- long text over about 200 characters cut to a marked preview in lists;
+- heavy jsonb left out of lists;
+- whole rows when fetched by `ids`;
+- a response-size cap.
+
+Your tool supplies `filter` (its own predicates, pushed into the query before the page window), `order`, `allowedIncludes` with `attach` (related content), `omit`, and `fullText` (columns its callers must read whole, e.g. `inbox.captured_text`, `ken_items.ground_truth`). An RPC-backed list (get_items) runs its RPC with the parsed options and finishes with `finishRead`. `get_records` reads any visible table this way. Computed reports (cash flow, pickers, stats) are not lists and keep their own shape, but still clamp.
+
+Per-tool defaults that differ (get_contexts and get_apps return 50, archived included where relevant) are set by passing `args: { ...args, limit: args.limit ?? 50 }`, never by bypassing the shared read.
 
 ---
 
@@ -138,26 +159,26 @@ Do not mark a migration block complete without seeing `CONFORMANT`. A conformanc
 ## `defineTool` — canonical shape
 
 ```ts
-import { defineTool, clampLimit, envelope } from "../_shared/platform.ts";
+import { defineTool, readTable } from "../_shared/platform.ts";
 
 export const getMyThingTool = defineTool({
   name: "get_my_thing",
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
-    const LIMIT = clampLimit(args.limit as number | undefined);
-    const { data, error } = await ctx.db
-      .from("my_things")
-      .select("id, name, created_at")
-      .limit(LIMIT);
-    if (error) throw new Error(`get_my_thing: ${error.message}`);
-    const rows = data ?? [];
-    return envelope(rows, {
-      limit_applied: LIMIT,
-      truncated: rows.length >= LIMIT,
+    // limit, offset, ids, archived, no_context are read by readTable from args.
+    return await readTable(ctx, {
+      tool: "get_my_thing",
+      table: "my_things",
+      args,
+      filter: (q) => (args.status ? q.eq("status", args.status as string) : q),
+      order: [{ column: "name", ascending: true }],
+      fullText: ["notes"],             // only if callers depend on the whole text
     });
   },
 });
 ```
+
+Register it with `...readOptions({ archived: "exclude" })` in its `inputSchema`, alongside its own filters. Test it with `_shared/tools/test-platform.mjs` (`loadTool`, `settingsFor`, `withSettings`), which runs the real platform layer.
 
 For writes (tier 2 or 3): same shape, plus `ctx.userId` (unverified JWT `sub`, log/observability only — RLS is the real gate) and reliance on the audit trigger to log the change with `actor='claude'` (set via the `x-actor` header baked into `ctx.db`).
 
