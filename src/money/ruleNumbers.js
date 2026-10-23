@@ -30,3 +30,10 @@ export const OVERRIDDEN_MIN = 2;
 export const OVERRIDDEN_SHARE_DIVISOR = 4; // "at least a quarter": n * 4 >= hits
 export const DUPLICATE_RULES_MIN = 2;
 export const RULE_MISSING_MIN = 3;
+
+// wb_action_items (Phase 3 step 9 migrations): the defaults of p_days, p_big_amount and
+// p_big_days, and c_flow_days. Help: overview.next_days, overview.major_expenses, overview.cash_flow.
+export const ACTION_DAYS = 14;
+export const ACTION_BIG_AMOUNT = 1000;
+export const ACTION_BIG_DAYS = 60;
+export const CASH_FLOW_DAYS = 30;

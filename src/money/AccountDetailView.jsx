@@ -117,7 +117,7 @@ function EditAccount({ account, onSaved, onCancel }) {
   );
 }
 
-export default function AccountDetailView({ accountId, onBack, onOpenTransaction = () => {} }) {
+export default function AccountDetailView({ accountId, onBack, backTitle = "Back to Accounts", onOpenTransaction = () => {} }) {
   const [editing, setEditing] = useState(false);
   const { data, error, loading, reload } = useLoad(async () => {
     const account = await getAccount(accountId);
@@ -133,7 +133,7 @@ export default function AccountDetailView({ accountId, onBack, onOpenTransaction
 
   const header = (title, subtitle) => (
     <div className="flex items-center gap-3 mb-4">
-      <button type="button" onClick={onBack} title="Back to Accounts"
+      <button type="button" onClick={onBack} title={backTitle}
         className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground rounded">
         <ArrowLeft className="w-5 h-5" />
       </button>

@@ -227,6 +227,37 @@ test("mark_wb_reviewed reports ids it could not see", async () => {
   assert.deepEqual(out, { reviewed: true, updated: 1, not_found: [id(2)] });
 });
 
+test("mark_wb_reviewed adds a note after any note already there", async () => {
+  const db = fakeDb((t, ops) => has(ops, "update")
+    ? { data: { id: id(1), notes: "ZZ old\nZZ fee refunded" }, error: null }
+    : { data: { id: id(1), notes: " ZZ old " }, error: null });
+  const out = await m.markWbReviewedTool.handler({ transaction_ids: [id(1)], note: " ZZ fee refunded " }, { db });
+  assert.deepEqual(db.op("wb_transactions", "update")[0][1], { reviewed: true, notes: "ZZ old\nZZ fee refunded" });
+  assert.deepEqual(out, { reviewed: true, updated: 1, not_found: [], notes: "ZZ old\nZZ fee refunded" });
+  const fresh = fakeDb((t, ops) => has(ops, "update") ? { data: { id: id(1), notes: "ZZ n" }, error: null } : { data: { id: id(1), notes: null }, error: null });
+  await m.markWbReviewedTool.handler({ transaction_ids: [id(1)], note: "ZZ n" }, { db: fresh });
+  assert.equal(fresh.op("wb_transactions", "update")[0][1].notes, "ZZ n");
+});
+
+test("mark_wb_reviewed note refusals write nothing", async () => {
+  const db = fakeDb(() => ({ data: { id: id(1), notes: null }, error: null }));
+  await assert.rejects(m.markWbReviewedTool.handler({ transaction_ids: [id(1), id(2)], note: "x" }, { db }), /exactly one transaction_id/);
+  await assert.rejects(m.markWbReviewedTool.handler({ transaction_ids: [id(1)], note: "x", reviewed: false }, { db }), /only when marking reviewed/);
+  await assert.rejects(m.markWbReviewedTool.handler({ transaction_ids: [id(1)], note: "x".repeat(2001) }, { db }), /longer than 2000/);
+  await assert.rejects(m.markWbReviewedTool.handler({ transaction_ids: [id(1)], note: 5 }, { db }), /note must be text/);
+  assert.equal(writes(db).length, 0);
+  const none = fakeDb(() => ({ data: null, error: null }));
+  assert.deepEqual(await m.markWbReviewedTool.handler({ transaction_ids: [id(9)], note: "x" }, { db: none }),
+    { reviewed: true, updated: 0, not_found: [id(9)] });
+  assert.equal(writes(none).length, 0);
+});
+
+test("mark_wb_reviewed without a note behaves as before", async () => {
+  const db = fakeDb(() => ({ data: [{ id: id(1) }, { id: id(2) }], error: null }));
+  await m.markWbReviewedTool.handler({ transaction_ids: [id(1), id(2)], reviewed: false }, { db });
+  assert.deepEqual(db.op("wb_transactions", "update")[0][1], { reviewed: false });
+});
+
 // --- "Always do this" (spec §6.1) ------------------------------------------
 
 // The plan and the write run in the database (wb_fix_plan, wb_apply_fix, migration

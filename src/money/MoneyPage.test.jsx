@@ -23,6 +23,7 @@ jest.mock("./moneyApi", () => ({
   getProjectDetail: jest.fn(),
   getPlannedItemDetail: jest.fn(),
   getProjectChoices: jest.fn(),
+  getActionItems: jest.fn(),
   PAGE_SIZE: 50,
 }));
 const api = require("./moneyApi");
@@ -45,6 +46,7 @@ beforeEach(() => {
   api.getSubscriptionDetail.mockResolvedValue(null);
   api.getPlanOverview.mockResolvedValue({ projects: [], items: [], confirmed: [], missed: [] });
   api.getProjectChoices.mockResolvedValue([]);
+  api.getActionItems.mockResolvedValue({ flags: [], coming_up: [], big_bites: [], below_floor: { floor_missing: true } });
 });
 
 it("routes the Plan tab, and a project or item link never lands on a blank screen", async () => {
@@ -72,6 +74,16 @@ it("goes back from an item opened in Review to Review", async () => {
   );
   fireEvent.click(await screen.findByRole("button", { name: /Back/ }));
   expect(screen.getByTestId("where")).toHaveTextContent(/^\/money\/review$/);
+});
+
+it("goes back from an account opened on the Overview to the Overview", async () => {
+  render(
+    <MemoryRouter initialEntries={[{ pathname: "/money/accounts/abc", state: { from: "overview" } }]}>
+      <Routes><Route path="*" element={<><MoneyPage /><Where /></>} /></Routes>
+    </MemoryRouter>,
+  );
+  fireEvent.click(await screen.findByTitle("Back to Overview"));
+  expect(screen.getByTestId("where")).toHaveTextContent(/^\/money$/);
 });
 
 it("goes back from an item to the project it came from", async () => {

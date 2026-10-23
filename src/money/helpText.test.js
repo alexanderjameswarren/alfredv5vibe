@@ -62,6 +62,13 @@ test("numbers in the wording match the code", () => {
   says("rule_health.rule_missing", `${N.RULE_MISSING_MIN} or more settled transactions`);
   says("overview.burn_rate", `last ${N.BURN_MONTHS} full months`);
   says("overview.true_cost", `yearly ÷ ${MONTHS_PER_YEAR}, weekly × ${WEEKS_PER_YEAR} ÷ ${MONTHS_PER_YEAR}`);
+  const big = `$${N.ACTION_BIG_AMOUNT.toLocaleString("en-US")}`;
+  says("overview.major_expenses", `over ${big} in the next ${N.ACTION_BIG_DAYS} days`);
+  says("overview.next_days", `due in the next ${N.ACTION_DAYS} days`);
+  says("overview.next_days", `over ${big} are in bold`);
+  says("overview.cash_flow", `Last ${N.CASH_FLOW_DAYS} days`);
+  says("overview.cash_flow", `Next ${N.CASH_FLOW_DAYS} days`);
+  says("overview.todo", `more than ${N.OVERDUE_GRACE_DAYS} days late`);
 });
 
 test("the yearly and weekly conversions are what monthlyEquivalent does", () => {
@@ -110,6 +117,13 @@ test("the JS mirrors match the SQL that really runs", () => {
   expect(num(health, /where t\.n >= (\d+)/)).toEqual([N.RULE_MISSING_MIN]);
 
   expect(num(latestDefinition("wb_burn_rate_on"), /v_months constant int := (\d+)/)).toEqual([N.BURN_MONTHS]);
+
+  const actions = latestDefinition("wb_action_items");
+  expect(num(actions, /p_days\s+int\s+default (\d+)/)).toEqual([N.ACTION_DAYS]);
+  expect(num(actions, /p_big_amount\s+numeric\s+default (\d+)/)).toEqual([N.ACTION_BIG_AMOUNT]);
+  expect(num(actions, /p_big_days\s+int\s+default (\d+)/)).toEqual([N.ACTION_BIG_DAYS]);
+  expect(num(actions, /c_flow_days\s+constant int := (\d+)/)).toEqual([N.CASH_FLOW_DAYS]);
+  expect(num(actions, /c_sub_grace\s+constant int := (\d+)/)).toEqual([N.OVERDUE_GRACE_DAYS]);
 });
 
 test("the SQL monthly equivalent is the JS rule (A12)", () => {

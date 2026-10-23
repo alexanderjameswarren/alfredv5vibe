@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 08:29, through migration 151 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 10:20, through migration 153 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -4611,6 +4611,10 @@ begin
     else
       new.status_changed_at := now();
     end if;
+    -- Restructure P5: the reason belongs to Closed. Leaving it, by any path, clears it.
+    if old.status = 'closed' and new.status is distinct from 'closed' then
+      new.closed_reason := null;
+    end if;
   else
     new.status_written_at := old.status_written_at;
     new.status_changed_at := old.status_changed_at;
@@ -4624,7 +4628,7 @@ $$;
 ALTER FUNCTION "public"."status_guard"() OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."status_guard"() IS 'Restructure P1, P4. BEFORE UPDATE on any table with status, status_changed_at and status_written_at (intents, items). Keeps the old status when an update would move it back to someday, except closed -> someday within 10 minutes of the close by status_written_at (Undo). On a status change, stamps status_written_at now(), keeps an app-supplied status_changed_at that is no later than now() and otherwise stamps now(); an update that does not change status keeps both stored values.';
+COMMENT ON FUNCTION "public"."status_guard"() IS 'Restructure P1, P4, P5. BEFORE UPDATE on items, intents and item_groups. Keeps the old status when an update would move it back to someday, except closed -> someday within 10 minutes of the close by status_written_at (Undo). On a status change, stamps status_written_at now(), keeps an app-supplied status_changed_at that is no later than now() and otherwise stamps now(), and (P5) clears closed_reason when the status leaves closed; an update that does not change status keeps both stored dates.';
 
 
 
@@ -4659,12 +4663,13 @@ CREATE OR REPLACE FUNCTION "public"."wb_action_items"("p_days" integer DEFAULT 1
     SET "search_path" TO 'public', 'pg_temp'
     AS $$
 declare
-  -- If you change 14, 1000 or 60 (the defaults above), 30, 2 or 7, update the Overview help entries
-  -- for Action Items in src/money/helpText.js and ruleNumbers.js (step 9e), and their test.
-  c_fee_days      constant int := 30;   -- card fees and interest looked back over
+  -- If you change 14, 1000 or 60 (the defaults above), 90, 30, 2 or 7, update the Overview help entries
+  -- in src/money/helpText.js and ruleNumbers.js (ACTION_* and CASH_FLOW_DAYS), and their test.
+  c_flag_days     constant int := 90;   -- card fees and interest looked back over (A53)
   c_manual_stale  constant int := 30;   -- a hand-entered balance older than this needs checking
   c_synced_stale  constant int := 2;    -- as STALE_ACCOUNT_DAYS in moneyFormat.js
   c_sub_grace     constant int := 7;    -- as wb_subscription_overview.overdue (OVERDUE_GRACE_DAYS)
+  c_flow_days     constant int := 30;   -- the Cash flow card's two windows, back and ahead
   c_title_max     constant int := 120;
   c_money         constant text := 'muvitejhrgt3rgi8t6q';
   v_today   date := coalesce(p_today, (now() at time zone 'America/Los_Angeles')::date);
@@ -4672,6 +4677,7 @@ declare
   v_cards   jsonb := '[]';
   v_attn    jsonb := '[]';
   v_below   jsonb;
+  v_cash    jsonb;
   card      record;
   v_close   date;
   v_due     date;
@@ -4681,6 +4687,9 @@ declare
   v_floor   numeric;
   v_first   record;
   v_low     record;
+  v_last30  numeric;
+  v_next30  numeric;
+  v_typical numeric;
   run       record;
 begin
   -- ---------------------------------------------------------------- card bills
@@ -4749,24 +4758,40 @@ begin
     end if;
   end loop;
 
-  -- ---------------------------------------------------------------- flags: card interest and fees
+  -- ---------------------------------------------------------------- flags: card interest and fees (A53)
+  -- Looked back c_flag_days. A flag clears only when the charge is marked handled: reviewed, with a
+  -- note (the transaction page's own fields). A credit of the same amount on the same card, on or after
+  -- it, turns the flag info and is shown as refund; it never clears it alone.
   v_flags := (
     select coalesce(jsonb_agg(f order by f ->> 'on' desc), '[]'::jsonb)
     from (
       select jsonb_build_object(
-               'type', 'card_charge', 'severity', 'red',
+               'type', 'card_charge', 'severity', case when cr.id is null then 'red' else 'info' end,
                'title', format('%s on %s', initcap(coalesce(nullif(x.clean_description, ''), x.description)), coalesce(a.display_name, a.name)),
-               'todo', 'A card charged interest or a fee. Check the due date was not missed, and pay in full to stop it.',
+               'todo', case when cr.id is null
+                            then 'A card charged interest or a fee. Check the due date was not missed, and pay in full to stop it. When it is dealt with, write a note on the charge and tick Reviewed.'
+                            else 'The refund came. Write a note on the charge and tick Reviewed to clear this.' end,
+               'note', nullif(btrim(x.notes), ''),
+               'refund', case when cr.id is not null then jsonb_build_object(
+                           'amount', cr.amount, 'on', cr.d, 'link_kind', 'transaction', 'link_id', cr.id) end,
                'amount', x.amount,
-               'on', (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date,
+               'on', c.d,
                'link_kind', 'transaction', 'link_id', x.id) as f
       from public.wb_transactions x
       join public.wb_accounts a on a.id = x.account_id
+      cross join lateral (select (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date as d) c
+      left join lateral (
+        select r.id, r.amount, (coalesce(r.posted_at, r.transacted_at) at time zone 'America/Los_Angeles')::date as d
+        from public.wb_transactions r
+        where r.account_id = x.account_id and not r.pending and r.amount = -x.amount
+          and (coalesce(r.posted_at, r.transacted_at) at time zone 'America/Los_Angeles')::date >= c.d
+        order by coalesce(r.posted_at, r.transacted_at) limit 1) cr on true
       where a.role in ('credit_card', 'emergency_credit')
         and not x.pending and x.amount < 0
-        and (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date between v_today - c_fee_days and v_today
+        and c.d between v_today - c_flag_days and v_today
         and concat_ws(' ', x.description, x.payee) ~* '(interest charge|finance charge|late fee|late payment|annual fee|over ?limit fee|returned payment)'
-    ) c
+        and not (x.reviewed and nullif(btrim(x.notes), '') is not null)
+    ) z
   ) || v_flags;
 
   -- ---------------------------------------------------------------- needs attention
@@ -4886,8 +4911,84 @@ begin
           where p.day <= v_first.day
         ) z
         where (c ->> 'amount')::numeric < 0
+      ) end,
+      -- The path to the first day below (A53): the starting balance, then every planned item,
+      -- subscription and deposit in date order, and the burn rate as one row per week. balance is the
+      -- projection's closing that day; below marks a balance under the floor. The planned rows are the
+      -- projection's own: due dates less what is confirmed, and an overdue one-off on today.
+      'path', case when v_first.day is null then '[]'::jsonb else (
+        with proj as (
+          select p.day, p.opening, p.closing, p.burn
+          from public.wb_cash_projection(false, v_today) p
+          where p.day <= v_first.day
+        ),
+        ev as (
+          select o.occurrence_on as d, pi.name as title, public.wb_planned_left(o.amount, (
+                   select sum(abs(pm.amount_applied)) from public.wb_planned_matches pm
+                   where pm.planned_item_id = o.planned_item_id and pm.status = 'confirmed'
+                     and pm.occurrence_on is not distinct from case when o.recurring then o.occurrence_on end),
+                   pi.amount_tolerance) as amount,
+                 'planned' as type, 'planned_item' as link_kind, pi.id::text as link_id, 1 as ord
+          from public.wb_planned_occurrences(v_today, v_first.day, false) o
+          join public.wb_planned_items pi on pi.id = o.planned_item_id
+          where o.recurring or o.stage <> 'paid'
+          union all
+          select v_today, pi.name || ' (overdue)', public.wb_planned_left(pi.amount, (
+                   select sum(abs(pm.amount_applied)) from public.wb_planned_matches pm
+                   where pm.planned_item_id = pi.id and pm.status = 'confirmed'), pi.amount_tolerance),
+                 'planned', 'planned_item', pi.id::text, 1
+          from public.wb_planned_items pi
+          where pi.interval_count is null and pi.due_on < v_today
+            and pi.stage not in ('paid', 'cancelled', 'draft')
+          union all
+          select so.occurrence_on, so.name, so.amount, 'subscription', 'subscription', so.subscription_id::text, 1
+          from public.wb_subscription_occurrences(v_today, v_first.day, v_today) so
+          union all
+          -- One row per week from today, on the week's last day (or the first day below).
+          select max(pr.day), 'Everyday spending at the burn rate', round(sum(pr.burn), 2), 'burn', null, null, 2
+          from proj pr
+          group by (pr.day - v_today) / 7
+        )
+        select jsonb_build_array(jsonb_build_object(
+                 'type', 'start', 'title', 'Starting balance', 'amount', null, 'on', v_today,
+                 'balance', (select pr.opening from proj pr where pr.day = v_today),
+                 'below', (select pr.opening < v_floor from proj pr where pr.day = v_today),
+                 'link_kind', null, 'link_id', null))
+               || coalesce(jsonb_agg(jsonb_build_object(
+                    'type', e.type, 'title', e.title, 'amount', e.amount, 'on', e.d, 'balance', pr.closing,
+                    'below', pr.closing < v_floor, 'link_kind', e.link_kind, 'link_id', e.link_id)
+                  order by e.d, e.ord, e.amount, e.title), '[]'::jsonb)
+        from ev e
+        join proj pr on pr.day = e.d
+        where e.amount <> 0
       ) end);
   end if;
+
+  -- ---------------------------------------------------------------- cash flow (A52): in less out, back, ahead and typical
+  -- Settled rows on spending-cash and card accounts in the last c_flow_days days (today included),
+  -- leaving out transfers between our own accounts: a paired transfer, or a transfer received on a card.
+  select coalesce(sum(x.amount), 0) into v_last30
+  from public.wb_transactions x
+  join public.wb_accounts a on a.id = x.account_id
+  where a.role in ('spending_cash', 'credit_card')
+    and not x.pending
+    and x.transfer_pair_id is null
+    and not (a.role = 'credit_card' and coalesce(x.kind, '') = 'transfer')
+    and (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date
+        between v_today - (c_flow_days - 1) and v_today;
+  -- The projection's balance on day c_flow_days, less its opening today (no drafts).
+  select max(p.closing) filter (where p.day = v_today + c_flow_days) - max(p.opening) filter (where p.day = v_today)
+  into v_next30
+  from public.wb_cash_projection(false, v_today) p;
+  select t.net_monthly into v_typical from public.wb_true_cost t;
+  v_cash := jsonb_build_object(
+    'days', c_flow_days,
+    'last_30_actual', round(v_last30, 2),
+    'next_30_projected', round(v_next30, 2),
+    'typical_month', round(v_typical, 2),
+    'reserve_balance', v_low.reserve_cash,
+    'runway_months', case when v_typical < 0 and v_low.reserve_cash is not null
+                          then round(v_low.reserve_cash / -v_typical, 1) end);
 
   return jsonb_build_object(
     'today', v_today, 'days', p_days, 'big_amount', p_big_amount, 'big_days', p_big_days,
@@ -4935,11 +5036,13 @@ begin
         where s.overdue
       ) x),
 
+    -- big: money out larger than p_big_amount, so the app and Claude can bold it (A52).
     'coming_up', (
       select coalesce(jsonb_agg(r order by r ->> 'on', r ->> 'title'), '[]'::jsonb)
       from (
         select jsonb_build_object('type', case when o.recurring then 'planned_repeating' else 'planned_one_off' end,
                  'severity', 'info', 'title', pi.name, 'late', false,
+                 'big', z.left_amt < 0 and -z.left_amt > p_big_amount,
                  'todo', case when pi.merchant_id is null and o.amount > 0 then 'Deposit it; it will be matched once it posts.'
                               when pi.merchant_id is null then 'Pay it; it will be matched once it posts.'
                               else 'It will be matched once the payment posts.' end,
@@ -4956,6 +5059,7 @@ begin
         -- Past due, still inside the match window: late, not yet overdue.
         select jsonb_build_object('type', case when u.recurring then 'planned_repeating' else 'planned_one_off' end,
                  'severity', 'amber', 'late', true,
+                 'big', u.remaining < 0 and -u.remaining > p_big_amount,
                  'title', format('%s (late, due %s)', u.name, to_char(u.due_on, 'Mon FMDD')),
                  'todo', case when u.has_suggestion then 'A match is waiting in Review: confirm it.'
                               when u.merchant_id is null and u.amount > 0 then 'Deposit it; it will be matched once it posts.'
@@ -4968,6 +5072,7 @@ begin
         select jsonb_build_object('type', 'subscription',
                  'severity', case when so.overdue_charge then 'amber' else 'info' end,
                  'late', so.overdue_charge,
+                 'big', so.amount < 0 and -so.amount > p_big_amount,
                  'title', so.name || case when so.overdue_charge then format(' (late, due %s)', to_char(ws.next_expected_on, 'Mon FMDD')) else '' end,
                  'todo', case when so.overdue_charge then format('The charge has not shown yet and may still post; after %s days it counts as overdue.', c_sub_grace)
                               else 'Nothing to do unless you mean to cancel it first.' end,
@@ -5030,7 +5135,8 @@ begin
         where b.suggested_context_id = c_money and not coalesce(b.archived, false)
       ) x),
 
-    'below_floor', v_below
+    'below_floor', v_below,
+    'cash_flow', v_cash
   );
 end;
 $$;
@@ -5039,7 +5145,7 @@ $$;
 ALTER FUNCTION "public"."wb_action_items"("p_days" integer, "p_big_amount" numeric, "p_big_days" integer, "p_today" "date") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."wb_action_items"("p_days" integer, "p_big_amount" numeric, "p_big_days" integer, "p_today" "date") IS 'Warren Buffet: the money to-do list, one JSON object (spec A49, A50, A51). Sections: flags (card interest and fees in the last 30 days; a card bill past due and unpaid), reconcile (review queue counts by reason), overdue (wb_planned_unmatched past the match window, and subscriptions more than 7 days late), coming_up (planned items less what is covered, A45, and subscriptions, in the next p_days; dates past due but not yet overdue come first, with late true and amber), big_bites (payments out of more than p_big_amount in the next p_big_days, what-ifs included and marked), card_bills (from statement_close_day, payment_due_day and autopay: the balance on the last close day less card payments since; a card with no days set asks for them), needs_attention (sync problems, stale or missing balances, subscriptions to review or confirm, accounts with no role, rule health), money_intentions and money_inbox (Alfred records in the Money context, as RLS allows; a title longer than 120 characters is cut and ends with an ellipsis), and below_floor (the first projected day under the safety floor, the shortfall then and at the low point, and the payments up to it; read from wb_cash_projection and wb_free_cash). Every row has type, severity (red, amber, info), title, todo, amount, on and a link (link_kind, link_id). Security invoker; read by the app and get_wb_action_items.';
+COMMENT ON FUNCTION "public"."wb_action_items"("p_days" integer, "p_big_amount" numeric, "p_big_days" integer, "p_today" "date") IS 'Warren Buffet: the money to-do list, one JSON object (spec A49 to A53). Sections: flags (card interest and fees in the last 90 days, red until the charge is reviewed with a note (shown as note), when it clears; a credit of the same amount on that card turns it info with refund (amount, on, link) but does not clear it; and a card bill past due and unpaid), reconcile (review queue counts by reason), overdue (wb_planned_unmatched past the match window, and subscriptions more than 7 days late), coming_up (planned items less what is covered, A45, and subscriptions, in the next p_days; dates past due but not yet overdue come first, with late true and amber; big true for money out over p_big_amount), big_bites (payments out of more than p_big_amount in the next p_big_days, what-ifs included and marked), card_bills (from statement_close_day, payment_due_day and autopay: the balance on the last close day less card payments since; a card with no days set asks for them), needs_attention (sync problems, stale or missing balances, subscriptions to review or confirm, accounts with no role, rule health), money_intentions and money_inbox (Alfred records in the Money context, as RLS allows; a title longer than 120 characters is cut and ends with an ellipsis), below_floor (the first projected day under the safety floor, the shortfall then and at the low point, the payments up to it as causes, and path: the starting balance, every dated event and a weekly burn row up to that day, each with the projected balance after it and below when it is under the floor; read from wb_cash_projection, wb_free_cash and the occurrence helpers), and cash_flow (money in less money out: last_30_actual from settled spending-cash and card rows, leaving out paired transfers and transfers received on a card; next_30_projected, the projection''s change over the next 30 days; typical_month, wb_true_cost.net_monthly; runway_months, the reserve over a monthly shortfall, null when typical_month is not negative). Every row has type, severity (red, amber, info), title, todo, amount, on and a link (link_kind, link_id). Security invoker; read by the app and get_wb_action_items.';
 
 
 
@@ -8859,6 +8965,7 @@ CREATE TABLE IF NOT EXISTS "public"."intents" (
     "group_id" "text",
     "archived_at" timestamp with time zone,
     CONSTRAINT "intents_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
+    CONSTRAINT "intents_closed_reason_only_closed" CHECK ((("closed_reason" IS NULL) OR ("status" = 'closed'::"text"))),
     CONSTRAINT "intents_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
 );
 
@@ -8912,7 +9019,7 @@ COMMENT ON COLUMN "public"."intents"."last_completed_at" IS 'Latest completion (
 
 
 
-COMMENT ON COLUMN "public"."intents"."closed_reason" IS 'Restructure P4. Why it was closed: done (Completed) | wont_do (Won''t do). Null = unknown (closed before P4, or never recorded). Written by the app''s Close pop-up and by the automatic close of a one-time intention on completion; not cleared on reopen.';
+COMMENT ON COLUMN "public"."intents"."closed_reason" IS 'Restructure P4. Why it was closed: done (Completed) | wont_do (Won''t do). Null = unknown (closed before P4, or never recorded), and always null when not closed (P5: status_guard clears it on reopen; intents_closed_reason_only_closed). Written by the app''s Close pop-up and by the automatic close of a one-time intention on completion.';
 
 
 
@@ -9040,6 +9147,7 @@ CREATE TABLE IF NOT EXISTS "public"."item_groups" (
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "archived_at" timestamp with time zone,
     CONSTRAINT "item_groups_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
+    CONSTRAINT "item_groups_closed_reason_only_closed" CHECK ((("closed_reason" IS NULL) OR ("status" = 'closed'::"text"))),
     CONSTRAINT "item_groups_name_check" CHECK ((("name" IS NULL) OR ("btrim"("name") <> ''::"text"))),
     CONSTRAINT "item_groups_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
 );
@@ -9076,7 +9184,7 @@ COMMENT ON COLUMN "public"."item_groups"."status_written_at" IS 'Server time of 
 
 
 
-COMMENT ON COLUMN "public"."item_groups"."closed_reason" IS 'Why it was closed: done | wont_do, as on items. Null = unknown.';
+COMMENT ON COLUMN "public"."item_groups"."closed_reason" IS 'Why it was closed: done | wont_do, as on items. Null = unknown, and always null when not closed (status_guard clears it on reopen; item_groups_closed_reason_only_closed).';
 
 
 
@@ -9117,6 +9225,7 @@ CREATE TABLE IF NOT EXISTS "public"."items" (
     "status_written_at" timestamp with time zone DEFAULT "now"(),
     "archived_at" timestamp with time zone,
     CONSTRAINT "items_closed_reason_check" CHECK (("closed_reason" = ANY (ARRAY['done'::"text", 'wont_do'::"text"]))),
+    CONSTRAINT "items_closed_reason_only_closed" CHECK ((("closed_reason" IS NULL) OR ("status" = 'closed'::"text"))),
     CONSTRAINT "items_status_check" CHECK (("status" = ANY (ARRAY['someday'::"text", 'active'::"text", 'background'::"text", 'closed'::"text"])))
 );
 
@@ -9169,7 +9278,7 @@ COMMENT ON COLUMN "public"."items"."last_completed_at" IS 'Latest completion (cl
 
 
 
-COMMENT ON COLUMN "public"."items"."closed_reason" IS 'Restructure P4. Why it was closed: done (Completed) | wont_do (Won''t do). Null = unknown (closed before P4, or never recorded). Written by the app''s Close pop-up; not cleared on reopen.';
+COMMENT ON COLUMN "public"."items"."closed_reason" IS 'Restructure P4. Why it was closed: done (Completed) | wont_do (Won''t do). Null = unknown (closed before P4, or never recorded), and always null when not closed (P5: status_guard clears it on reopen; items_closed_reason_only_closed). Written by the app''s Close pop-up.';
 
 
 

@@ -84,7 +84,7 @@ begin
     (v_user, v_ctx, cash, t, 1000000, 'manual');
   perform pg_temp.zz_txn(cA, date '2031-06-05', 200, 'ZZ ONLINE PAYMENT THANK YOU');
   x_fee := pg_temp.zz_txn(cA, date '2031-06-10', -12, 'INTEREST CHARGE ON PURCHASES');
-  perform pg_temp.zz_txn(cA, date '2031-04-10', -9, 'LATE FEE');                 -- older than 30 days
+  perform pg_temp.zz_txn(cA, date '2031-03-01', -9, 'LATE FEE');                 -- older than the flag lookback (30, then 90 days)
   perform pg_temp.zz_txn(cC, date '2031-06-03', 100, 'ZZ ONLINE PAYMENT THANK YOU');
 
   -- ---------------------------------------------------------------- planned items and subscriptions

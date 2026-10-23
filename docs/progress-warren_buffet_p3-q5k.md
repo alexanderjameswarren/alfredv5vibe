@@ -16,7 +16,7 @@ No amounts in this file. The safety floor is never written into the repo.
 | 8b | **Tools first (A42, A43).** New tools: project summary, missed dates, mark not needed, unconfirm (tier 2, `paid_not_covered`). Changed: the free cash what-if (tier 1, writes nothing), `backdated_from`, `project_names`, `over_matched`. Needs `mcp/index.ts`. **Live mcp must still be v155 before deploying; if higher, stop and ask** | done, 2026-10-20: live on **mcp v157** (138 tools), with the tolerance fix (A45; 143 applied, 144 24/24); re-check and fresh-thread batches passed |
 | 8c | Planning skill `.claude/skills/wb-planning/SKILL.md` (A44); scripted planning conversation in a fresh thread. **Notes from 8b:** (a) for bills whose amount varies (fuel, utilities), suggest a wider amount_tolerance before backdating, or only some payments qualify; (b) when backdating moves the due day, tell Alex the new day | done, 2026-10-20 (all six fresh-thread tests passed; two fixes to the skill, see log) |
 | 8d | Slimmer app (A44, A46, A47): 8d-1 the delete function; 8d-2 the Plan overview (read-only missed dates); 8d-3 project detail; 8d-4 item detail (Remove match, Delete item); 8d-5 the full Review card; 8d-6 the single-part project picker; help. **No add or edit forms, and no split-editor picker** | 8d-1 done 2026-10-21 (146 applied, tests 12/12); 8d-2 and 8d-3 tested 2026-10-21; 8d-4 done 2026-10-22 (fixes re-tested); 8d-5 and 8d-6 tested 2026-10-22. **8d done 2026-10-22, live** (merge 4bd3d97; the live Plan tab matches local testing) |
-| 9 | Overview numbers, plus Action Items and Dropping below the floor (A49). Data first, then mockups in claude.ai, then the UI | 9a and 9b done 2026-10-23: 150 and 151 applied (live tests 40/40 and 21/21; A51); 9c done (mcp v159, fresh-thread check passed); 9d–9e not started |
+| 9 | Overview numbers, plus Action Items and Dropping below the floor (A49). Data first, then mockups in claude.ai, then the UI | 9a and 9b done 2026-10-23: 150 and 151 applied (live tests 40/40 and 21/21; A51); 9c done (mcp v159, fresh-thread check passed); 9d built (moneyApi reads, unit-tested); 9e live 2026-10-23 (A52, A53; checkpoint 1d583db, merged as ffeb7cc); 9f done 2026-10-23 (mcp v160, fresh-thread check passed). **Step 9 done** |
 | 10 | Weekly cleanup prompt, **plus the `never_fires` fix (spec A16)**: flag a rule when its last match is older than about 1.5× its expected interval, and give a new rule that long before its first match is due; update `rule_health.never_fires` help and `ruleNumbers.js` with it; **and count a hand change to a rule-set project as an often_overridden override** (redefines `wb_rule_health_all`, with A15 comments). **Done when** the planned-items section lists every overdue unmatched one-off **and every missed date of a recurring planned item** as unmatched (A25), because the projection does not count those. **Also check (not a bug):** in the step 6 fresh thread, July 2026's burn `subscription_excluded` was much smaller than Aug and Sep. The likely cause is that older subscription charges were never linked. Check the links and relink if needed. **Also: a sync encoding check.** A SimpleFIN account name arrives as "VISA SIGNATURE�� CARD", with the ® garbled (found 2026-10-23); find where wb-sync decodes it | not started |
 | 11 | Phase 3 review | not started |
 
@@ -730,6 +730,73 @@ All six tests passed in a fresh claude.ai thread with the skill loaded. No amoun
   - `update_wb_account` refused a due day of 32 and card days on a checking account, then set and cleared the three Visa 3782 fields, which are null again.
 - Released `db:deploy`. Yielded `warren-buffet-p2.ts` (unchanged) to mcp_read_gaps-t8k. That thread also waits on `mcp/index.ts`, `index.test.mjs`, `warren-buffet.ts` and `warren-buffet-p3.ts`, which free up after the 9c checkpoint.
 - For step 10: a card's SimpleFIN name arrives as "VISA SIGNATURE�� CARD" (the ® garbled). Add a sync encoding check; not fixed now.
+
+### Step 9d built (2026-10-23, run tag `warren_buffet_p3-q5k-s20-g9vb`)
+- 9c was checkpointed as 0db2609 (merged as b8eb0fc). Yielded `mcp/index.ts`, `index.test.mjs`, `warren-buffet.ts` and `warren-buffet-p3.ts` to mcp_read_gaps-t8k; all four were unchanged from main.
+- `moneyApi`:
+  - `getActionItems({days, bigAmount, bigDays})`: the `wb_action_items` RPC, passing only the options given;
+  - `getFreeCash({includeDrafts})`: the `wb_free_cash` row plus `missed_dates`, the count of `wb_planned_unmatched` (A49);
+  - `getTrueCost()`: `wb_true_cost` plus 12 burn months, as `get_wb_true_cost`.
+- Tests: moneyApi 46/46. No UI yet.
+- Live data sample for the mockups: waiting for Alex's one rolled-back read. The amounts go in the report, never in the repo.
+
+### Step 9e built (2026-10-23, run tag `warren_buffet_p3-q5k-s21-o4kz`)
+- Layout decisions recorded as A52, from the claude.ai mockups.
+- **SQL:** `supabase/migrations/_pending_warren_buffet_p3-q5k_cash_flow.sql` adds `cash_flow` and `coming_up.big` to `wb_action_items`. Tests in `supabase/tests/warren_buffet_p3/4_cash_flow_tests.sql`, 11 checks. PGlite passes all 17 test files, and the new checks fail against 151.
+- **UI:**
+  - `OverviewScreen.jsx` rebuilt from `getActionItems`, in this order: sync line, funds transfer, red flags, To do, major expenses, next 14 days, cash flow, net worth;
+  - `MoneyPage.jsx`: Back from an item or a transaction opened on Overview returns to Overview;
+  - help: 5 new entries and 4 unreserved;
+  - `ruleNumbers.js` mirrors the defaults.
+- Main had a second migration 150 (`150_restructure_p5_shared_group_types.sql`, restructure_p5) beside `150_wb_phase3_step9a_action_items.sql`. Reported to Alex; not changed here.
+- Next: Alex runs gitsync, then the drift check, the `db:fn:wb_action_items` claim, and numbering.
+
+### Step 9e changes after live testing (2026-10-23, run tag `warren_buffet_p3-q5k-s21-f6mc`, A53)
+- **Same pending migration:**
+  - `below_floor.path`: the start, dated events with the balance after each, and weekly burn;
+  - flags over 90 days, until a matching credit or reviewed-with-note, with `note`.
+- **UI:**
+  - "Show the path to (date)", with the first row below the floor highlighted;
+  - the flag note shown under the title;
+  - Back from an account returns to Overview, and the Reserve button is a text link;
+  - the Major expenses total on its own row;
+  - headings read title, count, then "?".
+- **Tests:**
+  - `4_cash_flow_tests.sql` grows to 28 checks;
+  - the old-fee date in `2_action_items_tests.sql` moves past 90 days;
+  - Overview and Money page tests updated.
+- Follow-up 9c-style MCP work (not done): a transaction-note tool or a note on `mark_wb_reviewed`, and the `get_wb_action_items` description for the 90 days, the clearing rules, `note` and `path`.
+
+### Step 9e numbered 153 (2026-10-23, run tag `warren_buffet_p3-q5k-s21-n2hp`)
+- Flag rule changed (A53): a matching credit turns a flag info, with `refund` linked ("Refund received"); only reviewed-with-a-note clears it. Flag cards are green when info.
+- The sync was already in (5d137ff), and the drift check was clear. Claimed `db:fn:wb_action_items`.
+- Numbered **153_wb_phase3_step9e_overview_cash_flow.sql** after 152 and deleted the `_pending_` file.
+- `4_cash_flow_tests.sql`: 29 checks. PGlite passes all 17 test files.
+- **Next 9c-style step:** a note on `mark_wb_reviewed`, or a small transaction-note tool. Plus the `get_wb_action_items` description update: 90 days, the refund-received state, the handled rule, `note`, and `path`.
+
+### Step 9e applied and tested (2026-10-23, run tag `warren_buffet_p3-q5k-s22-t5wd`)
+- Alex ran 153 (conformant), `4_` 29/29, `3_` 21/21 and `2_` 40/40.
+- He tested the Overview in Chrome mobile view against live data: cash flow and runway, the path with the first row below the floor marked, the flag note, the headings, and Back to Overview.
+- **Polish (app only):**
+  - the path shows each day's balance once, on its last row;
+  - an intention or inbox title that stops mid-line (a trailing comma, colon, dash or joining word) ends with "…". The SQL doesn't cut intentions: it sends the whole `intents.text`, and the longer text is probably in `description`. An exact rule would need a "has more" flag from SQL.
+- Released `db:fn:wb_action_items`.
+
+### Step 9e live; 9f built (2026-10-23, run tag `warren_buffet_p3-q5k-s23-q1ve`)
+- 9e was checkpointed as 1d583db, merged as ffeb7cc, and is live on the site.
+- **9f:** `mark_wb_reviewed` gains `note`.
+  - It applies to exactly one transaction, only while marking it reviewed, and is added on a new line after any existing note, so nothing is lost. Up to 2000 characters.
+  - It stays on `mark_wb_reviewed` rather than a new tool: one optional argument, and refused for a batch.
+  - Without a note, the tool behaves as before.
+- The `get_wb_action_items` description now covers: flags over 90 days, the refund-to-info state, the handled rule, `note`, `path`, `cash_flow` and `big`. The skill's section 11 says how to close a fee flag.
+- Tests: p2 41, mcp index 34, p3 25, warren-buffet 26. Still 139 tools.
+- Deployed mcp **v160** over v159 (mine) at 10:18 PT. No auth: 401. Live: 139 tools, with `note` on `mark_wb_reviewed` and the new description. `db:deploy` is held until the fresh-thread check.
+
+### Step 9f done; step 9 complete (2026-10-23, run tag `warren_buffet_p3-q5k-s23-x8gu`)
+- Fresh claude.ai thread on v160:
+  - `get_wb_action_items` led with the Visa 3782 interest flag (red, note shown, no refund), then below_floor on Nov 9 and cash_flow with its runway;
+  - `mark_wb_reviewed` refused a note with two ids, and refused one with reviewed false. Nothing was written.
+- Released `db:deploy`.
 
 ## Later
 
