@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 14:15, through migration 161 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-23 14:39, through migration 162 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -3326,49 +3326,69 @@ COMMENT ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text", 
 
 
 
-CREATE OR REPLACE FUNCTION "public"."platform_search_items"("p_context_id" "text" DEFAULT NULL::"text", "p_search_text" "text" DEFAULT NULL::"text", "p_tags" "text"[] DEFAULT NULL::"text"[], "p_limit" integer DEFAULT 20, "p_status" "text"[] DEFAULT NULL::"text"[]) RETURNS "jsonb"
-    LANGUAGE "sql" STABLE SECURITY DEFINER
+CREATE OR REPLACE FUNCTION "public"."platform_search_items"("p_context_id" "text" DEFAULT NULL::"text", "p_search_text" "text" DEFAULT NULL::"text", "p_tags" "text"[] DEFAULT NULL::"text"[], "p_limit" integer DEFAULT 20, "p_status" "text"[] DEFAULT NULL::"text"[], "p_offset" integer DEFAULT 0, "p_archived" "text" DEFAULT 'exclude'::"text", "p_no_context" boolean DEFAULT false) RETURNS "jsonb"
+    LANGUAGE "sql" STABLE
     SET "search_path" TO 'public', 'pg_temp'
     AS $$
-  with filtered as (
+  with words as (
+    -- Words split on spaces and common punctuation, with LIKE's wildcards and escape character made literal.
+    -- Null when there is no search text.
+    select array_agg(replace(replace(replace(w, '\', '\\'), '%', '\%'), '_', '\_')) as ws
+      from regexp_split_to_table(coalesce(p_search_text, ''), '[\s,;:.!?()\[\]{}"]+') as w
+     where w <> ''
+  ),
+  filtered as (
     select i.id, i.name, i.description, i.context_id, i.tags, i.is_capture_target,
-           i.created_at, i.status, i.closed_reason, i.last_completed_at
+           i.created_at, i.status, i.closed_reason, i.last_completed_at, i.archived,
+           coalesce((select bool_and(i.name ilike '%' || w || '%') from unnest((select ws from words)) as w), false)
+             as name_match
       from items i
-     where i.user_id = auth.uid()
-       and i.archived = false
-       and (p_context_id  is null or i.context_id = p_context_id)
-       and (p_search_text is null or
-            i.name ilike '%' || p_search_text || '%' or
-            i.description ilike '%' || p_search_text || '%' or
-            exists (select 1 from notes n
-                     where n.body ilike '%' || p_search_text || '%'
-                       and ((n.target_type = 'item' and n.target_id = i.id)
-                            or (n.target_type = 'intention'
-                                and n.target_id in (select t.id from intents t where t.item_id = i.id))
-                            or n.execution_id in (select x.id from executions x where x.item_ids ? i.id))))
-       and (p_tags is null
-            or array_length(p_tags, 1) is null
-            or i.tags && p_tags)
-       and (p_status is null
-            or array_length(p_status, 1) is null
-            or i.status = any(p_status))
+     where (case coalesce(p_archived, 'exclude')
+              when 'include' then true
+              when 'only'    then coalesce(i.archived, false)
+              else not coalesce(i.archived, false)
+            end)
+       and (p_context_id is null or i.context_id = p_context_id)
+       and (not coalesce(p_no_context, false) or i.context_id is null)
+       and (p_tags is null or array_length(p_tags, 1) is null or i.tags && p_tags)
+       and (p_status is null or array_length(p_status, 1) is null or i.status = any(p_status))
+       and ((select ws from words) is null
+            or not exists (
+                 select 1 from unnest((select ws from words)) as w
+                  where not (
+                    i.name ilike '%' || w || '%'
+                    or coalesce(i.description, '') ilike '%' || w || '%'
+                    or exists (select 1 from notes n
+                                where n.body ilike '%' || w || '%'
+                                  and ((n.target_type = 'item' and n.target_id = i.id)
+                                       or (n.target_type = 'intention'
+                                           and n.target_id in (select t.id from intents t where t.item_id = i.id))
+                                       or n.execution_id in (select x.id from executions x where x.item_ids ? i.id))))))
+  ),
+  page as (
+    select * from filtered
+     order by name_match desc, name, id
+     limit greatest(coalesce(p_limit, 20), 0) offset greatest(coalesce(p_offset, 0), 0)
   )
   select jsonb_build_object(
-    'rows',
-      coalesce(
-        (select jsonb_agg(row_to_json(x) order by x.name)
-           from (select * from filtered order by name limit p_limit) x),
-        '[]'::jsonb),
-    'total',
-      (select count(*) from filtered)
+    'rows', coalesce(
+      (select jsonb_agg(jsonb_build_object(
+                'id', p.id, 'name', p.name, 'description', p.description, 'context_id', p.context_id,
+                'tags', p.tags, 'is_capture_target', p.is_capture_target, 'created_at', p.created_at,
+                'status', p.status, 'closed_reason', p.closed_reason, 'last_completed_at', p.last_completed_at,
+                'archived', p.archived)
+              order by p.name_match desc, p.name, p.id)
+         from page p),
+      '[]'::jsonb),
+    'total', (select count(*) from filtered)
   );
 $$;
 
 
-ALTER FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[]) OWNER TO "postgres";
+ALTER FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[], "p_offset" integer, "p_archived" "text", "p_no_context" boolean) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[]) IS 'Alfred: get_items'' reader. Live items owned by the caller, filtered by context, search text, tags (any-of) and status (any-of) before the limit. Returns { rows, total }. Restructure P1 added status and p_status. Restructure P2: search text also matches notes on the item, its intentions and its executions; rows carry last_completed_at. Restructure P4: rows carry closed_reason.';
+COMMENT ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[], "p_offset" integer, "p_archived" "text", "p_no_context" boolean) IS 'Alfred: the reader behind get_items and search_items. Items the caller can see (RLS: own, or in a shared context), filtered by context (or no context), archived (exclude, include, only), tags (any-of), status (any-of) and search text before the page window. Search text is split into words; every word must appear in the name, the description, or a note on the item, its intentions or its executions; %, _ and \ match literally. Rows whose name holds every word come first, then by name. Returns { rows, total } with status, closed_reason and last_completed_at. Security invoker since migration 163.';
 
 
 
@@ -13676,6 +13696,10 @@ CREATE INDEX "idx_executions_group" ON "public"."executions" USING "btree" ("gro
 
 
 
+CREATE INDEX "idx_executions_item_ids" ON "public"."executions" USING "gin" ("item_ids");
+
+
+
 CREATE INDEX "idx_executions_parent" ON "public"."executions" USING "btree" ("parent_execution_id") WHERE ("parent_execution_id" IS NOT NULL);
 
 
@@ -15596,7 +15620,7 @@ CREATE POLICY "collection_items_parent_access" ON "public"."collection_items" TO
 ALTER TABLE "public"."contexts" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "contexts_access" ON "public"."contexts" USING ((("user_id" = "auth"."uid"()) OR ("shared" = true)));
+CREATE POLICY "contexts_access" ON "public"."contexts" USING ((("user_id" = ( SELECT "auth"."uid"() AS "uid")) OR ("shared" = true)));
 
 
 
@@ -15751,9 +15775,9 @@ CREATE POLICY "inbox_access" ON "public"."inbox" USING (("user_id" = "auth"."uid
 ALTER TABLE "public"."intents" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "intents_access" ON "public"."intents" USING ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+CREATE POLICY "intents_access" ON "public"."intents" USING ((("user_id" = ( SELECT "auth"."uid"() AS "uid")) OR ("context_id" IN ( SELECT "contexts"."id"
    FROM "public"."contexts"
-  WHERE ("contexts"."shared" = true))))) WITH CHECK ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+  WHERE ("contexts"."shared" = true))))) WITH CHECK ((("user_id" = ( SELECT "auth"."uid"() AS "uid")) OR ("context_id" IN ( SELECT "contexts"."id"
    FROM "public"."contexts"
   WHERE ("contexts"."shared" = true)))));
 
@@ -15799,9 +15823,9 @@ CREATE POLICY "item_groups_access" ON "public"."item_groups" TO "authenticated" 
 ALTER TABLE "public"."items" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "items_access" ON "public"."items" USING ((("user_id" = "auth"."uid"()) OR (("context_id" IS NOT NULL) AND ("context_id" IN ( SELECT "contexts"."id"
+CREATE POLICY "items_access" ON "public"."items" USING ((("user_id" = ( SELECT "auth"."uid"() AS "uid")) OR (("context_id" IS NOT NULL) AND ("context_id" IN ( SELECT "contexts"."id"
    FROM "public"."contexts"
-  WHERE ("contexts"."shared" = true)))))) WITH CHECK ((("user_id" = "auth"."uid"()) OR (("context_id" IS NOT NULL) AND ("context_id" IN ( SELECT "contexts"."id"
+  WHERE ("contexts"."shared" = true)))))) WITH CHECK ((("user_id" = ( SELECT "auth"."uid"() AS "uid")) OR (("context_id" IS NOT NULL) AND ("context_id" IN ( SELECT "contexts"."id"
    FROM "public"."contexts"
   WHERE ("contexts"."shared" = true))))));
 
@@ -15845,11 +15869,11 @@ CREATE POLICY "ken_misconceptions_owner_access" ON "public"."ken_misconceptions"
 ALTER TABLE "public"."notes" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "notes_delete" ON "public"."notes" FOR DELETE TO "authenticated" USING (("user_id" = "auth"."uid"()));
+CREATE POLICY "notes_delete" ON "public"."notes" FOR DELETE TO "authenticated" USING (("user_id" = ( SELECT "auth"."uid"() AS "uid")));
 
 
 
-CREATE POLICY "notes_insert" ON "public"."notes" FOR INSERT TO "authenticated" WITH CHECK ((("user_id" = "auth"."uid"()) AND ((("target_type" = 'item'::"text") AND (EXISTS ( SELECT 1
+CREATE POLICY "notes_insert" ON "public"."notes" FOR INSERT TO "authenticated" WITH CHECK ((("user_id" = ( SELECT "auth"."uid"() AS "uid")) AND ((("target_type" = 'item'::"text") AND (EXISTS ( SELECT 1
    FROM "public"."items" "i"
   WHERE (("i"."id" = "notes"."target_id") AND (COALESCE("i"."archived", false) = false))))) OR (("target_type" = 'intention'::"text") AND (EXISTS ( SELECT 1
    FROM "public"."intents" "t"
@@ -15871,7 +15895,7 @@ CREATE POLICY "notes_select" ON "public"."notes" FOR SELECT TO "authenticated" U
 
 
 
-CREATE POLICY "notes_update" ON "public"."notes" FOR UPDATE TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK ((("user_id" = "auth"."uid"()) AND ((("target_type" = 'item'::"text") AND (EXISTS ( SELECT 1
+CREATE POLICY "notes_update" ON "public"."notes" FOR UPDATE TO "authenticated" USING (("user_id" = ( SELECT "auth"."uid"() AS "uid"))) WITH CHECK ((("user_id" = ( SELECT "auth"."uid"() AS "uid")) AND ((("target_type" = 'item'::"text") AND (EXISTS ( SELECT 1
    FROM "public"."items" "i"
   WHERE ("i"."id" = "notes"."target_id")))) OR (("target_type" = 'intention'::"text") AND (EXISTS ( SELECT 1
    FROM "public"."intents" "t"
@@ -16427,9 +16451,9 @@ GRANT ALL ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text"
 
 
 
-REVOKE ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[]) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[]) TO "authenticated";
-GRANT ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[]) TO "service_role";
+REVOKE ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[], "p_offset" integer, "p_archived" "text", "p_no_context" boolean) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[], "p_offset" integer, "p_archived" "text", "p_no_context" boolean) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[], "p_offset" integer, "p_archived" "text", "p_no_context" boolean) TO "service_role";
 
 
 
