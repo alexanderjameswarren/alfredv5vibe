@@ -78,6 +78,24 @@ import {
 import { getAppsTool, checkSourceApp } from "../_shared/tools/apps.ts";
 import { getGroupsTool } from "../_shared/tools/groups.ts";
 import {
+  ACTIVITY_KINDS,
+  ACTIVITY_SOURCES,
+  ACTIVITY_TARGETS,
+  LOG_SOURCES,
+  getActivityTool,
+  logActivityTool,
+} from "../_shared/tools/overwatch-activity.ts";
+import {
+  GROUP_STATUSES,
+  HURDLE_KINDS,
+  LINK_KINDS,
+  WAITING_KINDS,
+  createProjectLinkTool,
+  getProjectLinksTool,
+  getProjectPlansTool,
+  updateProjectPlanTool,
+} from "../_shared/tools/overwatch-projects.ts";
+import {
   getRecordsTool,
   LIVE_STATUSES,
   readItems,
@@ -2891,6 +2909,141 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(updateReminderTool, args, token),
+  );
+
+  // --- Overwatch, Phase 3 (docs/technical-spec-overwatch-q4n.md §7) ---
+  const owEnum = (values: readonly string[]) => z.enum(values as [string, ...string[]]);
+
+  server.registerTool(
+    "get_activity",
+    {
+      title: "Get Activity",
+      description:
+        "Read Overwatch's log of what got done across every app, newest first. Rows come from Alfred's own closes " +
+        "(source 'trigger': an execution done, an item or intention closed as done, a Project closed as done = kind " +
+        "'shipped'), from log_activity (claude, cli, manual) and from the nightly job (kind 'used' or 'progress'). " +
+        "Filter by a date range (from and to are Pacific dates, to inclusive, or ISO times with offset), app_id, " +
+        "context_id, group_id (the Project it counts toward), kind, source and tag (the record's tags when the row was " +
+        "written). Tier 1.",
+      inputSchema: {
+        from: z.string().optional().describe("Start: a Pacific date YYYY-MM-DD (from its midnight) or an ISO time with offset."),
+        to: z.string().optional().describe("End: a Pacific date YYYY-MM-DD (inclusive) or an ISO time with offset (exclusive)."),
+        app_id: z.string().optional().describe("Only this app, an id from get_apps."),
+        context_id: z.string().optional().describe("Only this context."),
+        group_id: z.string().optional().describe("Only rows counting toward this Project group."),
+        kind: owEnum(ACTIVITY_KINDS).optional().describe("shipped, done, progress or used."),
+        source: owEnum(ACTIVITY_SOURCES).optional().describe("trigger, claude, cli, nightly or manual."),
+        tag: z.string().optional().describe("Only rows whose tags snapshot includes this tag."),
+        ...readOptions({ noContext: true }),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getActivityTool, args, token),
+  );
+
+  server.registerTool(
+    "log_activity",
+    {
+      title: "Log Activity",
+      description:
+        "Add one row to Overwatch's activity log: work done or progress made that Alfred's own triggers cannot see, such " +
+        "as a CLI step reported in a claude.ai thread (source 'cli', source_ref the run tag, kind 'progress'; kind " +
+        "'shipped' at closeout). With a source_ref, a second call returns the row already logged (already_logged true) " +
+        "and writes nothing, so it is safe to repeat. Never edits a row. Tier 1.",
+      inputSchema: {
+        kind: owEnum(ACTIVITY_KINDS).describe("shipped (a project finished), done, progress or used."),
+        source: owEnum(LOG_SOURCES).describe("claude, cli, nightly or manual. 'trigger' is the database's own."),
+        title: z.string().describe("One line, up to 300 characters."),
+        summary: z.string().optional().describe("A few sentences, if needed."),
+        occurred_at: z.string().optional().describe("When it happened, ISO with offset. Default now."),
+        app_id: z.string().optional().describe("The app, an id from get_apps. Default alfred."),
+        context_id: z.string().optional().describe("The context, if any."),
+        group_id: z.string().optional().describe("The Project group it counts toward, if any."),
+        target_type: owEnum(ACTIVITY_TARGETS).optional().describe("What it is about. Default other."),
+        target_id: z.string().optional().describe("The id of that record, if any."),
+        source_ref: z.string().optional().describe("The source's identity, e.g. the run tag, so the row is logged once."),
+        tags: z.array(z.string()).optional().describe("Tags to record with it."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(logActivityTool, args, token),
+  );
+
+  server.registerTool(
+    "get_project_plans",
+    {
+      title: "Get Project Plans",
+      description:
+        "List Alex's Project groups (group type Project) with their plans: project_code, target_date, effort_estimate " +
+        "(CLI steps), the status line (where_now, next_step, waiting_on, waiting_on_kind, waiting_on_group_id, " +
+        "hurdle_kind, status_written_at), and the counted effort: steps_used (distinct step numbers in CLI run tags " +
+        "under the project code), reports and last_report_at. has_plan is false for a Project with no plan yet. " +
+        "Default: active Projects, most recently reported first. Tier 1.",
+      inputSchema: {
+        status: z.union([z.literal("all"), owEnum(GROUP_STATUSES), z.array(owEnum(GROUP_STATUSES))]).optional()
+          .describe("Group status or statuses to include (default active), or 'all'."),
+        group_ids: z.array(z.string()).optional().describe("Only these Project groups."),
+        limit: z.number().optional().describe("Rows, default 20, max 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getProjectPlansTool, args, token),
+  );
+
+  server.registerTool(
+    "update_project_plan",
+    {
+      title: "Update Project Plan",
+      description:
+        "Create or change a Project's plan, by group_id (a Project group; anything else is refused). Only the fields " +
+        "passed change; null clears one. Write the status line (where_now, next_step, waiting_on and waiting_on_kind) " +
+        "on every CLI report: status_written_at is stamped when it changes, and that is what the stall check reads. " +
+        "Waiting on another Project: waiting_on_kind 'project' with waiting_on_group_id. Parked: hurdle_kind. Tier 2.",
+      inputSchema: {
+        group_id: z.string().describe("The Project group's id."),
+        project_code: z.string().nullable().optional().describe("The CLI project code, e.g. overwatch-q4n. One per Project."),
+        target_date: z.string().nullable().optional().describe("Done by, YYYY-MM-DD."),
+        effort_estimate: z.number().nullable().optional().describe("Estimated CLI steps, 1 to 500."),
+        where_now: z.string().nullable().optional().describe("One line: where it stands."),
+        next_step: z.string().nullable().optional().describe("One line: the next step."),
+        waiting_on: z.string().nullable().optional().describe("One line: what it waits on."),
+        waiting_on_kind: owEnum(WAITING_KINDS).nullable().optional().describe("alex, decision, project or hurdle."),
+        waiting_on_group_id: z.string().nullable().optional().describe("The Project it waits on (waiting_on_kind 'project')."),
+        hurdle_kind: owEnum(HURDLE_KINDS).nullable().optional().describe("Why it is parked: technology, time, money or skill."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateProjectPlanTool, args, token),
+  );
+
+  server.registerTool(
+    "get_project_links",
+    {
+      title: "Get Project Links",
+      description:
+        "List links between Projects: notify_on_ship (when from ships, tell to), no_parallel (do not run the two at " +
+        "once) and depends_on (from waits on to). Filter by kind and by group_id at either end. Tier 1.",
+      inputSchema: {
+        kind: owEnum(LINK_KINDS).optional().describe("notify_on_ship, no_parallel or depends_on."),
+        group_id: z.string().optional().describe("Only links with this Project at either end."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getProjectLinksTool, args, token),
+  );
+
+  server.registerTool(
+    "create_project_link",
+    {
+      title: "Create Project Link",
+      description:
+        "Link two Projects: notify_on_ship, no_parallel or depends_on. Both must be Alex's Project groups. created_by " +
+        "'overwatch' when the nightly job proposed it and Alex agreed. A duplicate is refused. Tier 2.",
+      inputSchema: {
+        from_group_id: z.string().describe("The Project the link starts from."),
+        to_group_id: z.string().describe("The Project it points to."),
+        kind: owEnum(LINK_KINDS).describe("notify_on_ship, no_parallel or depends_on."),
+        note: z.string().optional().describe("Why, in plain words."),
+        created_by: z.enum(["alex", "overwatch"]).optional().describe("Default alex."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createProjectLinkTool, args, token),
   );
 
   // --- Warren Buffet, Phase 1 (docs/technical-spec-warren_buffet-w7b.md §8) ---
