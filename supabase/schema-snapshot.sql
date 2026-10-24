@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-24 14:26, through migration 169 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-24 15:09, through migration 170 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -3811,6 +3811,52 @@ ALTER FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "j
 
 
 COMMENT ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "jsonb") IS 'Alfred: process an inbox capture in one transaction: create its item, intention (taking the capture''s reminders) and event, add a collection member, then archive the capture as processed with outcome appended and source_app. Any failure writes nothing. Only the capture''s owner can process it. Does not use intents.is_item. Security invoker. Returns the rows written.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."project_plans_check_group"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  -- Read as jsonb: the two tables have different columns, and a field the row lacks would fail even in an unused branch.
+  v_row    jsonb := to_jsonb(new);
+  v_groups text[];
+  v_g      text;
+begin
+  v_groups := case tg_table_name
+    when 'project_plans' then array_remove(array[v_row ->> 'group_id', v_row ->> 'waiting_on_group_id'], null)
+    else array[v_row ->> 'from_group_id', v_row ->> 'to_group_id']
+  end;
+  foreach v_g in array v_groups loop
+    if not exists (select 1 from public.item_groups g join public.group_types t on t.id = g.group_type_id
+                    where g.id = v_g and g.user_id = new.user_id and t.kind = 'project') then
+      raise exception '% refused: group % is not one of your Project groups (group_types.kind = project).', tg_table_name, v_g
+        using errcode = '23514';
+    end if;
+  end loop;
+
+  if tg_table_name = 'project_plans' then
+    new.updated_at := now();
+    if tg_op = 'INSERT' then
+      new.status_written_at := case when coalesce(new.where_now, new.next_step, new.waiting_on, new.waiting_on_kind) is not null
+                                    then now() end;
+    elsif (new.where_now, new.next_step, new.waiting_on, new.waiting_on_kind)
+          is distinct from (old.where_now, old.next_step, old.waiting_on, old.waiting_on_kind) then
+      new.status_written_at := now();
+    else
+      new.status_written_at := old.status_written_at;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."project_plans_check_group"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."project_plans_check_group"() IS 'Overwatch: refuses a project_plans or project_links row whose group is not the same user''s Project group (group_types.kind = project); stamps project_plans.updated_at, and status_written_at when the status line changes.';
 
 
 
@@ -10710,6 +10756,147 @@ COMMENT ON COLUMN "public"."platform_schedules"."enabled" IS 'False suspends sta
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."project_links" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "from_group_id" "text" NOT NULL,
+    "to_group_id" "text" NOT NULL,
+    "kind" "text" NOT NULL,
+    "note" "text",
+    "created_by" "text" DEFAULT 'alex'::"text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "project_links_created_by_values" CHECK (("created_by" = ANY (ARRAY['alex'::"text", 'overwatch'::"text"]))),
+    CONSTRAINT "project_links_kind_values" CHECK (("kind" = ANY (ARRAY['notify_on_ship'::"text", 'no_parallel'::"text", 'depends_on'::"text"]))),
+    CONSTRAINT "project_links_not_to_itself" CHECK (("from_group_id" <> "to_group_id"))
+);
+
+
+ALTER TABLE "public"."project_links" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."project_links" IS 'OVERWATCH. Links between Project groups: notify_on_ship (when from ships, tell to), no_parallel (learned from repeated claim blocks; do not run the two at once) and depends_on (from waits on to). Both ends must be the user''s Projects (project_plans_check_group). Spec: docs/technical-spec-overwatch-q4n.md section 4.4.';
+
+
+
+COMMENT ON COLUMN "public"."project_links"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."project_links"."user_id" IS 'Owner. Must own both groups (project_plans_check_group). Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."project_links"."from_group_id" IS 'The Project the link starts from.';
+
+
+
+COMMENT ON COLUMN "public"."project_links"."to_group_id" IS 'The Project it points to. Never the same as from_group_id.';
+
+
+
+COMMENT ON COLUMN "public"."project_links"."kind" IS 'notify_on_ship, no_parallel or depends_on. One of each per pair and direction.';
+
+
+
+COMMENT ON COLUMN "public"."project_links"."note" IS 'Why the link exists, in plain words.';
+
+
+
+COMMENT ON COLUMN "public"."project_links"."created_by" IS 'alex, or overwatch when the nightly job proposed it and Alex agreed.';
+
+
+
+COMMENT ON COLUMN "public"."project_links"."created_at" IS 'Row creation.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."project_plans" (
+    "group_id" "text" NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "project_code" "text",
+    "target_date" "date",
+    "effort_estimate" integer,
+    "where_now" "text",
+    "next_step" "text",
+    "waiting_on" "text",
+    "waiting_on_kind" "text",
+    "waiting_on_group_id" "text",
+    "hurdle_kind" "text",
+    "status_written_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "project_plans_code_format" CHECK ((("project_code" IS NULL) OR ("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text"))),
+    CONSTRAINT "project_plans_effort_positive" CHECK ((("effort_estimate" IS NULL) OR (("effort_estimate" >= 1) AND ("effort_estimate" <= 500)))),
+    CONSTRAINT "project_plans_hurdle_kind_values" CHECK ((("hurdle_kind" IS NULL) OR ("hurdle_kind" = ANY (ARRAY['technology'::"text", 'time'::"text", 'money'::"text", 'skill'::"text"])))),
+    CONSTRAINT "project_plans_not_waiting_on_itself" CHECK (("waiting_on_group_id" IS DISTINCT FROM "group_id")),
+    CONSTRAINT "project_plans_waiting_group_is_project_kind" CHECK ((("waiting_on_group_id" IS NULL) OR ("waiting_on_kind" = 'project'::"text"))),
+    CONSTRAINT "project_plans_waiting_kind_values" CHECK ((("waiting_on_kind" IS NULL) OR ("waiting_on_kind" = ANY (ARRAY['alex'::"text", 'decision'::"text", 'project'::"text", 'hurdle'::"text"]))))
+);
+
+
+ALTER TABLE "public"."project_plans" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."project_plans" IS 'OVERWATCH. Planning fields for a Project group (group_types.kind = project), one row per group. Actual effort is not stored: it is the number of distinct step numbers in run tags under project_code. Written by update_project_plan (tier 2). Spec: docs/technical-spec-overwatch-q4n.md section 4.3.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."group_id" IS 'The Project group, an item_groups.id. One plan per group; deleting the group deletes its plan. project_plans_check_group refuses a group that is not a Project or not the caller''s.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."user_id" IS 'Owner. Must own the group too (project_plans_check_group). Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."project_code" IS 'The CLI project code, e.g. overwatch-q4n, which links run tags (clips.run_tag) to this project. One per user.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."target_date" IS 'The date Alex wants it done by, or null.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."effort_estimate" IS 'Estimated CLI steps, 1 to 500, or null.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."where_now" IS 'One line: where it stands.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."next_step" IS 'One line: the next step.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."waiting_on" IS 'One line: what it is waiting on, or null.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."waiting_on_kind" IS 'What kind of wait: alex, decision, project (set waiting_on_group_id) or hurdle (set hurdle_kind), or null.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."waiting_on_group_id" IS 'The Project it waits on, when waiting_on_kind is project. Must be a Project of the same user, never itself.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."hurdle_kind" IS 'Why it is parked: technology, time, money or skill, or null.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."status_written_at" IS 'When the status line (where_now, next_step, waiting_on, waiting_on_kind) last changed. Stamped by project_plans_check_group; the stall check reads it.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."created_at" IS 'Row creation.';
+
+
+
+COMMENT ON COLUMN "public"."project_plans"."updated_at" IS 'Last change. Stamped by project_plans_check_group.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."push_subscriptions" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -13771,6 +13958,21 @@ ALTER TABLE ONLY "public"."platform_schedules"
 
 
 
+ALTER TABLE ONLY "public"."project_links"
+    ADD CONSTRAINT "project_links_once" UNIQUE ("user_id", "from_group_id", "to_group_id", "kind");
+
+
+
+ALTER TABLE ONLY "public"."project_links"
+    ADD CONSTRAINT "project_links_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."project_plans"
+    ADD CONSTRAINT "project_plans_pkey" PRIMARY KEY ("group_id");
+
+
+
 ALTER TABLE ONLY "public"."push_subscriptions"
     ADD CONSTRAINT "push_subscriptions_endpoint_key" UNIQUE ("endpoint");
 
@@ -14510,6 +14712,10 @@ CREATE INDEX "platform_runs_unnotified_idx" ON "public"."platform_runs" USING "b
 
 
 
+CREATE UNIQUE INDEX "project_plans_code_once" ON "public"."project_plans" USING "btree" ("user_id", "project_code") WHERE ("project_code" IS NOT NULL);
+
+
+
 CREATE INDEX "reminders_inbox_idx" ON "public"."reminders" USING "btree" ("inbox_id") WHERE ("inbox_id" IS NOT NULL);
 
 
@@ -14818,6 +15024,14 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."project_links" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."project_plans" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."push_subscriptions" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -15015,6 +15229,14 @@ CREATE OR REPLACE TRIGGER "items_status_guard" BEFORE UPDATE ON "public"."items"
 
 
 CREATE OR REPLACE TRIGGER "notes_touch_updated_at" BEFORE UPDATE ON "public"."notes" FOR EACH ROW EXECUTE FUNCTION "public"."notes_touch_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "project_plans_check_group" BEFORE INSERT OR UPDATE ON "public"."project_links" FOR EACH ROW EXECUTE FUNCTION "public"."project_plans_check_group"();
+
+
+
+CREATE OR REPLACE TRIGGER "project_plans_check_group" BEFORE INSERT OR UPDATE ON "public"."project_plans" FOR EACH ROW EXECUTE FUNCTION "public"."project_plans_check_group"();
 
 
 
@@ -15607,6 +15829,36 @@ ALTER TABLE ONLY "public"."platform_runs"
 
 ALTER TABLE ONLY "public"."platform_schedules"
     ADD CONSTRAINT "platform_schedules_app_fkey" FOREIGN KEY ("app") REFERENCES "public"."apps"("id");
+
+
+
+ALTER TABLE ONLY "public"."project_links"
+    ADD CONSTRAINT "project_links_from_group_id_fkey" FOREIGN KEY ("from_group_id") REFERENCES "public"."item_groups"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."project_links"
+    ADD CONSTRAINT "project_links_to_group_id_fkey" FOREIGN KEY ("to_group_id") REFERENCES "public"."item_groups"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."project_links"
+    ADD CONSTRAINT "project_links_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."project_plans"
+    ADD CONSTRAINT "project_plans_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."item_groups"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."project_plans"
+    ADD CONSTRAINT "project_plans_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."project_plans"
+    ADD CONSTRAINT "project_plans_waiting_on_group_id_fkey" FOREIGN KEY ("waiting_on_group_id") REFERENCES "public"."item_groups"("id") ON DELETE SET NULL;
 
 
 
@@ -16562,6 +16814,20 @@ CREATE POLICY "platform_schedules_owner_access" ON "public"."platform_schedules"
 
 
 
+ALTER TABLE "public"."project_links" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "project_links_owner_access" ON "public"."project_links" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."project_plans" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "project_plans_owner_access" ON "public"."project_plans" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
 ALTER TABLE "public"."push_subscriptions" ENABLE ROW LEVEL SECURITY;
 
 
@@ -17120,6 +17386,12 @@ GRANT ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p
 REVOKE ALL ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "jsonb") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "jsonb") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."project_plans_check_group"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."project_plans_check_group"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."project_plans_check_group"() TO "service_role";
 
 
 
@@ -17789,6 +18061,16 @@ GRANT ALL ON TABLE "public"."platform_runs" TO "service_role";
 
 GRANT ALL ON TABLE "public"."platform_schedules" TO "authenticated";
 GRANT ALL ON TABLE "public"."platform_schedules" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."project_links" TO "authenticated";
+GRANT ALL ON TABLE "public"."project_links" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."project_plans" TO "authenticated";
+GRANT ALL ON TABLE "public"."project_plans" TO "service_role";
 
 
 
