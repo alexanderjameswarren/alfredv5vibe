@@ -5,11 +5,13 @@ entire program. It is written to be read cold, months later, by someone debuggin
 that misbehaved. Length here is deliberate — compression would cost exactly the context a
 cold reader needs.
 
-- **Schedule:** daily, **17:00 UTC** (10:00 Pacific). Far from the UTC midnight boundary
+- **Schedule:** daily, **4:30 am Pacific** (11:30 or 12:30 UTC), so it lands before the Drive Mix
+  refresh at 4:54. Moved from 17:00 UTC on 2026-10-11. Still far from the UTC midnight boundary
   that governs how YouTube buckets history — a run near 00:00 UTC risks the feed rolling
   over mid-request, with some entries answered under one UTC day and some under the next
   and no way to tell which afterwards.
-- **App / job:** `dj` / `daily_history_sync`.
+- **App / job:** `dj` / `daily_history_sync`, registered in `platform_schedules` (expected by 04:30
+  Pacific, 6 hours' grace) since Overwatch Step 8.
 - **Edit rule:** change this file, then paste it into the task. Never edit the task alone,
   or this file becomes a description of something that no longer exists.
 

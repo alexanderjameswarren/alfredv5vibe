@@ -44,8 +44,8 @@ conversation, not a capture to be filed: there is no item, no intention and no e
 suggested context would be the same mistake in miniature — something to accept or reject on a row
 where the only action is Copy.
 
-`task_name` is spelled as it reads, because it is rendered: *Weekly DJ review*. The job has no
-`platform_schedules` row to take a slug from — see Appendix B.
+`task_name` is spelled as it reads, because it is rendered: *Weekly DJ review*. The job's slug is
+`dj/weekly_review` (its `platform_schedules` row), which is used for the run stamp below, not here.
 
 ---
 
@@ -63,6 +63,16 @@ failure permanently.
 
 ## The run — make these calls, in this order
 
+**First, before anything else:** call `create_platform_run` with app `"dj"`, job `"weekly_review"`,
+executor `"claude"`, status `"running"`. Keep the run id.
+
+**Last, after the inbox item, and also if the run stops early:** call `update_platform_run` with that id:
+- `"ok"` when the inbox item was written, with details `{ "inbox_item_id": "<id>", "concerts": <n> }`;
+- `"partial"` when the report says it is partial, with the same details;
+- `"failed"` otherwise, with a one-line `error_message` and details `{ "failure_kind": "<short slug>" }`.
+
+A run with no row means the task never fired; that is what the schedule row is for.
+
 | # | call | for |
 |---|---|---|
 | 1 | `get_workshop_status` | which host answered — note `git_sha` in the footer |
@@ -79,7 +89,7 @@ failure permanently.
 
 ### Budget: 60 calls per 300 seconds, SHARED
 
-**The run costs `8 + 3n`** where n is the number of upcoming concerts. Three concerts is 17.
+**The run costs `10 + 3n`** where n is the number of upcoming concerts (the two run-stamp calls included). Three concerts is 19.
 
 ⚠️ **IF n > 8, DO THE EIGHT NEAREST DATES IN FULL AND GIVE THE REST ONE LINE EACH** — date,
 playlist, `runs`, `last_run_on`, taken from the engagement call you already made, so the fallback
@@ -90,12 +100,13 @@ partial report that says so beats a complete one that guessed.
 
 ---
 
-## What THIS job writes — two things, and nothing else
+## What THIS job writes — three things, and nothing else
 
 ⚠️ **Everything else here is read-only.**
 
 | write | when | tool |
 |---|---|---|
+| the run stamp | first (open) and last (close) | `create_platform_run`, `update_platform_run` |
 | derived tag facts (`derivable_as` non-null) | **immediately, without asking** — they are facts, not proposals | `record_dj_artist_tag` |
 | the inbox item | last, once the report is written | `create_inbox_item`, `source_type: "task"`, no suggestions |
 
@@ -351,8 +362,6 @@ State these only when load-bearing for something in the report, never as a stand
   conversation, never from listening history.
 - **Artist-identity collisions are not detectable** (§14.4). The diff can tell that a search
   returned several artists; it cannot tell that two real acts share a name.
-- **This job is not registered in `platform_schedules`** — checked 2026-09-25, which returns four
-  rows: `alfred/inbox_enrich_hourly`, `alfred/notify-dispatch`, `ken/ken_seed_check` and
-  `sam/daily_plan_review`. So nothing raises a staleness alarm if the weekly review silently stops
-  running, and there is no job slug to take `task_name` from — hence the readable name in the call
-  above. Registering it is a decision for Alex, not something this prompt can do.
+- **Registered since 2026-10-24** as `dj/weekly_review` in `platform_schedules` (Fridays, 13:00 UTC;
+  Overwatch Step 8). Before that it had no row, so nothing noticed if it silently stopped. The run
+  stamp at the top of "The run" is what the staleness check reads.
