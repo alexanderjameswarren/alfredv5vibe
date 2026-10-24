@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-24 13:00, through migration 165 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-24 13:23, through migration 166 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -8515,6 +8515,78 @@ COMMENT ON COLUMN "public"."apps"."updated_at" IS 'Last change. Stamped by the a
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."claim_blocks" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "waiter_code" "text" NOT NULL,
+    "holder_code" "text" NOT NULL,
+    "item" "text" NOT NULL,
+    "run_tag" "text",
+    "blocked_at" timestamp with time zone NOT NULL,
+    "last_seen_at" timestamp with time zone NOT NULL,
+    "repeat_count" integer DEFAULT 0 NOT NULL,
+    "cleared_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "claim_blocks_cleared_after_blocked" CHECK ((("cleared_at" IS NULL) OR ("cleared_at" >= "blocked_at"))),
+    CONSTRAINT "claim_blocks_codes_format" CHECK ((("waiter_code" ~ '^[a-z0-9_-]{1,40}$'::"text") AND ("holder_code" ~ '^[a-z0-9_-]{1,40}$'::"text"))),
+    CONSTRAINT "claim_blocks_item_length" CHECK ((("length"("item") >= 1) AND ("length"("item") <= 500))),
+    CONSTRAINT "claim_blocks_repeat_count_nonneg" CHECK (("repeat_count" >= 0)),
+    CONSTRAINT "claim_blocks_run_tag_format" CHECK ((("run_tag" IS NULL) OR ("run_tag" ~ '^[a-z0-9_-]{1,40}$'::"text"))),
+    CONSTRAINT "claim_blocks_seen_after_blocked" CHECK (("last_seen_at" >= "blocked_at"))
+);
+
+
+ALTER TABLE "public"."claim_blocks" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."claim_blocks" IS 'OVERWATCH. History of claims blocks between CLI threads, one row per episode: a waiting project refused a file or folder another project holds, from blocked_at until the holder let go (cleared_at). The local blocks file keeps only live blocks; this keeps them all. Written only by the overwatch-ingest edge function from events the claims script sends. Three or more episodes between the same pair of codes inside 30 days make the nightly job propose a no_parallel project link. Spec: docs/technical-spec-overwatch-q4n.md section 4.5.';
+
+
+
+COMMENT ON COLUMN "public"."claim_blocks"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."claim_blocks"."user_id" IS 'Owner. Set explicitly by overwatch-ingest from CLIPBOARD_USER_ID, since it writes with the service role and has no auth.uid(). Owner RLS scopes every read.';
+
+
+
+COMMENT ON COLUMN "public"."claim_blocks"."waiter_code" IS 'Project code of the thread that was refused, e.g. overwatch-q4n. "main" for the main checkout when it has no code.';
+
+
+
+COMMENT ON COLUMN "public"."claim_blocks"."holder_code" IS 'Project code of the thread holding the claim. Same form as waiter_code.';
+
+
+
+COMMENT ON COLUMN "public"."claim_blocks"."item" IS 'The repo-relative file or folder the waiter asked for, as the claims script recorded it.';
+
+
+
+COMMENT ON COLUMN "public"."claim_blocks"."run_tag" IS 'The waiter''s run tag when the claims script knew it (claims.mjs --run-tag), else null.';
+
+
+
+COMMENT ON COLUMN "public"."claim_blocks"."blocked_at" IS 'When the episode started: the first refusal, as recorded in the local blocks file. Part of the episode key.';
+
+
+
+COMMENT ON COLUMN "public"."claim_blocks"."last_seen_at" IS 'The latest refusal seen in this episode.';
+
+
+
+COMMENT ON COLUMN "public"."claim_blocks"."repeat_count" IS 'Refusals after the first in this episode. Information only: the guard refuses every blocked edit, so this counts attempts, not episodes. Patterns count distinct blocked_at values instead. A resent event can count twice.';
+
+
+
+COMMENT ON COLUMN "public"."claim_blocks"."cleared_at" IS 'When the block stopped being in force (the holder released, or the waiter got the file). Null while live, or when the clear was never seen.';
+
+
+
+COMMENT ON COLUMN "public"."claim_blocks"."created_at" IS 'When overwatch-ingest wrote the row.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."clips" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -13033,6 +13105,16 @@ ALTER TABLE ONLY "public"."apps"
 
 
 
+ALTER TABLE ONLY "public"."claim_blocks"
+    ADD CONSTRAINT "claim_blocks_episode_key" UNIQUE ("user_id", "waiter_code", "holder_code", "item", "blocked_at");
+
+
+
+ALTER TABLE ONLY "public"."claim_blocks"
+    ADD CONSTRAINT "claim_blocks_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."clips"
     ADD CONSTRAINT "clips_pkey" PRIMARY KEY ("id");
 
@@ -13559,6 +13641,10 @@ CREATE INDEX "idx_mcp_call_loop" ON "platform"."mcp_call_log" USING "btree" ("us
 
 
 CREATE INDEX "idx_mcp_call_user_time" ON "platform"."mcp_call_log" USING "btree" ("user_id", "called_at" DESC);
+
+
+
+CREATE INDEX "claim_blocks_pair_idx" ON "public"."claim_blocks" USING "btree" ("user_id", "waiter_code", "holder_code", "blocked_at" DESC);
 
 
 
@@ -14734,6 +14820,11 @@ CREATE OR REPLACE TRIGGER "wb_transactions_default_split" AFTER INSERT ON "publi
 
 
 
+ALTER TABLE ONLY "public"."claim_blocks"
+    ADD CONSTRAINT "claim_blocks_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
 ALTER TABLE ONLY "public"."clips"
     ADD CONSTRAINT "clips_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
@@ -15629,6 +15720,13 @@ ALTER TABLE "public"."apps" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "apps_read" ON "public"."apps" FOR SELECT TO "authenticated" USING (true);
+
+
+
+ALTER TABLE "public"."claim_blocks" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "claim_blocks_owner_access" ON "public"."claim_blocks" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
 
 
 
@@ -16988,6 +17086,11 @@ GRANT ALL ON TABLE "public"."allowed_emails" TO "service_role";
 
 GRANT ALL ON TABLE "public"."apps" TO "authenticated";
 GRANT ALL ON TABLE "public"."apps" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."claim_blocks" TO "authenticated";
+GRANT ALL ON TABLE "public"."claim_blocks" TO "service_role";
 
 
 
