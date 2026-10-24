@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-24 15:09, through migration 170 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-24 15:19, through migration 171 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -1179,6 +1179,46 @@ $$;
 
 
 ALTER FUNCTION "public"."bump_song_edited_at"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."create_overwatch_plan"("p_instructions" "text", "p_settings" "jsonb", "p_reason" "text", "p_written_by" "text" DEFAULT 'alex'::"text", "p_checks" "jsonb" DEFAULT NULL::"jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_old public.overwatch_plans%rowtype;
+  v_new public.overwatch_plans%rowtype;
+begin
+  if coalesce(trim(p_instructions), '') = '' then
+    raise exception 'create_overwatch_plan: instructions are required.' using errcode = '22023';
+  end if;
+  if p_settings is null or jsonb_typeof(p_settings) <> 'object' then
+    raise exception 'create_overwatch_plan: settings must be a JSON object.' using errcode = '22023';
+  end if;
+  if coalesce(trim(p_reason), '') = '' then
+    raise exception 'create_overwatch_plan: a reason is required.' using errcode = '22023';
+  end if;
+
+  -- Lock the active plan so two writers cannot both supersede it.
+  select * into v_old from public.overwatch_plans where user_id = auth.uid() and active for update;
+  if v_old.id is not null then
+    update public.overwatch_plans set active = false where id = v_old.id;
+  end if;
+
+  insert into public.overwatch_plans (instructions, settings, checks_next_run, written_by, reason, supersedes_id)
+  values (p_instructions, p_settings, coalesce(p_checks, v_old.checks_next_run, '[]'::jsonb),
+          coalesce(p_written_by, 'alex'), p_reason, v_old.id)
+  returning * into v_new;
+  return to_jsonb(v_new);
+end;
+$$;
+
+
+ALTER FUNCTION "public"."create_overwatch_plan"("p_instructions" "text", "p_settings" "jsonb", "p_reason" "text", "p_written_by" "text", "p_checks" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."create_overwatch_plan"("p_instructions" "text", "p_settings" "jsonb", "p_reason" "text", "p_written_by" "text", "p_checks" "jsonb") IS 'Overwatch: supersede the caller''s active plan in one transaction: the old row goes inactive, the new one is inserted with supersedes_id, carrying the old checks_next_run unless p_checks is given. Returns the new row. Called by the tier-3 create_overwatch_plan tool.';
+
 
 SET default_tablespace = '';
 
@@ -3372,6 +3412,34 @@ COMMENT ON FUNCTION "public"."notes_touch_updated_at"() IS 'Alfred: stamps notes
 
 
 
+CREATE OR REPLACE FUNCTION "public"."overwatch_plans_guard"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if new.id is distinct from old.id or new.user_id is distinct from old.user_id
+     or new.instructions is distinct from old.instructions or new.settings is distinct from old.settings
+     or new.written_by is distinct from old.written_by or new.reason is distinct from old.reason
+     or new.supersedes_id is distinct from old.supersedes_id or new.created_at is distinct from old.created_at then
+    raise exception 'overwatch_plans rows are not edited: write a new plan with create_overwatch_plan.'
+      using errcode = '23514';
+  end if;
+  if new.active and not old.active then
+    raise exception 'overwatch_plans: a superseded plan cannot become active again; write a new plan instead.'
+      using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."overwatch_plans_guard"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."overwatch_plans_guard"() IS 'Overwatch: on overwatch_plans only active (true to false) and checks_next_run may change.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."platform_check_call_budget"("p_tool" "text", "p_args_hash" "text" DEFAULT NULL::"text", "p_window_seconds" integer DEFAULT 300, "p_max_calls" integer DEFAULT 60) RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'platform', 'public'
@@ -5266,6 +5334,45 @@ $$;
 
 
 ALTER FUNCTION "public"."update_modified_column"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."update_overwatch_checks"("p_checks" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $_$
+declare
+  v_row public.overwatch_plans%rowtype;
+  v_bad int;
+begin
+  if p_checks is null or jsonb_typeof(p_checks) <> 'array' then
+    raise exception 'update_overwatch_checks: checks must be a JSON array.' using errcode = '22023';
+  end if;
+  select count(*) into v_bad
+    from jsonb_array_elements(p_checks) c
+   where jsonb_typeof(c) <> 'object'
+      or coalesce(trim(c ->> 'text'), '') = ''
+      or coalesce(c ->> 'check_on', '') !~ '^\d{4}-\d{2}-\d{2}$';
+  if v_bad > 0 then
+    raise exception 'update_overwatch_checks: % check(s) lack text or a check_on date (YYYY-MM-DD).', v_bad
+      using errcode = '22023';
+  end if;
+
+  update public.overwatch_plans set checks_next_run = p_checks
+   where user_id = auth.uid() and active
+  returning * into v_row;
+  if v_row.id is null then
+    raise exception 'update_overwatch_checks: there is no active plan.' using errcode = 'P0002';
+  end if;
+  return to_jsonb(v_row);
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."update_overwatch_checks"("p_checks" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."update_overwatch_checks"("p_checks" "jsonb") IS 'Overwatch: replace checks_next_run on the caller''s active plan. Each check needs text and a check_on date. Returns the plan. Called by the tier-2 update_overwatch_checks tool.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."update_updated_at"() RETURNS "trigger"
@@ -10658,6 +10765,239 @@ COMMENT ON COLUMN "public"."notification_steps"."created_at" IS 'Row creation. A
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."overwatch_notes" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "period" "text" NOT NULL,
+    "for_date" "date" NOT NULL,
+    "body" "text" NOT NULL,
+    "flags" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "plan_id" "uuid",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "overwatch_notes_flags_object" CHECK (("jsonb_typeof"("flags") = 'object'::"text")),
+    CONSTRAINT "overwatch_notes_period_values" CHECK (("period" = ANY (ARRAY['nightly'::"text", 'weekly'::"text"])))
+);
+
+
+ALTER TABLE "public"."overwatch_notes" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."overwatch_notes" IS 'OVERWATCH. The notes the tab shows, kept as history: one nightly and at most one weekly note per day. A re-run replaces the day''s note (create_overwatch_note upserts). Spec: docs/technical-spec-overwatch-q4n.md 4.8.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_notes"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_notes"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_notes"."period" IS 'nightly or weekly.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_notes"."for_date" IS 'The day the note is for.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_notes"."body" IS 'The note, in markdown.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_notes"."flags" IS 'A JSON object of structured findings (quiet apps, stalls, backlogs, over-limit, stopped schedules, friction) so the tab can render them without parsing prose.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_notes"."plan_id" IS 'The plan that was active when the note was written.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_notes"."created_at" IS 'When the note was written.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."overwatch_plans" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "active" boolean DEFAULT true NOT NULL,
+    "instructions" "text" NOT NULL,
+    "settings" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "checks_next_run" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "written_by" "text" DEFAULT 'alex'::"text" NOT NULL,
+    "reason" "text",
+    "supersedes_id" "uuid",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "overwatch_plans_checks_array" CHECK (("jsonb_typeof"("checks_next_run") = 'array'::"text")),
+    CONSTRAINT "overwatch_plans_settings_object" CHECK (("jsonb_typeof"("settings") = 'object'::"text")),
+    CONSTRAINT "overwatch_plans_written_by_values" CHECK (("written_by" = ANY (ARRAY['alex'::"text", 'overwatch'::"text"])))
+);
+
+
+ALTER TABLE "public"."overwatch_plans" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."overwatch_plans" IS 'OVERWATCH. The rulebook: instructions (focus, what to watch, tone), settings (limits and times) and the checks for the next run. Rows are only inserted; exactly one is active (overwatch_plans_one_active). A change supersedes the active row through create_overwatch_plan; checks_next_run is the one field changed in place, through update_overwatch_checks. overwatch_plans_guard enforces both. Spec: docs/technical-spec-overwatch-q4n.md 4.6.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_plans"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_plans"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_plans"."active" IS 'True on the one plan in force. Goes false only when create_overwatch_plan supersedes it; never back to true.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_plans"."instructions" IS 'Plain text: what to focus on, what to watch, and the tone.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_plans"."settings" IS 'A JSON object of limits and times: active_project_limit, limit_mode, pushes_per_day, push_time, stall_days, waiting_on_alex_days, fading_days, overrun_factor, inbox_backlog_threshold, weekly_day, audit_every_weeks.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_plans"."checks_next_run" IS 'A JSON array of { text, check_on (date), about (app id or group id) }: what the next run should look at. The nightly job replaces it through update_overwatch_checks.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_plans"."written_by" IS 'alex, or overwatch when the nightly job''s proposal was accepted.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_plans"."reason" IS 'Why this plan replaced the one before.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_plans"."supersedes_id" IS 'The plan this one replaced, or null for the first.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_plans"."created_at" IS 'When this plan was written.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."overwatch_seen_releases" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "source" "text" NOT NULL,
+    "entry_key" "text" NOT NULL,
+    "title" "text" NOT NULL,
+    "summary" "text",
+    "first_seen_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "overwatch_seen_releases_source_values" CHECK (("source" = ANY (ARRAY['claude_release_notes'::"text", 'claude_code_changelog'::"text", 'api_release_notes'::"text"])))
+);
+
+
+ALTER TABLE "public"."overwatch_seen_releases" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."overwatch_seen_releases" IS 'OVERWATCH. Release-note entries the weekly feature watch has already seen, so each is reported once. Spec: docs/technical-spec-overwatch-q4n.md 4.10.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_seen_releases"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_seen_releases"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_seen_releases"."source" IS 'claude_release_notes, claude_code_changelog or api_release_notes.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_seen_releases"."entry_key" IS 'The entry''s identity within its source (a version, date or heading). Not a credential: cleared for conformance.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_seen_releases"."title" IS 'The entry''s heading.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_seen_releases"."summary" IS 'A line on what it changes, or null.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_seen_releases"."first_seen_at" IS 'When the weekly job first recorded it.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."overwatch_watch" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "kind" "text" NOT NULL,
+    "text" "text" NOT NULL,
+    "app_id" "text",
+    "group_id" "text",
+    "starts_on" "date" DEFAULT CURRENT_DATE NOT NULL,
+    "ends_on" "date" NOT NULL,
+    "created_by" "text" DEFAULT 'alex'::"text" NOT NULL,
+    "expiry_noted_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "overwatch_watch_created_by_values" CHECK (("created_by" = ANY (ARRAY['alex'::"text", 'overwatch'::"text"]))),
+    CONSTRAINT "overwatch_watch_dates" CHECK (("ends_on" >= "starts_on")),
+    CONSTRAINT "overwatch_watch_kind_values" CHECK (("kind" = ANY (ARRAY['focus'::"text", 'ease_off'::"text", 'keep_an_eye_on'::"text"])))
+);
+
+
+ALTER TABLE "public"."overwatch_watch" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."overwatch_watch" IS 'OVERWATCH. Short-term adjustments with dates: focus on something, ease off something (an app''s quiet days stop counting), or keep an eye on something. Spec: docs/technical-spec-overwatch-q4n.md 4.7.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_watch"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_watch"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_watch"."kind" IS 'focus, ease_off or keep_an_eye_on.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_watch"."text" IS 'What it is about, in plain words.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_watch"."app_id" IS 'The app it is about, or null.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_watch"."group_id" IS 'The Project group it is about, or null. Deleting the group deletes it.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_watch"."starts_on" IS 'First day it applies.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_watch"."ends_on" IS 'Last day it applies; never before starts_on.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_watch"."created_by" IS 'alex or overwatch.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_watch"."expiry_noted_at" IS 'Set once a note has mentioned that it expired, so it is said once.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_watch"."created_at" IS 'Row creation.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."platform_runs" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -10753,6 +11093,75 @@ COMMENT ON COLUMN "public"."platform_schedules"."grace_hours" IS 'How late befor
 
 
 COMMENT ON COLUMN "public"."platform_schedules"."enabled" IS 'False suspends staleness checking without deleting the definition — a paused job should not alarm, and should not have to be reconstructed from memory later.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."process_friction" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "occurred_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "what_happened" "text" NOT NULL,
+    "process" "text" NOT NULL,
+    "project_code" "text",
+    "suggested_fix" "text",
+    "pattern_id" "uuid",
+    "resolved_by" "text",
+    "resolved_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "process_friction_code_format" CHECK ((("project_code" IS NULL) OR ("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text"))),
+    CONSTRAINT "process_friction_process_values" CHECK ((("process" = ANY (ARRAY['cli_testing_steps'::"text", 'cli_prompt'::"text", 'todos'::"text", 'closeout'::"text", 'inbox'::"text", 'other'::"text"])) OR ("process" ~ '^skill:[a-z0-9_-]{1,60}$'::"text"))),
+    CONSTRAINT "process_friction_resolved_pair" CHECK ((("resolved_by" IS NULL) = ("resolved_at" IS NULL)))
+);
+
+
+ALTER TABLE "public"."process_friction" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."process_friction" IS 'OVERWATCH. Snags in how the work runs: a missed instruction, a testing format that confused Alex, a prompt he had to correct, a step that caused a redo. Any thread logs one with log_friction, without asking. Fixes wait for a pattern: the weekly job groups open entries by process and proposes a fix once a process has three or more in 30 days. Spec: docs/technical-spec-overwatch-q4n.md 4.11.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."occurred_at" IS 'When the snag happened.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."what_happened" IS 'What happened, in plain words.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."process" IS 'Which process: cli_testing_steps, cli_prompt, todos, closeout, inbox, other, or skill:<name>.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."project_code" IS 'The CLI project code it happened in, or null.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."suggested_fix" IS 'A fix suggested at the time, or null.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."pattern_id" IS 'Set when the weekly job groups entries into one pattern; entries sharing it are fixed together.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."resolved_by" IS 'What fixed it (a skill change, a prompt change), set with resolved_at when the pattern is resolved.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."resolved_at" IS 'When it was resolved; null while open.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."created_at" IS 'When the entry was written.';
 
 
 
@@ -13943,6 +14352,36 @@ ALTER TABLE ONLY "public"."notification_steps"
 
 
 
+ALTER TABLE ONLY "public"."overwatch_notes"
+    ADD CONSTRAINT "overwatch_notes_once" UNIQUE ("user_id", "period", "for_date");
+
+
+
+ALTER TABLE ONLY "public"."overwatch_notes"
+    ADD CONSTRAINT "overwatch_notes_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."overwatch_plans"
+    ADD CONSTRAINT "overwatch_plans_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."overwatch_seen_releases"
+    ADD CONSTRAINT "overwatch_seen_releases_once" UNIQUE ("user_id", "source", "entry_key");
+
+
+
+ALTER TABLE ONLY "public"."overwatch_seen_releases"
+    ADD CONSTRAINT "overwatch_seen_releases_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."overwatch_watch"
+    ADD CONSTRAINT "overwatch_watch_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."platform_runs"
     ADD CONSTRAINT "platform_runs_pkey" PRIMARY KEY ("id");
 
@@ -13955,6 +14394,11 @@ ALTER TABLE ONLY "public"."platform_schedules"
 
 ALTER TABLE ONLY "public"."platform_schedules"
     ADD CONSTRAINT "platform_schedules_user_id_app_job_key" UNIQUE ("user_id", "app", "job");
+
+
+
+ALTER TABLE ONLY "public"."process_friction"
+    ADD CONSTRAINT "process_friction_pkey" PRIMARY KEY ("id");
 
 
 
@@ -14704,11 +15148,23 @@ CREATE INDEX "notification_steps_execution_idx" ON "public"."notification_steps"
 
 
 
+CREATE UNIQUE INDEX "overwatch_plans_one_active" ON "public"."overwatch_plans" USING "btree" ("user_id") WHERE "active";
+
+
+
+CREATE INDEX "overwatch_watch_user_ends_idx" ON "public"."overwatch_watch" USING "btree" ("user_id", "ends_on");
+
+
+
 CREATE INDEX "platform_runs_recent_idx" ON "public"."platform_runs" USING "btree" ("user_id", "app", "job", "started_at" DESC);
 
 
 
 CREATE INDEX "platform_runs_unnotified_idx" ON "public"."platform_runs" USING "btree" ("user_id", "status", "notified_at") WHERE ("status" <> 'ok'::"text");
+
+
+
+CREATE INDEX "process_friction_open_idx" ON "public"."process_friction" USING "btree" ("user_id", "process", "occurred_at" DESC) WHERE ("resolved_at" IS NULL);
 
 
 
@@ -15020,7 +15476,27 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."overwatch_notes" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."overwatch_plans" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."overwatch_seen_releases" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."overwatch_watch" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."platform_schedules" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."process_friction" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
 
@@ -15229,6 +15705,10 @@ CREATE OR REPLACE TRIGGER "items_status_guard" BEFORE UPDATE ON "public"."items"
 
 
 CREATE OR REPLACE TRIGGER "notes_touch_updated_at" BEFORE UPDATE ON "public"."notes" FOR EACH ROW EXECUTE FUNCTION "public"."notes_touch_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "overwatch_plans_guard" BEFORE UPDATE ON "public"."overwatch_plans" FOR EACH ROW EXECUTE FUNCTION "public"."overwatch_plans_guard"();
 
 
 
@@ -15822,6 +16302,46 @@ ALTER TABLE ONLY "public"."notes"
 
 
 
+ALTER TABLE ONLY "public"."overwatch_notes"
+    ADD CONSTRAINT "overwatch_notes_plan_id_fkey" FOREIGN KEY ("plan_id") REFERENCES "public"."overwatch_plans"("id");
+
+
+
+ALTER TABLE ONLY "public"."overwatch_notes"
+    ADD CONSTRAINT "overwatch_notes_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."overwatch_plans"
+    ADD CONSTRAINT "overwatch_plans_supersedes_id_fkey" FOREIGN KEY ("supersedes_id") REFERENCES "public"."overwatch_plans"("id");
+
+
+
+ALTER TABLE ONLY "public"."overwatch_plans"
+    ADD CONSTRAINT "overwatch_plans_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."overwatch_seen_releases"
+    ADD CONSTRAINT "overwatch_seen_releases_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."overwatch_watch"
+    ADD CONSTRAINT "overwatch_watch_app_id_fkey" FOREIGN KEY ("app_id") REFERENCES "public"."apps"("id");
+
+
+
+ALTER TABLE ONLY "public"."overwatch_watch"
+    ADD CONSTRAINT "overwatch_watch_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."item_groups"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."overwatch_watch"
+    ADD CONSTRAINT "overwatch_watch_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
 ALTER TABLE ONLY "public"."platform_runs"
     ADD CONSTRAINT "platform_runs_app_fkey" FOREIGN KEY ("app") REFERENCES "public"."apps"("id");
 
@@ -15829,6 +16349,11 @@ ALTER TABLE ONLY "public"."platform_runs"
 
 ALTER TABLE ONLY "public"."platform_schedules"
     ADD CONSTRAINT "platform_schedules_app_fkey" FOREIGN KEY ("app") REFERENCES "public"."apps"("id");
+
+
+
+ALTER TABLE ONLY "public"."process_friction"
+    ADD CONSTRAINT "process_friction_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
 
 
@@ -16800,6 +17325,34 @@ CREATE POLICY "notification_steps_owner_access" ON "public"."notification_steps"
 
 
 
+ALTER TABLE "public"."overwatch_notes" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "overwatch_notes_owner_access" ON "public"."overwatch_notes" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."overwatch_plans" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "overwatch_plans_owner_access" ON "public"."overwatch_plans" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."overwatch_seen_releases" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "overwatch_seen_releases_owner_access" ON "public"."overwatch_seen_releases" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."overwatch_watch" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "overwatch_watch_owner_access" ON "public"."overwatch_watch" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
 ALTER TABLE "public"."platform_runs" ENABLE ROW LEVEL SECURITY;
 
 
@@ -16811,6 +17364,13 @@ ALTER TABLE "public"."platform_schedules" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "platform_schedules_owner_access" ON "public"."platform_schedules" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."process_friction" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "process_friction_owner_access" ON "public"."process_friction" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
 
 
 
@@ -17173,6 +17733,12 @@ GRANT ALL ON FUNCTION "public"."bump_song_edited_at"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."create_overwatch_plan"("p_instructions" "text", "p_settings" "jsonb", "p_reason" "text", "p_written_by" "text", "p_checks" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."create_overwatch_plan"("p_instructions" "text", "p_settings" "jsonb", "p_reason" "text", "p_written_by" "text", "p_checks" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."create_overwatch_plan"("p_instructions" "text", "p_settings" "jsonb", "p_reason" "text", "p_written_by" "text", "p_checks" "jsonb") TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."reminders" TO "authenticated";
 GRANT ALL ON TABLE "public"."reminders" TO "service_role";
 
@@ -17344,6 +17910,12 @@ GRANT ALL ON FUNCTION "public"."notes_delete_for_target"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."notes_touch_updated_at"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."notes_touch_updated_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."notes_touch_updated_at"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."overwatch_plans_guard"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."overwatch_plans_guard"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."overwatch_plans_guard"() TO "service_role";
 
 
 
@@ -17552,6 +18124,12 @@ GRANT ALL ON FUNCTION "public"."status_guard"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."update_modified_column"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."update_modified_column"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."update_modified_column"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."update_overwatch_checks"("p_checks" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."update_overwatch_checks"("p_checks" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."update_overwatch_checks"("p_checks" "jsonb") TO "service_role";
 
 
 
@@ -18054,6 +18632,26 @@ GRANT ALL ON TABLE "public"."notification_steps" TO "service_role";
 
 
 
+GRANT ALL ON TABLE "public"."overwatch_notes" TO "authenticated";
+GRANT ALL ON TABLE "public"."overwatch_notes" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."overwatch_plans" TO "authenticated";
+GRANT ALL ON TABLE "public"."overwatch_plans" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."overwatch_seen_releases" TO "authenticated";
+GRANT ALL ON TABLE "public"."overwatch_seen_releases" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."overwatch_watch" TO "authenticated";
+GRANT ALL ON TABLE "public"."overwatch_watch" TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."platform_runs" TO "authenticated";
 GRANT ALL ON TABLE "public"."platform_runs" TO "service_role";
 
@@ -18061,6 +18659,11 @@ GRANT ALL ON TABLE "public"."platform_runs" TO "service_role";
 
 GRANT ALL ON TABLE "public"."platform_schedules" TO "authenticated";
 GRANT ALL ON TABLE "public"."platform_schedules" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."process_friction" TO "authenticated";
+GRANT ALL ON TABLE "public"."process_friction" TO "service_role";
 
 
 
