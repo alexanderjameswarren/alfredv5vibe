@@ -25,6 +25,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { OUTBOX_FILE, SENDER_SCRIPT, kickSender, queueEvents } from "./overwatch-post.mjs";
 import { readMainCode } from "./project-code.mjs";
 
 export const CLAIMS_FILE = "alfred-claims.json";
@@ -93,6 +94,11 @@ export function resolveRepo(cwd = process.cwd()) {
     blocksFile: process.env.CLAIMS_BLOCKS_FILE
       ? path.resolve(process.env.CLAIMS_BLOCKS_FILE)
       : path.join(commonDir, BLOCKS_FILE),
+    // Overwatch's outbox, only where the sender exists and the blocks file is the real one, so a test's
+    // scratch repo or redirected blocks file never queues events for the live database.
+    outboxFile: !process.env.CLAIMS_BLOCKS_FILE && existsSync(path.join(root, SENDER_SCRIPT))
+      ? path.join(commonDir, OUTBOX_FILE)
+      : null,
     owner: isWorktree ? path.basename(root) : "main",
     isWorktree,
     // The main checkout holds the common .git; null for a bare repo.
@@ -1460,12 +1466,54 @@ export function addBlocks(blocks, { waiter, hits, via, runTag = null, codeOf = (
   return out;
 }
 
+/**
+ * What changed between two block lists, as Overwatch events (spec 4.5): `new` for a record that appeared,
+ * `repeat` for one seen again, `clear` for one gone. Pure.
+ */
+export function blockEvents(before, after, now = new Date()) {
+  const ev = (b, event, at) => ({
+    event,
+    waiter_code: b.waiter_code,
+    holder_code: b.holder_code,
+    item: b.item,
+    run_tag: b.run_tag ?? null,
+    blocked_at: b.blocked_at,
+    at,
+  });
+  const out = [];
+  for (const a of after) {
+    const b = before.find((x) => sameBlock(x, a));
+    if (!b) out.push(ev(a, "new", a.blocked_at));
+    else if (a.last_seen !== b.last_seen) out.push(ev(a, "repeat", a.last_seen));
+  }
+  for (const b of before) {
+    if (!after.some((a) => sameBlock(a, b))) out.push(ev(b, "clear", now.toISOString()));
+  }
+  return out;
+}
+
+/** Inside the lock: queue the events for Overwatch and start the sender. Never throws. */
+export function queueBlockEvents(ctx, before, after, now = new Date()) {
+  if (!ctx.outboxFile) return;
+  try {
+    const events = blockEvents(before, after, now);
+    if (!events.length) return;
+    queueEvents(ctx.outboxFile, events);
+    kickSender(ctx);
+  } catch {
+    /* a lost event is acceptable; a failed claim or edit is not */
+  }
+}
+
 /** Inside the lock: drop dead records, and a finished waiter's own. Writes only on change. */
 export function pruneBlocksLocked(ctx, state, finishedWaiter = null) {
   if (!ctx.blocksFile) return;
   const before = readBlocks(ctx.blocksFile);
   const after = liveBlocks(before, state).filter((b) => b.waiter !== finishedWaiter);
-  if (after.length !== before.length) writeBlocks(ctx.blocksFile, after);
+  if (after.length !== before.length) {
+    writeBlocks(ctx.blocksFile, after);
+    queueBlockEvents(ctx, before, after);
+  }
 }
 
 /**
@@ -1477,11 +1525,10 @@ export function recordBlocks(ctx, args, { timeoutMs } = {}) {
     withLock(
       ctx,
       (state) => {
-        const next = liveBlocks(
-          addBlocks(readBlocks(ctx.blocksFile), { codeOf: (o) => codeOfOwner(ctx, o), ...args }),
-          state,
-        );
+        const before = readBlocks(ctx.blocksFile);
+        const next = liveBlocks(addBlocks(before, { codeOf: (o) => codeOfOwner(ctx, o), ...args }), state);
         writeBlocks(ctx.blocksFile, next);
+        queueBlockEvents(ctx, before, next, args.now);
         return null; // the claims file is untouched
       },
       { timeoutMs },
