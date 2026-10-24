@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-24 15:19, through migration 171 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-24 15:50, through migration 172 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -3437,6 +3437,41 @@ ALTER FUNCTION "public"."overwatch_plans_guard"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."overwatch_plans_guard"() IS 'Overwatch: on overwatch_plans only active (true to false) and checks_next_run may change.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."overwatch_project_progress"("p_status" "text"[] DEFAULT ARRAY['active'::"text"], "p_group_ids" "text"[] DEFAULT NULL::"text"[]) RETURNS TABLE("group_id" "text", "name" "text", "group_status" "text", "context_id" "text", "has_plan" boolean, "project_code" "text", "target_date" "date", "effort_estimate" integer, "where_now" "text", "next_step" "text", "waiting_on" "text", "waiting_on_kind" "text", "waiting_on_group_id" "text", "hurdle_kind" "text", "status_written_at" timestamp with time zone, "steps_used" integer, "reports" integer, "last_report_at" timestamp with time zone)
+    LANGUAGE "sql" STABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $_$
+  select g.id, g.name, g.status, g.context_id, p.group_id is not null,
+         p.project_code, p.target_date, p.effort_estimate, p.where_now, p.next_step, p.waiting_on,
+         p.waiting_on_kind, p.waiting_on_group_id, p.hurdle_kind, p.status_written_at,
+         coalesce(r.steps_used, 0), coalesce(r.reports, 0), r.last_report_at
+    from public.item_groups g
+    join public.group_types t on t.id = g.group_type_id and t.kind = 'project'
+    left join public.project_plans p on p.group_id = g.id
+    left join lateral (
+      select count(distinct (regexp_match(c.run_tag, '^' || p.project_code || '-s([0-9]+)[a-z]?-[a-z0-9]{4}$'))[1])::int
+               as steps_used,
+             count(*)::int as reports,
+             max(c.created_at) as last_report_at
+        from public.clips c
+       where p.project_code is not null
+         and c.run_tag like p.project_code || '-s%'
+         and c.run_tag ~ ('^' || p.project_code || '-s[0-9]+[a-z]?-[a-z0-9]{4}$')
+    ) r on true
+   where g.archived = false
+     and (p_status is null or g.status = any (p_status))
+     and (p_group_ids is null or g.id = any (p_group_ids))
+   order by r.last_report_at desc nulls last, g.name
+$_$;
+
+
+ALTER FUNCTION "public"."overwatch_project_progress"("p_status" "text"[], "p_group_ids" "text"[]) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."overwatch_project_progress"("p_status" "text"[], "p_group_ids" "text"[]) IS 'Overwatch: the caller''s unarchived Project groups (group_types.kind = project) in the given statuses (default active; null for all), each with its project_plans row if any, and the counted effort from clips.run_tag under the project code: steps_used (distinct step numbers), reports and last_report_at. Invoker: RLS on item_groups, project_plans and clips decides the rows. Backs get_project_plans.';
 
 
 
@@ -17916,6 +17951,12 @@ GRANT ALL ON FUNCTION "public"."notes_touch_updated_at"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."overwatch_plans_guard"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."overwatch_plans_guard"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."overwatch_plans_guard"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."overwatch_project_progress"("p_status" "text"[], "p_group_ids" "text"[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."overwatch_project_progress"("p_status" "text"[], "p_group_ids" "text"[]) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."overwatch_project_progress"("p_status" "text"[], "p_group_ids" "text"[]) TO "service_role";
 
 
 
