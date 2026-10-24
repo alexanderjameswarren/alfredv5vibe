@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-24 14:01, through migration 167 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-24 14:12, through migration 168 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -769,6 +769,31 @@ ALTER FUNCTION "public"."alfred_recent_completions"("p_item_id" "text", "p_inten
 
 
 COMMENT ON FUNCTION "public"."alfred_recent_completions"("p_item_id" "text", "p_intent_id" "text", "p_limit" integer) IS 'Alfred: the latest completed (closed + done) executions for an item (through item_ids or its intentions) or for one intention, newest first, each with its notes. Default 3, cap 50. SECURITY INVOKER: executions and notes RLS apply. Restructure P2, detail pages only.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."app_profiles_touch"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public'
+    AS $$
+begin
+  new.updated_at := now();
+  if tg_op = 'INSERT' then
+    new.current_state_updated_at := case when new.current_state is not null then now() end;
+  elsif new.current_state is distinct from old.current_state then
+    new.current_state_updated_at := now();
+  else
+    new.current_state_updated_at := old.current_state_updated_at;
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."app_profiles_touch"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."app_profiles_touch"() IS 'Overwatch: stamps app_profiles.updated_at, and current_state_updated_at only when current_state changes.';
 
 
 
@@ -8462,6 +8487,63 @@ from the platform contract. Do not add user data here.';
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."app_profiles" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "app_id" "text" NOT NULL,
+    "activity_recipe" "text",
+    "rhythm_days" integer,
+    "current_state" "text",
+    "current_state_updated_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "app_profiles_rhythm_days_range" CHECK ((("rhythm_days" IS NULL) OR (("rhythm_days" >= 1) AND ("rhythm_days" <= 365))))
+);
+
+
+ALTER TABLE "public"."app_profiles" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."app_profiles" IS 'OVERWATCH. One row per user per app: how the nightly job reads the app''s activity, how long a silence counts as quiet, and a page describing what the app does today. Per user so update_app_profile (tier 2) can write it under owner RLS; public.apps itself stays shared and migration-written. Spec: docs/technical-spec-overwatch-q4n.md 4.1.';
+
+
+
+COMMENT ON COLUMN "public"."app_profiles"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."app_profiles"."user_id" IS 'Owner. Owner RLS scopes every read and write.';
+
+
+
+COMMENT ON COLUMN "public"."app_profiles"."app_id" IS 'The app, an apps.id. One profile per user per app (app_profiles_one_per_app).';
+
+
+
+COMMENT ON COLUMN "public"."app_profiles"."activity_recipe" IS 'Plain words telling the nightly job how to read this app''s activity and what counts, naming the tools to call. Example: "One row per practice day: total minutes and songs touched, from get_sam_sessions." Null: not written yet.';
+
+
+
+COMMENT ON COLUMN "public"."app_profiles"."rhythm_days" IS 'Days of silence before the app counts as quiet, 1 to 365. Null means the app has no rhythm (Timer, Games) and is never flagged as quiet.';
+
+
+
+COMMENT ON COLUMN "public"."app_profiles"."current_state" IS 'About one page: what the app does today, its main flows and known gaps. Rewritten after a project touching the app finishes. Markdown.';
+
+
+
+COMMENT ON COLUMN "public"."app_profiles"."current_state_updated_at" IS 'When current_state last changed. Stamped by the app_profiles_touch trigger; writes from clients are ignored.';
+
+
+
+COMMENT ON COLUMN "public"."app_profiles"."created_at" IS 'Row creation.';
+
+
+
+COMMENT ON COLUMN "public"."app_profiles"."updated_at" IS 'Last change to any column. Stamped by the app_profiles_touch trigger.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."apps" (
     "id" "text" NOT NULL,
     "name" "text" NOT NULL,
@@ -13100,6 +13182,16 @@ ALTER TABLE ONLY "public"."allowed_emails"
 
 
 
+ALTER TABLE ONLY "public"."app_profiles"
+    ADD CONSTRAINT "app_profiles_one_per_app" UNIQUE ("user_id", "app_id");
+
+
+
+ALTER TABLE ONLY "public"."app_profiles"
+    ADD CONSTRAINT "app_profiles_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."apps"
     ADD CONSTRAINT "apps_pkey" PRIMARY KEY ("id");
 
@@ -14228,7 +14320,15 @@ CREATE INDEX "wb_transactions_subscription_idx" ON "public"."wb_transactions" US
 
 
 
+CREATE OR REPLACE TRIGGER "app_profiles_touch" BEFORE INSERT OR UPDATE ON "public"."app_profiles" FOR EACH ROW EXECUTE FUNCTION "public"."app_profiles_touch"();
+
+
+
 CREATE OR REPLACE TRIGGER "apps_touch_updated_at" BEFORE UPDATE ON "public"."apps" FOR EACH ROW EXECUTE FUNCTION "public"."apps_touch_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."app_profiles" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
 
@@ -14817,6 +14917,16 @@ CREATE OR REPLACE TRIGGER "wb_transactions_amount_follow" AFTER UPDATE OF "amoun
 
 
 CREATE OR REPLACE TRIGGER "wb_transactions_default_split" AFTER INSERT ON "public"."wb_transactions" FOR EACH ROW EXECUTE FUNCTION "public"."wb_transactions_default_split"();
+
+
+
+ALTER TABLE ONLY "public"."app_profiles"
+    ADD CONSTRAINT "app_profiles_app_id_fkey" FOREIGN KEY ("app_id") REFERENCES "public"."apps"("id");
+
+
+
+ALTER TABLE ONLY "public"."app_profiles"
+    ADD CONSTRAINT "app_profiles_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
 
 
@@ -15716,6 +15826,13 @@ CREATE POLICY "anyone_can_read_allowed_emails" ON "public"."allowed_emails" FOR 
 
 
 
+ALTER TABLE "public"."app_profiles" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "app_profiles_owner_access" ON "public"."app_profiles" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
 ALTER TABLE "public"."apps" ENABLE ROW LEVEL SECURITY;
 
 
@@ -16368,6 +16485,12 @@ REVOKE ALL ON FUNCTION "platform"."heavy_jsonb_columns"("p_table" "regclass") FR
 REVOKE ALL ON FUNCTION "public"."alfred_recent_completions"("p_item_id" "text", "p_intent_id" "text", "p_limit" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."alfred_recent_completions"("p_item_id" "text", "p_intent_id" "text", "p_limit" integer) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."alfred_recent_completions"("p_item_id" "text", "p_intent_id" "text", "p_limit" integer) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."app_profiles_touch"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."app_profiles_touch"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."app_profiles_touch"() TO "service_role";
 
 
 
@@ -17081,6 +17204,11 @@ GRANT SELECT ON TABLE "platform"."audit_log" TO "authenticated";
 
 GRANT ALL ON TABLE "public"."allowed_emails" TO "authenticated";
 GRANT ALL ON TABLE "public"."allowed_emails" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."app_profiles" TO "authenticated";
+GRANT ALL ON TABLE "public"."app_profiles" TO "service_role";
 
 
 
