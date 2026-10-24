@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-24 11:01, through migration 164 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-24 13:00, through migration 165 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -10164,7 +10164,6 @@ CREATE TABLE IF NOT EXISTS "public"."platform_runs" (
     "details" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
     "error_message" "text",
     "notified_at" timestamp with time zone,
-    CONSTRAINT "platform_runs_app_check" CHECK (("app" = ANY (ARRAY['dj'::"text", 'sam'::"text", 'alfred'::"text", 'workshop'::"text", 'ken'::"text", 'warren_buffet'::"text"]))),
     CONSTRAINT "platform_runs_executor_check" CHECK (("executor" = ANY (ARRAY['workshop'::"text", 'claude'::"text", 'alfred'::"text"]))),
     CONSTRAINT "platform_runs_status_check" CHECK (("status" = ANY (ARRAY['running'::"text", 'ok'::"text", 'failed'::"text", 'auth_expired'::"text", 'partial'::"text"])))
 );
@@ -10177,7 +10176,7 @@ COMMENT ON TABLE "public"."platform_runs" IS 'Platform: one row per attempted jo
 
 
 
-COMMENT ON COLUMN "public"."platform_runs"."app" IS 'Constrained rather than free text so a typo fails loudly instead of creating a row that no staleness query will ever match. Adding an app is one line in a migration.';
+COMMENT ON COLUMN "public"."platform_runs"."app" IS 'The app this job belongs to: an apps.id (platform_runs_app_fkey). A key rather than free text so a typo fails loudly instead of creating a row no staleness query will ever match. Adding an app is a new apps row; nothing here changes. Replaced the fixed six-app check in Overwatch Step 5.';
 
 
 
@@ -10218,7 +10217,6 @@ CREATE TABLE IF NOT EXISTS "public"."platform_schedules" (
     "enabled" boolean DEFAULT true NOT NULL,
     "notes" "text",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    CONSTRAINT "platform_schedules_app_check" CHECK (("app" = ANY (ARRAY['dj'::"text", 'sam'::"text", 'alfred'::"text", 'workshop'::"text", 'ken'::"text", 'warren_buffet'::"text"]))),
     CONSTRAINT "platform_schedules_cadence_check" CHECK (("cadence" = ANY (ARRAY['daily'::"text", 'weekly'::"text"]))),
     CONSTRAINT "platform_schedules_day_of_week_check" CHECK ((("day_of_week" >= 0) AND ("day_of_week" <= 6))),
     CONSTRAINT "platform_schedules_executor_check" CHECK (("executor" = ANY (ARRAY['workshop'::"text", 'claude'::"text", 'alfred'::"text"]))),
@@ -10230,6 +10228,10 @@ ALTER TABLE "public"."platform_schedules" OWNER TO "postgres";
 
 
 COMMENT ON TABLE "public"."platform_schedules" IS 'Platform: what is SUPPOSED to run, and how often. Stores the cadence, NOT materialised expected occurrences — materialising would need a job to create those rows, and that job could fail silently, which is the exact problem this table exists to detect. Staleness is derived at read time by comparing the due occurrence against platform_runs. Absence of a row is the only signal when Claude never fires OR fires but cannot reach Supabase.';
+
+
+
+COMMENT ON COLUMN "public"."platform_schedules"."app" IS 'The app this job belongs to: an apps.id (platform_schedules_app_fkey), matching platform_runs.app. Replaced the fixed six-app check in Overwatch Step 5.';
 
 
 
@@ -15024,6 +15026,16 @@ ALTER TABLE ONLY "public"."notes"
 
 ALTER TABLE ONLY "public"."notes"
     ADD CONSTRAINT "notes_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."platform_runs"
+    ADD CONSTRAINT "platform_runs_app_fkey" FOREIGN KEY ("app") REFERENCES "public"."apps"("id");
+
+
+
+ALTER TABLE ONLY "public"."platform_schedules"
+    ADD CONSTRAINT "platform_schedules_app_fkey" FOREIGN KEY ("app") REFERENCES "public"."apps"("id");
 
 
 

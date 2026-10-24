@@ -653,11 +653,11 @@ test("Drive Mix schemas advertise exactly the args their handlers read, at the s
   });
 });
 
-test("the platform app enums accept warren_buffet", () => {
+test("the platform tools take any app id, not a fixed list", () => {
+  // Overwatch Step 5: apps(id) is the list, enforced by a foreign key.
   const src = readFileSync(join(HERE, "index.ts"), "utf-8");
-  const enums = src.match(/app: z\.enum\(\[[^\]]*\]\)/g);
-  assert.equal(enums.length, 4);
-  for (const e of enums) assert.ok(e.includes('"warren_buffet"'), e);
+  assert.equal(src.match(/^\s+app: z\.enum\(/gm), null);
+  assert.equal(src.match(/^\s+app: z\.string\(\)(\.optional\(\))?\.describe\("[^"]*get_apps/gm).length, 4);
 });
 
 test("create_job_application stays UNGATED", () => {

@@ -1992,7 +1992,7 @@ export function createMcpServer(token: string) {
       description:
         "Stamp one attempted job run — scheduled or on-demand — in platform_runs. Append-only. Call this on EVERY run including failures: a poll that could not reach YouTube still writes status 'failed' or 'auth_expired', and that row is what staleness detection and the phase-6 failure tests read. Absence of a row is the only signal for both 'the task never fired' and 'it fired but could not reach Supabase', so a missing stamp is indistinguishable from a missing run. Tier 1.",
       inputSchema: {
-        app: z.enum(["dj", "sam", "alfred", "workshop", "ken", "warren_buffet"]).describe("Which app this job belongs to."),
+        app: z.string().describe("Which app this job belongs to: an app id from get_apps, e.g. 'dj' or 'drive_mix'. An unknown id is refused."),
         job: z.string().describe("Job name, e.g. 'daily_history_sync'. Stable across runs — staleness queries group on it."),
         executor: z.enum(["workshop", "claude", "alfred"]).describe("Who actually ran it. Different executors fail in different ways."),
         status: RUN_STATUS
@@ -2017,7 +2017,7 @@ export function createMcpServer(token: string) {
       description:
         "Read the job run log, most recent first. The gap-detection read: call with app, job and status 'ok', limit 1 to get the newest successful run, then backfill anything between its covered_to and today. Also the staleness and failure-triage read. Tier 1.",
       inputSchema: {
-        app: z.enum(["dj", "sam", "alfred", "workshop", "ken", "warren_buffet"]).optional().describe("Filter to one app."),
+        app: z.string().optional().describe("Filter to one app: an app id from get_apps."),
         job: z.string().optional().describe("Filter to one job name."),
         status: RUN_STATUS.optional().describe("Filter by outcome. Use 'ok' for gap detection; use 'running' to find ORPHANS - runs that opened and never closed because the task died mid-flight. Nothing closes those automatically."),
         unnotified_only: z.boolean().optional().describe("Only runs whose failure has not yet been surfaced (notified_at is null)."),
@@ -2364,7 +2364,7 @@ export function createMcpServer(token: string) {
         "Re-seeding the same (app, job) UPDATES its definition rather than duplicating: a schedule is a definition, unlike platform_runs which is an append-only log. " +
         "⚠️ `day_of_week` uses the POSTGRES convention where 0 = SUNDAY — not ISO, where 1 = Monday. Required for weekly, rejected for daily. Tier 2.",
       inputSchema: {
-        app: z.enum(["dj", "sam", "alfred", "workshop", "ken", "warren_buffet"]).describe("Which app this job belongs to."),
+        app: z.string().describe("Which app this job belongs to: an app id from get_apps, e.g. 'dj' or 'drive_mix'. An unknown id is refused."),
         job: z.string().describe("Job name, matching the `job` used in create_platform_run — staleness queries join on it."),
         executor: z.enum(["workshop", "claude", "alfred"]).describe("Who is supposed to run it."),
         cadence: z.enum(["daily", "weekly"]).describe("How often."),
@@ -2386,7 +2386,7 @@ export function createMcpServer(token: string) {
         "Read the cadence definitions — what is supposed to run. These are DEFINITIONS, not occurrences (spec §4.5). `day_of_week` uses the Postgres convention where 0 = SUNDAY. " +
         "⚠️ Staleness is deliberately NOT computed here: it needs the newest matching run from get_platform_runs AND a timezone to resolve `expected_by` against, and it must be reconciled against dj_plays rather than trusting the run log, which asserts coverage and cannot be audited against the data (spec §11.4). Tier 1, read-only.",
       inputSchema: {
-        app: z.enum(["dj", "sam", "alfred", "workshop", "ken", "warren_buffet"]).optional().describe("Filter to one app."),
+        app: z.string().optional().describe("Filter to one app: an app id from get_apps."),
         job: z.string().optional().describe("Filter to one job name."),
         enabled: z.boolean().optional().describe("Filter to enabled or suspended definitions."),
         ...readOptions(),

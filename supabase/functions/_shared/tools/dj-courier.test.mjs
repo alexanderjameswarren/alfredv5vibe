@@ -63,10 +63,12 @@ await import(pathToFileURL(join(dir, "dj-courier.probe.ts")).href);
 const toolByName = Object.fromEntries(globalThis.__tools.map((t) => [t.name, t]));
 
 const USER = "user-1";
+// The seeded apps rows (migration 116), less the ones no test needs.
+const APP_IDS = ["alfred", "dj", "drive_mix", "ken", "sam", "warren_buffet", "workshop"];
 
 function makeDb() {
   const tables = { dj_tracks: [], dj_plays: [], platform_runs: [], platform_schedules: [],
-                   dj_known_disagreements: [] };
+                   dj_known_disagreements: [], apps: APP_IDS.map((id) => ({ id })) };
   let seq = 0;
   const uniq = {
     dj_tracks: (r) => `${r.user_id}|${r.video_id}`,
@@ -516,6 +518,37 @@ test("create_platform_run and get_platform_runs round-trip", async () => {
   assert.equal(ok.data[0].covered_to, "2026-08-27");
 });
 
+test("create_platform_run takes any app in apps, and refuses others unwritten", async () => {
+  const db = makeDb();
+  const ctx = { db, userId: USER };
+  const r = await toolByName.create_platform_run.handler(
+    { app: "drive_mix", job: "daily_refresh", executor: "claude", status: "running" }, ctx);
+  assert.equal(r.app, "drive_mix");
+  await assert.rejects(
+    () => toolByName.create_platform_run.handler(
+      { app: "homer", job: "j", executor: "claude", status: "ok" }, ctx),
+    /`app` must be one of the apps in get_apps \(alfred, dj, drive_mix[^)]*\); got "homer"/,
+  );
+  await assert.rejects(
+    () => toolByName.create_platform_run.handler({ job: "j", executor: "claude", status: "ok" }, ctx),
+    /`app` is required/,
+  );
+  assert.equal(db._tables.platform_runs.length, 1);
+});
+
+test("an unreadable apps table is an operational error, not a bad app", async () => {
+  const db = makeDb();
+  const broken = { from: (t) => (t === "apps"
+    ? { select: () => ({ order: async () => ({ data: null, error: { message: "timeout" } }) }) }
+    : db.from(t)) };
+  await assert.rejects(
+    () => toolByName.create_platform_run.handler(
+      { app: "dj", job: "j", executor: "claude", status: "ok" }, { db: broken, userId: USER }),
+    (e) => /could not read apps to check `app`: timeout/.test(e.message) && !/do not retry/i.test(e.message),
+  );
+  assert.equal(db._tables.platform_runs.length, 0);
+});
+
 test("update_platform_run sets notified_at and reports before/after", async () => {
   const db = makeDb();
   const ctx = { db, userId: USER };
@@ -800,6 +833,8 @@ test("bad enums, times and grace values are all rejected", async () => {
   // Not "ken" — ken became a real app on 2026-09-11 (ken_003), and is accepted below.
   await assert.rejects(() => sched(db, { ...base, app: "homer" }), /`app` must be one of/);
   await assert.doesNotReject(() => sched(db, { ...base, app: "ken", job: "ken_seed_check" }));
+  // drive_mix was outside the old six-app list; any apps row is accepted now.
+  await assert.doesNotReject(() => sched(db, { ...base, app: "drive_mix", job: "daily_refresh" }));
   await assert.rejects(() => sched(db, { ...base, executor: "cron" }), /`executor` must be one of/);
   await assert.rejects(() => sched(db, { ...base, cadence: "hourly" }), /`cadence` must be one of/);
   await assert.rejects(() => sched(db, { ...base, expected_by: "8am" }), /HH:MM/);
