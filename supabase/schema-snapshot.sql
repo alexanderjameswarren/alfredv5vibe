@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-24 14:12, through migration 168 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-24 14:26, through migration 169 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -736,6 +736,219 @@ ALTER FUNCTION "platform"."set_read_settings"("p_table" "regclass", "p_mcp_read"
 
 
 COMMENT ON FUNCTION "platform"."set_read_settings"("p_table" "regclass", "p_mcp_read" "text", "p_secret_columns" "text"[], "p_cleared_columns" "text"[]) IS 'Change a registered table''s MCP read settings without re-running register_table''s RLS, grant and audit work. Null keeps the current value. Raises on an unregistered table or a column name that does not exist.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."activity_from_execution"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_was     boolean := coalesce(tg_op <> 'INSERT' and old.status = 'closed' and old.outcome = 'done', false);
+  v_is      boolean := coalesce(tg_op <> 'DELETE' and new.status = 'closed' and new.outcome = 'done', false);
+  v_intent  public.intents%rowtype;
+  v_item    public.items%rowtype;
+  v_item_id text;
+  v_own     text;
+  v_group   text;
+  v_context text;
+begin
+  if v_was and not v_is then
+    delete from public.activity
+     where user_id = old.user_id and source = 'trigger' and source_ref = 'execution:' || old.id;
+    return null;
+  end if;
+  if not v_is or v_was then
+    return null;
+  end if;
+
+  select * into v_intent from public.intents where id = new.intent_id;
+  v_own := v_intent.group_id;
+
+  -- closeRecords logged this on the intention already.
+  if v_intent.id is not null and v_intent.status = 'closed' and v_intent.closed_reason = 'done'
+     and abs(extract(epoch from (v_intent.status_changed_at - new.closed_at))) < 600 then
+    return null;
+  end if;
+  -- A Project's own intention: the group's shipped row covers it.
+  if v_own is not null and exists (
+       select 1 from public.item_groups g join public.group_types t on t.id = g.group_type_id
+        where g.id = v_own and t.kind = 'project') then
+    return null;
+  end if;
+
+  v_item_id := coalesce(v_intent.item_id,
+                        case when jsonb_typeof(new.item_ids) = 'array' then new.item_ids ->> 0 end);
+  if v_item_id is not null then
+    select * into v_item from public.items where id = v_item_id;
+  end if;
+
+  select g.id into v_group
+    from public.item_groups g join public.group_types t on t.id = g.group_type_id
+   where t.kind = 'project'
+     and (g.id = new.group_id
+          or g.id in (select m.group_id from public.item_group_members m
+                       where m.removed_at is null
+                         and ((m.member_type = 'intention' and m.member_id = new.intent_id)
+                              or (m.member_type = 'item' and m.member_id = v_item_id))))
+   order by (g.id = new.group_id) desc nulls last
+   limit 1;
+
+  v_context := coalesce(new.context_id, v_intent.context_id, v_item.context_id);
+
+  insert into public.activity
+    (user_id, occurred_at, app_id, context_id, group_id, target_type, target_id, kind, title, source, source_ref, tags)
+  values
+    (new.user_id, coalesce(new.closed_at, now()),
+     coalesce((select c.app_id from public.contexts c where c.id = v_context), 'alfred'),
+     v_context, v_group, 'execution', new.id, 'done',
+     left(coalesce(nullif(v_intent.text, ''), nullif(v_item.name, ''),
+                   (select nullif(g.name, '') from public.item_groups g where g.id = new.group_id), 'Execution'), 300),
+     'trigger', 'execution:' || new.id,
+     coalesce(nullif(v_intent.tags, '{}'), v_item.tags, '{}'))
+  on conflict (user_id, source, source_ref) where source_ref is not null do nothing;
+  return null;
+exception when others then
+  raise warning 'activity_from_execution % failed: %', coalesce(new.id, old.id), sqlerrm;
+  return null;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."activity_from_execution"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."activity_from_execution"() IS 'Overwatch: an execution closed with outcome done writes one done activity row; leaving that state (Undo deletes the execution) removes it. Skips what an intention close or a Project''s shipped row already logged. Never blocks.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."activity_from_group_close"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_was   boolean := coalesce(old.status = 'closed' and old.closed_reason = 'done', false);
+  v_is    boolean := coalesce(new.status = 'closed' and new.closed_reason = 'done', false);
+  v_moved boolean := old.status_changed_at is distinct from new.status_changed_at;
+begin
+  if not exists (select 1 from public.group_types t where t.id = new.group_type_id and t.kind = 'project') then
+    return null;
+  end if;
+  if v_was and (not v_is or v_moved) then
+    delete from public.activity
+     where user_id = old.user_id and source = 'trigger'
+       and source_ref = 'item_groups:' || old.id || ':' || extract(epoch from old.status_changed_at);
+  end if;
+  if not v_is or (v_was and not v_moved) then
+    return null;
+  end if;
+
+  insert into public.activity
+    (user_id, occurred_at, app_id, context_id, group_id, target_type, target_id, kind, title, source, source_ref, tags)
+  values
+    (new.user_id, new.status_changed_at,
+     coalesce((select c.app_id from public.contexts c where c.id = new.context_id), 'alfred'),
+     new.context_id, new.id, 'group', new.id, 'shipped',
+     left(coalesce(nullif(new.name, ''), 'Unnamed project'), 300),
+     'trigger', 'item_groups:' || new.id || ':' || extract(epoch from new.status_changed_at), '{}')
+  on conflict (user_id, source, source_ref) where source_ref is not null do nothing;
+  return null;
+exception when others then
+  raise warning 'activity_from_group_close % failed: %', new.id, sqlerrm;
+  return null;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."activity_from_group_close"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."activity_from_group_close"() IS 'Overwatch: a Project group (group_types.kind = project) closed with closed_reason done writes one shipped activity row; reopening removes it. Never blocks.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."activity_from_record_close"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_was     boolean := coalesce(old.status = 'closed' and old.closed_reason = 'done', false);
+  v_is      boolean := coalesce(new.status = 'closed' and new.closed_reason = 'done', false);
+  v_moved   boolean := old.status_changed_at is distinct from new.status_changed_at;
+  v_row     jsonb := to_jsonb(new);
+  v_is_int  boolean := tg_table_name = 'intents';
+  v_own     text;
+  v_group   text;
+  v_context text := v_row ->> 'context_id';
+begin
+  if v_was and (not v_is or v_moved) then
+    delete from public.activity
+     where user_id = old.user_id and source = 'trigger'
+       and source_ref = tg_table_name || ':' || old.id || ':' || extract(epoch from old.status_changed_at);
+  end if;
+  if not v_is or (v_was and not v_moved) then
+    return null;
+  end if;
+
+  if v_is_int then
+    v_own := v_row ->> 'group_id';
+    -- A Project's own intention: the group's shipped row covers it.
+    if v_own is not null and exists (
+         select 1 from public.item_groups g join public.group_types t on t.id = g.group_type_id
+          where g.id = v_own and t.kind = 'project') then
+      return null;
+    end if;
+    -- closeExecution logged this on the execution already.
+    if exists (select 1 from public.executions e
+                where e.intent_id = new.id and e.status = 'closed' and e.outcome = 'done'
+                  and abs(extract(epoch from (e.closed_at - new.status_changed_at))) < 600) then
+      return null;
+    end if;
+  else
+    -- Closed with its intention, or finished by an execution: that row covers it.
+    if exists (select 1 from public.intents i
+                where i.item_id = new.id and i.status = 'closed' and i.closed_reason = 'done'
+                  and abs(extract(epoch from (i.status_changed_at - new.status_changed_at))) < 600)
+       or exists (select 1 from public.executions e
+                   where e.status = 'closed' and e.outcome = 'done'
+                     and abs(extract(epoch from (e.closed_at - new.status_changed_at))) < 600
+                     and ((jsonb_typeof(e.item_ids) = 'array' and e.item_ids ? new.id)
+                          or e.intent_id in (select i.id from public.intents i where i.item_id = new.id))) then
+      return null;
+    end if;
+  end if;
+
+  select g.id into v_group
+    from public.item_groups g join public.group_types t on t.id = g.group_type_id
+   where t.kind = 'project'
+     and g.id in (select m.group_id from public.item_group_members m
+                   where m.removed_at is null
+                     and m.member_type = case when v_is_int then 'intention' else 'item' end
+                     and m.member_id = new.id)
+   limit 1;
+
+  insert into public.activity
+    (user_id, occurred_at, app_id, context_id, group_id, target_type, target_id, kind, title, source, source_ref, tags)
+  values
+    (new.user_id, new.status_changed_at,
+     coalesce((select c.app_id from public.contexts c where c.id = v_context), 'alfred'),
+     v_context, v_group, case when v_is_int then 'intention' else 'item' end, new.id, 'done',
+     left(coalesce(nullif(v_row ->> 'text', ''), nullif(v_row ->> 'name', ''), 'Untitled'), 300),
+     'trigger', tg_table_name || ':' || new.id || ':' || extract(epoch from new.status_changed_at),
+     coalesce(array(select jsonb_array_elements_text(coalesce(v_row -> 'tags', '[]'::jsonb))), '{}'))
+  on conflict (user_id, source, source_ref) where source_ref is not null do nothing;
+  return null;
+exception when others then
+  raise warning 'activity_from_record_close %.% failed: %', tg_table_name, new.id, sqlerrm;
+  return null;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."activity_from_record_close"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."activity_from_record_close"() IS 'Overwatch: an item or intention closed with closed_reason done writes one done activity row, unless an execution or its intention already logged the close or it is a Project''s own intention; reopening removes it. Never blocks.';
 
 
 
@@ -8472,6 +8685,96 @@ called more often. Nonzero loops_24h means an agent is actually getting stuck.';
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."activity" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "occurred_at" timestamp with time zone NOT NULL,
+    "app_id" "text" DEFAULT 'alfred'::"text" NOT NULL,
+    "context_id" "text",
+    "group_id" "text",
+    "target_type" "text" NOT NULL,
+    "target_id" "text",
+    "kind" "text" NOT NULL,
+    "title" "text" NOT NULL,
+    "summary" "text",
+    "source" "text" NOT NULL,
+    "source_ref" "text",
+    "tags" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "activity_kind_values" CHECK (("kind" = ANY (ARRAY['shipped'::"text", 'done'::"text", 'progress'::"text", 'used'::"text"]))),
+    CONSTRAINT "activity_source_values" CHECK (("source" = ANY (ARRAY['trigger'::"text", 'claude'::"text", 'cli'::"text", 'nightly'::"text", 'manual'::"text"]))),
+    CONSTRAINT "activity_target_type_values" CHECK (("target_type" = ANY (ARRAY['item'::"text", 'intention'::"text", 'group'::"text", 'execution'::"text", 'job_application'::"text", 'other'::"text"]))),
+    CONSTRAINT "activity_title_length" CHECK ((("length"("title") >= 1) AND ("length"("title") <= 500)))
+);
+
+
+ALTER TABLE "public"."activity" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."activity" IS 'OVERWATCH. The log of what got done, across every app. Inserted by the activity_from_* triggers (Alfred''s own closes), by log_activity (Claude and CLI reports) and by the nightly job; never edited. The UI may delete a wrong row. One row per (user_id, source, source_ref) when source_ref is set, so nothing is logged twice. Spec: docs/technical-spec-overwatch-q4n.md section 4.2.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."user_id" IS 'Owner. Copied from the row that fired the trigger, or auth.uid(). Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."occurred_at" IS 'When the work happened: the execution''s closed_at, or the record''s status_changed_at at close.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."app_id" IS 'The app it belongs to: the context''s app_id, else alfred.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."context_id" IS 'The context of the record, when there is one.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."group_id" IS 'The Project group it counts toward: the execution''s or intention''s own Project group, else a Project group the intention or item is a member of. Null when none.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."target_type" IS 'What the row is about: item, intention, group, execution, job_application or other.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."target_id" IS 'The id of that record, or null.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."kind" IS 'shipped (a Project closed as done), done (a task or session finished), progress (a step of a longer piece of work), used (an app was used that day).';
+
+
+
+COMMENT ON COLUMN "public"."activity"."title" IS 'One line: the intention''s text, item''s name or group''s name, cut to 300 characters.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."summary" IS 'Short text, or null. Triggers leave it null.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."source" IS 'Who wrote it: trigger, claude, cli, nightly or manual.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."source_ref" IS 'The source record''s identity, so a second write is a no-op: execution:<id>, items:<id>:<epoch>, intents:<id>:<epoch>, item_groups:<id>:<epoch> for triggers; the run tag for cli; <app>:<date> for nightly.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."tags" IS 'A snapshot of the record''s tags when the row was written, so history shows how a thing was tagged then.';
+
+
+
+COMMENT ON COLUMN "public"."activity"."created_at" IS 'When the row was written.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."allowed_emails" (
     "email" "text" NOT NULL,
     "added_at" bigint DEFAULT (EXTRACT(epoch FROM "now"()) * (1000)::numeric)
@@ -9512,7 +9815,9 @@ CREATE TABLE IF NOT EXISTS "public"."group_types" (
     "execution_mode" "text" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "kind" "text",
     CONSTRAINT "group_types_execution_mode_check" CHECK (("execution_mode" = ANY (ARRAY['together'::"text", 'separately'::"text"]))),
+    CONSTRAINT "group_types_kind_values" CHECK ((("kind" IS NULL) OR ("kind" = ANY (ARRAY['project'::"text", 'menu'::"text", 'series'::"text"])))),
     CONSTRAINT "group_types_label_plural_check" CHECK (("btrim"("label_plural") <> ''::"text")),
     CONSTRAINT "group_types_label_singular_check" CHECK (("btrim"("label_singular") <> ''::"text"))
 );
@@ -9538,6 +9843,10 @@ COMMENT ON COLUMN "public"."group_types"."icon" IS 'A lucide-react icon name fro
 
 
 COMMENT ON COLUMN "public"."group_types"."execution_mode" IS 'together: one tap executes every item member (menu). separately: members are executed on their own intentions and the group has no Start Now (project, series).';
+
+
+
+COMMENT ON COLUMN "public"."group_types"."kind" IS 'Stable name for the three seeded types: project, menu or series; null for types added in Settings. Code finds Project groups by kind = ''project'', never by label, so renaming a type changes nothing. Backfilled from the seeded labels in Overwatch Step 10.';
 
 
 
@@ -13177,6 +13486,11 @@ ALTER TABLE ONLY "platform"."registry"
 
 
 
+ALTER TABLE ONLY "public"."activity"
+    ADD CONSTRAINT "activity_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."allowed_emails"
     ADD CONSTRAINT "allowed_emails_pkey" PRIMARY KEY ("email");
 
@@ -13733,6 +14047,22 @@ CREATE INDEX "idx_mcp_call_loop" ON "platform"."mcp_call_log" USING "btree" ("us
 
 
 CREATE INDEX "idx_mcp_call_user_time" ON "platform"."mcp_call_log" USING "btree" ("user_id", "called_at" DESC);
+
+
+
+CREATE INDEX "activity_group_idx" ON "public"."activity" USING "btree" ("group_id") WHERE ("group_id" IS NOT NULL);
+
+
+
+CREATE UNIQUE INDEX "activity_source_ref_once" ON "public"."activity" USING "btree" ("user_id", "source", "source_ref") WHERE ("source_ref" IS NOT NULL);
+
+
+
+CREATE INDEX "activity_tags_idx" ON "public"."activity" USING "gin" ("tags");
+
+
+
+CREATE INDEX "activity_user_occurred_idx" ON "public"."activity" USING "btree" ("user_id", "occurred_at" DESC);
 
 
 
@@ -14320,11 +14650,31 @@ CREATE INDEX "wb_transactions_subscription_idx" ON "public"."wb_transactions" US
 
 
 
+CREATE OR REPLACE TRIGGER "activity_from_execution" AFTER INSERT OR DELETE OR UPDATE ON "public"."executions" FOR EACH ROW EXECUTE FUNCTION "public"."activity_from_execution"();
+
+
+
+CREATE OR REPLACE TRIGGER "activity_from_group_close" AFTER UPDATE OF "status", "closed_reason", "status_changed_at" ON "public"."item_groups" FOR EACH ROW WHEN ((("old"."status" IS DISTINCT FROM "new"."status") OR ("old"."closed_reason" IS DISTINCT FROM "new"."closed_reason") OR ("old"."status_changed_at" IS DISTINCT FROM "new"."status_changed_at"))) EXECUTE FUNCTION "public"."activity_from_group_close"();
+
+
+
+CREATE OR REPLACE TRIGGER "activity_from_record_close" AFTER UPDATE OF "status", "closed_reason", "status_changed_at" ON "public"."intents" FOR EACH ROW WHEN ((("old"."status" IS DISTINCT FROM "new"."status") OR ("old"."closed_reason" IS DISTINCT FROM "new"."closed_reason") OR ("old"."status_changed_at" IS DISTINCT FROM "new"."status_changed_at"))) EXECUTE FUNCTION "public"."activity_from_record_close"();
+
+
+
+CREATE OR REPLACE TRIGGER "activity_from_record_close" AFTER UPDATE OF "status", "closed_reason", "status_changed_at" ON "public"."items" FOR EACH ROW WHEN ((("old"."status" IS DISTINCT FROM "new"."status") OR ("old"."closed_reason" IS DISTINCT FROM "new"."closed_reason") OR ("old"."status_changed_at" IS DISTINCT FROM "new"."status_changed_at"))) EXECUTE FUNCTION "public"."activity_from_record_close"();
+
+
+
 CREATE OR REPLACE TRIGGER "app_profiles_touch" BEFORE INSERT OR UPDATE ON "public"."app_profiles" FOR EACH ROW EXECUTE FUNCTION "public"."app_profiles_touch"();
 
 
 
 CREATE OR REPLACE TRIGGER "apps_touch_updated_at" BEFORE UPDATE ON "public"."apps" FOR EACH ROW EXECUTE FUNCTION "public"."apps_touch_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."activity" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
 
@@ -14917,6 +15267,26 @@ CREATE OR REPLACE TRIGGER "wb_transactions_amount_follow" AFTER UPDATE OF "amoun
 
 
 CREATE OR REPLACE TRIGGER "wb_transactions_default_split" AFTER INSERT ON "public"."wb_transactions" FOR EACH ROW EXECUTE FUNCTION "public"."wb_transactions_default_split"();
+
+
+
+ALTER TABLE ONLY "public"."activity"
+    ADD CONSTRAINT "activity_app_id_fkey" FOREIGN KEY ("app_id") REFERENCES "public"."apps"("id");
+
+
+
+ALTER TABLE ONLY "public"."activity"
+    ADD CONSTRAINT "activity_context_id_fkey" FOREIGN KEY ("context_id") REFERENCES "public"."contexts"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."activity"
+    ADD CONSTRAINT "activity_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."item_groups"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."activity"
+    ADD CONSTRAINT "activity_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
 
 
@@ -15819,6 +16189,13 @@ CREATE POLICY "Users see own songs" ON "public"."sam_songs" USING (("auth"."uid"
 
 
 
+ALTER TABLE "public"."activity" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "activity_owner_access" ON "public"."activity" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
 ALTER TABLE "public"."allowed_emails" ENABLE ROW LEVEL SECURITY;
 
 
@@ -16479,6 +16856,24 @@ REVOKE ALL ON FUNCTION "platform"."grant_table"("p_table" "regclass") FROM PUBLI
 
 
 REVOKE ALL ON FUNCTION "platform"."heavy_jsonb_columns"("p_table" "regclass") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."activity_from_execution"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."activity_from_execution"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."activity_from_execution"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."activity_from_group_close"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."activity_from_group_close"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."activity_from_group_close"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."activity_from_record_close"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."activity_from_record_close"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."activity_from_record_close"() TO "service_role";
 
 
 
@@ -17199,6 +17594,11 @@ GRANT ALL ON FUNCTION "public"."wb_unconfirm_planned_match"("p_match_id" "uuid")
 
 
 GRANT SELECT ON TABLE "platform"."audit_log" TO "authenticated";
+
+
+
+GRANT ALL ON TABLE "public"."activity" TO "authenticated";
+GRANT ALL ON TABLE "public"."activity" TO "service_role";
 
 
 
