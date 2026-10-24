@@ -54,6 +54,7 @@ import {
   normaliseItem,
   overlaps,
   pruneBlocksLocked,
+  queueBlockEvents,
   readBlocks,
   readState,
   recordBlocks,
@@ -326,19 +327,19 @@ function cmdClaim(ctx, items, flags) {
           `\nClaimed nothing. ${conflicts.length} item${conflicts.length === 1 ? " is" : "s are"} held by another thread — stop and ask Alex.`,
         );
         // The claims file is not written; the blocks file is, under the same lock.
-        writeBlocks(
-          ctx.blocksFile,
-          liveBlocks(
-            addBlocks(readBlocks(ctx.blocksFile), {
-              waiter: ctx.owner,
-              hits: conflicts.map((c) => c.hit),
-              via: "claim",
-              runTag: flags.runTag ?? null,
-              codeOf: (o) => codeOfOwner(ctx, o),
-            }),
-            state,
-          ),
+        const before = readBlocks(ctx.blocksFile);
+        const next = liveBlocks(
+          addBlocks(before, {
+            waiter: ctx.owner,
+            hits: conflicts.map((c) => c.hit),
+            via: "claim",
+            runTag: flags.runTag ?? null,
+            codeOf: (o) => codeOfOwner(ctx, o),
+          }),
+          state,
         );
+        writeBlocks(ctx.blocksFile, next);
+        queueBlockEvents(ctx, before, next);
         console.log(`Recorded as a block, so ${[...new Set(conflicts.flatMap((c) => c.hit.holders.map((h) => h.owner)))].join(", ")} will be told.`);
         exit = 1;
         return null;
