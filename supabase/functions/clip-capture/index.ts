@@ -454,6 +454,11 @@ async function handleFinish(
       page_width: pageWidth,
       page_height: pageHeight,
       captured_at: capturedAt,
+      // Columns since Overwatch Step 4, so a report is found by run tag without the inbox row.
+      // Still copied into inbox.source_metadata below, which get_recent_clips reads.
+      run_tag: runTag,
+      repo,
+      branch,
     })
     .select("id, slice_count")
     .single();
