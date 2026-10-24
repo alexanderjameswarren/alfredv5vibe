@@ -478,6 +478,28 @@ export const recordDjPlaysTool = defineTool({
 });
 
 // ---------------------------------------------------------------------------
+// app — any row in public.apps (Overwatch Step 5)
+// ---------------------------------------------------------------------------
+
+// platform_runs.app and platform_schedules.app reference apps(id), so a new app
+// is a new row, not a code change. Checked here too, so the error names the ids.
+async function requireKnownApp(
+  ctx: { db: { from: (t: string) => any } },
+  tool: string,
+  app: string | undefined,
+) {
+  if (!app) throw new Error(`${tool}: \`app\` is required.`);
+  const { data, error } = await ctx.db.from("apps").select("id").order("id", { ascending: true });
+  if (error) throw new Error(`${tool}: could not read apps to check \`app\`: ${error.message}`);
+  const ids = (data ?? []).map((r: { id: string }) => r.id);
+  if (!ids.includes(app)) {
+    throw new Error(
+      `${tool}: \`app\` must be one of the apps in get_apps (${ids.join(", ")}); got ${JSON.stringify(app)}.`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // create_platform_run — tier 1
 // ---------------------------------------------------------------------------
 
@@ -490,7 +512,7 @@ export const createPlatformRunTool = defineTool({
     const executor = args.executor as string | undefined;
     const status = args.status as string | undefined;
 
-    if (!app) throw new Error("create_platform_run: `app` is required.");
+    await requireKnownApp(ctx, "create_platform_run", app);
     if (!job) throw new Error("create_platform_run: `job` is required.");
     if (!executor) throw new Error("create_platform_run: `executor` is required.");
     if (!status) throw new Error("create_platform_run: `status` is required.");
@@ -594,8 +616,8 @@ export const createPlatformRunTool = defineTool({
       .insert(row)
       .select("id, app, job, executor, status, started_at, finished_at, covered_from, covered_to")
       .single();
-    // CHECK constraints on app / executor / status do the validating — a typo
-    // fails loudly here rather than creating a row no staleness query matches.
+    // The apps foreign key and the executor / status checks do the validating — a
+    // typo fails loudly here rather than creating a row no staleness query matches.
     if (error) throw new Error(`create_platform_run: ${error.message}`);
     return data;
   },
@@ -818,9 +840,6 @@ export const updatePlatformRunTool = defineTool({
 // silently — which is the exact problem this table exists to detect. Staleness
 // is derived at read time by comparing the due occurrence against platform_runs.
 
-// Mirrors platform_schedules_app_check / platform_runs_app_check. The zod enums
-// on the four platform tools in mcp/index.ts carry the same list.
-const VALID_APP = ["dj", "sam", "alfred", "workshop", "ken", "warren_buffet"];
 const VALID_EXECUTOR = ["workshop", "claude", "alfred"];
 const VALID_CADENCE = ["daily", "weekly"];
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
@@ -834,9 +853,7 @@ export const createPlatformScheduleTool = defineTool({
     const executor = args.executor as string | undefined;
     const cadence = args.cadence as string | undefined;
 
-    if (!app || !VALID_APP.includes(app)) {
-      throw new Error(`create_platform_schedule: \`app\` must be one of ${VALID_APP.join(", ")}.`);
-    }
+    await requireKnownApp(ctx, "create_platform_schedule", app);
     if (!job) throw new Error("create_platform_schedule: `job` is required.");
     if (!executor || !VALID_EXECUTOR.includes(executor)) {
       throw new Error(
