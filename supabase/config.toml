@@ -108,3 +108,16 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/wb-sync/deno.json"
 entrypoint = "./functions/wb-sync/index.ts"
+
+[functions.overwatch-ingest]
+enabled = true
+# 🛑 JWT verification OFF. Called from the desktop by the claims script (Overwatch Step 7), and later by gitpush
+# and Switchboard; none holds a Supabase session. OVERWATCH_INGEST_SECRET in the x-overwatch-secret header stands
+# in front of it instead, checked with a length check plus timingSafeEqual before any work — the clip-capture pattern.
+#
+# ⚠️ Declared BEFORE THE FIRST DEPLOY, because the CLI defaults verify_jwt to TRUE when nothing declares it, and the
+# flag has reset silently on redeploy in this project. Re-check after every deploy: an unauthenticated POST must
+# come back 401 with this function's own body (`{"ok":false,"error":"unauthorized"}`).
+verify_jwt = false
+import_map = "./functions/overwatch-ingest/deno.json"
+entrypoint = "./functions/overwatch-ingest/index.ts"
