@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-23 15:01, through migration 163 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-24 11:01, through migration 164 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -8533,7 +8533,11 @@ CREATE TABLE IF NOT EXISTS "public"."clips" (
     "captured_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "links_truncated" boolean DEFAULT false NOT NULL,
+    "run_tag" "text",
+    "repo" "text",
+    "branch" "text",
     CONSTRAINT "clips_cli_has_no_slices" CHECK ((("source" <> 'cli'::"text") OR ("cardinality"("slice_paths") = 0))),
+    CONSTRAINT "clips_run_tag_format" CHECK ((("run_tag" IS NULL) OR ("run_tag" ~ '^[a-z0-9_-]{1,40}$'::"text"))),
     CONSTRAINT "clips_slice_paths_max_24" CHECK (("cardinality"("slice_paths") <= 24)),
     CONSTRAINT "clips_source_check" CHECK (("source" = ANY (ARRAY['clipboard'::"text", 'cli'::"text"])))
 );
@@ -8599,6 +8603,18 @@ COMMENT ON COLUMN "public"."clips"."captured_at" IS 'When the extension or the C
 
 
 COMMENT ON COLUMN "public"."clips"."links_truncated" IS 'True when the page had more than 1,000 links and the excess was dropped by the capture function. The stored `links` array is then the FIRST 1,000, which are the ones nearest the top of the page. Set from the links_dropped figure clip-capture already computes; de-duplication is NOT truncation, so three links with two distinct addresses leave this false. Reads alongside text_truncated (the page text was cut at 1 MB) and screenshot_truncated (the screenshot does not show the whole page) -- three independent facts about three different parts of the same clip. If "Claude missed a listing on a huge job board" is ever reported, this is the first column to look at.';
+
+
+
+COMMENT ON COLUMN "public"."clips"."run_tag" IS 'The run tag of the CLI prompt this report answers, e.g. overwatch-q4n-s4-k2mf. Null for Chrome clips and for untagged pushes. Everything before the step segment is the project code, so a prefix search finds every report of one project. Same pattern clip-capture accepts (clips_run_tag_format). Also kept in the paired inbox.source_metadata.run_tag, which get_recent_clips reads.';
+
+
+
+COMMENT ON COLUMN "public"."clips"."repo" IS 'The repository folder the CLI ran in, as clip.mjs reports it from git, e.g. alfred-v5. Context, not identity: trimmed and capped at 120 characters by clip-capture, never validated. Null for Chrome clips.';
+
+
+
+COMMENT ON COLUMN "public"."clips"."branch" IS 'The git branch the CLI ran on, e.g. worktree-overwatch-q4n. Context, not identity: trimmed and capped at 200 characters by clip-capture, never validated. Null for Chrome clips.';
 
 
 
@@ -13541,6 +13557,10 @@ CREATE INDEX "idx_mcp_call_loop" ON "platform"."mcp_call_log" USING "btree" ("us
 
 
 CREATE INDEX "idx_mcp_call_user_time" ON "platform"."mcp_call_log" USING "btree" ("user_id", "called_at" DESC);
+
+
+
+CREATE INDEX "clips_run_tag_idx" ON "public"."clips" USING "btree" ("run_tag" "text_pattern_ops") WHERE ("run_tag" IS NOT NULL);
 
 
 
