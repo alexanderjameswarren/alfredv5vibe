@@ -324,15 +324,20 @@ test("the tool count is 72 after the job-search tools", () => {
   // Overwatch Step 13, +6.
   const EXPECTED_ADDED_OVERWATCH_13 = ["get_activity", "log_activity", "get_project_plans", "update_project_plan",
     "get_project_links", "create_project_link"];
+  // Overwatch Step 14, +14.
+  const EXPECTED_ADDED_OVERWATCH_14 = ["get_overwatch_plan", "create_overwatch_plan", "update_overwatch_checks",
+    "get_overwatch_watch", "create_overwatch_watch", "update_overwatch_watch", "get_overwatch_notes",
+    "create_overwatch_note", "get_claim_blocks", "update_app_profile", "record_seen_releases", "log_friction",
+    "get_friction", "update_friction"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
                       ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C, ...EXPECTED_ADDED_P5,
-                      ...EXPECTED_ADDED_READ, ...EXPECTED_ADDED_OVERWATCH_13]) {
+                      ...EXPECTED_ADDED_READ, ...EXPECTED_ADDED_OVERWATCH_13, ...EXPECTED_ADDED_OVERWATCH_14]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 147,
-    `expected 147 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 161,
+    `expected 161 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -656,19 +661,28 @@ test("Drive Mix schemas advertise exactly the args their handlers read, at the s
   });
 });
 
-test("Overwatch Step 13 schemas advertise exactly the args their handlers read, at the spec's tiers", () => {
+test("Overwatch Steps 13 and 14 schemas advertise exactly the args their handlers read, at the spec's tiers", () => {
   const tiers = {};
-  for (const file of ["overwatch-activity.ts", "overwatch-projects.ts"]) {
-    const src = readFileSync(join(TOOLS, file), "utf-8");
+  for (const file of ["overwatch-activity.ts", "overwatch-projects.ts", "overwatch-plan.ts"]) {
+    let src = readFileSync(join(TOOLS, file), "utf-8");
     // planPatch reads the plan fields for update_project_plan; they are listed in PLAN_FIELDS.
     const planFields = [...(/const PLAN_FIELDS = \[([\s\S]*?)\]/.exec(src)?.[1] ?? "").matchAll(/"(\w+)"/g)].map((m) => m[1]);
-    const helperStart = src.indexOf("export function planPatch(");
-    const body = helperStart >= 0 ? src.slice(helperStart).split("\n}\n")[0] : "";
-    for (const b of src.replace(body, "").split("defineTool({").slice(1)) {
+    // Helper bodies are cut out, and their args counted for the tools that call them.
+    const helperArgs = {};
+    for (const h of ["planPatch", "planInput"]) {
+      const start = src.indexOf(`export function ${h}(`);
+      if (start < 0) continue;
+      const body = src.slice(start).split("\n}\n")[0];
+      helperArgs[h] = [...body.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]);
+      src = src.replace(body, "");
+    }
+    for (const b of src.split("defineTool({").slice(1)) {
       const name = /name:\s*"([^"]+)"/.exec(b)[1];
       tiers[name] = Number(/tier:\s*(\d)/.exec(b)[1]);
       const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
       if (b.includes("planPatch(")) planFields.forEach((k) => read.add(k));
+      for (const [h, keys] of Object.entries(helperArgs)) if (b.includes(`${h}(`)) keys.forEach((k) => read.add(k));
+      if (tiers[name] === 3) read.add("confirmed");
       const t = registered.find((r) => r.name === name);
       assert.ok(t, `${name} not registered`);
       addSharedRead(b, read, t);
@@ -678,6 +692,10 @@ test("Overwatch Step 13 schemas advertise exactly the args their handlers read, 
   assert.deepEqual(tiers, {
     get_activity: 1, log_activity: 1, get_project_plans: 1, update_project_plan: 2,
     get_project_links: 1, create_project_link: 2,
+    get_overwatch_plan: 1, create_overwatch_plan: 3, update_overwatch_checks: 2,
+    get_overwatch_watch: 1, create_overwatch_watch: 2, update_overwatch_watch: 2,
+    get_overwatch_notes: 1, create_overwatch_note: 2, get_claim_blocks: 1, update_app_profile: 2,
+    record_seen_releases: 1, log_friction: 1, get_friction: 1, update_friction: 2,
   });
 });
 
