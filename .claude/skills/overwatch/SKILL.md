@@ -134,7 +134,9 @@ Everything the nightly run does, plus:
   entries that could unblock a parked project or change the platform;
 - friction: `get_friction` (open), group entries by process with `update_friction`
   (`pattern_id: "new"` once, then that id), and for a process with three or more open
-  entries in 30 days, one task inbox item proposing a fix with a paste-ready prompt;
+  entries in 30 days, one task inbox item proposing a fix with a paste-ready prompt. Only
+  `open` entries count; `update_friction` closes them as `fixed` (`resolved_by`) or
+  `wont_fix` (`wont_fix_reason`, one line);
 - estimate accuracy, once `estimate_accuracy_min_shipped` projects have a `final` row:
   actual against original and against scope-adjusted for each, and a suggested
   `estimate_correction_factor`, which changes only through `create_overwatch_plan`;

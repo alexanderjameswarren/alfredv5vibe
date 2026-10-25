@@ -15,8 +15,8 @@
 //   update_app_profile       tier 2 — an app's activity recipe, rhythm and current state.
 //   record_seen_releases     tier 1 — release-note entries seen, each once.
 //   log_friction             tier 1 — a snag in how the work runs.
-//   get_friction             tier 1 — friction entries, open ones by default.
-//   update_friction          tier 2 — group entries into a pattern, or resolve them.
+//   get_friction             tier 1 — friction entries by status, open ones by default.
+//   update_friction          tier 2 — group entries into a pattern, or set status (fixed, wont_fix, back to open).
 // ============================================================================
 
 import { defineTool, describeDbError, readTable } from "../platform.ts";
@@ -25,6 +25,7 @@ export const WATCH_KINDS = ["focus", "ease_off", "keep_an_eye_on"] as const;
 export const NOTE_PERIODS = ["nightly", "weekly"] as const;
 export const RELEASE_SOURCES = ["claude_release_notes", "claude_code_changelog", "api_release_notes"] as const;
 export const FRICTION_PROCESSES = ["cli_testing_steps", "cli_prompt", "todos", "closeout", "inbox", "other"] as const;
+export const FRICTION_STATUSES = ["open", "fixed", "wont_fix"] as const;
 const AUTHORS = ["alex", "overwatch"] as const;
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -37,7 +38,8 @@ const WATCH_COLUMNS = "id, kind, text, app_id, group_id, starts_on, ends_on, cre
 const NOTE_COLUMNS = "id, period, for_date, body, flags, plan_id, created_at";
 const PROFILE_COLUMNS = "id, app_id, activity_recipe, rhythm_days, current_state, current_state_updated_at, updated_at";
 const FRICTION_COLUMNS =
-  "id, occurred_at, what_happened, process, project_code, suggested_fix, pattern_id, resolved_by, resolved_at, created_at";
+  "id, occurred_at, what_happened, process, project_code, suggested_fix, pattern_id, status, wont_fix_reason, " +
+  "resolved_by, resolved_at, created_at";
 
 /** Today in America/Los_Angeles, YYYY-MM-DD. */
 export function pacificToday(now: Date = new Date()): string {
@@ -472,15 +474,22 @@ export const getFrictionTool = defineTool({
     const code = text(T, "project_code", args.project_code);
     const patternId = text(T, "pattern_id", args.pattern_id);
     const since = day(T, "since", args.since);
-    if (given(args, "open") && typeof args.open !== "boolean") throw new Error(`${T}: open must be true or false.`);
+    // Open by default: what the weekly grouping and the trigger work on.
+    let status: string | null = "open";
+    if (args.status === "all") status = null;
+    else if (given(args, "status")) {
+      if (!(FRICTION_STATUSES as readonly string[]).includes(args.status as string)) {
+        throw new Error(`${T}: status must be one of ${FRICTION_STATUSES.join(", ")}, or all; got ${JSON.stringify(args.status)}.`);
+      }
+      status = args.status as string;
+    }
     return await readTable(ctx, {
       tool: T,
       table: "process_friction",
       args,
       filter: (query) => {
         let q = query;
-        // Open by default: what the weekly grouping works on.
-        if (args.open !== false) q = q.is("resolved_at", null);
+        if (status) q = q.eq("status", status);
         if (proc) q = q.eq("process", proc);
         if (code) q = q.eq("project_code", code);
         if (patternId) q = q.eq("pattern_id", patternId);
@@ -508,11 +517,25 @@ export const updateFrictionTool = defineTool({
       else if (typeof args.pattern_id === "string" && UUID.test(args.pattern_id)) patch.pattern_id = args.pattern_id;
       else throw new Error(`${T}: pattern_id must be an existing pattern's uuid, or "new" to start one.`);
     }
-    if (given(args, "resolved_by")) {
-      patch.resolved_by = text(T, "resolved_by", args.resolved_by);
-      patch.resolved_at = new Date().toISOString();
+    const resolvedBy = text(T, "resolved_by", args.resolved_by);
+    const reason = text(T, "wont_fix_reason", args.wont_fix_reason);
+    // resolved_by alone still means fixed.
+    const status = given(args, "status") ? args.status : resolvedBy ? "fixed" : null;
+    if (status !== null && !(FRICTION_STATUSES as readonly string[]).includes(status as string)) {
+      throw new Error(`${T}: status must be one of ${FRICTION_STATUSES.join(", ")}; got ${JSON.stringify(status)}.`);
     }
-    if (!Object.keys(patch).length) throw new Error(`${T}: nothing to change; pass pattern_id or resolved_by.`);
+    if (reason && status !== "wont_fix") throw new Error(`${T}: wont_fix_reason is only for status wont_fix.`);
+    if (status === "open") {
+      if (resolvedBy) throw new Error(`${T}: resolved_by is for fixed or wont_fix, not open.`);
+      Object.assign(patch, { status, resolved_by: null, resolved_at: null, wont_fix_reason: null });
+    } else if (status === "fixed") {
+      if (!resolvedBy) throw new Error(`${T}: fixed needs resolved_by: what fixed it.`);
+      Object.assign(patch, { status, resolved_by: resolvedBy, resolved_at: new Date().toISOString(), wont_fix_reason: null });
+    } else if (status === "wont_fix") {
+      if (!reason) throw new Error(`${T}: wont_fix needs wont_fix_reason, one line on why.`);
+      Object.assign(patch, { status, wont_fix_reason: reason, resolved_by: resolvedBy ?? "alex", resolved_at: new Date().toISOString() });
+    }
+    if (!Object.keys(patch).length) throw new Error(`${T}: nothing to change; pass pattern_id or status.`);
     const { data, error } = await ctx.db.from("process_friction").update(patch).in("id", args.ids).select(FRICTION_COLUMNS);
     if (error) throw new Error(describeDbError(T, error));
     const rows = (data ?? []) as { id: string }[];

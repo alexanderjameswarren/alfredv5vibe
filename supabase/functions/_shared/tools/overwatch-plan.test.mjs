@@ -15,7 +15,7 @@ const SETTINGS = [
   settingsFor("claim_blocks", ["id", "user_id", "waiter_code", "holder_code", "item", "run_tag", "blocked_at",
     "last_seen_at", "repeat_count", "cleared_at", "created_at"]),
   settingsFor("process_friction", ["id", "user_id", "occurred_at", "what_happened", "process", "project_code",
-    "suggested_fix", "pattern_id", "resolved_by", "resolved_at", "created_at"]),
+    "suggested_fix", "pattern_id", "status", "wont_fix_reason", "resolved_by", "resolved_at", "created_at"]),
 ];
 const PLAN = { id: "p1", instructions: "Watch everything.", settings: { stall_days: 5, push_time: "07:30" }, checks_next_run: [{}] };
 
@@ -154,16 +154,48 @@ test("friction: named processes or skill:<name>; open by default; patterns and r
 
   const list = fakeDb();
   await m.getFrictionTool.handler({ process: "cli_testing_steps" }, { db: list });
-  assert.ok(saw(list, "process_friction", "is", "resolved_at", null));
+  assert.ok(saw(list, "process_friction", "eq", "status", "open"));
 
   const id = "11111111-2222-3333-4444-555555555555";
   const up = fakeDb(() => ({ data: [{ id }], error: null }));
   const out = await m.updateFrictionTool.handler({ ids: [id], pattern_id: "new", resolved_by: "cli-workflow v2" }, { db: up });
   const patch = up.calls.find(([, k]) => k === "update")[2];
   assert.match(patch.pattern_id, /^[0-9a-f-]{36}$/);
+  assert.equal(patch.status, "fixed");
   assert.equal(patch.resolved_by, "cli-workflow v2");
   assert.ok(patch.resolved_at);
   assert.equal(out.not_found, undefined);
   await assert.rejects(() => m.updateFrictionTool.handler({ ids: ["x"] }, { db: up }), /ids is required/);
   await assert.rejects(() => m.updateFrictionTool.handler({ ids: [id] }, { db: up }), /nothing to change/);
+});
+
+test("get_friction: status filter, all, and bad values", async () => {
+  const db = fakeDb();
+  await m.getFrictionTool.handler({ status: "wont_fix" }, { db });
+  assert.ok(saw(db, "process_friction", "eq", "status", "wont_fix"));
+  const all = fakeDb();
+  await m.getFrictionTool.handler({ status: "all" }, { db: all });
+  assert.ok(!all.calls.some(([, k, c]) => k === "eq" && c === "status"));
+  await assert.rejects(() => m.getFrictionTool.handler({ status: "resolved" }, { db }), /status must be one of/);
+});
+
+test("update_friction: wont_fix needs a reason, open clears the stamp, fixed needs resolved_by", async () => {
+  const id = "11111111-2222-3333-4444-555555555555";
+  const patchOf = async (args) => {
+    const db = fakeDb(() => ({ data: [{ id }], error: null }));
+    await m.updateFrictionTool.handler({ ids: [id], ...args }, { db });
+    return db.calls.find(([, k]) => k === "update")[2];
+  };
+  const w = await patchOf({ status: "wont_fix", wont_fix_reason: " one-off " });
+  assert.deepEqual([w.status, w.wont_fix_reason, w.resolved_by, !!w.resolved_at], ["wont_fix", "one-off", "alex", true]);
+  assert.deepEqual(await patchOf({ status: "open" }), { status: "open", resolved_by: null, resolved_at: null, wont_fix_reason: null });
+  const f = await patchOf({ status: "fixed", resolved_by: "skill v3" });
+  assert.equal(f.wont_fix_reason, null);
+
+  const bad = (args, re) => assert.rejects(() => patchOf(args), re);
+  await bad({ status: "wont_fix" }, /needs wont_fix_reason/);
+  await bad({ status: "fixed" }, /needs resolved_by/);
+  await bad({ status: "fixed", resolved_by: "x", wont_fix_reason: "y" }, /only for status wont_fix/);
+  await bad({ status: "open", resolved_by: "x" }, /not open/);
+  await bad({ status: "resolved" }, /status must be one of/);
 });
