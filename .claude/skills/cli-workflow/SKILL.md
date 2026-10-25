@@ -231,6 +231,10 @@ is a list of steps in the step format, in this order:
 3. This chat: rename it — the same name with "Not done" removed.
 4. Switchboard: check it is clear — the project's tile is gone, and for main,
    the bar reads `main: free`, with no claims left under the project code.
+5. Alfred app: close the project's Project group as **Completed**. That close
+   writes the project's `shipped` row in Overwatch's activity log by itself, so do
+   not also call `log_activity` for it. Name the group exactly as it appears in the
+   app.
 
 For a worktree it looks like this:
 
@@ -256,10 +260,15 @@ rem-j7p Reminders
 
 **4.** Switchboard: check the rem-j7p tile is gone.
 Expected: no tile and no claims under rem-j7p.
+
+---
+
+**5.** Alfred app: open the group "rem-j7p Reminders" and close it as Completed.
+Expected: the group shows as closed; Overwatch logs it as shipped.
 ````
 
 For main, drop step 1, use `gitpush main finish`, and step 4 checks the bar
-reads `main: free`.
+reads `main: free`. Step 5, closing the Project group, applies to both.
 
 If the last report raised anything, deal with it first. Closeout waits.
 
@@ -271,6 +280,22 @@ him a zip.
 
 Once the change has landed, Alex copies the repo file into claude.ai himself:
 Settings, Skills, the skill, Content, Edit.
+
+### Friction: log it, and don't fix it yet
+
+When Alex misses or misreads an instruction, says a format or flow is not working,
+or has to correct how something was presented, call `log_friction` straight away,
+without asking:
+- `what_happened`: what happened, in plain words, with the step it happened at.
+- `process`: `cli_testing_steps`, `cli_prompt`, `todos`, `closeout`, `inbox`,
+  `other`, or `skill:<name>` when one skill's rule caused it.
+- `project_code`: this project's code.
+- `suggested_fix`: only when one is obvious.
+
+Mention it in one line in the reply ("Logged as friction: the copy box hid step
+1"). **Do not change this skill's rules because of one entry.** Fixes wait for a
+pattern: Overwatch's weekly job proposes one when a process has three open entries
+in 30 days.
 
 ### The project code
 
@@ -350,6 +375,14 @@ In this order:
    what to rename this claude.ai chat to. The name must contain the project
    code, because that is how Switchboard finds the chat's Chrome window. Alex
    renames it; Claude cannot.
+1a. **The Project group and its plan.** No tool creates groups, so this is a step for
+   Alex: in the Alfred app, create a group of type Project named after the project
+   (the code and a few words, e.g. "overwatch-q4n Overwatch"). Then Claude calls
+   `update_project_plan` with that group's id (from `get_project_plans`,
+   `status: "all"`), the `project_code`, `effort_estimate` (the CLI steps the plan
+   expects), a `target_date` if Alex has one, `where_now: "Planning"` and the
+   `next_step`. Overwatch counts steps from run tags under the project code, so the
+   code must match exactly.
 2. **Main or a worktree.** For a job that is one prompt, Claude asks whether to
    do it in the main checkout instead of a worktree, with a recommendation, and
    only when main is free (`main: free` on Switchboard, or nothing bound in
@@ -659,6 +692,29 @@ Fetch by exact `run_tag` for one prompt's messages, and by `run_tag_prefix` set
 to the **project code** — `claims-wq7` — for everything that project has ever
 reported, across every step and every thread that worked on it. Since the project
 code also names the worktree, the prefix and the worktree are the same string.
+
+### Overwatch: the status line and the activity row, on every report
+
+Overwatch cannot read this chat, so the status of a project is written here, while
+the work happens. After reading each report and before replying, make two calls.
+Neither is mentioned in the reply unless it fails, and then in one line.
+
+1. **`update_project_plan`** for the project's Project group, found with
+   `get_project_plans` (`status: "all"`) by its `project_code`:
+   - `where_now`: one line, where the project stands after this report.
+   - `next_step`: one line, the next step.
+   - `waiting_on` and `waiting_on_kind`: `alex` when the reply leaves him to-dos or
+     testing, `decision` when a question is open, `project` (with
+     `waiting_on_group_id`) when another project must land first, `hurdle` when it is
+     parked. Set both to null when nothing waits.
+   - If the step count turned out different from the plan, update `effort_estimate`.
+2. **`log_activity`** with `kind: "progress"`, `source: "cli"`, `source_ref` the
+   report's run tag, a one-line `title` saying what the step did, and the group's
+   `group_id`. Calling it twice for the same run tag is safe: it returns the row
+   already there.
+
+If the project has no Project group yet, say so in one line and give the steps from
+"Starting a new project" to make one.
 
 ## The return leg: responding to CLI output
 

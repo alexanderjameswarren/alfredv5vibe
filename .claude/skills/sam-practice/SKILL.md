@@ -33,8 +33,11 @@ whether that happened.
 
 ## The conversation
 
-1. **Read the history.** Start with the Alfred inbox: if there is a pending "SAM: practice plan
-   review due" item, read it - it carries the review note and its item id. Then the active plan,
+1. **Read the history.** Start with the Alfred inbox, reading only SAM's own items: `get_inbox`
+   with `source_app: "sam"`. If there is a pending "SAM: practice plan review due" item, read it -
+   it carries the review note and its item id. If it is not there, it may have been raised before
+   it had an app: look once with `source_app: "none"` for that exact title. Never read or archive
+   items owned by another app. Then the active plan,
    its progress since it started, practice outside the plan, and any snippets he made himself.
    Snippets he carves on his own are him investigating something; find out what.
 2. **Check whether the last plan's approach worked.** Each plan records what it was testing. Did
@@ -253,7 +256,8 @@ can carry a ladder alone, leaving the goal tempo and `goal_set_at` untouched.
 ## Closing the inbox note
 
 The daily review job raises an Alfred inbox item when a plan conversation is due. Once the new
-plan is saved, archive that item with `archive_inbox_item`, the same as any other handled capture.
+plan is saved, archive that item with `archive_inbox_item`, the same as any other handled capture,
+passing `source_app: "sam"` so it is filed under SAM. Archive only SAM's own items.
 Use reason "discarded" only if he says to drop it without acting on it.
 
 Archive it AFTER the plan is saved, not when the conversation starts - if the conversation is

@@ -31,7 +31,14 @@ land in the inbox and neither announces itself, so **look before asking him what
 he wants to work on:**
 
 1. `get_recent_clips` with `source: "clipboard"` — pages he has clipped.
-2. `get_inbox` with `source_type: "email"` — forwarded job alerts.
+2. `get_inbox` with `source_app: "jobs"` — forwarded job alerts and postings, routed to
+   Jobs by enrichment. This skill reads only items Jobs owns; never act on an item owned
+   by another app.
+3. `get_inbox` with `source_app: "none"` and `source_type: "email"` — a forward the
+   hourly router has not reached yet. For each one that is about a job, route it first
+   with `update_inbox_item` (`source_app: "jobs"`, an `ai_confidence`, and an
+   `ai_reasoning` saying it was routed from the jobs conversation), then handle it like
+   the rest. Leave every other email alone.
 
 Read the clip's `page_text` first; it is cheap and usually enough. Only call
 `get_clip_slices` when the layout matters or the text came out thin. A clip's
