@@ -77,54 +77,42 @@ to correct how something was presented, call `log_friction` without asking (`pro
 `skill:<name>`), and mention it in one line. Do not fix anything on one entry; fixes wait
 for a pattern.
 
+## Scheduled runs: the prompt owns the procedure, this skill owns the judgment
+
+Each Overwatch scheduled task runs a prompt from the repo that owns its procedure: the
+steps, the writes it may make, the run record, failure handling, limits and its PROMPT
+VERSION. This skill owns only the judgment the steps call for. Where the two disagree, the
+prompt wins. Never repeat a prompt's steps here; change them in the prompt.
+
 ## The nightly run (scheduled task `overwatch/nightly`)
 
-Open the run first: `create_platform_run` with app `overwatch`, job `nightly`, executor
-`claude`, status `running`. Close it last with `update_platform_run` (`ok`; `partial` when
-a step failed; `failed` with `error_message` and `details.failure_kind`).
+The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks for:
 
-1. **Read.** `get_overwatch_plan` (settings and today's checks), `get_overwatch_watch`,
-   `get_apps` with each app's profile, `get_project_plans`.
-2. **Pull.** For each app with an `activity_recipe`, follow it, and write at most one row
-   per app per day with `log_activity` (`kind` `used` or `progress`, `source: "nightly"`,
-   `source_ref: "<app>:<YYYY-MM-DD>"`, so a re-run adds nothing).
-3. **Count.** From the tools, not by judgement:
-   - quiet apps: last activity (`get_activity` with `app_id`) older than `rhythm_days`,
-     unless an `ease_off` watch item covers the app;
-   - stalled projects: no CLI report (`last_report_at`) for `stall_days`, and not waiting
-     on another project;
-   - waiting on Alex longer than `waiting_on_alex_days` (`status_written_at`);
-   - overruns: `steps_used` above `effort_estimate` (the current estimate, scope changes
-     included) × `overrun_factor`, or past `target_date`;
-   - scope changes since the last run: new `scope_increase` or `scope_decrease` rows in
-     `get_project_estimates`, noted in tonight's note with their reasons;
-   - active projects above `active_project_limit`;
-   - inbox backlog per app above `inbox_backlog_threshold`, with the oldest item's age;
-     unrouted items, and unrouted items older than a day;
-   - stopped schedules: `get_platform_schedules` against `get_platform_runs`, no `ok` run
-     within `expected_by` plus `grace_hours`;
-   - repeated claim blocks: `get_claim_blocks`, three or more episodes (distinct
-     `blocked_at`) between the same two codes in 30 days;
-   - fading items and intentions: active, with no activity for `fading_days`;
-   - watch items that ended since the last run.
-4. **Act.**
-   - Write tonight's note: `create_overwatch_note` with `period: "nightly"`, a short body,
-     and every finding in `flags`.
-   - A stall or overrun: one task inbox item holding a status-request prompt for the
-     project's worktree or thread, with a new run tag.
-   - A fading item: one task inbox item asking keep, park or let go.
-   - A proposed `no_parallel` link or plan change: one task inbox item with a paste-ready
-     prompt (rule 3).
-   - Inbox items here use `create_inbox_item` with `source_type: "task"`,
-     `source_app: "overwatch"` and `source_metadata.task_name`.
-   - At most `pushes_per_day` nudges, at `push_time`, each a `create_reminder` linked to
-     one of those inbox items, most important first.
-   - Mark expired watch items noted (`update_overwatch_watch` `expiry_noted: true`).
-   - `update_overwatch_checks` with what the next run should look at.
+- **Reading an app.** Its `activity_recipe` is Alex's own words for what counts as use or
+  progress. Read it literally: the tools it names, and the record it names as the sign of
+  use. `used` means he opened or played the app; `progress` means something moved (a
+  practice pass, a tagged transaction, an application sent). When the recipe does not say,
+  log nothing for that app. Don't guess. `current_state` says what the app is for right now;
+  use it to judge whether a quiet app matters ("finished, kept for reference" does not).
+- **Fading.** A candidate is old by the dates; it is fading only if it still means to happen.
+  Not fading: reference items, someday-style holders, recurring intentions that are simply
+  between occurrences, and anything a `focus` or `keep_an_eye_on` watch item names. Fading:
+  a one-off intention or an active item that was started or promised and has gone silent.
+  When unsure, include it; the item asks keep, park or let go.
+- **A deadline with no date.** An active intention with no event whose text or description
+  names a cutoff: "by", "before", "claim by", "expires", "points expire", "deadline",
+  "due", "renew", "cancel before", or a month, a date, a season or "end of the year". A bare
+  time period with no cutoff ("for a month", "weekly") is not a deadline. Quote the words
+  that make it one.
+- **The note.** Follow the plan's `instructions` for focus and tone. Plain, short lines,
+  most important first, each naming the app or project and what Alex can do. Say what
+  changed since the last note, not everything that is true. Never soften a count, and never
+  invent one. A quiet night is one line: "Nothing needs you tonight."
 
 ## The weekly run (on the plan's `weekly_day`)
 
-Everything the nightly run does, plus:
+Its prompt, to come, will take the procedure below the same way, and this section will shrink
+to its judgment. Until then, everything the nightly run does, plus:
 - the weekly note (`period: "weekly"`): what shipped, what progressed, and the ideas list
   (count, oldest untouched, newly possible);
 - parked projects with `hurdle_kind: "technology"`: compare their `waiting_on` with the
