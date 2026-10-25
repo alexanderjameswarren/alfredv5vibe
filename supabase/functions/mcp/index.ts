@@ -96,6 +96,26 @@ import {
   updateProjectPlanTool,
 } from "../_shared/tools/overwatch-projects.ts";
 import {
+  FRICTION_PROCESSES,
+  NOTE_PERIODS,
+  RELEASE_SOURCES,
+  WATCH_KINDS,
+  createOverwatchNoteTool,
+  createOverwatchPlanTool,
+  createOverwatchWatchTool,
+  getClaimBlocksTool,
+  getFrictionTool,
+  getOverwatchNotesTool,
+  getOverwatchPlanTool,
+  getOverwatchWatchTool,
+  logFrictionTool,
+  recordSeenReleasesTool,
+  updateAppProfileTool,
+  updateFrictionTool,
+  updateOverwatchChecksTool,
+  updateOverwatchWatchTool,
+} from "../_shared/tools/overwatch-plan.ts";
+import {
   getRecordsTool,
   LIVE_STATUSES,
   readItems,
@@ -3044,6 +3064,274 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(createProjectLinkTool, args, token),
+  );
+
+  const owCheck = z.object({
+    text: z.string().describe("What to check."),
+    check_on: z.string().describe("When, YYYY-MM-DD."),
+    about: z.string().optional().describe("An app id or a group id."),
+  });
+
+  server.registerTool(
+    "get_overwatch_plan",
+    {
+      title: "Get Overwatch Plan",
+      description:
+        "Read Overwatch's rulebook: the one active plan, whole: instructions (focus, what to watch, tone), settings " +
+        "(active_project_limit, limit_mode, pushes_per_day, push_time, stall_days, waiting_on_alex_days, fading_days, " +
+        "overrun_factor, inbox_backlog_threshold, weekly_day, audit_every_weeks) and checks_next_run. history: true " +
+        "lists every plan, newest first, with written_by, reason and supersedes_id. Tier 1.",
+      inputSchema: {
+        history: z.boolean().optional().describe("true for every plan, not just the active one."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getOverwatchPlanTool, args, token),
+  );
+
+  server.registerTool(
+    "create_overwatch_plan",
+    {
+      title: "Create Overwatch Plan",
+      description:
+        "Replace Overwatch's active plan with a new one: the old one stays as history. Pass the whole instructions and " +
+        "the whole settings object, and a reason. checks_next_run carries over unless checks is given. Only when Alex " +
+        "has agreed the change in this conversation; the nightly job proposes changes as an inbox item instead. Tier 3: " +
+        "the first call writes nothing and returns a proposal saying what changes (instructions, each setting, checks); " +
+        "show it to Alex and call again with confirmed: true after he approves.",
+      inputSchema: {
+        instructions: z.string().describe("The whole instructions text."),
+        settings: z.record(z.any()).describe("The whole settings object."),
+        reason: z.string().describe("Why the plan changes."),
+        written_by: z.enum(["alex", "overwatch"]).optional().describe("Default alex; overwatch when its proposal was accepted."),
+        checks: z.array(owCheck).optional().describe("Replace the checks for the next run. Default: carry them over."),
+        confirmed: z.boolean().optional().describe("true to write, after Alex approves the proposal."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createOverwatchPlanTool, args, token),
+  );
+
+  server.registerTool(
+    "update_overwatch_checks",
+    {
+      title: "Update Overwatch Checks",
+      description:
+        "Replace checks_next_run on the active plan: what the next nightly run should look at. Each check needs text " +
+        "and check_on (YYYY-MM-DD); about is an app id or group id. The nightly job's one in-place change to its plan. " +
+        "Tier 2.",
+      inputSchema: {
+        checks: z.array(owCheck).describe("The new list; an empty list clears it."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateOverwatchChecksTool, args, token),
+  );
+
+  server.registerTool(
+    "get_overwatch_watch",
+    {
+      title: "Get Overwatch Watch Items",
+      description:
+        "List Overwatch's dated adjustments: focus, ease_off (an app's quiet days stop counting) and keep_an_eye_on. " +
+        "Default: current ones (started and not ended, Pacific days), soonest to end first; current: false for all. " +
+        "Tier 1.",
+      inputSchema: {
+        kind: owEnum(WATCH_KINDS).optional().describe("focus, ease_off or keep_an_eye_on."),
+        app_id: z.string().optional().describe("Only items about this app."),
+        group_id: z.string().optional().describe("Only items about this Project group."),
+        current: z.boolean().optional().describe("Default true: only items in force today."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getOverwatchWatchTool, args, token),
+  );
+
+  server.registerTool(
+    "create_overwatch_watch",
+    {
+      title: "Create Overwatch Watch Item",
+      description:
+        "Add a dated adjustment: focus on something, ease_off something, or keep_an_eye_on something, from starts_on " +
+        "(default today) to ends_on. Point it at an app_id or group_id when it is about one. Tier 2.",
+      inputSchema: {
+        kind: owEnum(WATCH_KINDS).describe("focus, ease_off or keep_an_eye_on."),
+        text: z.string().describe("What it is about, in plain words."),
+        app_id: z.string().optional().describe("The app it is about, an id from get_apps."),
+        group_id: z.string().optional().describe("The Project group it is about."),
+        starts_on: z.string().optional().describe("First day, YYYY-MM-DD. Default today (Pacific)."),
+        ends_on: z.string().describe("Last day, YYYY-MM-DD."),
+        created_by: z.enum(["alex", "overwatch"]).optional().describe("Default alex."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createOverwatchWatchTool, args, token),
+  );
+
+  server.registerTool(
+    "update_overwatch_watch",
+    {
+      title: "Update Overwatch Watch Item",
+      description:
+        "Change one watch item by id: its text or dates; or expiry_noted: true once a note has mentioned that it " +
+        "expired, so it is said once. Tier 2.",
+      inputSchema: {
+        id: z.string().describe("The watch item's id."),
+        text: z.string().optional().describe("New text."),
+        starts_on: z.string().optional().describe("New first day, YYYY-MM-DD."),
+        ends_on: z.string().optional().describe("New last day, YYYY-MM-DD."),
+        expiry_noted: z.boolean().optional().describe("true: the note has mentioned its expiry."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateOverwatchWatchTool, args, token),
+  );
+
+  server.registerTool(
+    "get_overwatch_notes",
+    {
+      title: "Get Overwatch Notes",
+      description:
+        "Read Overwatch's notes, newest first: one nightly and at most one weekly per day, each with body (markdown) " +
+        "and flags (structured findings). Filter by period and a for_date range (from, to: YYYY-MM-DD). Tier 1.",
+      inputSchema: {
+        period: owEnum(NOTE_PERIODS).optional().describe("nightly or weekly."),
+        from: z.string().optional().describe("Earliest for_date, YYYY-MM-DD."),
+        to: z.string().optional().describe("Latest for_date, YYYY-MM-DD."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getOverwatchNotesTool, args, token),
+  );
+
+  server.registerTool(
+    "create_overwatch_note",
+    {
+      title: "Create Overwatch Note",
+      description:
+        "Write the day's nightly or weekly note: body in markdown and flags as a JSON object of structured findings " +
+        "(quiet apps, stalls, backlogs, over-limit, stopped schedules, friction). for_date defaults to today (Pacific). " +
+        "A second call for the same period and day replaces the note. Records the active plan. Tier 2.",
+      inputSchema: {
+        period: owEnum(NOTE_PERIODS).describe("nightly or weekly."),
+        for_date: z.string().optional().describe("The day, YYYY-MM-DD. Default today (Pacific)."),
+        body: z.string().describe("The note, in markdown."),
+        flags: z.record(z.any()).optional().describe("Structured findings, so the tab can render them."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createOverwatchNoteTool, args, token),
+  );
+
+  server.registerTool(
+    "get_claim_blocks",
+    {
+      title: "Get Claim Blocks",
+      description:
+        "List claims block episodes between CLI threads, newest first: waiter_code was refused a file holder_code " +
+        "held, from blocked_at to cleared_at (null while live). repeat_count counts refused attempts, not episodes. " +
+        "Filter by waiter_code, holder_code, code (either side), since (YYYY-MM-DD) and open. Tier 1.",
+      inputSchema: {
+        waiter_code: z.string().optional().describe("The project that was refused."),
+        holder_code: z.string().optional().describe("The project holding the claim."),
+        code: z.string().optional().describe("A project on either side."),
+        since: z.string().optional().describe("Episodes that started on or after this date, YYYY-MM-DD."),
+        open: z.boolean().optional().describe("true: only live blocks; false: only cleared ones."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getClaimBlocksTool, args, token),
+  );
+
+  server.registerTool(
+    "update_app_profile",
+    {
+      title: "Update App Profile",
+      description:
+        "Set Alex's profile of one app (creating it if needed): activity_recipe (plain words telling the nightly job " +
+        "how to read the app's activity, naming the tools), rhythm_days (days of silence before it counts as quiet; " +
+        "null for no rhythm) and current_state (about a page on what the app does today). Only the fields passed " +
+        "change; null clears one. Tier 2.",
+      inputSchema: {
+        app_id: z.string().describe("The app, an id from get_apps."),
+        activity_recipe: z.string().nullable().optional().describe("How to read this app's activity."),
+        rhythm_days: z.number().nullable().optional().describe("Days of silence before it is quiet, 1 to 365."),
+        current_state: z.string().nullable().optional().describe("What the app does today, its flows and gaps."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateAppProfileTool, args, token),
+  );
+
+  server.registerTool(
+    "record_seen_releases",
+    {
+      title: "Record Seen Releases",
+      description:
+        "Record release-note entries the weekly feature watch has read, up to 50 per call. Returns recorded (the ones " +
+        "new this time, which are the ones to report) and already_seen. Tier 1.",
+      inputSchema: {
+        entries: z.array(z.object({
+          source: owEnum(RELEASE_SOURCES).describe("claude_release_notes, claude_code_changelog or api_release_notes."),
+          entry_key: z.string().describe("The entry's identity in its source: a version, date or heading."),
+          title: z.string().describe("The entry's heading."),
+          summary: z.string().optional().describe("A line on what it changes."),
+        })).describe("The entries read."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(recordSeenReleasesTool, args, token),
+  );
+
+  const owProcess = z.string().describe(`One of ${FRICTION_PROCESSES.join(", ")}, or skill:<name>.`);
+
+  server.registerTool(
+    "log_friction",
+    {
+      title: "Log Friction",
+      description:
+        "Log a snag in how the work runs: Alex missed or misread an instruction, said a format or flow is not working, " +
+        "or had to correct how something was presented. Log it without asking and mention it in one line. process: " +
+        `${FRICTION_PROCESSES.join(", ")}, or skill:<name>. Fixes wait for a pattern: the weekly job proposes one once a ` +
+        "process has three open entries in 30 days. Tier 1.",
+      inputSchema: {
+        what_happened: z.string().describe("What happened, in plain words."),
+        process: owProcess,
+        project_code: z.string().optional().describe("The CLI project code it happened in."),
+        suggested_fix: z.string().optional().describe("A fix, if one is obvious."),
+        occurred_at: z.string().optional().describe("When, ISO with offset. Default now."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(logFrictionTool, args, token),
+  );
+
+  server.registerTool(
+    "get_friction",
+    {
+      title: "Get Friction",
+      description:
+        "List process friction entries, newest first. Default: open ones (not resolved); open: false for resolved. " +
+        "Filter by process, project_code, pattern_id and since (YYYY-MM-DD). Tier 1.",
+      inputSchema: {
+        process: owProcess.optional(),
+        project_code: z.string().optional().describe("Only this project."),
+        pattern_id: z.string().optional().describe("Only entries grouped into this pattern."),
+        since: z.string().optional().describe("Entries on or after this date, YYYY-MM-DD."),
+        open: z.boolean().optional().describe("Default true: unresolved only."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getFrictionTool, args, token),
+  );
+
+  server.registerTool(
+    "update_friction",
+    {
+      title: "Update Friction",
+      description:
+        "Group friction entries into one pattern (pattern_id: an existing pattern's id, or \"new\") and/or resolve them " +
+        "(resolved_by: what fixed it; resolved_at is stamped now). Up to 50 ids. Returns the updated entries and any " +
+        "ids not found. Tier 2.",
+      inputSchema: {
+        ids: z.array(z.string()).describe("The friction entries' ids."),
+        pattern_id: z.string().optional().describe("An existing pattern id, or \"new\" to start one."),
+        resolved_by: z.string().optional().describe("What fixed it: a skill change, a prompt change."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateFrictionTool, args, token),
   );
 
   // --- Warren Buffet, Phase 1 (docs/technical-spec-warren_buffet-w7b.md §8) ---
