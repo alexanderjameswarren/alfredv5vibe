@@ -3345,7 +3345,8 @@ export function createMcpServer(token: string) {
         "Log a snag in how the work runs: Alex missed or misread an instruction, said a format or flow is not working, " +
         "or had to correct how something was presented. Log it without asking and mention it in one line. process: " +
         `${FRICTION_PROCESSES.join(", ")}, or skill:<name>. Fixes wait for a pattern: the weekly job proposes one once a ` +
-        "process has three open entries in 30 days. Tier 1.",
+        "process has friction_trigger_count open entries within friction_window_days days (Overwatch's plan " +
+        "settings). Tier 1.",
       inputSchema: {
         what_happened: z.string().describe("What happened, in plain words."),
         process: owProcess,

@@ -296,8 +296,9 @@ without asking:
 
 Mention it in one line in the reply ("Logged as friction: the copy box hid step
 1"). **Do not change this skill's rules because of one entry.** Fixes wait for a
-pattern: Overwatch's weekly job proposes one when a process has three open entries
-in 30 days.
+pattern: Overwatch's weekly job proposes one when a process has
+`friction_trigger_count` open entries within `friction_window_days` days (both in
+Overwatch's plan settings).
 
 ### The project code
 
@@ -379,12 +380,24 @@ In this order:
    renames it; Claude cannot.
 1a. **The Project group and its plan.** No tool creates groups, so this is a step for
    Alex: in the Alfred app, create a group of type Project named after the project
-   (the code and a few words, e.g. "overwatch-q4n Overwatch"). Then Claude calls
+   (the code and a few words, e.g. "overwatch-q4n Overwatch"), then set it to
+   **Active**: a new group starts as Someday, and Overwatch counts only active
+   Projects. Then Claude calls
    `update_project_plan` with that group's id (from `get_project_plans`,
    `status: "all"`), the `project_code`, a `target_date` if Alex has one,
    `where_now: "Planning"` and the `next_step`. The estimate is not set here: it
    comes from the plan report (next section). Overwatch counts steps from run tags under the project code, so the
    code must match exactly.
+1b. **What the group holds.** Every Project group holds at least one item or intention;
+   Overwatch's nightly note lists the empty ones. Claude looks for existing ones that belong
+   to the project, with `search_items` (`query`) and `get_intents` (`search_text`), and
+   suggests adding each to the group, with its link
+   (`https://alfredv5vibe.vercel.app/<id>`). Alex adds them in the app. If none exist,
+   Claude pushes an overview item to the inbox for Alex to file and attach:
+   `create_inbox_item` with `suggest_item: true`, `suggested_item_text` (the project's
+   name), `suggested_item_description` (what it is for and how it will be done, a few
+   lines), `suggested_item_elements` (the phases or main parts), `suggested_context_id`
+   (the project's context) and `source_app` when the app is known.
 2. **Main or a worktree.** For a job that is one prompt, Claude asks whether to
    do it in the main checkout instead of a worktree, with a recommendation, and
    only when main is free (`main: free` on Switchboard, or nothing bound in
