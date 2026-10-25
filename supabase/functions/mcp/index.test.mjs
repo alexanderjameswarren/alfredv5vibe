@@ -396,7 +396,7 @@ test("MCP read access S8: the Alfred list tools advertise the shared read option
     get_intents: ["context_id", "search_text", "tags", "include_archived", "recurring_only", "status", ...SHARED_READ_OPTIONS],
     get_events: ["date_from", "date_to", "context_id", "intent_id", "include_archived", "limit", "offset", "ids", "archived", "no_context"],
     get_collections: ["context_id", "limit", "offset", "ids", "archived", "no_context"],
-    get_inbox: ["ai_status", "source_type", "limit", "offset", "ids", "archived"],
+    get_inbox: ["ai_status", "source_type", "source_app", "limit", "offset", "ids", "archived"],
     get_contexts: ["shared", "limit", "offset", "ids", "archived"],
   };
   for (const [name, keys] of Object.entries(expected)) {
@@ -697,6 +697,14 @@ test("Overwatch Steps 13 and 14 schemas advertise exactly the args their handler
     get_overwatch_notes: 1, create_overwatch_note: 2, get_claim_blocks: 1, update_app_profile: 2,
     record_seen_releases: 1, log_friction: 1, get_friction: 1, update_friction: 2,
   });
+});
+
+test("get_inbox filters by source_app, and none means unrouted", () => {
+  const src = readFileSync(join(HERE, "index.ts"), "utf-8");
+  const block = src.split("const getInboxTool = defineTool({")[1].split("\n});\n")[0];
+  assert.match(block, /sourceApp === "none"\) q = q\.is\("source_app", null\)/);
+  assert.match(block, /else if \(sourceApp\) q = q\.eq\("source_app", sourceApp\)/);
+  assert.match(block, /source_app must be an app id from get_apps, or "none"/);
 });
 
 test("the platform tools take any app id, not a fixed list", () => {
