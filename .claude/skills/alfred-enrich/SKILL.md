@@ -1,6 +1,6 @@
 ---
 name: alfred-enrich
-description: "Enrich Alfred inbox items with AI-powered suggestions for organizing captures into the GTD system. Use this skill whenever the user asks to enrich, process, triage, or organize their Alfred inbox items — including \"enrich my inbox\", \"process inbox\", \"re-enrich with Opus\", or references to inbox items needing AI suggestions. Also trigger when the user asks Claude to analyze a captured item and suggest how to organize it in Alfred."
+description: "Enrich Alfred inbox items with AI-powered suggestions for organizing captures into the GTD system, and route each one to the app that owns it (Overwatch's router). Use this skill whenever the user asks to enrich, process, triage, route, or organize their Alfred inbox items — including \"enrich my inbox\", \"process inbox\", \"re-enrich with Opus\", or references to inbox items needing AI suggestions. Also trigger when the user asks Claude to analyze a captured item and suggest how to organize it in Alfred."
 ---
 
 # Alfred Inbox Enrichment
@@ -50,9 +50,15 @@ them, do not suggest a context, do not file them anywhere.
 They look like: a job board digest, a single posting forwarded on, a recruiter
 approach, an alert from Idealist / LinkedIn / NTEN / 80,000 Hours.
 
-The `job-search` skill picks these up with `get_inbox` filtered to `email`,
+The `job-search` skill picks these up with `get_inbox` filtered to `source_app: "jobs"`,
 evaluates them with Alex, and archives them when it is done. Enriching one first
 would turn a role he has not decided about into an intention he never asked for.
+
+**Route them, and do nothing else.** Call `update_inbox_item` with `source_app: "jobs"`,
+`ai_status: "enriched"`, an `ai_confidence`, and an `ai_reasoning` such as "Job posting:
+routed to Jobs and left for the job-search skill." No context, no suggestions, no tags.
+Without the route, the job-search skill, which reads only items owned by jobs, never
+sees it.
 
 Ordinary forwarded email — a newsletter, a receipt, a note to self — is yours as
 usual. The distinction is whether it is about a job.
@@ -74,7 +80,7 @@ thread, never a reason to record it.
 
 **For initial enrichment:**
 - Use `get_inbox` with `ai_status: "not_started"` to find unenriched items. It returns 20 at a time, newest first; when its NOTE says the results were truncated, call it again with the `offset` the NOTE gives until it doesn't. `captured_text` always comes back whole.
-- **Drop every item whose `source_type` is `clipboard`, `cli` or `task`, and every `email` item that is a job listing or job alert** — see "What NOT to enrich" above. Do this before any research, so you never spend a lookup on an item you are going to skip
+- **Drop every item whose `source_type` is `clipboard`, `cli` or `task`, and every `email` item that is a job listing or job alert** — see "What NOT to enrich" above. Do this before any research, so you never spend a lookup on an item you are going to skip. A job email still gets its one routing call (`source_app: "jobs"`), and nothing more
 - Process the rest sequentially
 
 **For re-enrichment:**
@@ -89,6 +95,7 @@ thread, never a reason to record it.
 1. **Call `get_contexts` first** to understand the user's organizational structure
 1a. **Call `get_apps` once per session** and keep the list: each app's `description` says what belongs to it. You use it to choose every capture's app (see "App" below)
 2. **Search for existing items** via `search_items` to avoid creating duplicates. If the captured text references something that already exists (like "make chicken tikka tonight"), find the existing item and use `suggested_item_id` to link to it rather than creating a new one. Pass two or three distinctive words, not the whole capture: every word must appear in the item's name, description or notes, in any order. Closed items are left out unless you ask for them by `status`, and each result carries its `status` and `context_name`. Descriptions in the results are previews; use `get_items` with `ids` for a whole item
+2a. **Then search what was dropped.** Run the same words with `search_items` `status: ["closed"]`, and `get_intents` with `status: ["closed"]` and `search_text`. A match closed as won't do (`closed_reason: "wont_do"`) means Alex already decided against it: read its notes for why (`include: ["notes"]`), and say so in `ai_reasoning`, e.g. "Dropped before on 2026-09-02 as won't do: too expensive for now." Suggest it again only if the capture gives a new reason. A match closed as done is just history; link it only if the capture is about doing it again
 3. **Check `get_tags`** and reuse the existing taxonomy. Read the counts as well as the names — a tag used many times is a real axis the user filters on; a tag used once is a mistake waiting to be cleaned up, not a precedent to follow
 4. **If the captured text contains a URL**, note this in your reasoning (you can't fetch URLs via MCP, but flag it for the user)
 
@@ -106,6 +113,12 @@ For each inbox item, determine:
 - If `source_app` is already set, keep it unless it is clearly wrong.
 - **When nothing fits, leave `source_app` out.** An empty app is honest; a guessed one files the capture under the wrong app once it is processed.
 - Do not take the app from the context's `app_id`; judge the capture itself.
+
+**You are the router.** Every inbox item has exactly one owner app, and each app's skill reads only the items it owns (`get_inbox` with `source_app`). So the app you choose decides who will ever see the capture:
+- A wrongly routed item is worse than an unrouted one: it lands in another app's queue and nobody looks for it there. When you are not sure, leave `source_app` out **and say why in `ai_reasoning`** ("App left blank: could be Money or Alfred; it depends on whether this is a bill"). Alex then assigns it with the app picker, and Overwatch's nightly job lists unrouted items.
+- Example: a health insurance bill belongs to Warren Buffet (`warren_buffet`), not Arnold. Arnold never sees it.
+- Changing an item's app moves it to the other app's queue. Do it only when the first choice was clearly wrong.
+- In conversation, when Alex asks what needs his attention or about one app's items, enrich and route on the spot any item still at `ai_status: "not_started"` — the hourly job may not have reached it yet.
 
 **Item vs. Intent vs. Both**:
 - **Item** (`suggest_item: true`): Reusable reference material — recipes, checklists, project notes, how-tos. Things you'd want to find and use again.
