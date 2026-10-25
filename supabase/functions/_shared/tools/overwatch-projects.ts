@@ -3,12 +3,14 @@
 //
 // Overwatch's projects. Spec: docs/technical-spec-overwatch-q4n.md 4.3, 4.4 and 7.
 //
-//   get_project_plans    tier 1 — Project groups with their plans, steps used, reports and last report time.
-//   update_project_plan  tier 2 — create or change a Project's plan (status line, estimate, target date, waits).
-//   get_project_links    tier 1 — links between Projects.
-//   create_project_link  tier 2 — add a notify_on_ship, no_parallel or depends_on link.
+//   get_project_plans        tier 1 — Project groups with their plans, estimates, steps used, reports and last report time.
+//   update_project_plan      tier 2 — create or change a Project's plan (status line, target date, waits).
+//   record_project_estimate  tier 2 — add an estimate to a Project's history; the only way to change its estimate.
+//   get_project_estimates    tier 1 — a Project's estimate history, with original, scope-adjusted and current.
+//   get_project_links        tier 1 — links between Projects.
+//   create_project_link      tier 2 — add a notify_on_ship, no_parallel or depends_on link.
 //
-// The database refuses any group that is not the caller's Project (project_plans_check_group).
+// The database refuses any group that is not the caller's Project (project_plans_check_group, project_estimates_guard).
 // ============================================================================
 
 import { clampLimit, defineTool, describeDbError, envelope, readTable } from "../platform.ts";
@@ -35,6 +37,44 @@ function oneOf<V extends string>(T: string, key: string, value: unknown, allowed
     throw new Error(`${T}: ${key} must be one of ${allowed.join(", ")}; got ${JSON.stringify(value)}.`);
   }
   return value as V;
+}
+
+// ---------------------------------------------------------------------------
+// estimate history helpers (spec 4.12)
+// ---------------------------------------------------------------------------
+
+export const ESTIMATE_KINDS = ["initial", "scope_increase", "scope_decrease", "re_estimate", "final"] as const;
+const ESTIMATE_COLUMNS = "id, group_id, kind, estimate, cli_estimate, steps_added, at_step, reason, created_at";
+
+type EstimateRow = { group_id: string; kind: string; estimate: number; steps_added: number | null };
+
+/** Original (the initial row), scope-adjusted (original plus every steps_added) and final, for one project's rows. */
+export function estimateSummary(rows: EstimateRow[]) {
+  const initial = rows.find((r) => r.kind === "initial");
+  const final = rows.find((r) => r.kind === "final");
+  const added = rows.reduce((n, r) => n + (r.steps_added ?? 0), 0);
+  return {
+    original_estimate: initial?.estimate ?? null,
+    scope_adjusted_estimate: initial ? initial.estimate + added : null,
+    final_steps: final?.estimate ?? null,
+  };
+}
+
+async function readEstimates(T: string, ctx: { db: any }, groupIds: string[]) {
+  if (!groupIds.length) return [] as (EstimateRow & Record<string, unknown>)[];
+  const { data, error } = await ctx.db.from("project_estimates").select(ESTIMATE_COLUMNS)
+    .in("group_id", groupIds).order("created_at", { ascending: true }).order("id", { ascending: true });
+  if (error) throw new Error(describeDbError(T, error));
+  return (data ?? []) as (EstimateRow & Record<string, unknown>)[];
+}
+
+/** Adds original_estimate and scope_adjusted_estimate to each plan row (one read for the page). */
+async function withEstimates(T: string, ctx: { db: any }, rows: Record<string, unknown>[]) {
+  const all = await readEstimates(T, ctx, rows.map((r) => r.group_id as string));
+  return rows.map((r) => {
+    const s = estimateSummary(all.filter((e) => e.group_id === r.group_id));
+    return { ...r, original_estimate: s.original_estimate, scope_adjusted_estimate: s.scope_adjusted_estimate };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -67,7 +107,7 @@ export const getProjectPlansTool = defineTool({
     const { data, error } = await ctx.db.rpc("overwatch_project_progress", { p_status: status, p_group_ids: groupIds });
     if (error) throw new Error(describeDbError(T, error));
     const rows = (data ?? []) as Record<string, unknown>[];
-    const page = rows.slice(0, limit);
+    const page = await withEstimates(T, ctx, rows.slice(0, limit));
     return envelope(page, {
       total: rows.length,
       limit_applied: limit,
@@ -81,9 +121,10 @@ export const getProjectPlansTool = defineTool({
 // update_project_plan — tier 2
 // ---------------------------------------------------------------------------
 // Creates the plan when the Project has none. Only the fields passed change; null clears one.
+// effort_estimate is not here: it changes only with a history row (record_project_estimate).
 
 const PLAN_FIELDS = [
-  "project_code", "target_date", "effort_estimate", "where_now", "next_step", "waiting_on", "waiting_on_kind",
+  "project_code", "target_date", "where_now", "next_step", "waiting_on", "waiting_on_kind",
   "waiting_on_group_id", "hurdle_kind",
 ] as const;
 
@@ -101,13 +142,6 @@ export function planPatch(T: string, args: Record<string, unknown>): Record<stri
       throw new Error(`${T}: target_date must be YYYY-MM-DD.`);
     }
     patch.target_date = v;
-  }
-  if (given("effort_estimate")) {
-    const v = args.effort_estimate;
-    if (v !== null && (!Number.isInteger(v) || (v as number) < 1 || (v as number) > 500)) {
-      throw new Error(`${T}: effort_estimate is a whole number of CLI steps, 1 to 500.`);
-    }
-    patch.effort_estimate = v;
   }
   for (const k of ["where_now", "next_step", "waiting_on"]) {
     if (!given(k)) continue;
@@ -144,6 +178,86 @@ export const updateProjectPlanTool = defineTool({
       .maybeSingle();
     if (error) throw new Error(describeDbError(T, error));
     return data;
+  },
+});
+
+// ---------------------------------------------------------------------------
+// record_project_estimate — tier 2
+// ---------------------------------------------------------------------------
+// One RPC writes the history row and, except for final, the plan's current estimate, in one transaction.
+
+function wholeSteps(T: string, key: string, v: unknown, { min, max }: { min: number; max: number }): number | null {
+  if (v === undefined || v === null) return null;
+  if (!Number.isInteger(v) || (v as number) < min || (v as number) > max) {
+    throw new Error(`${T}: ${key} must be a whole number of CLI steps, ${min} to ${max}.`);
+  }
+  return v as number;
+}
+
+export const recordProjectEstimateTool = defineTool({
+  name: "record_project_estimate",
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const T = "record_project_estimate";
+    const groupId = requireId(T, "group_id", args.group_id);
+    const kind = oneOf(T, "kind", args.kind, ESTIMATE_KINDS);
+    if (typeof args.reason !== "string" || !args.reason.trim()) throw new Error(`${T}: reason is required, one line.`);
+    const estimate = wholeSteps(T, "estimate", args.estimate, { min: 0, max: 1000 });
+    const cliEstimate = wholeSteps(T, "cli_estimate", args.cli_estimate, { min: 1, max: 1000 });
+    const stepsAdded = wholeSteps(T, "steps_added", args.steps_added, { min: -1000, max: 1000 });
+    const atStep = wholeSteps(T, "at_step", args.at_step, { min: 0, max: 1000 });
+
+    if ((kind === "initial" || kind === "re_estimate") && cliEstimate === null && estimate === null) {
+      throw new Error(`${T}: ${kind} needs cli_estimate (the CLI's figure; the correction factor is applied to it).`);
+    }
+    if (kind === "scope_increase" && !(stepsAdded !== null && stepsAdded > 0)) {
+      throw new Error(`${T}: scope_increase needs steps_added greater than 0.`);
+    }
+    if (kind === "scope_decrease" && !(stepsAdded !== null && stepsAdded < 0)) {
+      throw new Error(`${T}: scope_decrease needs steps_added less than 0, e.g. -2.`);
+    }
+    if (stepsAdded !== null && kind !== "scope_increase" && kind !== "scope_decrease") {
+      throw new Error(`${T}: steps_added is only for scope_increase and scope_decrease.`);
+    }
+
+    const { data, error } = await ctx.db.rpc("record_project_estimate", {
+      p_group_id: groupId,
+      p_kind: kind,
+      p_reason: (args.reason as string).trim(),
+      p_estimate: estimate,
+      p_cli_estimate: cliEstimate,
+      p_steps_added: stepsAdded,
+      p_at_step: atStep,
+    });
+    if (error?.code === "23505") throw new Error(`${T}: this project already has its ${kind} estimate. Nothing was written.`);
+    if (error) throw new Error(describeDbError(T, error));
+    return data;
+  },
+});
+
+// ---------------------------------------------------------------------------
+// get_project_estimates — tier 1 (a computed report: per project, its summary and full history)
+// ---------------------------------------------------------------------------
+
+export const getProjectEstimatesTool = defineTool({
+  name: "get_project_estimates",
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const T = "get_project_estimates";
+    if (!Array.isArray(args.group_ids) || args.group_ids.length === 0 ||
+        args.group_ids.some((g) => typeof g !== "string" || !g)) {
+      throw new Error(`${T}: group_ids is required, a list of Project group ids (from get_project_plans).`);
+    }
+    if (args.group_ids.length > 20) throw new Error(`${T}: at most 20 projects per call.`);
+    const ids = [...new Set(args.group_ids as string[])];
+    const all = await readEstimates(T, ctx, ids);
+    const { data: plans, error } = await ctx.db.from("project_plans").select("group_id, effort_estimate").in("group_id", ids);
+    if (error) throw new Error(describeDbError(T, error));
+    return ids.map((id) => {
+      const history = all.filter((e) => e.group_id === id);
+      const plan = ((plans ?? []) as { group_id: string; effort_estimate: number | null }[]).find((p) => p.group_id === id);
+      return { group_id: id, current_estimate: plan?.effort_estimate ?? null, ...estimateSummary(history), history };
+    });
   },
 });
 

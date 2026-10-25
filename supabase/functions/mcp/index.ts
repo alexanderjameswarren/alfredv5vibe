@@ -86,13 +86,16 @@ import {
   logActivityTool,
 } from "../_shared/tools/overwatch-activity.ts";
 import {
+  ESTIMATE_KINDS,
   GROUP_STATUSES,
   HURDLE_KINDS,
   LINK_KINDS,
   WAITING_KINDS,
   createProjectLinkTool,
+  getProjectEstimatesTool,
   getProjectLinksTool,
   getProjectPlansTool,
+  recordProjectEstimateTool,
   updateProjectPlanTool,
 } from "../_shared/tools/overwatch-projects.ts";
 import {
@@ -3006,10 +3009,12 @@ export function createMcpServer(token: string) {
       title: "Get Project Plans",
       description:
         "List Alex's Project groups (group type Project) with their plans: project_code, target_date, effort_estimate " +
-        "(CLI steps), the status line (where_now, next_step, waiting_on, waiting_on_kind, waiting_on_group_id, " +
-        "hurdle_kind, status_written_at), and the counted effort: steps_used (distinct step numbers in CLI run tags " +
-        "under the project code), reports and last_report_at. has_plan is false for a Project with no plan yet. " +
-        "Default: active Projects, most recently reported first. Tier 1.",
+        "(the current estimate in CLI steps), original_estimate (the first one) and scope_adjusted_estimate (the original " +
+        "plus every scope change), the status line (where_now, next_step, waiting_on, waiting_on_kind, " +
+        "waiting_on_group_id, hurdle_kind, status_written_at), and the counted effort: steps_used (distinct step " +
+        "numbers in CLI run tags under the project code), reports and last_report_at. Judge overrun against " +
+        "effort_estimate; judge the estimate's accuracy against both original and scope-adjusted. has_plan is false for " +
+        "a Project with no plan yet. Default: active Projects, most recently reported first. Tier 1.",
       inputSchema: {
         status: z.union([z.literal("all"), owEnum(GROUP_STATUSES), z.array(owEnum(GROUP_STATUSES))]).optional()
           .describe("Group status or statuses to include (default active), or 'all'."),
@@ -3028,12 +3033,12 @@ export function createMcpServer(token: string) {
         "Create or change a Project's plan, by group_id (a Project group; anything else is refused). Only the fields " +
         "passed change; null clears one. Write the status line (where_now, next_step, waiting_on and waiting_on_kind) " +
         "on every CLI report: status_written_at is stamped when it changes, and that is what the stall check reads. " +
-        "Waiting on another Project: waiting_on_kind 'project' with waiting_on_group_id. Parked: hurdle_kind. Tier 2.",
+        "Waiting on another Project: waiting_on_kind 'project' with waiting_on_group_id. Parked: hurdle_kind. The " +
+        "estimate is not set here: use record_project_estimate, which keeps every estimate with its reason. Tier 2.",
       inputSchema: {
         group_id: z.string().describe("The Project group's id."),
         project_code: z.string().nullable().optional().describe("The CLI project code, e.g. overwatch-q4n. One per Project."),
         target_date: z.string().nullable().optional().describe("Done by, YYYY-MM-DD."),
-        effort_estimate: z.number().nullable().optional().describe("Estimated CLI steps, 1 to 500."),
         where_now: z.string().nullable().optional().describe("One line: where it stands."),
         next_step: z.string().nullable().optional().describe("One line: the next step."),
         waiting_on: z.string().nullable().optional().describe("One line: what it waits on."),
@@ -3043,6 +3048,46 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(updateProjectPlanTool, args, token),
+  );
+
+  server.registerTool(
+    "record_project_estimate",
+    {
+      title: "Record Project Estimate",
+      description:
+        "Add an estimate to a Project's history; the only way to change its estimate. Kinds: 'initial' (from the " +
+        "read-only plan prompt's step estimate; pass the CLI's figure as cli_estimate, and the plan's " +
+        "estimate_correction_factor is applied), 'scope_increase' or 'scope_decrease' (work added or removed; pass " +
+        "steps_added, positive or negative, with the reason), 're_estimate' (a new guess with no change of scope; pass " +
+        "cli_estimate), and 'final' (at closeout, before the group is closed: the actual steps; leave estimate out to " +
+        "use steps_used). Steps count as steps_used counts them: s4b is step 4. One initial and one final per Project. " +
+        "Every kind but final also sets the plan's effort_estimate. Tier 2.",
+      inputSchema: {
+        group_id: z.string().describe("The Project group's id."),
+        kind: owEnum(ESTIMATE_KINDS).describe("initial, scope_increase, scope_decrease, re_estimate or final."),
+        reason: z.string().describe("One line: why."),
+        cli_estimate: z.number().optional().describe("initial or re_estimate: the CLI's figure, in steps."),
+        estimate: z.number().optional().describe("Set the figure directly instead (final: the actual steps)."),
+        steps_added: z.number().optional().describe("scope_increase (positive) or scope_decrease (negative)."),
+        at_step: z.number().optional().describe("The step number it happened at, from the run tag."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(recordProjectEstimateTool, args, token),
+  );
+
+  server.registerTool(
+    "get_project_estimates",
+    {
+      title: "Get Project Estimates",
+      description:
+        "Read Projects' estimate history, oldest first, with a summary for each: original_estimate (the initial row), " +
+        "scope_adjusted_estimate (original plus every steps_added), current_estimate (the plan's effort_estimate) and " +
+        "final_steps (the actual steps, once shipped). Up to 20 projects per call. Tier 1.",
+      inputSchema: {
+        group_ids: z.array(z.string()).describe("Project group ids, from get_project_plans."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getProjectEstimatesTool, args, token),
   );
 
   server.registerTool(

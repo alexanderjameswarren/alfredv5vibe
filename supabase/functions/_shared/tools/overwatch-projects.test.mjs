@@ -39,6 +39,61 @@ test("get_project_plans asks for active Projects by default, and clamps with a n
   assert.match(out.meta.notes[0], /other 5/);
 });
 
+const HISTORY = [
+  { group_id: "g1", kind: "initial", estimate: 40, steps_added: null },
+  { group_id: "g1", kind: "scope_increase", estimate: 44, steps_added: 4 },
+  { group_id: "g1", kind: "re_estimate", estimate: 50, steps_added: null },
+  { group_id: "g1", kind: "scope_decrease", estimate: 48, steps_added: -2 },
+];
+
+test("estimateSummary: original, original plus scope changes, final", () => {
+  assert.deepEqual(m.estimateSummary(HISTORY), { original_estimate: 40, scope_adjusted_estimate: 42, final_steps: null });
+  assert.equal(m.estimateSummary([...HISTORY, { group_id: "g1", kind: "final", estimate: 47, steps_added: null }]).final_steps, 47);
+  assert.deepEqual(m.estimateSummary([]), { original_estimate: null, scope_adjusted_estimate: null, final_steps: null });
+});
+
+test("get_project_plans adds original and scope-adjusted estimates to each row", async () => {
+  const db = fakeDb((t) => ({ data: t === "project_estimates" ? HISTORY : [], error: null }),
+    () => ({ data: [{ group_id: "g1", effort_estimate: 48 }, { group_id: "g2", effort_estimate: null }], error: null }));
+  const out = await m.getProjectPlansTool.handler({}, { db });
+  assert.equal(out.data[0].original_estimate, 40);
+  assert.equal(out.data[0].scope_adjusted_estimate, 42);
+  assert.equal(out.data[1].original_estimate, null);
+  assert.ok(db.calls.some(([t, k, a, b]) => t === "project_estimates" && k === "in" && a === "group_id" && b.join() === "g1,g2"));
+});
+
+test("record_project_estimate passes the rpc params and checks each kind's inputs", async () => {
+  const db = fakeDb(undefined, () => ({ data: { kind: "scope_increase", estimate: 48 }, error: null }));
+  await m.recordProjectEstimateTool.handler({ group_id: "g1", kind: "scope_increase", reason: " step 22 ", steps_added: 4, at_step: 22 }, { db });
+  assert.deepEqual(db.calls[0], ["rpc", "record_project_estimate", { p_group_id: "g1", p_kind: "scope_increase",
+    p_reason: "step 22", p_estimate: null, p_cli_estimate: null, p_steps_added: 4, p_at_step: 22 }]);
+
+  const bad = (a, re) => assert.rejects(() => m.recordProjectEstimateTool.handler({ group_id: "g1", reason: "r", ...a }, { db }), re);
+  await bad({ kind: "initial" }, /needs cli_estimate/);
+  await bad({ kind: "scope_increase", steps_added: -1 }, /greater than 0/);
+  await bad({ kind: "scope_decrease", steps_added: 2 }, /less than 0/);
+  await bad({ kind: "re_estimate", cli_estimate: 30, steps_added: 2 }, /only for scope_increase/);
+  await bad({ kind: "initial", cli_estimate: 2.5 }, /whole number/);
+  await bad({ kind: "guess" }, /kind must be one of/);
+  await assert.rejects(() => m.recordProjectEstimateTool.handler({ group_id: "g1", kind: "final" }, { db }), /reason is required/);
+
+  const dup = fakeDb(undefined, () => ({ data: null, error: { code: "23505", message: "duplicate key" } }));
+  await assert.rejects(() => m.recordProjectEstimateTool.handler({ group_id: "g1", kind: "initial", reason: "r", cli_estimate: 30 }, { db: dup }),
+    /already has its initial estimate/);
+});
+
+test("get_project_estimates returns each project's summary and history", async () => {
+  const db = fakeDb((t) => ({ data: t === "project_estimates" ? HISTORY : [{ group_id: "g1", effort_estimate: 48 }], error: null }));
+  const [g1, g2] = await m.getProjectEstimatesTool.handler({ group_ids: ["g1", "g2", "g1"] }, { db });
+  assert.equal(g1.current_estimate, 48);
+  assert.equal(g1.scope_adjusted_estimate, 42);
+  assert.equal(g1.history.length, 4);
+  assert.deepEqual([g2.group_id, g2.current_estimate, g2.history.length], ["g2", null, 0]);
+  await assert.rejects(() => m.getProjectEstimatesTool.handler({}, { db }), /group_ids is required/);
+  await assert.rejects(() => m.getProjectEstimatesTool.handler({ group_ids: Array.from({ length: 21 }, (_, i) => `g${i}`) }, { db }),
+    /at most 20/);
+});
+
 test("get_project_plans: status all, a list, group ids; bad values refused", async () => {
   const db = fakeDb();
   await m.getProjectPlansTool.handler({ status: "all", group_ids: ["g1"] }, { db });
@@ -55,7 +110,7 @@ test("planPatch keeps only what was passed, null clears, and checks each field",
     { waiting_on_kind: "project", waiting_on_group_id: "g2" });
   assert.throws(() => m.planPatch("t", {}), /nothing to change/);
   assert.throws(() => m.planPatch("t", { project_code: "Overwatch Q4N" }), /project_code must match/);
-  assert.throws(() => m.planPatch("t", { effort_estimate: 0 }), /1 to 500/);
+  assert.throws(() => m.planPatch("t", { effort_estimate: 40 }), /nothing to change/);
   assert.throws(() => m.planPatch("t", { target_date: "next week" }), /YYYY-MM-DD/);
   assert.throws(() => m.planPatch("t", { waiting_on_kind: "bob" }), /waiting_on_kind must be one of/);
   assert.throws(() => m.planPatch("t", { hurdle_kind: "fear" }), /hurdle_kind must be one of/);
