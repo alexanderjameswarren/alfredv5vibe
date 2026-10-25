@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-25 09:44, through migration 173 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-25 09:56, through migration 174 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -3917,6 +3917,32 @@ COMMENT ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payloa
 
 
 
+CREATE OR REPLACE FUNCTION "public"."project_estimates_guard"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if tg_op = 'UPDATE' then
+    raise exception 'project_estimates rows are not edited: record a new row with record_project_estimate.'
+      using errcode = '23514';
+  end if;
+  if not exists (select 1 from public.item_groups g join public.group_types t on t.id = g.group_type_id
+                  where g.id = new.group_id and g.user_id = new.user_id and t.kind = 'project') then
+    raise exception 'project_estimates refused: group % is not one of your Project groups (group_types.kind = project).',
+      new.group_id using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."project_estimates_guard"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."project_estimates_guard"() IS 'Overwatch: project_estimates rows are insert-only, and only for the same user''s Project groups.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."project_plans_check_group"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     SET "search_path" TO 'public', 'pg_temp'
@@ -4059,6 +4085,78 @@ $$;
 
 
 ALTER FUNCTION "public"."record_lookup_tables"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."record_project_estimate"("p_group_id" "text", "p_kind" "text", "p_reason" "text", "p_estimate" integer DEFAULT NULL::integer, "p_cli_estimate" integer DEFAULT NULL::integer, "p_steps_added" integer DEFAULT NULL::integer, "p_at_step" integer DEFAULT NULL::integer) RETURNS "jsonb"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_current integer;
+  v_factor  numeric;
+  v_est     integer;
+  v_row     public.project_estimates%rowtype;
+begin
+  if p_kind is null or p_kind not in ('initial', 'scope_increase', 'scope_decrease', 're_estimate', 'final') then
+    raise exception 'record_project_estimate: kind must be initial, scope_increase, scope_decrease, re_estimate or final.'
+      using errcode = '22023';
+  end if;
+  if coalesce(trim(p_reason), '') = '' then
+    raise exception 'record_project_estimate: a one-line reason is required.' using errcode = '22023';
+  end if;
+
+  select effort_estimate into v_current from public.project_plans where group_id = p_group_id;
+  if p_kind <> 'initial' and not exists (select 1 from public.project_estimates
+                                          where group_id = p_group_id and kind = 'initial') then
+    raise exception 'record_project_estimate: record the initial estimate first.' using errcode = '22023';
+  end if;
+
+  if p_kind in ('initial', 're_estimate') then
+    if p_estimate is null and p_cli_estimate is null then
+      raise exception 'record_project_estimate: % needs the CLI''s figure (p_cli_estimate) or p_estimate.', p_kind
+        using errcode = '22023';
+    end if;
+    select coalesce((settings ->> 'estimate_correction_factor')::numeric, 1.0) into v_factor
+      from public.overwatch_plans where user_id = auth.uid() and active;
+    v_est := coalesce(p_estimate, round(p_cli_estimate * coalesce(v_factor, 1.0))::integer);
+  elsif p_kind in ('scope_increase', 'scope_decrease') then
+    if p_steps_added is null then
+      raise exception 'record_project_estimate: % needs p_steps_added.', p_kind using errcode = '22023';
+    end if;
+    if v_current is null then
+      raise exception 'record_project_estimate: the project has no current estimate to change.' using errcode = '22023';
+    end if;
+    v_est := v_current + p_steps_added;
+  else -- final
+    v_est := coalesce(p_estimate, (select steps_used from public.overwatch_project_progress(null, array[p_group_id])));
+    if v_est is null then
+      raise exception 'record_project_estimate: no steps counted for this project; pass p_estimate (actual steps).'
+        using errcode = '22023';
+    end if;
+  end if;
+
+  insert into public.project_estimates (group_id, kind, estimate, cli_estimate, steps_added, at_step, reason)
+  values (p_group_id, p_kind, v_est,
+          case when p_kind in ('initial', 're_estimate') then p_cli_estimate end,
+          case when p_kind in ('scope_increase', 'scope_decrease') then p_steps_added end,
+          p_at_step, trim(p_reason))
+  returning * into v_row;
+
+  -- The plan carries the current figure; a final row records the outcome and leaves it alone.
+  if p_kind <> 'final' then
+    insert into public.project_plans (group_id, effort_estimate) values (p_group_id, v_est)
+    on conflict (group_id) do update set effort_estimate = excluded.effort_estimate;
+  end if;
+  return to_jsonb(v_row);
+end;
+$$;
+
+
+ALTER FUNCTION "public"."record_project_estimate"("p_group_id" "text", "p_kind" "text", "p_reason" "text", "p_estimate" integer, "p_cli_estimate" integer, "p_steps_added" integer, "p_at_step" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."record_project_estimate"("p_group_id" "text", "p_kind" "text", "p_reason" "text", "p_estimate" integer, "p_cli_estimate" integer, "p_steps_added" integer, "p_at_step" integer) IS 'Overwatch: add a project_estimates row and, except for final, set project_plans.effort_estimate to it, in one transaction. Refuses a second initial or final (unique indexes) and anything but the caller''s Project. Called by the tier-2 record_project_estimate tool.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."reminders_follow_intent_archive"() RETURNS "trigger"
@@ -11200,6 +11298,73 @@ COMMENT ON COLUMN "public"."process_friction"."created_at" IS 'When the entry wa
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."project_estimates" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "group_id" "text" NOT NULL,
+    "kind" "text" NOT NULL,
+    "estimate" integer NOT NULL,
+    "cli_estimate" integer,
+    "steps_added" integer,
+    "at_step" integer,
+    "reason" "text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "project_estimates_at_step_positive" CHECK ((("at_step" IS NULL) OR ("at_step" >= 0))),
+    CONSTRAINT "project_estimates_cli_estimate_where" CHECK ((("cli_estimate" IS NULL) OR (("kind" = ANY (ARRAY['initial'::"text", 're_estimate'::"text"])) AND (("cli_estimate" >= 1) AND ("cli_estimate" <= 1000))))),
+    CONSTRAINT "project_estimates_estimate_range" CHECK ((("estimate" >= 0) AND ("estimate" <= 1000))),
+    CONSTRAINT "project_estimates_kind_values" CHECK (("kind" = ANY (ARRAY['initial'::"text", 'scope_increase'::"text", 'scope_decrease'::"text", 're_estimate'::"text", 'final'::"text"]))),
+    CONSTRAINT "project_estimates_reason_one_line" CHECK ((("length"(TRIM(BOTH FROM "reason")) >= 1) AND ("length"(TRIM(BOTH FROM "reason")) <= 300))),
+    CONSTRAINT "project_estimates_steps_added_sign" CHECK (((("kind" = 'scope_increase'::"text") AND ("steps_added" > 0)) OR (("kind" = 'scope_decrease'::"text") AND ("steps_added" < 0)) OR (("kind" <> ALL (ARRAY['scope_increase'::"text", 'scope_decrease'::"text"])) AND ("steps_added" IS NULL))))
+);
+
+
+ALTER TABLE "public"."project_estimates" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."project_estimates" IS 'OVERWATCH. Every estimate a Project has had, in CLI steps, oldest first. Rows are only inserted: the initial row is the original estimate and never changes; scope_increase and scope_decrease carry steps_added; re_estimate is a new guess with no change of scope; final records the actual steps used. project_plans.effort_estimate is the current figure. Accuracy is judged against the original and against the scope-adjusted estimate (initial plus every steps_added). Spec: docs/technical-spec-overwatch-q4n.md section 4.12.';
+
+
+
+COMMENT ON COLUMN "public"."project_estimates"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."project_estimates"."user_id" IS 'Owner; must own the Project group too. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."project_estimates"."group_id" IS 'The Project group (group_types.kind = project).';
+
+
+
+COMMENT ON COLUMN "public"."project_estimates"."kind" IS 'initial, scope_increase, scope_decrease, re_estimate or final.';
+
+
+
+COMMENT ON COLUMN "public"."project_estimates"."estimate" IS 'The project''s estimate in CLI steps after this row; for final, the actual steps used. Steps count as steps_used counts them: a lettered sub-step (s4b) is step 4.';
+
+
+
+COMMENT ON COLUMN "public"."project_estimates"."cli_estimate" IS 'The figure the CLI gave, before estimate_correction_factor; on initial and re_estimate rows only.';
+
+
+
+COMMENT ON COLUMN "public"."project_estimates"."steps_added" IS 'Steps added (positive, scope_increase) or removed (negative, scope_decrease); null otherwise.';
+
+
+
+COMMENT ON COLUMN "public"."project_estimates"."at_step" IS 'The step number (from the run tag) it happened at, if known.';
+
+
+
+COMMENT ON COLUMN "public"."project_estimates"."reason" IS 'One line: why.';
+
+
+
+COMMENT ON COLUMN "public"."project_estimates"."created_at" IS 'When the row was written.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."project_links" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -14437,6 +14602,11 @@ ALTER TABLE ONLY "public"."process_friction"
 
 
 
+ALTER TABLE ONLY "public"."project_estimates"
+    ADD CONSTRAINT "project_estimates_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."project_links"
     ADD CONSTRAINT "project_links_once" UNIQUE ("user_id", "from_group_id", "to_group_id", "kind");
 
@@ -15203,6 +15373,18 @@ CREATE INDEX "process_friction_open_idx" ON "public"."process_friction" USING "b
 
 
 
+CREATE INDEX "project_estimates_group_idx" ON "public"."project_estimates" USING "btree" ("group_id", "created_at");
+
+
+
+CREATE UNIQUE INDEX "project_estimates_one_final" ON "public"."project_estimates" USING "btree" ("group_id") WHERE ("kind" = 'final'::"text");
+
+
+
+CREATE UNIQUE INDEX "project_estimates_one_initial" ON "public"."project_estimates" USING "btree" ("group_id") WHERE ("kind" = 'initial'::"text");
+
+
+
 CREATE UNIQUE INDEX "project_plans_code_once" ON "public"."project_plans" USING "btree" ("user_id", "project_code") WHERE ("project_code" IS NOT NULL);
 
 
@@ -15535,6 +15717,10 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."project_estimates" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."project_links" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -15744,6 +15930,10 @@ CREATE OR REPLACE TRIGGER "notes_touch_updated_at" BEFORE UPDATE ON "public"."no
 
 
 CREATE OR REPLACE TRIGGER "overwatch_plans_guard" BEFORE UPDATE ON "public"."overwatch_plans" FOR EACH ROW EXECUTE FUNCTION "public"."overwatch_plans_guard"();
+
+
+
+CREATE OR REPLACE TRIGGER "project_estimates_guard" BEFORE INSERT OR UPDATE ON "public"."project_estimates" FOR EACH ROW EXECUTE FUNCTION "public"."project_estimates_guard"();
 
 
 
@@ -16389,6 +16579,16 @@ ALTER TABLE ONLY "public"."platform_schedules"
 
 ALTER TABLE ONLY "public"."process_friction"
     ADD CONSTRAINT "process_friction_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."project_estimates"
+    ADD CONSTRAINT "project_estimates_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."item_groups"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."project_estimates"
+    ADD CONSTRAINT "project_estimates_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
 
 
@@ -17409,6 +17609,13 @@ CREATE POLICY "process_friction_owner_access" ON "public"."process_friction" TO 
 
 
 
+ALTER TABLE "public"."project_estimates" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "project_estimates_owner_access" ON "public"."project_estimates" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
 ALTER TABLE "public"."project_links" ENABLE ROW LEVEL SECURITY;
 
 
@@ -18002,6 +18209,12 @@ GRANT ALL ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payl
 
 
 
+REVOKE ALL ON FUNCTION "public"."project_estimates_guard"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."project_estimates_guard"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."project_estimates_guard"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."project_plans_check_group"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."project_plans_check_group"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."project_plans_check_group"() TO "service_role";
@@ -18027,6 +18240,12 @@ GRANT ALL ON FUNCTION "public"."recalc_last_completed_item"("p_item_id" "text") 
 REVOKE ALL ON FUNCTION "public"."record_lookup_tables"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."record_lookup_tables"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."record_lookup_tables"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."record_project_estimate"("p_group_id" "text", "p_kind" "text", "p_reason" "text", "p_estimate" integer, "p_cli_estimate" integer, "p_steps_added" integer, "p_at_step" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."record_project_estimate"("p_group_id" "text", "p_kind" "text", "p_reason" "text", "p_estimate" integer, "p_cli_estimate" integer, "p_steps_added" integer, "p_at_step" integer) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."record_project_estimate"("p_group_id" "text", "p_kind" "text", "p_reason" "text", "p_estimate" integer, "p_cli_estimate" integer, "p_steps_added" integer, "p_at_step" integer) TO "service_role";
 
 
 
@@ -18705,6 +18924,11 @@ GRANT ALL ON TABLE "public"."platform_schedules" TO "service_role";
 
 GRANT ALL ON TABLE "public"."process_friction" TO "authenticated";
 GRANT ALL ON TABLE "public"."process_friction" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."project_estimates" TO "authenticated";
+GRANT ALL ON TABLE "public"."project_estimates" TO "service_role";
 
 
 
