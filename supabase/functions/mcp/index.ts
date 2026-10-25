@@ -633,6 +633,11 @@ const getInboxTool = defineTool({
   handler: async (args: Record<string, unknown>, ctx) => {
     const aiStatus = args.ai_status as string | undefined;
     const sourceType = args.source_type as string | undefined;
+    // Overwatch principle 5: an app skill reads only its own items; "none" is the unrouted ones.
+    const sourceApp = args.source_app as string | undefined;
+    if (sourceApp !== undefined && (typeof sourceApp !== "string" || !/^[a-z][a-z0-9_]*$/.test(sourceApp))) {
+      throw new Error(`get_inbox: source_app must be an app id from get_apps, or "none" for unrouted items; got ${JSON.stringify(sourceApp)}.`);
+    }
     // Shared read: untriaged rows, newest first; the total is counted over the same
     // query, so the "N of M" NOTE cannot drift from the filters. captured_text stays
     // whole in lists, because enrichment reads it from here.
@@ -644,6 +649,8 @@ const getInboxTool = defineTool({
         let q = query.is("triaged_at", null);
         if (aiStatus) q = q.eq("ai_status", aiStatus);
         if (sourceType) q = q.eq("source_type", sourceType);
+        if (sourceApp === "none") q = q.is("source_app", null);
+        else if (sourceApp) q = q.eq("source_app", sourceApp);
         return q;
       },
       order: [{ column: "created_at", ascending: false }],
@@ -1288,6 +1295,12 @@ export function createMcpServer(token: string) {
           .optional()
           .describe(
             "Filter by how the capture arrived: 'manual' (typed into the Alfred app), 'email' (forwarded to the capture address), 'mcp' (created by Claude during a conversation), 'task' (created by a scheduled task run — these are NOT enriched and are waiting for a Claude session), 'clipboard' (a page clipped by the Chrome extension), or 'cli' (a report pushed by the Claude CLI). For clipboard and cli items, get_recent_clips is the better tool — it returns the actual page text and links, which the inbox row does not carry.",
+          ),
+        source_app: z
+          .string()
+          .optional()
+          .describe(
+            "Only items owned by this app, an id from get_apps; \"none\" for items no app owns yet. An app's skill reads only its own items; enrichment (the router) reads them all.",
           ),
         ...readOptions({ archived: "exclude" }),
       },
