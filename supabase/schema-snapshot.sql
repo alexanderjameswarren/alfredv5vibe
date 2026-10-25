@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-25 09:56, through migration 174 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-25 10:52, through migration 175 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -11241,16 +11241,25 @@ CREATE TABLE IF NOT EXISTS "public"."process_friction" (
     "resolved_by" "text",
     "resolved_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "status" "text" DEFAULT 'open'::"text" NOT NULL,
+    "wont_fix_reason" "text",
     CONSTRAINT "process_friction_code_format" CHECK ((("project_code" IS NULL) OR ("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text"))),
     CONSTRAINT "process_friction_process_values" CHECK ((("process" = ANY (ARRAY['cli_testing_steps'::"text", 'cli_prompt'::"text", 'todos'::"text", 'closeout'::"text", 'inbox'::"text", 'other'::"text"])) OR ("process" ~ '^skill:[a-z0-9_-]{1,60}$'::"text"))),
-    CONSTRAINT "process_friction_resolved_pair" CHECK ((("resolved_by" IS NULL) = ("resolved_at" IS NULL)))
+    CONSTRAINT "process_friction_resolved_pair" CHECK ((("resolved_by" IS NULL) = ("resolved_at" IS NULL))),
+    CONSTRAINT "process_friction_status_resolved" CHECK ((("status" = 'open'::"text") = ("resolved_at" IS NULL))),
+    CONSTRAINT "process_friction_status_values" CHECK (("status" = ANY (ARRAY['open'::"text", 'fixed'::"text", 'wont_fix'::"text"]))),
+    CONSTRAINT "process_friction_wont_fix_reason" CHECK (
+CASE
+    WHEN ("status" = 'wont_fix'::"text") THEN (COALESCE("btrim"("wont_fix_reason"), ''::"text") <> ''::"text")
+    ELSE ("wont_fix_reason" IS NULL)
+END)
 );
 
 
 ALTER TABLE "public"."process_friction" OWNER TO "postgres";
 
 
-COMMENT ON TABLE "public"."process_friction" IS 'OVERWATCH. Snags in how the work runs: a missed instruction, a testing format that confused Alex, a prompt he had to correct, a step that caused a redo. Any thread logs one with log_friction, without asking. Fixes wait for a pattern: the weekly job groups open entries by process and proposes a fix once a process has three or more in 30 days. Spec: docs/technical-spec-overwatch-q4n.md 4.11.';
+COMMENT ON TABLE "public"."process_friction" IS 'OVERWATCH. Snags in how any of Alex''s workflows run, coding or not: a missed instruction, a testing format that confused him, a prompt he had to correct, a chat flow in any app that did not work. Any thread logs one with log_friction, without asking. Fixes wait for a pattern: the weekly job groups open entries by process and proposes a fix once a process has three or more open in 30 days. Closed as fixed or wont_fix (with a reason) by update_friction. Spec: docs/technical-spec-overwatch-q4n.md 4.11.';
 
 
 
@@ -11286,15 +11295,23 @@ COMMENT ON COLUMN "public"."process_friction"."pattern_id" IS 'Set when the week
 
 
 
-COMMENT ON COLUMN "public"."process_friction"."resolved_by" IS 'What fixed it (a skill change, a prompt change), set with resolved_at when the pattern is resolved.';
+COMMENT ON COLUMN "public"."process_friction"."resolved_by" IS 'Who or what closed it (a skill change, a prompt change, or the decision not to fix); set with resolved_at for fixed and wont_fix, null while open.';
 
 
 
-COMMENT ON COLUMN "public"."process_friction"."resolved_at" IS 'When it was resolved; null while open.';
+COMMENT ON COLUMN "public"."process_friction"."resolved_at" IS 'When it was closed as fixed or wont_fix; null while open.';
 
 
 
 COMMENT ON COLUMN "public"."process_friction"."created_at" IS 'When the entry was written.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."status" IS 'open (the default), fixed or wont_fix. Set by update_friction. Only open entries count toward the weekly trigger.';
+
+
+
+COMMENT ON COLUMN "public"."process_friction"."wont_fix_reason" IS 'One line on why it will not be fixed; required when status is wont_fix, null otherwise.';
 
 
 
@@ -15369,7 +15386,7 @@ CREATE INDEX "platform_runs_unnotified_idx" ON "public"."platform_runs" USING "b
 
 
 
-CREATE INDEX "process_friction_open_idx" ON "public"."process_friction" USING "btree" ("user_id", "process", "occurred_at" DESC) WHERE ("resolved_at" IS NULL);
+CREATE INDEX "process_friction_open_idx" ON "public"."process_friction" USING "btree" ("user_id", "process", "occurred_at" DESC) WHERE ("status" = 'open'::"text");
 
 
 

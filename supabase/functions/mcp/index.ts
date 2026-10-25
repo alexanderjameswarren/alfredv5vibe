@@ -100,6 +100,7 @@ import {
 } from "../_shared/tools/overwatch-projects.ts";
 import {
   FRICTION_PROCESSES,
+  FRICTION_STATUSES,
   NOTE_PERIODS,
   RELEASE_SOURCES,
   WATCH_KINDS,
@@ -3361,14 +3362,15 @@ export function createMcpServer(token: string) {
     {
       title: "Get Friction",
       description:
-        "List process friction entries, newest first. Default: open ones (not resolved); open: false for resolved. " +
-        "Filter by process, project_code, pattern_id and since (YYYY-MM-DD). Tier 1.",
+        "List process friction entries, newest first. Default: status open, the only ones that count toward the weekly " +
+        "trigger; status fixed, wont_fix or all for the others. Filter by process, project_code, pattern_id and since " +
+        "(YYYY-MM-DD). Tier 1.",
       inputSchema: {
         process: owProcess.optional(),
         project_code: z.string().optional().describe("Only this project."),
         pattern_id: z.string().optional().describe("Only entries grouped into this pattern."),
         since: z.string().optional().describe("Entries on or after this date, YYYY-MM-DD."),
-        open: z.boolean().optional().describe("Default true: unresolved only."),
+        status: z.string().optional().describe(`One of ${FRICTION_STATUSES.join(", ")}, or all. Default open.`),
         ...readOptions(),
       },
     },
@@ -3380,13 +3382,17 @@ export function createMcpServer(token: string) {
     {
       title: "Update Friction",
       description:
-        "Group friction entries into one pattern (pattern_id: an existing pattern's id, or \"new\") and/or resolve them " +
-        "(resolved_by: what fixed it; resolved_at is stamped now). Up to 50 ids. Returns the updated entries and any " +
-        "ids not found. Tier 2.",
+        "Group friction entries into one pattern (pattern_id: an existing pattern's id, or \"new\") and/or set their " +
+        "status: fixed (resolved_by: what fixed it), wont_fix (wont_fix_reason, one line on why; resolved_by defaults " +
+        "to alex), or open again (clears the stamp and reason). fixed and wont_fix stamp resolved_at now, and neither " +
+        "counts toward the weekly trigger. resolved_by alone means fixed. Up to 50 ids. Returns the updated entries and " +
+        "any ids not found. Tier 2.",
       inputSchema: {
         ids: z.array(z.string()).describe("The friction entries' ids."),
         pattern_id: z.string().optional().describe("An existing pattern id, or \"new\" to start one."),
-        resolved_by: z.string().optional().describe("What fixed it: a skill change, a prompt change."),
+        status: owEnum(FRICTION_STATUSES).optional().describe("fixed, wont_fix, or open to reopen."),
+        resolved_by: z.string().optional().describe("Who or what closed it: a skill change, a prompt change."),
+        wont_fix_reason: z.string().optional().describe("Required for wont_fix: one line on why."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(updateFrictionTool, args, token),
