@@ -223,8 +223,10 @@ sitting unread in the Alfred inbox, because the thread never asked for it.
 ### Closing out a project
 
 Closeout comes only **after the final CLI report has been fetched, read and
-its inbox item archived**, in its own reply with no prompt in it. That reply
-is a list of steps in the step format, in this order:
+its inbox item archived**, in its own reply with no prompt in it. Before
+writing it, call `record_project_estimate` `kind: "final"` with a one-line
+`reason` (leave `estimate` out to use `steps_used`); the group must still be open.
+That reply is a list of steps in the step format, in this order:
 
 1. Worktree only: close the worktree's VS Code window.
 2. **MAIN** terminal: the `gitpush` Finish command.
@@ -379,9 +381,9 @@ In this order:
    Alex: in the Alfred app, create a group of type Project named after the project
    (the code and a few words, e.g. "overwatch-q4n Overwatch"). Then Claude calls
    `update_project_plan` with that group's id (from `get_project_plans`,
-   `status: "all"`), the `project_code`, `effort_estimate` (the CLI steps the plan
-   expects), a `target_date` if Alex has one, `where_now: "Planning"` and the
-   `next_step`. Overwatch counts steps from run tags under the project code, so the
+   `status: "all"`), the `project_code`, a `target_date` if Alex has one,
+   `where_now: "Planning"` and the `next_step`. The estimate is not set here: it
+   comes from the plan report (next section). Overwatch counts steps from run tags under the project code, so the
    code must match exactly.
 2. **Main or a worktree.** For a job that is one prompt, Claude asks whether to
    do it in the main checkout instead of a worktree, with a recommendation, and
@@ -407,7 +409,11 @@ Switchboard can find it.
 - list every database item it will need — `db:table:<name>`, `db:fn:<name>`,
   `db:deploy` — **each with the step that needs it**,
 - run `node scripts/claims.mjs check` on all of it,
+- give a step estimate broken down by phase, with the total,
 - report conflicts and warnings, change nothing, claim nothing, and stop.
+
+When the plan report comes back, record its total with `record_project_estimate`
+`kind: "initial"`, `cli_estimate` the CLI's figure, and a one-line `reason`.
 
 **Prompt 2 confirms and claims**, after Alex has read the plan: claim every file
 and folder in one command, reserve each database item with its step, then start.
@@ -707,7 +713,10 @@ Neither is mentioned in the reply unless it fails, and then in one line.
      testing, `decision` when a question is open, `project` (with
      `waiting_on_group_id`) when another project must land first, `hurdle` when it is
      parked. Set both to null when nothing waits.
-   - If the step count turned out different from the plan, update `effort_estimate`.
+   - The estimate changes only through `record_project_estimate`, with `at_step` and a
+     one-line `reason`: work added is `scope_increase` (`steps_added`), work removed
+     `scope_decrease` (negative `steps_added`), a new guess with no change of scope
+     `re_estimate` (`cli_estimate`).
 2. **`log_activity`** with `kind: "progress"`, `source: "cli"`, `source_ref` the
    report's run tag, a one-line `title` saying what the step did, and the group's
    `group_id`. Calling it twice for the same run tag is safe: it returns the row
