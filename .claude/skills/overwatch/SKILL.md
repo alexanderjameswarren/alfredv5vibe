@@ -48,7 +48,10 @@ Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
   (`steps_used`, `reports`, `last_report_at`). `has_plan: false` means a Project with no
   plan yet: offer to write one.
 - `update_project_plan` writes the plan: `where_now`, `next_step`, `waiting_on` and
-  `waiting_on_kind`, `effort_estimate`, `target_date`, `hurdle_kind` when parking it.
+  `waiting_on_kind`, `target_date`, `hurdle_kind` when parking it. Not the estimate.
+- `record_project_estimate` is the only way to change `effort_estimate` (`initial`,
+  `scope_increase`, `scope_decrease`, `re_estimate`, `final`, each with a reason);
+  `get_project_estimates` reads the history with original and scope-adjusted totals.
 - `create_project_link` records `notify_on_ship`, `no_parallel` or `depends_on` between
   two Projects; `get_project_links` reads them.
 - Groups are made in the app, never by a tool. Shipping a project means closing its group
@@ -91,7 +94,10 @@ a step failed; `failed` with `error_message` and `details.failure_kind`).
    - stalled projects: no CLI report (`last_report_at`) for `stall_days`, and not waiting
      on another project;
    - waiting on Alex longer than `waiting_on_alex_days` (`status_written_at`);
-   - overruns: `steps_used` above `effort_estimate` × `overrun_factor`, or past `target_date`;
+   - overruns: `steps_used` above `effort_estimate` (the current estimate, scope changes
+     included) × `overrun_factor`, or past `target_date`;
+   - scope changes since the last run: new `scope_increase` or `scope_decrease` rows in
+     `get_project_estimates`, noted in tonight's note with their reasons;
    - active projects above `active_project_limit`;
    - inbox backlog per app above `inbox_backlog_threshold`, with the oldest item's age;
      unrouted items, and unrouted items older than a day;
@@ -129,6 +135,9 @@ Everything the nightly run does, plus:
 - friction: `get_friction` (open), group entries by process with `update_friction`
   (`pattern_id: "new"` once, then that id), and for a process with three or more open
   entries in 30 days, one task inbox item proposing a fix with a paste-ready prompt;
+- estimate accuracy, once `estimate_accuracy_min_shipped` projects have a `final` row:
+  actual against original and against scope-adjusted for each, and a suggested
+  `estimate_correction_factor`, which changes only through `create_overwatch_plan`;
 - every `audit_every_weeks` weeks, the drift audit: skills naming missing tools, two
   skills claiming the same trigger, schedules with no recent run, apps with no skill,
   tables no tool reads.
