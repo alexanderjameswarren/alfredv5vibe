@@ -56,6 +56,11 @@ Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
   two Projects; `get_project_links` reads them.
 - Groups are made in the app, never by a tool. Shipping a project means closing its group
   as Completed in the app; that writes the shipped row itself.
+- **Every Project holds at least one item or intention.** Whenever you suggest creating a
+  Project, also suggest an overview item outlining it, pushed to the inbox for Alex to file
+  and attach: `create_inbox_item` with `suggest_item: true`, `suggested_item_text`,
+  `suggested_item_description`, `suggested_item_elements`, `suggested_context_id` and
+  `source_app` when known. The nightly note lists Projects that are still empty.
 
 ### Watch items
 
@@ -75,7 +80,8 @@ When Alex misses or misreads an instruction, says a format or flow is not workin
 to correct how something was presented, call `log_friction` without asking (`process` is
 `cli_testing_steps`, `cli_prompt`, `todos`, `closeout`, `inbox`, `other` or
 `skill:<name>`), and mention it in one line. Do not fix anything on one entry; fixes wait
-for a pattern.
+for a pattern. Only `open` entries count toward one; when Alex says, close entries with
+`update_friction` as `fixed` (`resolved_by`) or `wont_fix` (`wont_fix_reason`, one line).
 
 ## Scheduled runs: the prompt owns the procedure, this skill owns the judgment
 
@@ -109,25 +115,27 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
   changed since the last note, not everything that is true. Never soften a count, and never
   invent one. A quiet night is one line: "Nothing needs you tonight."
 
-## The weekly run (on the plan's `weekly_day`)
+## The weekly run (scheduled task `overwatch/weekly`)
 
-Its prompt, to come, will take the procedure below the same way, and this section will shrink
-to its judgment. Until then, everything the nightly run does, plus:
-- the weekly note (`period: "weekly"`): what shipped, what progressed, and the ideas list
-  (count, oldest untouched, newly possible);
-- parked projects with `hurdle_kind: "technology"`: compare their `waiting_on` with the
-  week's shipped activity and new releases;
-- feature watch: search Anthropic's release notes and the Claude Code changelog, pass what
-  was read to `record_seen_releases`, and raise one inbox item listing the `recorded`
-  entries that could unblock a parked project or change the platform;
-- friction: `get_friction` (open), group entries by process with `update_friction`
-  (`pattern_id: "new"` once, then that id), and for a process with three or more open
-  entries in 30 days, one task inbox item proposing a fix with a paste-ready prompt. Only
-  `open` entries count; `update_friction` closes them as `fixed` (`resolved_by`) or
-  `wont_fix` (`wont_fix_reason`, one line);
-- estimate accuracy, once `estimate_accuracy_min_shipped` projects have a `final` row:
-  actual against original and against scope-adjusted for each, and a suggested
-  `estimate_correction_factor`, which changes only through `create_overwatch_plan`;
-- every `audit_every_weeks` weeks, the drift audit: skills naming missing tools, two
-  skills claiming the same trigger, schedules with no recent run, apps with no skill,
-  tables no tool reads.
+The procedure is `docs/overwatch-weekly-task-prompt.md`. The judgment it asks for:
+
+- **The week.** Say what moved, by project and app: shipped first, then progress, then
+  what was used. Group many small rows into one line ("12 SAM practice passes"). A
+  nightly flag that stayed up all week is worth a line; one that cleared is not.
+- **Newly possible.** A parked `technology` project is newly possible when something
+  shipped or released this week does what its `waiting_on` asks for, not merely something
+  nearby. Name the activity row or release and the words in `waiting_on` it answers. When
+  unsure, say "may be" and raise it; Alex decides.
+- **New releases that matter.** One touches a parked project when it answers that
+  project's `waiting_on`, and touches the platform when it changes how Claude, the CLI,
+  connectors, skills or scheduled tasks work for Alfred. Ignore pricing, model launches
+  with no feature change, and other products.
+- **A friction pattern and its fix.** Read the entries together: the shared cause, not
+  the three symptoms. Propose one change, small and specific, to the skill or prompt rule
+  that caused it (`process: "skill:<name>"` points at it), and name the file. When the
+  entries do not share a cause, say so in the item and propose no fix.
+- **Estimate accuracy.** Report actual against original and against scope-adjusted for
+  each shipped project; a project that ran over only through scope changes was well
+  estimated. Keep the note to the ratios and the suggestion.
+- **The note.** As for the nightly note: the plan's `instructions`, plain short lines,
+  most important first, never a softened or invented count.
