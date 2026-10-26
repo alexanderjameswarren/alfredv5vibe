@@ -34,7 +34,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 > version, and Step 10 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-10-26c`
+> ### `PROMPT VERSION: 2026-10-26d`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -48,7 +48,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
    "THE PROMPT" line as its instructions.
 4. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
    Check: a `platform_runs` row for `overwatch` / `nightly` closed `ok`; tonight's note in
-   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-26c`.
+   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-26d`.
 
 ## The record, the note and the nudges are SEPARATE
 
@@ -67,7 +67,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 ---
 
 You are running Overwatch's nightly check for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-10-26c`. **First, load the `overwatch` skill.** It tells you how to read each
+`PROMPT VERSION: 2026-10-26d`. **First, load the `overwatch` skill.** It tells you how to read each
 app, what counts as fading, what counts as a deadline mention, and how to word the note. Follow
 these steps in order for everything else. **Where the skill and these steps disagree, these steps
 win.** Do not improvise.
@@ -172,8 +172,11 @@ Steps 3.3 to 3.6: if one errors, STOP with `failure_kind: "state_read"`.
      A recipe that needs more is SKIPPED (`pull:<app_id>`, "recipe needs more than 2 calls").
    - If it finds use or progress yesterday, call `log_activity` **once** for that app: `kind` `used`
      or `progress` as the recipe says, `source: "nightly"`, `source_ref: "<app_id>:<yesterday>"`,
-     `app_id`, and a one-line `title`. The `source_ref` makes a re-run add nothing. Then count the
-     app as active yesterday in 4.1's grouping.
+     `occurred_at: "<yesterday>T12:00:00<yesterday's offset>"` (noon Pacific yesterday, e.g.
+     `2026-10-25T12:00:00-07:00`; `-08:00` once standard time starts), `app_id`, and a one-line
+     `title`. Never leave `occurred_at` out: it would default to the time the run happened, which is
+     the wrong day. The `source_ref` makes a re-run add nothing. Then count the app as active
+     yesterday in 4.1's grouping.
    - If a recipe's call fails, SKIP that app (`pull:<app_id>`) and go on.
 
 Keep, per app, `pulled: true`, `pulled: "nothing yesterday"`, `pulled: "already active"` or
@@ -399,7 +402,7 @@ A failed call here is SKIPPED, never STOP.
 
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-- **`details`**, always: `local_date`, `prompt_version: "2026-10-26c"`, `manual`, `plan_id`, the
+- **`details`**, always: `local_date`, `prompt_version: "2026-10-26d"`, `manual`, `plan_id`, the
   count of each flag, `note_id`, `inbox_item_ids`, `reminders_sent`, `apps_pulled`,
   `alfred_calls`, `paused`, `skipped` and `settings_missing`; also `earlier_run_id` when Step 2.3
   kept one, or `duplicate_of` when it stopped there.
@@ -422,7 +425,7 @@ Run: <run id>
 ### Step 10 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-26c`;
+- `PROMPT VERSION: 2026-10-26d`;
 - the run id and its status, and `manual: true` or `manual: false`; `duplicate_of` if it stopped;
 - the count of each flag, the note id, the inbox item ids and the reminders sent;
 - `alfred_calls` and whether it paused;
