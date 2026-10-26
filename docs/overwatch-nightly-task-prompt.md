@@ -15,7 +15,8 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
   (`list_triggers`), which every Claude task already has. The **`overwatch` skill** must be
   available to the task.
 - **Call budget:** the Alfred connector allows **60 calls in 5 minutes**. The prompt reads in bulk
-  and groups locally, so a typical night makes about 41 to 46 Alfred calls, spread over more than
+  and groups locally, so a typical night makes about 41 to 46 Alfred calls (up to 4 more when apps
+  with no activity row need their last use read from their own data), spread over more than
   5 minutes of run time; rule 8 keeps it under the limit on a heavy night.
 - **Settings it reads** from the active plan: `stall_days`, `waiting_on_alex_days`, `fading_days`,
   `overrun_factor`, `active_project_limit`, `inbox_backlog_threshold`, `routing_low_confidence`,
@@ -33,7 +34,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 > version, and Step 10 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-10-26b`
+> ### `PROMPT VERSION: 2026-10-26c`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -47,7 +48,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
    "THE PROMPT" line as its instructions.
 4. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
    Check: a `platform_runs` row for `overwatch` / `nightly` closed `ok`; tonight's note in
-   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-26b`.
+   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-26c`.
 
 ## The record, the note and the nudges are SEPARATE
 
@@ -66,7 +67,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 ---
 
 You are running Overwatch's nightly check for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-10-26b`. **First, load the `overwatch` skill.** It tells you how to read each
+`PROMPT VERSION: 2026-10-26c`. **First, load the `overwatch` skill.** It tells you how to read each
 app, what counts as fading, what counts as a deadline mention, and how to word the note. Follow
 these steps in order for everything else. **Where the skill and these steps disagree, these steps
 win.** Do not improvise.
@@ -184,14 +185,20 @@ Each count names its setting. If a read errors, SKIP the count.
 
 1. **Quiet apps** (`rhythm_days`, per app). An app with a row in Step 4.1's window (or pulled as
    active yesterday) is not quiet. For each other app with a `rhythm_days` and no `ease_off` watch
-   item in force, one `get_activity` with its `app_id` and `limit: 1`: quiet when that row is more
-   than `rhythm_days` days before `local_date`. This is the one per-app read; it only covers apps
-   not seen in the window.
-   - **No row at all:** the activity log does not know when the app was last used, so find its
-     real last use in the app's own data with **one** call its `activity_recipe` names (the last job
-     application, the last Ken attempt, the last Money review), read the way the skill says. Write
-     "unknown" only when the app has no data at all, or its recipe names no such call.
-   - Keep: app name, days since its last use (or "unknown"), rhythm.
+   item in force, one `get_activity` with its `app_id` and `limit: 1`. This is the one per-app read;
+   it only covers apps not seen in the window.
+   - **`last_used_on` is required for every such app.** If `get_activity` returned a row, it is that
+     row's date (Pacific). **If the activity log has no row for the app, you must look in the app's
+     own data**: the newest record its `activity_recipe` names (the last job application, the last
+     Ken attempt, the last Money review), read the way the skill says. If Step 4's pull already read
+     that record tonight, use its date and make no new call; otherwise make **one** call for it.
+     Its date is `last_used_on`.
+   - `last_used_on` is null **only** when that call returns no records at all (the app has no data),
+     or the recipe names no record to read. "No activity row" is never a reason for null.
+   - Quiet when `last_used_on` is more than `rhythm_days` days before `local_date`, or is null.
+   - Keep, in this exact shape (flag `quiet_apps`, one entry per quiet app):
+     `{ "app": "<app_id>", "last_used_on": "YYYY-MM-DD" | null, "days_since": <whole days from last_used_on to local_date> | "none", "rhythm_days": <n> }`.
+     `days_since` is "none" exactly when `last_used_on` is null.
 2. **Projects:** `get_project_plans` with no arguments (active Projects), **one call**. Keep each row
    whole. If it errors, SKIP counts 2a to 2e (2f is its own read).
    - a. **Stalled** (`stall_days`): `last_report_at` more than `stall_days` days ago, or null with
@@ -355,7 +362,8 @@ Call `create_overwatch_note` with `period: "nightly"`, `for_date: <local_date>`,
   - **Projects:** one bullet per project with a finding, its name the link, then its estimated
     finish (count 2g), and as sub-bullets its stall or overrun, its scope changes (each with its
     reason) and, for an empty Project group, "No item or intention yet."
-  - **Quiet apps** on one bullet: "Quiet: Jobs (3 days), Ken (unknown)".
+  - **Quiet apps** on one bullet: "Quiet: Jobs (12 days), Money (9 days)"; an app with no data at
+    all reads "Ken (no data yet)".
   - **The inbox** on one bullet: count 3e's line.
   - Items that are "still open" from Step 6 say so. Counts skipped for the budget say so in one
     bullet. A night with nothing under Action Required says "- Nothing needs you tonight."
@@ -391,7 +399,7 @@ A failed call here is SKIPPED, never STOP.
 
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-- **`details`**, always: `local_date`, `prompt_version: "2026-10-26b"`, `manual`, `plan_id`, the
+- **`details`**, always: `local_date`, `prompt_version: "2026-10-26c"`, `manual`, `plan_id`, the
   count of each flag, `note_id`, `inbox_item_ids`, `reminders_sent`, `apps_pulled`,
   `alfred_calls`, `paused`, `skipped` and `settings_missing`; also `earlier_run_id` when Step 2.3
   kept one, or `duplicate_of` when it stopped there.
@@ -414,7 +422,7 @@ Run: <run id>
 ### Step 10 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-26b`;
+- `PROMPT VERSION: 2026-10-26c`;
 - the run id and its status, and `manual: true` or `manual: false`; `duplicate_of` if it stopped;
 - the count of each flag, the note id, the inbox item ids and the reminders sent;
 - `alfred_calls` and whether it paused;
