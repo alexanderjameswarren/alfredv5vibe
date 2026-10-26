@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-26 13:13, through migration 177 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-26 15:26, through migration 178 (supabase db dump --linked --schema public,platform)
 
 
 
