@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-25 11:32, through migration 176 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-26 13:13, through migration 177 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -3440,14 +3440,14 @@ COMMENT ON FUNCTION "public"."overwatch_plans_guard"() IS 'Overwatch: on overwat
 
 
 
-CREATE OR REPLACE FUNCTION "public"."overwatch_project_progress"("p_status" "text"[] DEFAULT ARRAY['active'::"text"], "p_group_ids" "text"[] DEFAULT NULL::"text"[]) RETURNS TABLE("group_id" "text", "name" "text", "group_status" "text", "context_id" "text", "has_plan" boolean, "project_code" "text", "target_date" "date", "effort_estimate" integer, "where_now" "text", "next_step" "text", "waiting_on" "text", "waiting_on_kind" "text", "waiting_on_group_id" "text", "hurdle_kind" "text", "status_written_at" timestamp with time zone, "steps_used" integer, "reports" integer, "last_report_at" timestamp with time zone)
+CREATE OR REPLACE FUNCTION "public"."overwatch_project_progress"("p_status" "text"[] DEFAULT ARRAY['active'::"text"], "p_group_ids" "text"[] DEFAULT NULL::"text"[]) RETURNS TABLE("group_id" "text", "name" "text", "group_status" "text", "context_id" "text", "has_plan" boolean, "project_code" "text", "target_date" "date", "effort_estimate" integer, "where_now" "text", "next_step" "text", "waiting_on" "text", "waiting_on_kind" "text", "waiting_on_group_id" "text", "hurdle_kind" "text", "status_written_at" timestamp with time zone, "steps_used" integer, "reports" integer, "last_report_at" timestamp with time zone, "first_report_at" timestamp with time zone)
     LANGUAGE "sql" STABLE
     SET "search_path" TO 'public', 'pg_temp'
     AS $_$
   select g.id, g.name, g.status, g.context_id, p.group_id is not null,
          p.project_code, p.target_date, p.effort_estimate, p.where_now, p.next_step, p.waiting_on,
          p.waiting_on_kind, p.waiting_on_group_id, p.hurdle_kind, p.status_written_at,
-         coalesce(r.steps_used, 0), coalesce(r.reports, 0), r.last_report_at
+         coalesce(r.steps_used, 0), coalesce(r.reports, 0), r.last_report_at, r.first_report_at
     from public.item_groups g
     join public.group_types t on t.id = g.group_type_id and t.kind = 'project'
     left join public.project_plans p on p.group_id = g.id
@@ -3455,7 +3455,8 @@ CREATE OR REPLACE FUNCTION "public"."overwatch_project_progress"("p_status" "tex
       select count(distinct (regexp_match(c.run_tag, '^' || p.project_code || '-s([0-9]+)[a-z]?-[a-z0-9]{4}$'))[1])::int
                as steps_used,
              count(*)::int as reports,
-             max(c.created_at) as last_report_at
+             max(c.created_at) as last_report_at,
+             min(c.created_at) as first_report_at
         from public.clips c
        where p.project_code is not null
          and c.run_tag like p.project_code || '-s%'
@@ -3471,7 +3472,7 @@ $_$;
 ALTER FUNCTION "public"."overwatch_project_progress"("p_status" "text"[], "p_group_ids" "text"[]) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."overwatch_project_progress"("p_status" "text"[], "p_group_ids" "text"[]) IS 'Overwatch: the caller''s unarchived Project groups (group_types.kind = project) in the given statuses (default active; null for all), each with its project_plans row if any, and the counted effort from clips.run_tag under the project code: steps_used (distinct step numbers), reports and last_report_at. Invoker: RLS on item_groups, project_plans and clips decides the rows. Backs get_project_plans.';
+COMMENT ON FUNCTION "public"."overwatch_project_progress"("p_status" "text"[], "p_group_ids" "text"[]) IS 'Overwatch: the caller''s unarchived Project groups (group_types.kind = project) in the given statuses (default active; null for all), each with its project_plans row if any, and the counted effort from clips.run_tag under the project code: steps_used (distinct step numbers), reports, last_report_at and first_report_at (the pace for the estimated finish). Invoker: RLS on item_groups, project_plans and clips decides the rows. Backs get_project_plans and the /overwatch tab.';
 
 
 
@@ -10895,6 +10896,38 @@ COMMENT ON COLUMN "public"."notification_steps"."completed_at" IS 'When the elem
 
 
 COMMENT ON COLUMN "public"."notification_steps"."created_at" IS 'Row creation. All rows in a chain are created together at execution start.';
+
+
+
+CREATE OR REPLACE VIEW "public"."overwatch_app_last_activity" WITH ("security_invoker"='true') AS
+ SELECT "user_id",
+    "app_id",
+    "max"("occurred_at") AS "last_occurred_at",
+    ("count"(*))::integer AS "rows_logged"
+   FROM "public"."activity" "a"
+  GROUP BY "user_id", "app_id";
+
+
+ALTER VIEW "public"."overwatch_app_last_activity" OWNER TO "postgres";
+
+
+COMMENT ON VIEW "public"."overwatch_app_last_activity" IS 'OVERWATCH. One row per user and app: when the app last had activity (any kind, any source) and how many activity rows it has. Backs the tab''s Quiet lately section, compared with app_profiles.rhythm_days. security_invoker, so activity''s owner RLS decides the rows. Spec: docs/technical-spec-overwatch-q4n.md section 9.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_app_last_activity"."user_id" IS 'Owner of the activity rows.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_app_last_activity"."app_id" IS 'The app, an apps.id.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_app_last_activity"."last_occurred_at" IS 'When its newest activity row happened.';
+
+
+
+COMMENT ON COLUMN "public"."overwatch_app_last_activity"."rows_logged" IS 'How many activity rows the app has.';
 
 
 
@@ -18906,6 +18939,11 @@ GRANT ALL ON TABLE "public"."notes" TO "service_role";
 
 GRANT ALL ON TABLE "public"."notification_steps" TO "authenticated";
 GRANT ALL ON TABLE "public"."notification_steps" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."overwatch_app_last_activity" TO "authenticated";
+GRANT ALL ON TABLE "public"."overwatch_app_last_activity" TO "service_role";
 
 
 
