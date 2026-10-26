@@ -1,6 +1,7 @@
 import React from "react";
 import {
   Briefcase,
+  Cable,
   Car,
   Disc3,
   Dumbbell,
@@ -9,14 +10,19 @@ import {
   House,
   LayoutGrid,
   Music,
+  Sprout,
   Timer,
+  TowerControl,
+  Trophy,
   Wallet,
   Wrench,
 } from "lucide-react";
 
-// apps.icon holds a lucide name; only the names seeded in 116 are bundled.
+// apps.icon holds a lucide name; only the names the apps rows use are bundled (116, Overwatch's,
+// and Switchboard, Monty Don and Sports from 2026-10-26).
 export const APP_ICONS = {
   Briefcase,
+  Cable,
   Car,
   Disc3,
   Dumbbell,
@@ -24,7 +30,12 @@ export const APP_ICONS = {
   GraduationCap,
   House,
   Music,
+  // Overwatch's row said Radar until migration 178; Alex chose TowerControl.
+  Radar: TowerControl,
+  Sprout,
+  TowerControl,
   Timer,
+  Trophy,
   Wallet,
   Wrench,
 };

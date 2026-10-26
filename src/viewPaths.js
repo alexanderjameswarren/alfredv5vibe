@@ -53,6 +53,7 @@ export const VIEW_TO_PATH = {
   sam: "/sam",
   games: "/games",
   money: "/money",
+  overwatch: "/overwatch",
 };
 
 export const DEFAULT_VIEW = "home";
@@ -85,6 +86,7 @@ export function pathToView(pathname) {
   if (isSamPath(pathname)) return "sam";
   // Everything under /money is the Money view; see the Money section below.
   if (moneyRouteFromPath(pathname)) return "money";
+  if (overwatchRouteFromPath(pathname)) return "overwatch";
   // /schedule/execution/:id is the same view as the bare /schedule/execution.
   if (executionIdFromPath(pathname)) return "execution-detail";
   // /inbox/detail/:id is the same view as the bare /inbox/detail.
@@ -114,6 +116,7 @@ export function isKnownPath(pathname) {
   if (recordIdFromPath(pathname)) return true;
   if (isSamPath(pathname)) return true;
   if (moneyRouteFromPath(pathname)) return true;
+  if (overwatchRouteFromPath(pathname)) return true;
   // Deliberately executionIdFromPath, not isExecutionPath: a malformed
   // /schedule/execution/a/b has no extractable id and stays unknown, so it is
   // redirected to home like any other nonsense path rather than half-served.
@@ -409,6 +412,28 @@ export function isSamStatsPath(pathname) {
 export function isSamPath(pathname) {
   const path = normalizePath(pathname);
   return path === SAM_PATH || path.startsWith(`${SAM_PATH}/`);
+}
+
+// --- Overwatch sub-routes (overwatch-q4n, Step 31b) --------------------------
+//
+// One view, "overwatch": the live tab, /overwatch/briefing for the latest briefing and
+// /overwatch/briefing/<note_id> for one (real addresses, so every briefing link is a real
+// link). Anything else under /overwatch is unknown.
+
+export const OVERWATCH_PATH = "/overwatch";
+export const OVERWATCH_BRIEFING_PATH = "/overwatch/briefing";
+
+export function overwatchBriefingPath(noteId) {
+  return `${OVERWATCH_BRIEFING_PATH}/${encodeURIComponent(noteId)}`;
+}
+
+export function overwatchRouteFromPath(pathname) {
+  const path = normalizePath(pathname);
+  if (path === OVERWATCH_PATH) return { screen: "tab" };
+  if (path === OVERWATCH_BRIEFING_PATH) return { screen: "briefing", noteId: null };
+  const id = path.startsWith(`${OVERWATCH_BRIEFING_PATH}/`) ? path.slice(OVERWATCH_BRIEFING_PATH.length + 1) : "";
+  if (id && !id.includes("/")) return { screen: "briefing", noteId: decodeURIComponent(id) };
+  return null;
 }
 
 // --- Money sub-routes (warren_buffet-w7b, Step 7) ----------------------------

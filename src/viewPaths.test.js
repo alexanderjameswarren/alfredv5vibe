@@ -32,6 +32,8 @@ import {
   groupHistoryPath,
   groupDetailPath,
   groupRouteFromPath,
+  overwatchRouteFromPath,
+  overwatchBriefingPath,
 } from "./viewPaths";
 import { uid } from "./utils/flattenElements";
 
@@ -40,11 +42,21 @@ import { uid } from "./utils/flattenElements";
 // on — above all "never crash, fall back to home".
 
 describe("the map itself", () => {
-  it("covers all 28 view values", () => {
+  it("covers all 29 view values", () => {
     // 20 until Step 12.6 added the two add pages; 23 since Clipboard Step 17
     // made inbox triage a page; 24 with Money (warren_buffet-w7b); 28 with the
-    // group create, edit, history and detail pages (Restructure P5).
-    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(28);
+    // group create, edit, history and detail pages (Restructure P5); 29 with Overwatch.
+    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(29);
+  });
+
+  it("serves /overwatch and its briefings as the Overwatch view", () => {
+    expect(pathToView("/overwatch")).toBe("overwatch");
+    expect(isKnownPath("/overwatch/")).toBe(true);
+    expect(pathToView("/overwatch/briefing")).toBe("overwatch");
+    expect(overwatchRouteFromPath("/overwatch/briefing")).toEqual({ screen: "briefing", noteId: null });
+    expect(overwatchRouteFromPath(overwatchBriefingPath("n-1"))).toEqual({ screen: "briefing", noteId: "n-1" });
+    expect(isKnownPath("/overwatch/briefing/a/b")).toBe(false);
+    expect(isKnownPath("/overwatch/note")).toBe(false);
   });
 
   it("is a bijection — no two views share a path", () => {

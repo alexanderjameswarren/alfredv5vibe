@@ -486,9 +486,9 @@ Watch items and plan settings are viewable on the tab; editing them goes through
 3. **Tools:** section 7 except inventory.
 4. **Skills and backfill:** cli-workflow and alfred-enrich changes; overwatch skill; backfill current Project groups and plans for live worktrees; backfill activity for the last 30 days from closed executions and CLI reports; write each app's current_state, activity_recipe and rhythm_days from the discovery report.
 5. **Nightly and weekly jobs:** estimate tracking first (project_estimates and its RPC, record_project_estimate and get_project_estimates, update_project_plan stops setting effort_estimate, the two new settings through the plan gate, the cli-workflow lines, and the Overwatch project's own initial row); friction status (4.11: the status and wont_fix_reason columns, update_friction and get_friction); then the prompts in the repo, schedule rows, first runs checked by hand.
-6. **The tab.**
-7. **Inventory and impact review:** `tables` on defineTool and every tool annotated; conformance rule; inventory script and table; finish_summaries table; the ingest function's finish_summary and inventory kinds; finish-time summary and inventory send from gitpush.
-8. **Switchboard state (later, optional):** Switchboard posts live session state through overwatch-ingest.
+6. **The tab.** Shipped 2026-10-26: status line and Briefing, Action Required, Active Projects, Quiet lately, Activity, Ideas, Friction, built to the design rules in section 9.
+7. **Inventory and impact review (deferred):** `tables` on defineTool and every tool annotated; conformance rule; inventory script and table; finish_summaries table; the ingest function's finish_summary and inventory kinds; finish-time summary and inventory send from gitpush.
+8. **Switchboard state (deferred, optional):** Switchboard posts live session state through overwatch-ingest.
 
 Phases 1 to 6 give a working Overwatch. Phase 7 is large but self-contained.
 
