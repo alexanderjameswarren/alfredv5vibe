@@ -5,6 +5,8 @@ description: "Enrich Alfred inbox items with AI-powered suggestions for organizi
 
 # Alfred Inbox Enrichment
 
+Skill version: 2026-10-26a
+
 This skill defines how to analyze Alfred inbox captures and write structured suggestions back using the `update_inbox_item` MCP tool.
 
 ## CRITICAL: How to Execute
@@ -206,6 +208,8 @@ Those four exist because of how the tags actually get used: finding a recipe fas
 **Do not tag** cooking method, equipment, source or author, season, difficulty, or incidental ingredients. `corn`, `squash`, `mushroom` and `cheese` were each considered and deliberately rejected — nobody decides what to cook based on them, so they add noise to the filter bar without adding a way in.
 
 Outside food, the same test applies even though the shapes differ: would the user filter on this to find things later? Development work uses shapes like `bug`, `ui`, `routing`, `mcp`, `ai`, and app names like `sam`. Health and wellbeing use `health`, `mobility`, `nervous system`. Match the shape you find in `get_tags` — don't invent a new axis.
+
+**Ideas get `idea`.** When a capture is an idea (something Alex might do or build someday, not a task with a next action), suggest the `idea` tag, in any context. It is an approved axis even before it shows in `get_tags`: Overwatch's Ideas section reads it. In the Alfred context, a code idea also gets its app's tag (`sam`, `dj`, `overwatch`, `alfred` and so on), and a bug gets `bug` instead of `idea`, never both.
 
 **Never tag what the context already says.** An item in the Recipes context does not need a `recipe` tag. That tag existed, sat on fifteen items, and was deleted precisely because it told nobody anything.
 
