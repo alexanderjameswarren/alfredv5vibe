@@ -13,6 +13,7 @@ import {
   Timer,
   Gamepad2,
   Wallet,
+  TowerControl,
   MessageSquareText,
   UtensilsCrossed,
   SquareKanban,
@@ -63,6 +64,7 @@ export const OBJECT_ICONS = {
   sam: Music,
   games: Gamepad2,
   money: Wallet,
+  overwatch: TowerControl,
 };
 
 /**

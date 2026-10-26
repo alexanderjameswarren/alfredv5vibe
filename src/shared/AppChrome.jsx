@@ -19,6 +19,7 @@ const NAV_ITEMS = [
   { key: "memories", label: "Memories", icon: "item" },
   { key: "collections", label: "Collections", icon: "collection" },
   { key: "money", label: "Money", icon: "money" },
+  { key: "overwatch", label: "Overwatch", icon: "overwatch" },
   { key: "timer", label: "Timer", icon: "timer", remembersReturn: true },
   { key: "sam", label: "Sam", icon: "sam", remembersReturn: true },
   { key: "games", label: "Games", icon: "games" },
