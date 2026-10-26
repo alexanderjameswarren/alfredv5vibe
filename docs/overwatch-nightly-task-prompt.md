@@ -19,7 +19,9 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
   5 minutes of run time; rule 8 keeps it under the limit on a heavy night.
 - **Settings it reads** from the active plan: `stall_days`, `waiting_on_alex_days`, `fading_days`,
   `overrun_factor`, `active_project_limit`, `inbox_backlog_threshold`, `routing_low_confidence`,
-  `overdue_days`, `pushes_per_day`, `push_time`.
+  `overdue_days`, `urgent_within_days` (to add through the gate), `pushes_per_day`, `push_time`.
+- **Needs** `first_report_at` on `get_project_plans` rows for the estimated finish (Step 33's
+  change to `overwatch_project_progress`); until then every finish is "unknown".
 - **Spec:** `docs/technical-spec-overwatch-q4n.md` section 6 (the nightly job and the rule for
   Overwatch's scheduled tasks), 4.6 to 4.12 and Appendix C.
 - **Edit rule:** change this file, then paste it into the task. Never edit the task alone. A change
@@ -31,7 +33,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 > version, and Step 10 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-10-25d`
+> ### `PROMPT VERSION: 2026-10-26b`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -45,7 +47,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
    "THE PROMPT" line as its instructions.
 4. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
    Check: a `platform_runs` row for `overwatch` / `nightly` closed `ok`; tonight's note in
-   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-25d`.
+   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-26b`.
 
 ## The record, the note and the nudges are SEPARATE
 
@@ -64,7 +66,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 ---
 
 You are running Overwatch's nightly check for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-10-25d`. **First, load the `overwatch` skill.** It tells you how to read each
+`PROMPT VERSION: 2026-10-26b`. **First, load the `overwatch` skill.** It tells you how to read each
 app, what counts as fading, what counts as a deadline mention, and how to word the note. Follow
 these steps in order for everything else. **Where the skill and these steps disagree, these steps
 win.** Do not improvise.
@@ -99,14 +101,17 @@ win.** Do not improvise.
    - When the count reaches **45** and fewer than 5 minutes have passed since the first call,
      **pause once** until 5 minutes have passed, then start a new count and a new window.
    - If you cannot pause, or a call is refused for the rate limit, SKIP the remaining counts in
-     Step 5 (each listed in `skipped` as `budget:<count>`) and go on to Step 6. Steps 6 to 9 always
+     Step 5 (each in `skipped` as `count:<flags key>` with the error "budget") and go on to Step 6. Steps 6 to 9 always
      run.
    - Record `alfred_calls` (the total) and `paused` (true or false) in Step 9.
 
 **Whenever a step says STOP: go to Step 9 and close the run as `failed`, then Step 10.** A step
-that says SKIP leaves that count out, adds its name and the verbatim error to `skipped`, and goes
-on. A run with anything in `skipped` closes `partial`. A count skipped only for a missing setting
-goes in `settings_missing`, not `skipped`.
+that says SKIP leaves that part out, adds `{ "part": "<part>", "error": "<verbatim error>" }` to
+`skipped`, and goes on. `part` is always one of: `count:<flags key>` (a Step 5 count, by its key in
+Step 7's flags), `pull:<app_id>`, `inbox:<first line>` or `nudge:<tool>`. The tab turns these into
+plain words ("Money not checked"), so never write anything else there. A run with anything in
+`skipped` closes `partial`. A count skipped only for a missing setting goes in `settings_missing`,
+not `skipped`.
 
 ### Step 1 — Open the run
 
@@ -129,6 +134,8 @@ create the failure item (Step 9, "On failed"), then Step 10.
    - **Manual run:** always go ahead, and keep the other run's id as `earlier_run_id`. Read
      everything again (rule 3). Step 7 then replaces today's note, which is what
      `create_overwatch_note` does for a second note on the same day and period.
+   - **Keep the two newest real runs before today** (not this one, not `running`, no
+     `details.duplicate_of`) and their `details.skipped`, for Step 6's scan gaps.
 
 ### Step 3 — Read Overwatch's own state
 
@@ -178,8 +185,13 @@ Each count names its setting. If a read errors, SKIP the count.
 1. **Quiet apps** (`rhythm_days`, per app). An app with a row in Step 4.1's window (or pulled as
    active yesterday) is not quiet. For each other app with a `rhythm_days` and no `ease_off` watch
    item in force, one `get_activity` with its `app_id` and `limit: 1`: quiet when that row is more
-   than `rhythm_days` days before `local_date`, or there is none. This is the one per-app read; it
-   only covers apps not seen in the window. Keep: app, days since (or "none"), rhythm.
+   than `rhythm_days` days before `local_date`. This is the one per-app read; it only covers apps
+   not seen in the window.
+   - **No row at all:** the activity log does not know when the app was last used, so find its
+     real last use in the app's own data with **one** call its `activity_recipe` names (the last job
+     application, the last Ken attempt, the last Money review), read the way the skill says. Write
+     "unknown" only when the app has no data at all, or its recipe names no such call.
+   - Keep: app name, days since its last use (or "unknown"), rhythm.
 2. **Projects:** `get_project_plans` with no arguments (active Projects), **one call**. Keep each row
    whole. If it errors, SKIP counts 2a to 2e (2f is its own read).
    - a. **Stalled** (`stall_days`): `last_report_at` more than `stall_days` days ago, or null with
@@ -190,6 +202,11 @@ Each count names its setting. If a read errors, SKIP the count.
      `effort_estimate × overrun_factor`; or `target_date` is before `local_date`. Keep which one.
    - d. **Over the limit** (`active_project_limit`): the number of rows above
      `active_project_limit`. Keep the count and the limit.
+   - g. **Estimated finish** (no setting; from the row): when it has `effort_estimate`,
+     `steps_used` above 0 and `first_report_at`, the finish is `local_date` plus
+     ceil((`effort_estimate` − `steps_used`) × days since `first_report_at` ÷ `steps_used`) days:
+     the pace so far, projected over the steps remaining. `steps_used` at or above the estimate is
+     "over estimate". Otherwise "unknown". Keep it for every row.
    - e. **Scope changes:** `get_project_estimates` with `group_ids` set to every row's `group_id`
      (one call for up to 20). Keep each history row whose `kind` is `scope_increase` or
      `scope_decrease` and whose `created_at` is after `since_last`: project, `steps_added`,
@@ -209,6 +226,9 @@ Each count names its setting. If a read errors, SKIP the count.
      `source_app`, `ai_confidence`. At most 10, newest first.
    - d. **Overwatch's own open items**, for Step 6: the first line of each row with
      `source_app: "overwatch"`.
+   - e. **Urgent** (`stall_days`, for the backlog): the 3b rows older than a day, the 3a apps whose
+     oldest item is older than `stall_days` days, and the 3c rows. The note's inbox line is
+     "<total> items. Nothing urgent." when there are none; otherwise it lists only these.
 4. **Schedules and tasks:**
    - a. **Stopped schedules:** `get_platform_schedules` with `enabled: true`, `limit: 50`, then
      `get_platform_runs` with `status: "ok"`, `limit: 50`, **one call each**. Group the runs by `app`
@@ -247,7 +267,9 @@ Each count names its setting. If a read errors, SKIP the count.
      is no execution's `event_id`. Keep intention, id, the event's date and days overdue.
    - b. **A deadline with no date:** from count 6's intentions, the active ones with no event in
      the events read whose text or description mentions a deadline or a time period. What counts as
-     one is the skill's call. Keep intention, id and the words that make it a deadline.
+     one is the skill's call. Keep intention, id and the words that make it a deadline, and, when
+     the words name a date, that date. **Urgent** (`urgent_within_days`) when that date is within
+     `urgent_within_days` days of `local_date`; while the setting is missing, none is urgent.
 8. **Watch items that ended:** the list from Step 3.3.
 9. **Checks due:** the list from Step 3.2, each with what you found about its `about`.
 
@@ -288,13 +310,23 @@ read them with one `get_inbox` with `source_app: "overwatch"`, `limit: 50`.)
    under "Deadline with no date", one line per 7b row: `<intention> (<link: id>): "<the words>". Give
    it a date?` `source_metadata.kind: "overdue"`.
 4. **One per repeated claim-block pair** (count 5). First line:
-   `Overwatch: proposal — no_parallel <code A> and <code B>`. Then "Blocked each other <N> times in
-   30 days." and this paste-ready prompt:
+   `Overwatch: no_parallel proposal for <code A> and <code B> — <N> blocks`. Then "Blocked each
+   other <N> times in 30 days." and this paste-ready prompt:
    ```
    FOR CLAUDE.AI, NOT THE CLI
    Overwatch proposes a no_parallel link between <code A> and <code B>: they blocked each other <N> times in 30 days. If Alex agrees, call create_project_link with kind "no_parallel" between their Project groups.
    ```
    `source_metadata.kind: "proposal"`.
+5. **One per scan gap:** a `part` in tonight's `skipped` that is also in the `skipped` of both runs
+   Step 2.3 kept, so it has not been checked on 3 nights running. First line:
+   `Overwatch: scan gap in <part in plain words, e.g. Money> — 3 nights`. Then "<part> has not been
+   checked on <the three dates, friendly>. Last error: <tonight's verbatim error>." and this
+   paste-ready prompt:
+   ```
+   FOR CLAUDE.AI, NOT THE CLI
+   Overwatch's nightly run has skipped <part> three nights running (<dates>); the last error was "<error>". Help me find out why and fix it, or log a bug.
+   ```
+   `source_metadata.kind: "scan_gap"`.
 
 Every item also sets `ai_reasoning: "Created by the overwatch/nightly scheduled task, run <run id>."`
 and nothing else: no `suggested_*` fields. Keep each returned inbox id. If one call errors, SKIP
@@ -304,13 +336,29 @@ it (`skipped` gets `inbox:<first line>`) and go on.
 
 Call `create_overwatch_note` with `period: "nightly"`, `for_date: <local_date>`, and:
 - **`body`**: markdown, short, in the plan's `instructions` voice and worded the way the skill
-  says. Most important first: anything waiting on Alex, stalls and overruns, overdue intentions,
-  scope changes (each with its reason), the over-limit count, empty Project groups (one line each:
-  "<name> (<link: id>) has no item or intention yet"), quiet apps, backlogs, unrouted and
-  low-confidence items, stopped schedules, failed or missing tasks and orphans, claim blocks,
-  fading, watch items that ended, checks due. One line each, naming the app or project. Items that
-  are "still open" from Step 6 say so. Counts skipped for the budget say so in one line. A night
-  with nothing to say says "Nothing needs you tonight."
+  says. **No title line.** Exactly this shape:
+  ```
+  ## Action Required
+  - <one bullet per finding, most important first>
+  ## Yesterday's Activity
+  - <App>: <what was done yesterday, from Step 4's rows>   (one bullet per app; "Nothing logged." when none)
+  ```
+  - **Dates** are friendly everywhere: "Oct 15", never 2026-10-15.
+  - **Every record is a markdown link** `[Name](https://alfredv5vibe.vercel.app/<id>)`, never a
+    bare URL: overdue and deadline intentions, inbox items, projects (to the group link,
+    `https://alfredv5vibe.vercel.app/groups/detail/<group_id>`).
+  - **Order under Action Required:** time-sensitive first (overdue intentions; deadlines, the urgent
+    ones first; failed or missing tasks, stopped schedules and orphan runs, each suggested as **a bug
+    to log**: "Log a bug: <schedule> has had no ok run since <date>."), then anything waiting on Alex,
+    then the projects, then the rest: the over-limit count, claim blocks, fading, quiet apps, the
+    inbox, watch items that ended, checks due.
+  - **Projects:** one bullet per project with a finding, its name the link, then its estimated
+    finish (count 2g), and as sub-bullets its stall or overrun, its scope changes (each with its
+    reason) and, for an empty Project group, "No item or intention yet."
+  - **Quiet apps** on one bullet: "Quiet: Jobs (3 days), Ken (unknown)".
+  - **The inbox** on one bullet: count 3e's line.
+  - Items that are "still open" from Step 6 say so. Counts skipped for the budget say so in one
+    bullet. A night with nothing under Action Required says "- Nothing needs you tonight."
 - **`flags`**: an object with one key per count, each a list of what you kept (an empty list when
   the count ran and found nothing; leave out a key whose count was skipped): `quiet_apps`,
   `stalled`, `waiting_on_alex`, `overruns`, `over_limit`, `scope_changes`, `empty_projects`,
@@ -325,7 +373,7 @@ errors, STOP with `failure_kind: "note_write"`.
 ### Step 8 — Nudges, watch items and checks
 
 1. **Nudges** (`pushes_per_day`, `push_time`). Take the inbox items raised in Step 6, most important
-   first: waiting on Alex, then overrun, stalled, overdue, proposals, fading. Send **at most
+   first: waiting on Alex, then overrun, stalled, overdue, scan gaps, proposals, fading. Send **at most
    `pushes_per_day`**, less any reminders an earlier run today already sent (`earlier_run_id`'s
    `details.reminders_sent`, from Step 2.3's read): one `create_reminder` per item, `inbox_id` its
    id, `text` its first line without "Overwatch: ", and `due_at`
@@ -343,7 +391,7 @@ A failed call here is SKIPPED, never STOP.
 
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-- **`details`**, always: `local_date`, `prompt_version: "2026-10-25d"`, `manual`, `plan_id`, the
+- **`details`**, always: `local_date`, `prompt_version: "2026-10-26b"`, `manual`, `plan_id`, the
   count of each flag, `note_id`, `inbox_item_ids`, `reminders_sent`, `apps_pulled`,
   `alfred_calls`, `paused`, `skipped` and `settings_missing`; also `earlier_run_id` when Step 2.3
   kept one, or `duplicate_of` when it stopped there.
@@ -366,7 +414,7 @@ Run: <run id>
 ### Step 10 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-25d`;
+- `PROMPT VERSION: 2026-10-26b`;
 - the run id and its status, and `manual: true` or `manual: false`; `duplicate_of` if it stopped;
 - the count of each flag, the note id, the inbox item ids and the reminders sent;
 - `alfred_calls` and whether it paused;
