@@ -5,6 +5,8 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
+Skill version: 2026-10-26a
+
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
 It is allowed to be pushy, within the limits in its own plan.
@@ -40,7 +42,10 @@ Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
    `get_inbox` per app for backlogs, and `get_overwatch_watch` for what is in force.
 4. **Answer in order of importance**, a line each, naming the app or project. For a deep
    dive into one app's items, hand over to that app's skill (`wb-planning`, `job-search`,
-   `sam-practice` and the others) rather than doing its work here.
+   `sam-practice` and the others) rather than doing its work here. Use the note's wording
+   rules (below): friendly dates, records as links, the inbox as "<N> items. Nothing
+   urgent." unless something is urgent, and a stopped schedule or task offered as a bug to
+   log.
 
 ### Projects
 
@@ -100,6 +105,10 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
   practice pass, a tagged transaction, an application sent). When the recipe does not say,
   log nothing for that app. Don't guess. `current_state` says what the app is for right now;
   use it to judge whether a quiet app matters ("finished, kept for reference" does not).
+- **When an app was last used.** If the activity log has no row for an app, its real last
+  use is in its own data: the newest record its recipe names (the last job application, the
+  last Ken attempt, the last Money review). Use that date. "Unknown" is only for an app with
+  no data at all.
 - **Fading.** A candidate is old by the dates; it is fading only if it still means to happen.
   Not fading: reference items, someday-style holders, recurring intentions that are simply
   between occurrences, and anything a `focus` or `keep_an_eye_on` watch item names. Fading:
@@ -109,11 +118,22 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
   names a cutoff: "by", "before", "claim by", "expires", "points expire", "deadline",
   "due", "renew", "cancel before", or a month, a date, a season or "end of the year". A bare
   time period with no cutoff ("for a month", "weekly") is not a deadline. Quote the words
-  that make it one.
+  that make it one, and when they name a date, read it as the next such date ("by March"
+  in October is next March).
 - **The note.** Follow the plan's `instructions` for focus and tone. Plain, short lines,
   most important first, each naming the app or project and what Alex can do. Say what
   changed since the last note, not everything that is true. Never soften a count, and never
-  invent one. A quiet night is one line: "Nothing needs you tonight."
+  invent one. The prompt sets its shape (no title; "Action Required", then "Yesterday's
+  Activity"); the wording within it is yours:
+  - friendly dates, "Oct 15", never 2026-10-15;
+  - every record by name, as a link: `[Renew passport](https://alfredv5vibe.vercel.app/<id>)`,
+    never a bare URL;
+  - quiet apps as "Jobs (3 days)";
+  - a schedule or task that stopped is **a bug to log**, said that way: "Log a bug:
+    notify-dispatch has had no ok run since Oct 20." The same in chat: offer to log it.
+  - Yesterday's Activity is one bullet per app, the thing done, not the rows: "Sam: 3
+    practice passes", "Money: 14 transactions reviewed".
+  - A quiet night under Action Required is one bullet: "Nothing needs you tonight."
 
 ## The weekly run (scheduled task `overwatch/weekly`)
 

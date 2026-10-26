@@ -5,6 +5,8 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
+Skill version: 2026-10-26a
+
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
 ## The copy-box rule (applies to every reply this skill produces)
@@ -37,17 +39,25 @@ in a table. It sits on top of the copy-box rule; it does not replace it.
 
 - **Every action he takes is a numbered step.** Nothing he must do sits in
   prose above, between or after the steps.
+- **One physical action is one step.** Copying from a file and pasting it into
+  claude.ai is one step, not two.
 - **The step line** is the number in bold (**1.**), then the location, a colon,
   then the action. Only the number is bold.
 - **The location is always stated and exact.** Use one of: "Worktree
   terminal", "Worktree CLI", "Worktree VS Code window", "**MAIN** terminal",
-  "**MAIN** CLI", "**MAIN** VS Code window", "**NEW CLAUDE AI THREAD**", "This
-  chat", "Supabase SQL editor", "Chrome", "Switchboard", "Text editor". MAIN and NEW
-  CLAUDE AI THREAD are always in bold capitals, because they are the locations
-  that differ from where he would normally be. Every other location is plain
-  text. For a worktree, name it when more than one is open.
-- **Under the step line comes the copy box**, if there is one.
+  "**MAIN** CLI", "**MAIN** VS Code window", "**START NEW CLAUDE AI THREAD**",
+  "**IN THAT SAME CLAUDE AI THREAD**", "This chat", "Supabase SQL editor",
+  "Chrome", "Switchboard", "Text editor". MAIN and the two CLAUDE AI THREAD
+  locations are always in bold capitals, because they are the locations that
+  differ from where he would normally be. The first step in a new thread says
+  START NEW CLAUDE AI THREAD; every later step in it says IN THAT SAME CLAUDE AI
+  THREAD. Every other location is plain text. For a worktree, name it when more
+  than one is open.
+- **Under the step line comes the copy box**, if there is one. **A terminal copy
+  box is a single line**: several PowerShell commands are chained with
+  semicolons, never put on separate lines.
 - **Then an "Expected:" line**, only when there is something specific to see.
+  **Every terminal step has one**, so a command that fails silently shows.
 - **Then a "Feedback:" line**, only when he must send something back. Use
   "screenshot" when the result is visual, "pass or fail" when it is a behavior,
   and "paste the result cell here" for SQL. Leave the line off entirely when
@@ -190,8 +200,18 @@ parseable step segment, so the alfred-v5 prompt guard blocks it.
 **EVERY prompt gets a tag — including the short ones.** "Confirmed, go ahead",
 "yes, claim it", "no drift" all get a `Run tag:` line, for the same reason the
 long ones do: alfred-v5 blocks a prompt whose tag belongs to a different window,
-and it can only do that if there is a tag. A bare one-word reply Alex types
-himself is fine; anything this skill *writes* carries a tag.
+and it can only do that if there is a tag.
+
+### Nothing travels by hand
+
+- **Every message Alex sends to the CLI is a tagged prompt this skill writes**,
+  never a bare reply he types. A mid-step confirmation or answer takes a letter
+  step: `s18c` after `s18b`.
+- **CLI output comes back through `get_recent_clips` by run tag**, never pasted.
+  If the clip is missing, say so and wait; do not ask him to paste it.
+- **A changed skill is offered from main**, after its checkpoint, as the complete
+  file with its version line at the top ("Skill version: 2026-10-26a"), shown as
+  a skill update card. Never ask him to copy a skill out of a worktree.
 
 ### One prompt at a time
 
@@ -277,11 +297,12 @@ If the last report raised anything, deal with it first. Closeout waits.
 ### Changing a skill
 
 Skills live in the repo at `.claude/skills/<name>/SKILL.md`. To change one,
-have the CLI edit that file, or give Alex the text to paste into it. Never hand
-him a zip.
+have the CLI edit that file. Never hand him a zip. The CLI adds or bumps the
+version line under the skill's title ("Skill version: 2026-10-26a").
 
-Once the change has landed, Alex copies the repo file into claude.ai himself:
-Settings, Skills, the skill, Content, Edit.
+Once the change has landed in main (a checkpoint), Claude offers the complete
+file from main, with its version line, as a skill update card. Never from a
+worktree and never as a fragment ("Nothing travels by hand", above).
 
 ### Friction: log it, and don't fix it yet
 
@@ -672,10 +693,8 @@ running `claims.mjs status`.
 
 ## Getting the report back
 
-The report reaches this thread in one of two ways.
-
-**1. From the clipboard (the normal path).** Alex sends just `cli`, or says the
-CLI responded, finished or replied, in any wording, without pasting anything.
+The report reaches this thread one way: from the clipboard, by run tag. Alex
+sends just `cli`, or says the CLI responded, finished or replied, in any wording.
 
 - Call `get_recent_clips` with `source: "cli"` and `run_tag` set to the tag of the
   most recent prompt this thread issued.
@@ -687,15 +706,13 @@ CLI responded, finished or replied, in any wording, without pasting anything.
   is yours; with several CLIs running, it often is not.
 - If this thread issued no tagged prompt and more than one unarchived CLI report
   exists, list them the same way and ask.
-- If the tool is not available in this thread, say so and ask Alex to paste the
-  report instead.
+- If the tool is not available in this thread, say so and stop: the fix is the
+  connector, not a paste ("Nothing travels by hand"). If Alex pastes output
+  anyway, use it, and say in one line that the clip should be fetched next time.
 
-**2. Pasted.** Alex pastes the CLI's output into the chat. Use it as before.
-
-Either way, the response format below is the same. **After responding, archive
+The response format below is the same either way. **After responding, archive
 the report's inbox item** with `archive_inbox_item`, passing the `inbox_id` from
-`get_recent_clips` (not the clip id), so it leaves Alex's inbox. A pasted report
-has no inbox item to archive.
+`get_recent_clips` (not the clip id), so it leaves Alex's inbox.
 
 If a report was pushed without a run tag, or in a repo other than the one this
 thread is working on, mention that in one line in the TLDR.
@@ -808,7 +825,7 @@ with its own block. SQL checks here follow Rule 5 too.
 - **Inside a part, steps that prepare for the test go under a "Set up"
   subheading**: starting servers, navigating to the screen, creating test
   records. The steps that check something go under a "Testing" subheading.
-  Numbering runs straight through both.
+  Numbering runs straight through both, and **restarts at 1 in each part**.
 - **Every step names exactly what to touch**: the screen, the heading, the
   button label, the record. Never "any group" or "for example". Before writing
   the steps, look up live data with the MCP tools so the step names a group or
@@ -963,7 +980,7 @@ and ask Claude for get_reminders with state all: it should be cancelled.
 Press Undo: it's scheduled again."):
 
 ````
-**1.** **NEW CLAUDE AI THREAD**: paste
+**1.** **START NEW CLAUDE AI THREAD**: paste
 ```
 Use create_reminder to remind me "Test R3: discard" 30 minutes from now.
 Report only the reminder id and the inbox item id.
@@ -976,7 +993,7 @@ Feedback: paste the reply here.
 
 ---
 
-**3.** **NEW CLAUDE AI THREAD**: in the same thread, paste
+**3.** **IN THAT SAME CLAUDE AI THREAD**: paste
 ```
 Call get_reminders with state "all". Report the state and cancel reason
 of "Test R3: discard", verbatim.
@@ -991,7 +1008,7 @@ Expected: the item is back in the inbox.
 
 ---
 
-**5.** **NEW CLAUDE AI THREAD**: in the same thread, paste
+**5.** **IN THAT SAME CLAUDE AI THREAD**: paste
 ```
 Call get_reminders with state "all" again. Report the state of
 "Test R3: discard", verbatim.

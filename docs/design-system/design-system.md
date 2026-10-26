@@ -267,6 +267,20 @@ something. Quietly wrong beats invisible.
 
 ---
 
+## Every link is a real anchor
+
+**Anything that navigates is an `<a href>`** (React Router's `Link`, or `AppLink` for a view),
+so middle-click, Ctrl-click and "open in new tab" work. That includes whole-row links: make
+the row's title the `Link` and stretch it over the row (`after:absolute after:inset-0` on
+the link, `relative` on the row), and lift any control inside the row above it
+(`relative z-10`). Never a `div` or `article` with an `onClick` that navigates.
+
+Added by Alex on 2026-10-26 (Overwatch, Step 31b) as a rule for every screen. Older screens
+that still navigate with `onClick` (the inbox list card among them) are brought in line when
+they are next changed.
+
+---
+
 ## Card titles in a list
 
 **`font-medium`, at the body size. Not bold.** `EventCard` on the Schedule is the

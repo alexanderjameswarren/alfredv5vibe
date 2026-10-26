@@ -30,7 +30,7 @@ nightly counts.
 > The task runs the text that was pasted, not the text in this repo. So the prompt carries a
 > version, and Step 11 echoes it.
 >
-> ### `PROMPT VERSION: 2026-10-25b`
+> ### `PROMPT VERSION: 2026-10-26a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -44,7 +44,7 @@ nightly counts.
    everything below "THE PROMPT" line as its instructions.
 3. **Run it once by hand** and say in the chat that this run is manual (Step 2 then runs it even
    on another day). Check: a `platform_runs` row for `overwatch` / `weekly` closed `ok`; the weekly
-   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-10-25b`.
+   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-10-26a`.
 
 ---
 
@@ -53,7 +53,7 @@ nightly counts.
 ---
 
 You are running Overwatch's weekly review for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-10-25b`. **First, load the `overwatch` skill.** It tells you how to read the
+`PROMPT VERSION: 2026-10-26a`. **First, load the `overwatch` skill.** It tells you how to read the
 week, what makes a friction pattern and its fix, when a parked project has become possible, and how
 to word the note. Follow these steps in order for everything else. **Where the skill and these
 steps disagree, these steps win.** Do not improvise.
@@ -84,7 +84,9 @@ steps disagree, these steps win.** Do not improvise.
    the name it belongs to, in parentheses.
 
 **Whenever a step says STOP: go to Step 10 and close the run as `failed`, then Step 11.** A step
-that says SKIP leaves that part out, adds its name and the verbatim error to `skipped`, and goes on.
+that says SKIP leaves that part out, adds `{ "part": "<part>", "error": "<verbatim error>" }` to
+`skipped` (`part` is `count:<flags key>`, by its key in Step 10's flags, `inbox:<first line>` or
+`nudge:<tool>`; the tab turns these into plain words), and goes on.
 A run with anything in `skipped` closes `partial`. A part skipped only for a missing setting goes in
 `settings_missing`, not `skipped`.
 
@@ -209,7 +211,7 @@ Skip any whose first line matches an open one (Step 3.4). Keep each returned id.
 SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismatch`.
 
 1. **One per friction pattern** (Step 6.3), kind `friction_fix`. First line:
-   `Overwatch: friction fix — <process>`. Then "<count> open entries in <friction_window_days>
+   `Overwatch: friction fix for <process> — <count> entries`. Then "<count> open entries in <friction_window_days>
    days:", one line per
    entry, then this paste-ready prompt, filled in from the skill's proposal:
    ```
@@ -220,7 +222,7 @@ SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismat
    `Overwatch: new releases — <local_date>`. One line per entry: `<title> (<source>, <entry_key>):
    <summary>. Touches: <project or platform>.`
 3. **One per newly possible parked project** (Step 4.2), kind `newly_possible`. First line:
-   `Overwatch: newly possible — <group name>`. Then its `waiting_on`, what makes it possible, and:
+   `Overwatch: <group name> may be newly possible — <local_date>`. Then its `waiting_on`, what makes it possible, and:
    ```
    FOR CLAUDE.AI, NOT THE CLI
    Overwatch thinks <group name> may no longer be blocked: it was waiting on "<waiting_on>", and <the activity or release>. Check with Alex whether to take it off the shelf; if so, clear hurdle_kind and waiting_on with update_project_plan.
@@ -239,11 +241,21 @@ SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismat
 
 1. **The weekly note:** `create_overwatch_note` with `period: "weekly"`, `for_date: <local_date>`,
    and:
-   - **`body`**: markdown, worded the way the skill says, in the plan's `instructions` voice: what
-     shipped, what progressed, by project and app; the week's nightly flags that stayed open; the
-     ideas list (count, oldest untouched, newly possible); new releases that matter; friction
-     patterns and the fixes proposed; estimate accuracy or why it waits; the drift audit, or when
-     it is next due. Items "still open" say so.
+   - **`body`**: markdown, worded the way the skill says, in the plan's `instructions` voice, with
+     the nightly note's rules: **no title line**; friendly dates ("Oct 15", never 2026-10-15);
+     **every record named as a markdown link** `[Name](https://alfredv5vibe.vercel.app/<id>)`
+     (projects to `https://alfredv5vibe.vercel.app/groups/detail/<group_id>`, inbox items to
+     their id), never a bare URL. Exactly this shape:
+     ```
+     ## Action Required
+     - <what this week needs from Alex, most important first: plan change, friction fixes, newly possible, new releases that matter, drift audit findings; "Nothing needs you this week." when none>
+     ## The Week
+     - <what shipped, then what progressed, by project and app; the week's nightly flags that stayed open>
+     - Ideas: <count>, oldest untouched <name as a link>; newly possible <names as links>
+     - Estimates: <accuracy, or why it waits>
+     - Drift audit: <findings, or when it is next due>
+     ```
+     Items "still open" say so.
    - **`flags`**: `shipped`, `progressed`, `ideas` (count, oldest), `newly_possible`,
      `new_releases`, `friction_patterns`, `estimate_accuracy`, `drift_audit` (the findings, or
      `not_due`), `inbox_items`, `skipped`, `settings_missing`.
@@ -257,7 +269,7 @@ SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismat
    `push_time` has passed. A failed call is SKIPPED.
 3. **Close the run:** `update_platform_run` with the run id, **once**.
    - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-   - **`details`**, always: `local_date`, `prompt_version: "2026-10-25b"`, `manual`, `plan_id`,
+   - **`details`**, always: `local_date`, `prompt_version: "2026-10-26a"`, `manual`, `plan_id`,
      `drift_audit` (true or false), `note_id`, `inbox_item_ids`, `reminders_sent`, `new_releases`,
      `friction_patterns`, `shipped_count`, `skipped`, `settings_missing`, and `not_weekly_day` when
      it applies.
@@ -280,7 +292,7 @@ Run: <run id>
 ### Step 11 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-25b`;
+- `PROMPT VERSION: 2026-10-26a`;
 - the run id and its status, and `manual: true` or `manual: false`;
 - whether the drift audit ran; the note id, the inbox item ids and the reminders sent;
 - `skipped` and `settings_missing`, if any;
