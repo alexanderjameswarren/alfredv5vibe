@@ -240,6 +240,7 @@ import {
 const getContextsTool = defineTool({
   name: "get_contexts",
   tier: 1,
+  tables: { reads: ["contexts"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const shared = args.shared as boolean | undefined;
     // Shared read (MCP read access S8). Defaults kept from before: up to 50
@@ -256,6 +257,7 @@ const getContextsTool = defineTool({
 
 const checkPlatformConformanceTool = defineTool({
   name: "check_platform_conformance",
+  tables: { reads: ["platform.conformance", "platform.conformance_failures", "platform.anon_exposure"], writes: [] },
   // Read tool — no gate. Calls the public SECURITY DEFINER wrapper for
   // platform.check_conformance() (the `platform` schema itself isn't
   // reachable via PostgREST). Return shape is whatever the SQL function
@@ -271,6 +273,10 @@ const checkPlatformConformanceTool = defineTool({
 
 const getPlatformContractTool = defineTool({
   name: "get_platform_contract",
+  tables: {
+    reads: ["platform.registry", "platform.conformance", "platform.conformance_failures", "platform.anon_exposure"],
+    writes: [],
+  },
   // Read tool — no gate. Public wrapper for the full contract snapshot:
   // rules for new tables and tools, registry of platform-managed tables,
   // and a live conformance report. Read this first when designing.
@@ -308,6 +314,7 @@ function checkSuggestedStatus(tool: string, value: unknown): string | undefined 
 
 const createInboxItemTool = defineTool({
   name: "create_inbox_item",
+  tables: { reads: ["apps"], writes: ["inbox"] },
   // Tier 1: the inbox IS the human-approval gateway. This write appends to
   // a staging table that affects nothing until triaged in the Alfred UI.
   // Gating it would mean confirming a capture in order to queue it for
@@ -500,6 +507,11 @@ const createInboxItemTool = defineTool({
 const getItemsTool = defineTool({
   name: "get_items",
   tier: 1,
+  // platform_search_items reads items, notes, executions and intents; includes read the rest.
+  tables: {
+    reads: ["items", "notes", "executions", "intents", "item_group_members", "item_groups", "group_types", "collection_items", "item_collections"],
+    writes: [],
+  },
   handler: async (args: Record<string, unknown>, ctx) => {
     return await readItems(ctx, "get_items", args, {
       text: args.search_text as string | undefined,
@@ -512,6 +524,10 @@ const getItemsTool = defineTool({
 const searchItemsTool = defineTool({
   name: "search_items",
   tier: 1,
+  tables: {
+    reads: ["items", "notes", "executions", "intents", "contexts", "item_group_members", "item_groups", "group_types", "collection_items", "item_collections"],
+    writes: [],
+  },
   handler: async (args: Record<string, unknown>, ctx) => {
     const query = args.query;
     if (typeof query !== "string" || query.trim() === "") {
@@ -530,6 +546,8 @@ const searchItemsTool = defineTool({
 const getExecutionHistoryTool = defineTool({
   name: "get_execution_history",
   tier: 1,
+  // Through platform_search_executions.
+  tables: { reads: ["executions", "events", "intents", "notes"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const LIMIT = clampLimit(args.limit as number | undefined);
     const result = await getExecutionHistory(ctx.db, {
@@ -557,6 +575,10 @@ const getExecutionHistoryTool = defineTool({
 const getIntentsTool = defineTool({
   name: "get_intents",
   tier: 1,
+  tables: {
+    reads: ["intents", "contexts", "notes", "item_group_members", "item_groups", "group_types", "item_collections"],
+    writes: [],
+  },
   handler: async (args: Record<string, unknown>, ctx) => {
     // Shared read (MCP read access S8): every filter in the query before the page
     // window, the total counted over the same query. Now returns description.
@@ -594,6 +616,7 @@ const getIntentsTool = defineTool({
 const getEventsTool = defineTool({
   name: "get_events",
   tier: 1,
+  tables: { reads: ["events", "contexts", "intents"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     return await readTable(ctx, {
       tool: "get_events",
@@ -616,6 +639,7 @@ const getEventsTool = defineTool({
 const getCollectionsTool = defineTool({
   name: "get_collections",
   tier: 1,
+  tables: { reads: ["item_collections", "collection_items", "items"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     // Defaults kept from before: up to 50, archived included, by name. Members come from
     // collection_items (item_collections.items is a frozen pre-migration snapshot, never read).
@@ -634,6 +658,7 @@ const getCollectionsTool = defineTool({
 const getInboxTool = defineTool({
   name: "get_inbox",
   tier: 1,
+  tables: { reads: ["inbox"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const aiStatus = args.ai_status as string | undefined;
     const sourceType = args.source_type as string | undefined;
@@ -666,6 +691,7 @@ const getInboxTool = defineTool({
 const getTagsTool = defineTool({
   name: "get_tags",
   tier: 1,
+  tables: { reads: ["items", "intents"], writes: [] },
   handler: async (_args: Record<string, unknown>, ctx) => {
     const result = await getTags(ctx.db, {});
     if (result.error) throw new Error(`get_tags: ${result.error}`);
@@ -675,6 +701,7 @@ const getTagsTool = defineTool({
 
 const updateInboxItemTool = defineTool({
   name: "update_inbox_item",
+  tables: { reads: ["inbox", "apps"], writes: ["inbox"] },
   // Tier 2: updates existing rows. Audited via trigger. Rollback available
   // through platform.rollback_audit_entry() if a bad enrichment lands.
   tier: 2,
@@ -737,6 +764,8 @@ const updateInboxItemTool = defineTool({
 const getDatabaseSchemaTool = defineTool({
   name: "get_database_schema",
   tier: 1,
+  // get_schema_info reads platform.registry and the Postgres catalogs.
+  tables: { reads: ["platform.registry"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const result = await getDatabaseSchema(ctx.db, {
       table_name: args.table_name as string | undefined,
@@ -749,6 +778,7 @@ const getDatabaseSchemaTool = defineTool({
 const getSamSongsTool = defineTool({
   name: "get_sam_songs",
   tier: 1,
+  tables: { reads: ["sam_songs", "sam_song_measures"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     // Shared read (MCP read access S8b). It used to return every song unbounded;
     // now up to 50 by default, with offset for the rest. measures (heavy) is left
@@ -769,6 +799,7 @@ const getSamSongsTool = defineTool({
 const getSamSessionsTool = defineTool({
   name: "get_sam_sessions",
   tier: 1,
+  tables: { reads: ["sam_sessions", "sam_songs", "sam_snippets"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const params = {
       song_id: args.song_id as string | undefined,
@@ -798,6 +829,7 @@ const getSamSessionsTool = defineTool({
 const getSamPassesTool = defineTool({
   name: "get_sam_passes",
   tier: 1,
+  tables: { reads: ["sam_passes", "sam_songs", "sam_snippets"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const params = {
       song_id: args.song_id as string | undefined,
@@ -831,6 +863,7 @@ const getSamPassesTool = defineTool({
 const getSamSnippetsTool = defineTool({
   name: "get_sam_snippets",
   tier: 1,
+  tables: { reads: ["sam_snippets", "sam_songs"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     // Shared read (MCP read access S8b). It used to return every snippet
     // unbounded; now up to 50 by default, with offset for the rest. notes and
@@ -854,6 +887,7 @@ const getSamSnippetsTool = defineTool({
 const getSamSongMeasuresTool = defineTool({
   name: "get_sam_song_measures",
   tier: 1,
+  tables: { reads: ["sam_songs", "sam_song_measures", "sam_song_lyrics", "sam_song_fingerings"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const result = await getSamSongMeasures(ctx.db, {
       song_id: args.song_id as string,
@@ -868,6 +902,7 @@ const getSamSongMeasuresTool = defineTool({
 const getSamLyricWorkspaceTool = defineTool({
   name: "get_sam_lyric_workspace",
   tier: 1,
+  tables: { reads: ["sam_song_lyrics"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const result = await getSamLyricWorkspace(ctx.db, {
       song_id: args.song_id as string,
@@ -881,6 +916,7 @@ const getSamLyricWorkspaceTool = defineTool({
 const placeSamLyricsTool = defineTool({
   name: "place_sam_lyrics",
   tier: 2,
+  tables: { reads: ["sam_song_lyrics", "sam_song_measures"], writes: ["sam_song_lyrics"] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const result = await placeSamLyrics(ctx.db, {
       song_id: args.song_id as string,
@@ -895,6 +931,7 @@ const placeSamLyricsTool = defineTool({
 const updateSamSongMeasuresTool = defineTool({
   name: "update_sam_song_measures",
   tier: 2,
+  tables: { reads: ["sam_song_measures"], writes: ["sam_song_measures"] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const result = await updateSamSongMeasures(ctx.db, {
       song_id: args.song_id as string,
@@ -907,6 +944,7 @@ const updateSamSongMeasuresTool = defineTool({
 
 const loadSamLyricsTool = defineTool({
   name: "load_sam_lyrics",
+  tables: { reads: ["sam_song_lyrics"], writes: ["sam_song_lyrics"] },
   // Tier 2: with replace=true this is destructive of prior workspace state.
   // Audited via trigger; rollback via platform.rollback_audit_entry().
   // Not tier 3 because forcing `confirmed: true` on every routine lyric load

@@ -42,9 +42,21 @@ export interface EnvelopeMeta {
   notes?: string[];
 }
 
+export interface ToolTables {
+  reads: string[];
+  writes: string[];
+}
+
 export interface DefineToolOptions<Args, Result> {
   name: string;
   tier: Tier;
+  /**
+   * The tables (and views) the tool reads and writes, as literal string arrays
+   * placed before the handler, so the inventory and mcp/tables.test.mjs can read
+   * them from source. An RPC-backed tool lists the tables the RPC touches;
+   * platform objects are schema-qualified; "*" (reads only) is a generic reader.
+   */
+  tables: ToolTables;
   handler: (args: Args, ctx: Context) => Promise<Result>;
   /**
    * Tier 3 only, optional. Builds a human-readable description of what the

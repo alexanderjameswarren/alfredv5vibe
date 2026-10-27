@@ -204,6 +204,7 @@ const INSERT_BATCH_SIZE = 500;
 
 export const createSamSongTool = defineTool({
   name: "create_sam_song",
+  tables: { reads: [], writes: ["sam_songs"] },
   tier: 3,
   handler: async (args: Record<string, unknown>, ctx) => {
     const title = args.title as string | undefined;
@@ -287,6 +288,7 @@ export const createSamSongTool = defineTool({
 
 export const appendSamMeasuresTool = defineTool({
   name: "append_sam_measures",
+  tables: { reads: ["sam_song_measures", "sam_songs"], writes: ["sam_song_measures", "sam_songs"] },
   tier: 3,
   handler: async (args: Record<string, unknown>, ctx) => {
     const songId = args.songId as string | undefined;

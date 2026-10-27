@@ -88,6 +88,7 @@ function object(T: string, key: string, value: unknown): Record<string, unknown>
 
 export const getOverwatchPlanTool = defineTool({
   name: "get_overwatch_plan",
+  tables: { reads: ["overwatch_plans"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_overwatch_plan";
@@ -151,6 +152,7 @@ export function describeChange(
 
 export const createOverwatchPlanTool = defineTool({
   name: "create_overwatch_plan",
+  tables: { reads: ["overwatch_plans"], writes: ["overwatch_plans"] },
   tier: 3,
   propose: async (args: Record<string, unknown>, ctx) => {
     const T = "create_overwatch_plan";
@@ -178,6 +180,7 @@ export const createOverwatchPlanTool = defineTool({
 
 export const updateOverwatchChecksTool = defineTool({
   name: "update_overwatch_checks",
+  tables: { reads: ["overwatch_plans"], writes: ["overwatch_plans"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "update_overwatch_checks";
@@ -199,6 +202,7 @@ export const updateOverwatchChecksTool = defineTool({
 
 export const getOverwatchWatchTool = defineTool({
   name: "get_overwatch_watch",
+  tables: { reads: ["overwatch_watch"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_overwatch_watch";
@@ -228,6 +232,7 @@ export const getOverwatchWatchTool = defineTool({
 
 export const createOverwatchWatchTool = defineTool({
   name: "create_overwatch_watch",
+  tables: { reads: [], writes: ["overwatch_watch"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "create_overwatch_watch";
@@ -249,6 +254,7 @@ export const createOverwatchWatchTool = defineTool({
 
 export const updateOverwatchWatchTool = defineTool({
   name: "update_overwatch_watch",
+  tables: { reads: ["overwatch_watch"], writes: ["overwatch_watch"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "update_overwatch_watch";
@@ -275,6 +281,7 @@ export const updateOverwatchWatchTool = defineTool({
 
 export const getOverwatchNotesTool = defineTool({
   name: "get_overwatch_notes",
+  tables: { reads: ["overwatch_notes"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_overwatch_notes";
@@ -300,6 +307,7 @@ export const getOverwatchNotesTool = defineTool({
 
 export const createOverwatchNoteTool = defineTool({
   name: "create_overwatch_note",
+  tables: { reads: ["overwatch_plans"], writes: ["overwatch_notes"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "create_overwatch_note";
@@ -324,6 +332,7 @@ export const createOverwatchNoteTool = defineTool({
 
 export const getClaimBlocksTool = defineTool({
   name: "get_claim_blocks",
+  tables: { reads: ["claim_blocks"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_claim_blocks";
@@ -364,6 +373,7 @@ export const getClaimBlocksTool = defineTool({
 
 export const updateAppProfileTool = defineTool({
   name: "update_app_profile",
+  tables: { reads: [], writes: ["app_profiles"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "update_app_profile";
@@ -396,6 +406,7 @@ export const updateAppProfileTool = defineTool({
 
 export const recordSeenReleasesTool = defineTool({
   name: "record_seen_releases",
+  tables: { reads: ["overwatch_seen_releases"], writes: ["overwatch_seen_releases"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "record_seen_releases";
@@ -440,6 +451,7 @@ function frictionProcess(T: string, value: unknown): string {
 
 export const logFrictionTool = defineTool({
   name: "log_friction",
+  tables: { reads: [], writes: ["process_friction"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "log_friction";
@@ -467,6 +479,7 @@ export const logFrictionTool = defineTool({
 
 export const getFrictionTool = defineTool({
   name: "get_friction",
+  tables: { reads: ["process_friction"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_friction";
@@ -504,6 +517,7 @@ export const getFrictionTool = defineTool({
 
 export const updateFrictionTool = defineTool({
   name: "update_friction",
+  tables: { reads: ["process_friction"], writes: ["process_friction"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "update_friction";

@@ -214,6 +214,7 @@ async function screenshotNoteFor(ctx: Context, inboxId: string | null): Promise<
 
 export const getRecentClipsTool = defineTool({
   name: "get_recent_clips",
+  tables: { reads: ["clips", "inbox"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_recent_clips";
@@ -421,6 +422,7 @@ export const getRecentClipsTool = defineTool({
 
 export const getClipSlicesTool = defineTool({
   name: "get_clip_slices",
+  tables: { reads: ["clips", "inbox"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_clip_slices";
@@ -607,6 +609,8 @@ export function parseOutcome(T: string, value: unknown): { table: string; id: st
 
 export const archiveInboxItemTool = defineTool({
   name: "archive_inbox_item",
+  // Through the archive_inbox_item RPC, which can file the outcome as an item, intention, event or application.
+  tables: { reads: ["apps", "inbox"], writes: ["inbox", "items", "intents", "events", "job_applications"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "archive_inbox_item";

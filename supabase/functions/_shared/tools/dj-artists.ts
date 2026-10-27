@@ -49,6 +49,7 @@ const COLS = "id, name, mbid, yt_channel_id, tags, notes, last_explored_at";
 
 export const getDjArtistsTool = defineTool({
   name: "get_dj_artists",
+  tables: { reads: ["dj_artists"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const name = args.name as string | undefined;
@@ -119,6 +120,7 @@ export const getDjArtistsTool = defineTool({
 
 export const upsertDjArtistTool = defineTool({
   name: "upsert_dj_artist",
+  tables: { reads: ["dj_artists"], writes: ["dj_artists"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const name = (args.name as string | undefined)?.trim();
@@ -289,6 +291,7 @@ export const upsertDjArtistTool = defineTool({
 // Deleting the row would restore exactly that behaviour.
 export const recordDjArtistTagTool = defineTool({
   name: "record_dj_artist_tag",
+  tables: { reads: ["dj_tracks", "dj_playlists", "dj_playlist_tracks", "dj_artist_tags"], writes: ["dj_artist_tags"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const tag = ((args.tag as string | undefined) ?? "jazz").trim();
@@ -466,6 +469,8 @@ export const recordDjArtistTagTool = defineTool({
 // §14.19 happened once and should not happen twice.
 export const getDjArtistTagsTool = defineTool({
   name: "get_dj_artist_tags",
+  // dj_tag_review reads tags, plays and playlist tracks.
+  tables: { reads: ["dj_artist_tags", "dj_plays", "dj_tracks", "dj_playlist_tracks"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const LIMIT = clampLimit(args.limit as number | undefined);

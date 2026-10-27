@@ -200,6 +200,8 @@ function validateDate(v: unknown, name: string): string | undefined {
 
 export const getDjPlaysTool = defineTool({
   name: "get_dj_plays",
+  // Plus dj_artist_activity, dj_tag_coverage and dj_tag_candidates in their modes.
+  tables: { reads: ["dj_plays", "dj_tracks", "dj_artist_tags", "dj_playlist_tracks", "dj_playlists"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const mode = (args.mode as string | undefined) ?? "plays";
@@ -907,6 +909,8 @@ function withRenderedPositions(
 
 export const getDjManagedPlaylistsTool = defineTool({
   name: "get_dj_managed_playlists",
+  // Plus dj_playlist_engagement.
+  tables: { reads: ["dj_playlists", "dj_playlist_tracks", "dj_tracks", "dj_plays"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const mode = (args.mode as string | undefined) ?? "list";

@@ -127,6 +127,7 @@ async function suggestFor(T: string, db: Db, itemId: string): Promise<Obj> {
 
 export const getWbProjectsTool = defineTool({
   name: "get_wb_projects",
+  tables: { reads: ["wb_projects"], writes: [] },
   tier: 1,
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_projects";
@@ -150,6 +151,7 @@ export const getWbProjectsTool = defineTool({
 
 export const getWbPlannedItemsTool = defineTool({
   name: "get_wb_planned_items",
+  tables: { reads: ["wb_planned_items", "wb_planned_matches"], writes: [] },
   tier: 1,
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_planned_items";
@@ -195,6 +197,7 @@ export const getWbPlannedItemsTool = defineTool({
 
 export const getWbPlannedMatchesTool = defineTool({
   name: "get_wb_planned_matches",
+  tables: { reads: ["wb_planned_matches", "wb_transaction_list"], writes: [] },
   tier: 1,
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_planned_matches";
@@ -240,6 +243,7 @@ async function currentSettings(T: string, db: Db): Promise<Obj> {
 
 export const getWbSettingsTool = defineTool({
   name: "get_wb_settings",
+  tables: { reads: ["wb_settings"], writes: [] },
   tier: 1,
   handler: async (_args: Obj, ctx) => currentSettings("get_wb_settings", ctx.db),
 });
@@ -319,6 +323,14 @@ export function lowPoint(rows: Obj[], floor: number, extra: Map<string, number> 
 
 export const getWbFreeCashTool = defineTool({
   name: "get_wb_free_cash",
+  // wb_free_cash and wb_cash_projection, with the functions they call.
+  tables: {
+    reads: [
+      "wb_accounts", "wb_balance_snapshots", "wb_settings", "wb_planned_items", "wb_planned_matches", "wb_planned_skips",
+      "wb_splits", "wb_transactions", "wb_subscriptions", "wb_subscription_prices",
+    ],
+    writes: [],
+  },
   tier: 1,
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_free_cash";
@@ -373,6 +385,7 @@ export const getWbFreeCashTool = defineTool({
 
 export const getWbTrueCostTool = defineTool({
   name: "get_wb_true_cost",
+  tables: { reads: ["wb_true_cost", "wb_burn_rate"], writes: [] },
   tier: 1,
   handler: async (_args: Obj, ctx) => {
     const T = "get_wb_true_cost";
@@ -391,6 +404,13 @@ export const getWbTrueCostTool = defineTool({
 
 export const getWbCashProjectionTool = defineTool({
   name: "get_wb_cash_projection",
+  tables: {
+    reads: [
+      "wb_accounts", "wb_balance_snapshots", "wb_settings", "wb_planned_items", "wb_planned_matches", "wb_planned_skips",
+      "wb_splits", "wb_transactions", "wb_subscriptions", "wb_subscription_prices",
+    ],
+    writes: [],
+  },
   tier: 1,
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_cash_projection";
@@ -426,6 +446,7 @@ export const getWbCashProjectionTool = defineTool({
 
 export const upsertWbProjectTool = defineTool({
   name: "upsert_wb_project",
+  tables: { reads: ["wb_projects"], writes: ["wb_projects"] },
   tier: 2,
   handler: async (args: Obj, ctx) => {
     const T = "upsert_wb_project";
@@ -503,6 +524,11 @@ function itemFields(T: string, args: Obj): Obj {
 
 export const upsertWbPlannedItemTool = defineTool({
   name: "upsert_wb_planned_item",
+  // wb_planned_start_from_history, then wb_suggest_planned_matches (which writes suggested matches).
+  tables: {
+    reads: ["wb_planned_items", "wb_planned_matches", "wb_splits", "wb_transactions"],
+    writes: ["wb_planned_items", "wb_planned_matches"],
+  },
   tier: 2,
   handler: async (args: Obj, ctx) => {
     const T = "upsert_wb_planned_item";
@@ -628,6 +654,10 @@ export async function matchPlan(T: string, db: Db, args: Obj): Promise<Obj> {
 
 export const createWbPlannedMatchTool = defineTool({
   name: "create_wb_planned_match",
+  tables: {
+    reads: ["wb_planned_items", "wb_splits", "wb_transaction_list", "wb_planned_matches"],
+    writes: ["wb_planned_matches", "wb_planned_items"],
+  },
   tier: 3,
   propose: async (args: Obj, ctx) => {
     const p = await matchPlan("create_wb_planned_match", ctx.db, args);
@@ -670,6 +700,8 @@ export const createWbPlannedMatchTool = defineTool({
 
 export const updateWbPlannedMatchTool = defineTool({
   name: "update_wb_planned_match",
+  // Through wb_confirm_planned_match.
+  tables: { reads: ["wb_planned_items", "wb_planned_matches"], writes: ["wb_planned_matches", "wb_planned_items"] },
   tier: 2,
   handler: async (args: Obj, ctx) => {
     const T = "update_wb_planned_match";
@@ -692,6 +724,7 @@ export const updateWbPlannedMatchTool = defineTool({
 
 export const setWbTransactionProjectTool = defineTool({
   name: "set_wb_transaction_project",
+  tables: { reads: ["wb_splits"], writes: ["wb_splits"] },
   tier: 2,
   handler: async (args: Obj, ctx) => {
     const T = "set_wb_transaction_project";
@@ -743,6 +776,7 @@ function settingsFields(T: string, args: Obj): Obj {
 
 export const updateWbSettingsTool = defineTool({
   name: "update_wb_settings",
+  tables: { reads: ["wb_settings"], writes: ["wb_settings"] },
   tier: 3,
   propose: async (args: Obj, ctx) => {
     const T = "update_wb_settings";
@@ -773,6 +807,7 @@ const SUMMARY_COLUMNS =
 
 export const getWbProjectSummaryTool = defineTool({
   name: "get_wb_project_summary",
+  tables: { reads: ["wb_project_summary"], writes: [] },
   tier: 1,
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_project_summary";
@@ -798,6 +833,7 @@ const MISSED_COLUMNS =
 
 export const getWbMissedDatesTool = defineTool({
   name: "get_wb_missed_dates",
+  tables: { reads: ["wb_planned_unmatched"], writes: [] },
   tier: 1,
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_missed_dates";
@@ -839,6 +875,7 @@ const dateKey = (itemId: unknown, occ: unknown) => `${itemId}|${occ ?? ""}`;
 
 export const markWbMissedDatesNotNeededTool = defineTool({
   name: "mark_wb_missed_dates_not_needed",
+  tables: { reads: ["wb_planned_items", "wb_planned_skips", "wb_planned_unmatched"], writes: ["wb_planned_skips"] },
   tier: 2,
   handler: async (args: Obj, ctx) => {
     const T = "mark_wb_missed_dates_not_needed";
@@ -907,6 +944,7 @@ export const SET_BACK_HINT =
 
 export const unconfirmWbPlannedMatchTool = defineTool({
   name: "unconfirm_wb_planned_match",
+  tables: { reads: ["wb_planned_matches", "wb_planned_items"], writes: ["wb_planned_matches"] },
   tier: 2,
   handler: async (args: Obj, ctx) => {
     const T = "unconfirm_wb_planned_match";
@@ -935,6 +973,15 @@ export const unconfirmWbPlannedMatchTool = defineTool({
 
 export const getWbActionItemsTool = defineTool({
   name: "get_wb_action_items",
+  // wb_action_items reads across Money, plus inbox, intents and platform_runs for its own checks.
+  tables: {
+    reads: [
+      "inbox", "intents", "platform_runs", "wb_account_latest", "wb_accounts", "wb_balance_snapshots", "wb_planned_items",
+      "wb_planned_matches", "wb_planned_skips", "wb_planned_unmatched", "wb_review_queue", "wb_rule_health", "wb_settings",
+      "wb_subscription_overview", "wb_subscriptions", "wb_subscription_prices", "wb_splits", "wb_transactions", "wb_true_cost",
+    ],
+    writes: [],
+  },
   tier: 1,
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_action_items";

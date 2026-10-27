@@ -21,6 +21,8 @@ import { readSongScores } from "../samScoresRead.ts";
 
 export const getSamSongScoresTool = defineTool({
   name: "get_sam_song_scores",
+  // A read that refreshes stale scores first (replace_sam_song_scores), so it writes the cache.
+  tables: { reads: ["sam_songs", "sam_song_measures", "sam_song_scores"], writes: ["sam_song_scores"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const { data, meta } = await readSongScores(ctx.db, args);

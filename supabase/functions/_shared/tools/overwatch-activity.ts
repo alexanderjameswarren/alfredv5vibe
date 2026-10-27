@@ -70,6 +70,7 @@ function oneOf<V extends string>(T: string, key: string, value: unknown, allowed
 
 export const getActivityTool = defineTool({
   name: "get_activity",
+  tables: { reads: ["activity"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_activity";
@@ -113,6 +114,7 @@ export const getActivityTool = defineTool({
 
 export const logActivityTool = defineTool({
   name: "log_activity",
+  tables: { reads: ["activity"], writes: ["activity"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "log_activity";

@@ -29,6 +29,10 @@ interface AlbumTrackInput {
 // a dismissal has to be able to overwrite a proposal.
 export const recordDjAlbumTool = defineTool({
   name: "record_dj_album",
+  tables: {
+    reads: ["dj_albums", "dj_album_tracks", "dj_tracks", "dj_plays"],
+    writes: ["dj_albums", "dj_album_tracks", "dj_tracks"],
+  },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const title = (args.title as string | undefined)?.trim();
@@ -271,6 +275,8 @@ export const recordDjAlbumTool = defineTool({
 // ---------------------------------------------------------------------------
 export const getDjAlbumsTool = defineTool({
   name: "get_dj_albums",
+  // Through dj_album_coverage.
+  tables: { reads: ["dj_albums", "dj_album_tracks", "dj_tracks", "dj_plays"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const LIMIT = clampLimit(args.limit as number | undefined);
