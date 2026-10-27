@@ -26,6 +26,7 @@
     "prebuild": "node scripts/prebuild.js",
     "inline:repair-script": "node scripts/inline-note-duplicates.js",
     "schema:snapshot": "node scripts/schema-snapshot.mjs",
+    "inventory": "node scripts/inventory.mjs",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"

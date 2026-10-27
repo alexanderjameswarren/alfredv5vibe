@@ -11,6 +11,7 @@ import {
   kickSender,
   readLines,
   readSettings,
+  sendGroups,
   sendOutbox,
   sendingFile,
   senderLock,
@@ -161,6 +162,29 @@ test("sendOutbox: no network or no settings keeps everything; a 400 drops the ba
   const s = await sendOutbox({ outbox: ctx.outboxFile, withLock: noLock, settings, fetchImpl: fakeFetch([{ status: 400, body: { error: "bad body" } }]).impl });
   assert.deepEqual([s.dropped, s.kept], [2, 0]);
   assert.equal(existsSync(ctx.outboxFile), false);
+});
+
+test("sendGroups: block events batch; an inventory or summary goes alone, in order", () => {
+  const inv = { _kind: "inventory", parts: [{ kind: "tool", name: "x" }], open_work: [] };
+  const g = sendGroups([{ i: 0 }, { i: 1 }, inv, { i: 2 }, { _kind: "finish_summary", summary: { merge_commit: "abc1234" } }]);
+  assert.deepEqual(g.map((x) => [x.body.kind, x.items.length]),
+    [["claim_block", 2], ["inventory", 1], ["claim_block", 1], ["finish_summary", 1]]);
+  assert.deepEqual(g[1].body, { kind: "inventory", parts: [{ kind: "tool", name: "x" }], open_work: [] });
+});
+
+test("sendOutbox: an inventory is posted whole; a 500 on it keeps it and what follows", async () => {
+  const { ctx } = scratch();
+  writeFileSync(ctx.outboxFile, [{ i: 0 }, { _kind: "inventory", parts: [{ kind: "tool", name: "x" }], open_work: [] }, { i: 1 }]
+    .map((e) => JSON.stringify(e)).join("\n") + "\n");
+  const f = fakeFetch([{ status: 200, body: { ok: true, inserted: 1, rejected: [] } }, { status: 500, body: { ok: false, error: "db" } }]);
+  const s = await sendOutbox({ outbox: ctx.outboxFile, withLock: noLock, settings, fetchImpl: f.impl });
+  assert.deepEqual(f.seen.map((b) => b.kind), ["claim_block", "inventory"]);
+  assert.deepEqual([s.sent, s.kept], [1, 2]);
+  assert.equal(JSON.parse(readLines(ctx.outboxFile)[0])._kind, "inventory");
+  const again = await sendOutbox({ outbox: ctx.outboxFile, withLock: noLock, settings,
+    fetchImpl: fakeFetch([{ status: 200, body: { ok: true, parts: 1, open_work: 0 } }, { status: 200, body: { ok: true, inserted: 1, rejected: [] } }]).impl });
+  assert.deepEqual([again.sent, again.kept], [2, 0]);
+  assert.match(readFileSync(senderLog(ctx.outboxFile), "utf8"), /inventory sent: \{"parts":1,"open_work":0\}/);
 });
 
 test("sendOutbox: a leftover .sending file goes first, and the outbox is capped", async () => {

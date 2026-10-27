@@ -105,6 +105,31 @@ export function log(outbox, line, now = new Date()) {
 }
 
 /**
+ * The outbox in sending order. Block events (no `_kind`) go in batches of BATCH_SIZE; an event with `_kind`
+ * (inventory, finish_summary) is one request on its own, its other fields the body.
+ */
+export function sendGroups(events) {
+  const groups = [];
+  let batch = [];
+  const flush = () => {
+    if (batch.length) groups.push({ items: batch, body: { kind: "claim_block", events: batch } });
+    batch = [];
+  };
+  for (const e of events) {
+    if (e && typeof e._kind === "string") {
+      flush();
+      const { _kind, ...rest } = e;
+      groups.push({ items: [e], body: { kind: _kind, ...rest } });
+    } else {
+      batch.push(e);
+      if (batch.length === BATCH_SIZE) flush();
+    }
+  }
+  flush();
+  return groups;
+}
+
+/**
  * Drain the outbox and post it in batches. `withLock(fn)` runs fn under the claims lock, so no event is appended
  * between the read and the rename. What could not be sent goes back into the outbox, capped at OUTBOX_CAP lines.
  * Returns a summary, also written to the log.
@@ -137,15 +162,16 @@ export async function sendOutbox({ outbox, withLock, settings, fetchImpl = fetch
     unsent = events;
     log(outbox, `not sent: OVERWATCH_INGEST_URL unset, or OVERWATCH_INGEST_SECRET unset or under 32 characters (${events.length} kept)`);
   } else {
-    for (let i = 0; i < events.length; i += BATCH_SIZE) {
-      const batch = events.slice(i, i + BATCH_SIZE);
+    const groups = sendGroups(events);
+    for (let g = 0; g < groups.length; g += 1) {
+      const { items, body: payload } = groups[g];
       let status = 0;
       let body = null;
       try {
         const r = await fetchImpl(settings.url, {
           method: "POST",
           headers: { "content-type": "application/json", "x-overwatch-secret": settings.secret },
-          body: JSON.stringify({ kind: "claim_block", events: batch }),
+          body: JSON.stringify(payload),
         });
         status = r.status;
         body = await r.json().catch(() => null);
@@ -153,20 +179,26 @@ export async function sendOutbox({ outbox, withLock, settings, fetchImpl = fetch
         log(outbox, `network error: ${err.message}`);
       }
       if (status === 200 && body?.ok) {
-        summary.sent += batch.length;
-        for (const k of ["inserted", "updated", "unchanged"]) summary[k] += body[k] ?? 0;
-        for (const r of body.rejected ?? []) {
-          summary.dropped += 1;
-          log(outbox, `rejected ${JSON.stringify(batch[r.index])}: ${r.error}`);
+        summary.sent += items.length;
+        if (payload.kind === "claim_block") {
+          for (const k of ["inserted", "updated", "unchanged"]) summary[k] += body[k] ?? 0;
+          for (const r of body.rejected ?? []) {
+            summary.dropped += 1;
+            log(outbox, `rejected ${JSON.stringify(items[r.index])}: ${r.error}`);
+          }
+        } else {
+          const { ok: _ok, ...counts } = body;
+          log(outbox, `${payload.kind} sent: ${JSON.stringify(counts)}`);
         }
       } else if (status === 400) {
-        // The whole batch was refused as malformed; sending it again cannot help.
-        summary.dropped += batch.length;
-        log(outbox, `batch of ${batch.length} refused (400): ${body?.error ?? "no body"}`);
+        // Refused as malformed; sending it again cannot help.
+        summary.dropped += items.length;
+        log(outbox, `${payload.kind} of ${items.length} refused (400): ${body?.error ?? "no body"}`);
       } else {
-        // 401, 5xx or no answer: keep this batch and everything after it for the next run.
-        if (status) log(outbox, `HTTP ${status}: ${body?.error ?? "no body"}; ${events.length - i} kept`);
-        unsent = events.slice(i);
+        // 401, 5xx or no answer: keep this send and everything after it for the next run.
+        const rest = groups.slice(g).flatMap((x) => x.items);
+        if (status) log(outbox, `HTTP ${status}: ${body?.error ?? "no body"}; ${rest.length} kept`);
+        unsent = rest;
         break;
       }
     }

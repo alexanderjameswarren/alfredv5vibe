@@ -246,8 +246,20 @@ Estimate tracking first (spec 4.12, added 2026-10-25), because the nightly and w
   - [x] `_pending_overwatch-q4n_platform_inventory.sql`: platform_inventory (kinds include trigger; reads_any for a "*" reader; details jsonb; unique kind + name; not audited), platform_open_work (docs/ files only; unique file + line; not audited), finish_summaries (one per merge commit; reviewed_by_run needs reviewed_at; audited); replace_platform_inventory (upsert then delete unseen, one transaction, refuses empty or duplicate sends; service_role only); owner RLS, grants via register_table, every column commented, check query with conformance
   - [x] `24_platform_inventory_test.sql` (24 checks, rolls itself back) and `25_verify_platform_inventory.sql`
   - [x] gitsync (fast-forward fe80fd3 to 96091f9, only this project's two checkpoints; no migration, snapshot or name drift), the four db items claimed, numbered `180_overwatch_platform_inventory.sql` (claimed; the _pending_ file deleted)
-  - [ ] Alex runs 180, `24_platform_inventory_test.sql` and `25_verify_platform_inventory.sql`; then checkpoint 180 and the two test files
-- [ ] Step 44 (CLI): scripts/inventory.mjs and `npm run inventory` (parts and open work; prints a summary, `--send` queues it)
+  - [x] Alex runs 180, `24_platform_inventory_test.sql` and `25_verify_platform_inventory.sql`; checkpointed (main 1303ffd), db claims released (none held at Step 44)
+- [ ] Step 44 (CLI): scripts/inventory.mjs and `npm run inventory` (run tag overwatch-q4n-s44-q9wf)
+  - [x] scripts/lib/inventory.mjs: tier and offset from the parser; appFor (name words, only seeded app ids), toolParts (registered only, "*" as reads_any), skillPart and taskPromptPart (tools mentioned, their tables, version line), edgeFunctionPart, snapshotParts (tables, views, triggers with their function's writes), screenParts, isWorkDoc and openWork, lastChangedFromLog, dedupeParts; spec 5.5 "As built"
+  - [x] scripts/inventory.mjs and `npm run inventory` (package.json): payload to .scratch/inventory.json, summary; `--json`
+  - [x] Tests: inventory 21 pass (13 new); CLI suite 281 pass; mcp tables test passes
+  - [x] Real run: 497 parts (163 tools, 12 skills, 8 functions, 5 task prompts, 106 tables and views, 164 triggers, 39 screens), 920 open-work lines (867 checkboxes, 22 deferred, 31 not fixed), about 880 of them in docs/history; 8 skills have no "Skill version:" line
+  - [x] Alex decided (Step 45): docs/history filtered, see spec 4.13
+- [ ] Step 45 (CLI): history filter; overwatch-ingest kinds `inventory` and `finish_summary`; `--send`; deploy; first send (run tag overwatch-q4n-s45-v8kp)
+  - [x] openWork: in docs/history only unchecked follow-ups, deferred, not fixed and "Later" bullets (as deferred_phase); "Later" bullets everywhere. Inventory now 497 parts, 121 open-work lines (31 checkbox, 58 deferred, 32 not fixed). Tests: inventory 23
+  - [x] ingest.ts: parseInventory, parseFinishSummary, isRefusal; index.ts: inventory through replace_platform_inventory, finish_summary upserted on merge_commit, database refusals 400. Tests: ingest 15
+  - [x] overwatch-post: sendGroups (a `_kind` event goes alone, in order; blocks still batch); scripts/inventory.mjs `--send` queues one inventory event under the claims lock and runs the sender. Payload about 185 KB on the wire, one request. Tests: overwatch-post 13; CLI suite 285 pass
+  - [x] gitsync (fast-forward cd8b120 to 1303ffd: only the snapshot, through migration 180, labelled right by Step 42's fix); db:deploy claimed; overwatch-ingest deployed (version 2, verify_jwt false, unauthenticated POST gets its own 401 `{"ok":false,"error":"unauthorized"}`)
+  - [x] First send (run tag overwatch-q4n-s45b-c3tz): 501 parts (8 functions, 39 screens, 12 skills, 109 tables and views, 5 task prompts, 163 tools, 165 triggers), 124 open-work lines (32 checkbox, 59 deferred, 33 not fixed); the function returned parts 501, open_work 124, removed 0 and 0
+  - [ ] Alex runs the check query; then checkpoint the Step 44 and 45 files and release db:deploy
 - [ ] Step 45 (CLI): overwatch-ingest kinds `inventory` and `finish_summary`; the outbox sends an inventory on its own; deploy overwatch-ingest (db:deploy reserved)
 - [ ] Step 46 (CLI): get_platform_inventory, get_finish_summaries, mark_finish_summaries_reviewed; deploy mcp
 - [ ] Step 47 (CLI): gitpush Finish rebuilds and queues the inventory and a finish_summary (scripts/lib/finish-summary.mjs); tests
