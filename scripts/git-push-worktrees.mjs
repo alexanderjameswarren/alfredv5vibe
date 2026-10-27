@@ -54,7 +54,10 @@ import {
   readState,
   removeClaims,
   resolveRepo,
+  withLock,
 } from "./lib/claims-core.mjs";
+import { collectFinishSummary, queueOverwatch, sendPlanLine, sendsFor } from "./lib/finish-summary.mjs";
+import { buildInventory } from "./lib/inventory.mjs";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -276,6 +279,49 @@ function snapshotKeeper(root) {
   return () => (before === null ? fs.rmSync(file, { force: true }) : fs.writeFileSync(file, before));
 }
 
+/**
+ * After a push into main: queue the rebuilt inventory, and on a Finish the finish summary, for the detached sender
+ * (spec 5.4). Anything that goes wrong here is said and ignored; the push has already happened.
+ */
+function afterPush(w, mode, result, ctx, { upstreamBefore = null, mainCode = null } = {}) {
+  const sends = sendsFor({ mode, result });
+  if (!sends.inventory) return;
+  const events = [];
+  const queued = [];
+  try {
+    const inv = buildInventory(ctx.root);
+    events.push({ _kind: "inventory", parts: inv.parts, open_work: inv.open_work });
+    queued.push(`the inventory (${inv.parts.length} parts, ${inv.open_work.length} open-work lines)`);
+  } catch (err) {
+    say(`\n  Overwatch: the inventory could not be rebuilt (${err.message}); nothing else is affected.`);
+  }
+  if (sends.summary) {
+    const code = w.isMain ? mainCode : w.owner;
+    const isMerge = !w.isMain && tryGit(["rev-parse", "--verify", "--quiet", "HEAD^2"], ctx.root).ok;
+    const s = !code ? { error: "main has no project code" }
+      : !w.isMain && !isMerge ? { error: "main's HEAD is not a merge commit" }
+      : collectFinishSummary({
+        git: (args) => tryGit(args, ctx.root),
+        readFile: (p) => (fs.existsSync(path.join(ctx.root, p)) ? fs.readFileSync(path.join(ctx.root, p), "utf8") : null),
+        projectCode: code,
+        branch: w.branch,
+        base: w.isMain ? upstreamBefore : "HEAD^1",
+      });
+    if (s.row) {
+      events.push({ _kind: "finish_summary", summary: s.row });
+      queued.push(`a finish summary for ${s.row.merge_commit.slice(0, 7)} (${s.row.paths.length} paths)`);
+    } else {
+      say(`\n  Overwatch: no finish summary (${s.error}).`);
+    }
+  }
+  const q = queueOverwatch(ctx, events, { lock: (fn) => withLock(ctx, () => { fn(); return null; }) });
+  if (q.error) say(`\n  Overwatch: nothing queued (${q.error}).`);
+  else if (q.queued) {
+    say(`\n  Overwatch: queued ${queued.join(" and ")}. The sender runs in the background; its log is`);
+    say(`    ${ctx.outboxFile}.log`);
+  }
+}
+
 /** --dry-run stops at the plan, before the yes/no and before anything changes. */
 function dryRunStop() {
   if (!OPTS["dry-run"]) return false;
@@ -366,6 +412,7 @@ function doMain(w, ctx, release) {
       ? `Release all ${all.length} claim(s) main holds${all.length ? `: ${all.join(", ")}` : ""}.`
       : `Keep    all ${all.length} claim(s) main holds — the project is still going.`,
   );
+  say(sendPlanLine(release ? "f" : "p"));
 
   if (!confirm("\nDo all of that?")) return "cancelled";
 
@@ -532,6 +579,7 @@ function doFinish(w, ctx) {
   snapshotPlan(w, ctx.root, claimedChanges.map((f) => f.path));
   say(`Release all ${w.files.length + w.db.length} claim(s) held by ${w.owner}.`);
   say(`Remove  the worktree, then delete branch ${w.branch}.`);
+  say(sendPlanLine("f"));
   if (dryRunStop()) return "cancelled";
 
   // Windows will not delete a folder anything still has open, and in the Step 7
@@ -675,6 +723,7 @@ function doCheckpoint(w, ctx) {
     say(`        KEEPING ${dbKept.join(", ")} — re-claim at the next step instead.`);
   }
   say(`Keep    the worktree and every file claim ${w.owner} holds.`);
+  say(sendPlanLine("c"));
   if (dryRunStop()) return "cancelled";
 
   if (!confirm("\nDo all of that?")) return "cancelled";
@@ -851,9 +900,14 @@ function main() {
     checkOptionsFor(mode, w);
     checkFinishFrom(mode, w, ctx.root);
 
+    // Read before the run: a main Finish clears the code, and its push moves the upstream.
+    const upstream = w.isMain && mode === "f" ? tryGit(["rev-parse", "@{u}"], w.path) : null;
+    const mainCode = w.isMain ? readMainCode(ctx) : null;
+
     let result;
     if (w.isMain) result = doMain(w, ctx, mode === "f");
     else result = mode === "f" ? doFinish(w, ctx) : doCheckpoint(w, ctx);
+    afterPush(w, mode, result, ctx, { upstreamBefore: upstream?.ok ? upstream.stdout : null, mainCode });
 
     const remaining = chosen.slice(chosen.indexOf(w) + 1).map((t) => t.owner);
     const end = resultExit(result, w.owner, { done, remaining });

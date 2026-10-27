@@ -264,8 +264,13 @@ Estimate tracking first (spec 4.12, added 2026-10-25), because the nightly and w
 - [ ] Step 46 (CLI): get_platform_inventory, get_open_work, get_finish_summaries, mark_finish_summaries_reviewed; deploy mcp (run tag overwatch-q4n-s46-j5ry)
   - [x] `_shared/tools/overwatch-inventory.ts` (new): the four tools through readTable (inventory counts per kind in a NOTE; `table` marks uses), mark sets reviewed_at and reviewed_by_run; registered in mcp/index.ts (167 tools); spec section 7. Tests: overwatch-inventory 6, all function tests 798 pass; deno check back to the 111 existing errors
   - [x] gitsync (fast-forward 124521a to 9c3c9c1, this project's checkpoint only; nothing under mcp/, migrations or the snapshot), db:deploy claimed, mcp deployed (version 174, verify_jwt false, unauthenticated POST gets its own 401 "Unauthorized")
-  - [ ] Alex runs the four new-thread prompts (inbox users, reads_any, warren_buffet history, finish summaries); then checkpoint and release db:deploy
-- [ ] Step 47 (CLI): gitpush Finish rebuilds and queues the inventory and a finish_summary (scripts/lib/finish-summary.mjs); tests
+  - [x] Alex runs the four new-thread prompts (inbox users, reads_any, warren_buffet history, finish summaries); checkpointed (main be7bfbe), db:deploy released. The test showed BEFORE triggers that change their own row listed as reads only (fixed in Step 47)
+- [ ] Step 47 (CLI): gitpush sends the inventory and the finish summary; triggers that change their own row (run tag overwatch-q4n-s47-g6sd)
+  - [x] inventory.mjs: a trigger whose function assigns to NEW (:= or =, at a statement start) writes its own table (inbox.set_updated_at, set_archived_at, inbox_set_source_app now both); buildInventory(root) moved into the lib, scripts/inventory.mjs uses it
+  - [x] scripts/lib/finish-summary.mjs (new): parseNumstat, classifyPaths, toolsIn, buildFinishSummary, collectFinishSummary, sendsFor, sendPlanLine, queueOverwatch; tests 10
+  - [x] gitpush: a "Send" line in every mode's plan; afterPush queues the inventory after every push into main and a finish summary on Finish (worktree: merge commit against its first parent; main: against the upstream before the push); nothing when refused, cancelled, skipped, failed, or OVERWATCH_SENDER=off; prints what was queued and the sender's log
+  - [x] Spec 5.4 and 5.5; CLI suite 296 pass
+  - [ ] Alex's next checkpoint shows the Send line and the queued line; then check get_platform_inventory's seen_at
 - [ ] Step 48 (CLI, docs): nightly prompt (finish summaries against the inventory, follow-up items, current_state, mark reviewed); weekly drift audit Phase 7 checks; overwatch skill; Alex pastes prompts and skills
 - [ ] Step 49 (CLI): end-to-end check (a real inventory send, a finish summary, the next audit run)
 
