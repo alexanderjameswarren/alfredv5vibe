@@ -15,7 +15,7 @@ nightly counts.
   item saying the task's schedule and the plan disagree. **Changing `weekly_day` in the plan means
   also changing this task's day and the schedule row's `day_of_week`.**
 - **App / job:** `overwatch` / `weekly` (schedule row from migration 177, with the nightly one).
-- **Tools:** the **Alfred** connector (mcp v172 or later), the **Claude_Code_Remote** connector
+- **Tools:** the **Alfred** connector (mcp v174 or later, for `get_platform_inventory` in Step 8), the **Claude_Code_Remote** connector
   (`list_triggers`) and **web search**. The **`overwatch` skill** must be available to the task.
 - **Settings it reads** from the active plan: `weekly_day`, `audit_every_weeks`,
   `friction_trigger_count`, `friction_window_days`, `estimate_accuracy_min_shipped`,
@@ -30,7 +30,7 @@ nightly counts.
 > The task runs the text that was pasted, not the text in this repo. So the prompt carries a
 > version, and Step 11 echoes it.
 >
-> ### `PROMPT VERSION: 2026-10-26a`
+> ### `PROMPT VERSION: 2026-10-27a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -44,7 +44,7 @@ nightly counts.
    everything below "THE PROMPT" line as its instructions.
 3. **Run it once by hand** and say in the chat that this run is manual (Step 2 then runs it even
    on another day). Check: a `platform_runs` row for `overwatch` / `weekly` closed `ok`; the weekly
-   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-10-26a`.
+   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-10-27a`.
 
 ---
 
@@ -53,7 +53,7 @@ nightly counts.
 ---
 
 You are running Overwatch's weekly review for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-10-26a`. **First, load the `overwatch` skill.** It tells you how to read the
+`PROMPT VERSION: 2026-10-27a`. **First, load the `overwatch` skill.** It tells you how to read the
 week, what makes a friction pattern and its fix, when a parked project has become possible, and how
 to word the note. Follow these steps in order for everything else. **Where the skill and these
 steps disagree, these steps win.** Do not improvise.
@@ -200,7 +200,30 @@ skip this step (rule 1).
    - **Apps with no profile or no rhythm:** `get_apps` against `get_records` with
      `table: "app_profiles"`: an app with no row, or with no `activity_recipe`.
    - **Routing:** inbox items routed to an app id that `get_apps` does not list.
-3. Set `drift_audit: true`. If a read errors, SKIP that check.
+3. **The inventory checks (Phase 7).** Read the inventory once: `get_platform_inventory` with
+   `kind: "skill"`, then `kind: "task_prompt"` (one call each, `limit: 50`), `kind: "tool"` and
+   `kind: "table"` (`limit: 50`, paging until the NOTE says there is no more: about 4 and 3 calls),
+   about **9 calls** in all. Keep each part's `name`, `app_id`, `reads`, `writes`, `seen_at` and
+   `details` (`tools` and `unknown_tools` for skills and prompts). Then, all worked out locally:
+   - **Skills and prompts naming tools that are not in the inventory:** each name in a skill's or a
+     live (not `details.history`) prompt's `details.unknown_tools`. Which of them are real (a tool
+     that is gone or misspelt) and which are not tools at all is the skill's call; keep only the real
+     ones.
+   - **Apps with no skill:** each `get_apps` id that no skill's `app_id` names. Which of them need
+     one is the skill's call; keep them all, the skill words the note.
+   - **Tables no tool reads or writes:** each table part whose name is in no tool's `reads` or
+     `writes`, **leaving out** every `platform.*` table and view (the registry, the audit and call
+     logs, anon access and the conformance views: the platform's own plumbing, which tools never
+     declare), and any table a trigger part writes (kept up by triggers, read through other tables
+     or the app). A tool with `reads_any` (get_records) can read any of them, so say so once rather
+     than counting it.
+   - **Tools declaring a table missing from the inventory:** each name in a tool's `reads` or
+     `writes` that is not a table part's name. The repo's tables test should make this empty; a
+     finding means the snapshot and the inventory disagree.
+   - **Not checked: two skills claiming the same trigger.** The inventory holds no skill descriptions
+     or trigger phrases, so it cannot show this; leave it out and say so once in the note.
+   - Also note the inventory's `seen_at` (the last rebuild): the checks are only as fresh as it is.
+4. Set `drift_audit: true`. If a read errors, SKIP that check (`count:drift_audit`).
 
 ### Step 9 — Raise inbox items
 
@@ -269,7 +292,7 @@ SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismat
    `push_time` has passed. A failed call is SKIPPED.
 3. **Close the run:** `update_platform_run` with the run id, **once**.
    - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-   - **`details`**, always: `local_date`, `prompt_version: "2026-10-26a"`, `manual`, `plan_id`,
+   - **`details`**, always: `local_date`, `prompt_version: "2026-10-27a"`, `manual`, `plan_id`,
      `drift_audit` (true or false), `note_id`, `inbox_item_ids`, `reminders_sent`, `new_releases`,
      `friction_patterns`, `shipped_count`, `skipped`, `settings_missing`, and `not_weekly_day` when
      it applies.
@@ -292,7 +315,7 @@ Run: <run id>
 ### Step 11 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-26a`;
+- `PROMPT VERSION: 2026-10-27a`;
 - the run id and its status, and `manual: true` or `manual: false`;
 - whether the drift audit ran; the note id, the inbox item ids and the reminders sent;
 - `skipped` and `settings_missing`, if any;

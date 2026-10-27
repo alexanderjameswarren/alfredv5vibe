@@ -5,6 +5,8 @@ description: Manage Alex's Drive Mix car playlist: add artists or songs, cut son
 
 # Drive Mix
 
+Skill version: 2026-10-27a
+
 Drive Mix is Alex's default car playlist: familiar pop, rock, alternative, a little country and rap, songs he knows or heard on the radio. A daily scheduled task ("Drive Mix daily refresh", 4:54 am Pacific) rebuilds it every morning from a song pool in Supabase. This skill covers everything Alex asks for in chat.
 
 ## Key facts

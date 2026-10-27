@@ -5,6 +5,8 @@ description: Act on a weekly DJ review inbox item — brief Alex on what it says
 
 # Acting on a weekly DJ review
 
+Skill version: 2026-10-27a
+
 ## 🛑 STEP 1: HE HAS NOT READ IT. BRIEF HIM FIRST.
 
 **Assume the report was pasted in unread.** It arrives as an inbox item, and pasting an item is

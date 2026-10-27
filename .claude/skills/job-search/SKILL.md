@@ -5,6 +5,8 @@ description: "Track Alex's job and consulting applications in Alfred's job_appli
 
 # Job search tracker
 
+Skill version: 2026-10-27a
+
 Four Alfred tools, one table. Each row is one role Alex engaged with — applied to, still weighing, or passed on — and its status tracks it to an outcome. The table's main job is org lookup: before Alex spends time on a posting, he wants to know whether he has already dealt with that org and how it went.
 
 | tool | use it to |

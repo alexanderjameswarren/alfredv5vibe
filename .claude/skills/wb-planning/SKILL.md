@@ -5,6 +5,8 @@ description: "Plan money with Warren Buffet (the Money app's Alfred tools): add 
 
 # Planning with Warren Buffet
 
+Skill version: 2026-10-27a
+
 Sign rule everywhere: **money in is positive, money out is negative.**
 
 🛑 **Show before you write.** Before any write (`upsert_wb_planned_item`, `upsert_wb_project`,

@@ -245,6 +245,17 @@ export function toolParts(files, registered, apps, lastChanged = new Map()) {
 export const toolsMentioned = (text, toolNames) =>
   [...toolNames].filter((n) => new RegExp(`\\b${n}\\b`).test(text)).sort();
 
+const TOOL_LIKE = /\b(?:get|search|create|update|upsert|record|log|mark|set|archive|place|load|append|tag|split|reprocess|propose|bulk|acknowledge|unconfirm|check|dry_run)_[a-z][a-z0-9_]*\b/g;
+
+/**
+ * Names in a text shaped like tool names (get_x, create_x, …) that are not registered tools: a skill or prompt
+ * calling a tool that is gone or misspelt. Some are SQL functions or RPCs; the weekly audit judges which.
+ */
+export function unknownToolNames(text, toolNames) {
+  const known = new Set(toolNames);
+  return [...new Set(text.match(TOOL_LIKE) ?? [])].filter((n) => !known.has(n)).sort();
+}
+
 /** Reads and writes of the tools a skill or prompt mentions. */
 function tablesOf(names, toolsByName) {
   const reads = new Set();
@@ -263,7 +274,10 @@ export function skillPart(file, text, toolsByName, apps, lastChanged = new Map()
   return {
     kind: "skill", name, app_id: appFor(name, apps), ...tablesOf(tools, toolsByName),
     location: file, fingerprint: fingerprint(text), last_changed_project: changedBy(lastChanged, file),
-    details: { version: /Skill version:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}[a-z]?)/.exec(text)?.[1] ?? null, tools },
+    details: {
+      version: /Skill version:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}[a-z]?)/.exec(text)?.[1] ?? null, tools,
+      unknown_tools: unknownToolNames(text, toolsByName.keys()),
+    },
   };
 }
 
@@ -276,7 +290,7 @@ export function taskPromptPart(file, text, toolsByName, apps, lastChanged = new 
     location: file, fingerprint: fingerprint(text), last_changed_project: changedBy(lastChanged, file),
     details: {
       version: /PROMPT VERSION:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}[a-z]?)/.exec(text)?.[1] ?? null,
-      history: file.startsWith("docs/history/"), tools,
+      history: file.startsWith("docs/history/"), tools, unknown_tools: unknownToolNames(text, toolsByName.keys()),
     },
   };
 }

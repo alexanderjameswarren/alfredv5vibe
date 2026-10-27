@@ -124,6 +124,9 @@ test("skills: tools mentioned, their tables, the version line", () => {
   assert.deepEqual([s.kind, s.name, s.app_id, s.details.version], ["skill", "overwatch", "overwatch", "2026-10-27a"]);
   assert.deepEqual(s.details.tools, ["get_inbox", "log_friction"]);
   assert.deepEqual([s.reads, s.writes], [["inbox"], ["process_friction"]]);
+  assert.deepEqual(s.details.unknown_tools, ["get_inboxes"]);
+  const gone = skillPart(".claude/skills/x/SKILL.md", "Call get_inbox, then get_old_thing twice, and update_gone.", TOOLS, APPS);
+  assert.deepEqual(gone.details.unknown_tools, ["get_old_thing", "update_gone"]);
   assert.equal(skillPart(".claude/skills/ken/SKILL.md", "no line", TOOLS, APPS).details.version, null);
 });
 

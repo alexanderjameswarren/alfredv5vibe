@@ -270,7 +270,15 @@ Estimate tracking first (spec 4.12, added 2026-10-25), because the nightly and w
   - [x] scripts/lib/finish-summary.mjs (new): parseNumstat, classifyPaths, toolsIn, buildFinishSummary, collectFinishSummary, sendsFor, sendPlanLine, queueOverwatch; tests 10
   - [x] gitpush: a "Send" line in every mode's plan; afterPush queues the inventory after every push into main and a finish summary on Finish (worktree: merge commit against its first parent; main: against the upstream before the push); nothing when refused, cancelled, skipped, failed, or OVERWATCH_SENDER=off; prints what was queued and the sender's log
   - [x] Spec 5.4 and 5.5; CLI suite 296 pass
-  - [ ] Alex's next checkpoint shows the Send line and the queued line; then check get_platform_inventory's seen_at
+  - [x] Checkpointed (main fbb144b). The Send and queued lines first show at the checkpoint after it, since gitpush runs main's copy; not yet confirmed here
+- [ ] Step 48 (CLI, docs): nightly impact review, weekly drift audit, overwatch skill, skill version lines (run tag overwatch-q4n-s48-b2xe)
+  - [x] Nightly prompt 2026-10-27a: count 10 inventory freshness (`inventory_stale_days`, 7 until it is in the plan, the one fallback), count 11 impact review (at most 3 summaries, 5 tables, 5 follow-ups, 2 profile rewrites; follow-ups go to the affected app, deduped across apps), Step 6.6 and 6.7 items, Step 8.4 update_app_profile and 8.5 mark_finish_summaries_reviewed, flags `inventory_stale` and `impact_review`. Adds 2 calls with no summary, about 8 to 12 (at most 19) with one
+  - [x] Weekly prompt 2026-10-27a, Step 8.3 (about 9 calls): unknown tool names in skills and live prompts, apps with no skill, tables no tool touches (without platform.* and trigger-written tables), tools declaring missing tables; two skills claiming one trigger not checkable
+  - [x] inventory.mjs: `details.unknown_tools` on skills and task prompts (tool-shaped names not registered); tests 24
+  - [x] overwatch skill 2026-10-27a: tables a summary touched, what counts as a follow-up, when to rewrite current_state, names that are not missing tools (args, examples, SQL, Workshop connector tools), apps with no skill, tables no tool touches
+  - [x] "Skill version: 2026-10-27a" on dj-concert-playlist, dj-jazz, dj-weekly-review, drive-mix, job-search, ken, sam-practice, wb-planning (claimed in one command); the inventory reads all 12 skills' versions
+  - [x] Spec 4.6 (`inventory_stale_days`) and section 6; CLI suite 296 pass
+  - [ ] Alex adds `inventory_stale_days: 7` through the gate, pastes both prompts into their tasks and the nine skills into claude.ai
 - [ ] Step 48 (CLI, docs): nightly prompt (finish summaries against the inventory, follow-up items, current_state, mark reviewed); weekly drift audit Phase 7 checks; overwatch skill; Alex pastes prompts and skills
 - [ ] Step 49 (CLI): end-to-end check (a real inventory send, a finish summary, the next audit run)
 

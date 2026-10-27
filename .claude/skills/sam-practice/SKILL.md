@@ -5,6 +5,8 @@ description: Plan and review Alex's piano practice in SAM. Use whenever he asks 
 
 # SAM practice
 
+Skill version: 2026-10-27a
+
 ## What this is for
 
 Alex plays piano. SAM records every pass he plays. A practice plan is a checklist that lives on
