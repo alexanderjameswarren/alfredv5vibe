@@ -372,6 +372,33 @@ export function heardTempo(bpm, playbackSpeed) {
 }
 
 /**
+ * The heard tempo against the plan item's target_effective_bpm (sam_tempo spec).
+ * status: "none" (no item, or no usable tempo), "warmup" (a rung below 100% is
+ * running, or a ladder was paused mid-run — Resume restarts it at rung one),
+ * "on", "slower" or "faster". planBpm is the item's target whenever there is one.
+ */
+export function planTempoCheck(item, bpm, playbackSpeed, { rungPercent = null, pausedMidLadder = false } = {}) {
+  const planBpm = Number.isFinite(item?.target_effective_bpm) ? item.target_effective_bpm : null;
+  const heard = heardTempo(bpm, playbackSpeed);
+  if (planBpm == null || heard == null) return { status: "none", planBpm, heard };
+  if (pausedMidLadder || (Number.isFinite(rungPercent) && rungPercent < 100)) {
+    return { status: "warmup", planBpm, heard };
+  }
+  const status = heard < planBpm ? "slower" : heard > planBpm ? "faster" : "on";
+  return { status, planBpm, heard };
+}
+
+/**
+ * The words for a planTempoCheck result, or null when there is nothing to say.
+ * A faster pass still counts (passQualifies is >=), so only slower is a warning.
+ */
+export function planTempoText(check) {
+  if (check?.status === "slower") return `Below plan goal: ${check.planBpm}`;
+  if (check?.status === "faster") return `Faster than plan (${check.planBpm})`;
+  return null;
+}
+
+/**
  * The item for what is loaded in the player. A range typed but never saved has
  * no snippet id and matches nothing — it is not the whole song.
  */

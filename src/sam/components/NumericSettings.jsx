@@ -4,7 +4,7 @@ import RestControl from "./RestControl";
 import SegmentedControl from "./SegmentedControl";
 import { supabase } from "../../supabaseClient";
 import { DEFAULTS } from "../lib/samConstants";
-import { heardTempo } from "../lib/activePlan";
+import { heardTempo, planTempoCheck, planTempoText } from "../lib/activePlan";
 import { UI } from "./uiStyles";
 
 // The song page's numeric settings, as pieces placed by the song rail layout:
@@ -168,19 +168,33 @@ function useSaveSettings({ song, songDbId, bpm, timingWindowMs, chordMs, measure
   return { saveButton };
 }
 
+// The heard tempo against the loaded plan item (sam_tempo spec). Red and blue,
+// never amber: amber is the Goal button's "below goal".
+const PLAN_TEMPO = {
+  slower: { tone: "text-red-700", border: "!border-red-700" },
+  faster: { tone: "text-blue-700", border: "!border-blue-700" },
+};
+
 // The tempo box for the rail: BPM on a song without audio, Speed % on a song
 // with it (its BPM is the scroll-sync calibration, edited in the drawer),
-// then Goal, then Save while anything differs from the song's defaults.
+// then the plan warning, Goal, Set tempo when off plan, and Save while anything
+// differs from the song's defaults.
 export function TempoControls({
   song, songDbId, bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed,
   onSongUpdate, onHideBpmEdit,
+  planItem = null, planWarmup = undefined, onSetPlanTempo = null,
 }) {
   const { saveButton } = useSaveSettings({
     song, songDbId, bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed, onSongUpdate,
   });
   const hasAudio = !!song?.audioFilePath;
   const field = hasAudio ? playbackSpeed : bpm;
-  const inputClass = `w-full ${UI.input}`;
+  // The draft, so the warning moves as he types rather than on blur.
+  const check = planTempoCheck(
+    planItem, bpm.preview(RULES.bpm), playbackSpeed.preview(RULES.playbackSpeed), planWarmup
+  );
+  const warn = PLAN_TEMPO[check.status] || null;
+  const inputClass = `w-full ${UI.input} ${warn ? warn.border : ""}`;
 
   return (
     <div className="flex flex-col gap-2 w-full">
@@ -203,7 +217,23 @@ export function TempoControls({
           min={hasAudio ? 10 : 20} max={hasAudio ? 200 : 300}
         />
       </label>
+      {warn && (
+        <span className={`text-sm font-medium ${warn.tone}`} data-testid="plan-tempo" data-state={check.status}>
+          {planTempoText(check)}
+        </span>
+      )}
       <GoalLabel song={song} hasAudio={hasAudio} bpm={bpm} playbackSpeed={playbackSpeed} className="w-full justify-center" />
+      {warn && onSetPlanTempo && (
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onSetPlanTempo}
+          title={`Set the tempo box to ${check.planBpm} BPM for this session`}
+          className={`w-full flex items-center justify-center px-3 py-1.5 text-sm min-h-[44px] ${UI.outline}`}
+        >
+          Set tempo
+        </button>
+      )}
       {saveButton("w-full")}
     </div>
   );

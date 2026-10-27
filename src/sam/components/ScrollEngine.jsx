@@ -33,7 +33,7 @@ function logTeleportLater(elapsed, audioSyncOffset, anchor0, beatEvents) {
 }
 
 
-export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, onContentEnd, restMeasureCount = 0, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioAnchors = [], audioEndMs = null, handMode = "both", onScrollStart = null, fingerings = {}, scorePlayback = "off" }) {
+export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvents, onLoopCount, onBeatMiss, onContentEnd, restMeasureCount = 0, scrollStateExtRef, onTap, measureWidth, metronome = "off", audioCtx = null, firstPassStart = 0, loop = true, onEnded, timingWindowMs = 300, audioElement = null, audioAnchors = [], audioEndMs = null, handMode = "both", onScrollStart = null, fingerings = {}, scorePlayback = "off", continueAtWrapRef = null }) {
   const viewportRef = useRef(null);
   const scrollLayerRef = useRef(null);
   const rafRef = useRef(null);
@@ -46,6 +46,9 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
   const contentEndFiredRef = useRef(false);
   const geometryRef = useRef([]);
   const labelElsRef = useRef([]);
+  // Whether a run is in flight, so a `continueAtWrapRef` left over from a run
+  // that has since paused or stopped can never skip a real lead-in.
+  const runningRef = useRef(false);
   const [svgReady, setSvgReady] = useState(false);
 
   // Render copies of the score SVG into the scroll layer (1 copy for non-looping, 3 for looping)
@@ -168,6 +171,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
   // Animation loop with seamless looping
   useEffect(() => {
     if (playbackState !== "playing" || !svgReady) {
+      runningRef.current = false;
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
@@ -237,9 +241,18 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
       ? restStartIndex(events, measures, restMeasureCount, events.length / numCopies)
       : null;
 
+    // A tempo the parent set AT the loop wrap (a warm-up rung advancing) says so
+    // through `continueAtWrapRef`: the run carries straight on from the top of
+    // the range, which is at the play line already, so it gets no lead-in. The
+    // flag is taken once, whatever restarted the run. Audio runs keep the full
+    // restart: their clock comes from the audio element.
+    const continuing = runningRef.current && !audioElement && !!continueAtWrapRef?.current;
+    if (continueAtWrapRef) continueAtWrapRef.current = false;
+    runningRef.current = true;
+
     // Find the first beat at the firstPassStart measure (for resume-from-measure)
     let startEvtIdx = 0;
-    if (firstPassStart > 0 && measures[firstPassStart]) {
+    if (!continuing && firstPassStart > 0 && measures[firstPassStart]) {
       const startMeasNum = measures[firstPassStart].number;
       const beatsPerCopyForStart = events.length / numCopies;
       for (let i = 0; i < beatsPerCopyForStart; i++) {
@@ -255,10 +268,14 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     // at least 3 real seconds (leadIn.js; useAudioSync uses the same call).
     const startBeatX = events[startEvtIdx]?.xPx || events[0]?.xPx || 0;
     const scrollRate = audioElement ? (audioElement.playbackRate || 1) : 1;
-    const leadIn = computeLeadIn({ viewportWidth, pxPerBeat, msPerBeat, rate: scrollRate });
+    // Continuing, the copy's left edge (world x 10, as the teleport measures it)
+    // stays on the play line: the only approach left is the stave's own padding.
+    const leadIn = continuing
+      ? { px: startBeatX - 10, extraBeats: 0, wallMs: (startBeatX - 10) / pxPerMs }
+      : computeLeadIn({ viewportWidth, pxPerBeat, msPerBeat, rate: scrollRate });
     const leadInPx = leadIn.px;
     console.log(`[LeadIn] ${Math.round(leadIn.wallMs)}ms to the first note`,
-      `| +${leadIn.extraBeats} beats | ${bpm} BPM x rate ${scrollRate}`);
+      `| +${leadIn.extraBeats} beats | ${bpm} BPM x rate ${scrollRate}${continuing ? " | continuing at the wrap" : ""}`);
     const originPx = startBeatX - targetX - leadInPx;
 
     // Approach time adjusted for the start offset so that
@@ -899,7 +916,11 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     };
     // restMeasureCount is here because it decides where the music ends, and
     // so where a pass is credited; it changes only when the loaded range does.
-  }, [playbackState, svgReady, bpm, timingWindowMs, audioElement, firstPassStart, restMeasureCount]); // eslint-disable-line react-hooks/exhaustive-deps
+    // firstPassStart is read only when a run starts (Resume always restarts the
+    // run through playbackState), never a reason to restart one: the parent
+    // clears it at the first wrap after Resume, and that used to throw the run
+    // back into a second full lead-in (sam_tempo, 2026-10-27).
+  }, [playbackState, svgReady, bpm, timingWindowMs, audioElement, restMeasureCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="relative">

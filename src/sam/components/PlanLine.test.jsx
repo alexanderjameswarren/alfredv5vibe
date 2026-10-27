@@ -54,14 +54,8 @@ test("amber: attempts today, not done; no attempts is plain", () => {
   expect(screen.getByText(/0\/4 today/)).toHaveClass("text-foreground");
 });
 
-test("Set tempo appears only when the heard tempo differs, and calls back", () => {
-  const onSetTempo = jest.fn();
-  const { rerender } = render(<PlanLine item={ITEM} state={stateOf(ITEM, 0, 0)} heardTempo={55} onSetTempo={onSetTempo} />);
-  fireEvent.click(screen.getByRole("button", { name: "Set tempo" }));
-  expect(onSetTempo).toHaveBeenCalledTimes(1);
-  rerender(<PlanLine item={ITEM} state={stateOf(ITEM, 0, 0)} heardTempo={65} onSetTempo={onSetTempo} />);
-  expect(screen.getByRole("button", { name: "Set tempo" })).toBeInTheDocument();
-  rerender(<PlanLine item={ITEM} state={stateOf(ITEM, 0, 0)} heardTempo={60} onSetTempo={onSetTempo} />);
+test("Set tempo is never on the plan line; it lives in the rail", () => {
+  render(<PlanLine item={ITEM} state={stateOf(ITEM, 0, 0)} heardTempo={55} onSetTempo={() => {}} />);
   expect(screen.queryByRole("button", { name: "Set tempo" })).not.toBeInTheDocument();
 });
 
@@ -115,10 +109,9 @@ describe("Next on the plan line", () => {
     );
     const btn = screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" });
     const box = nextBox(btn);
-    // Order: Next, then the plan text, then Set tempo.
+    // Next leads the line.
     const names = screen.getAllByRole("button").map((b) => b.textContent);
     expect(names[0]).toMatch(/^Next:/);
-    expect(names[1]).toBe("Set tempo");
     // The primary outline is applied to the box from PlanLine; never a fill.
     expect(btn).toHaveClass("shrink-0", "[&_[data-next-box]]:border-primary", "[&_[data-next-box]]:text-primary");
     expect(box).toHaveClass("border", "rounded", "text-sm");
@@ -164,12 +157,6 @@ describe("Next on the plan line", () => {
     expect(within(btn).getByText("m.1–16")).toHaveClass("shrink-0");
     // eslint-disable-next-line testing-library/no-node-access
     expect(btn.querySelector("svg[aria-hidden='true']")).toBeInTheDocument();
-  });
-
-  test("Next sits beside Set tempo, not in place of it", () => {
-    render(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={55} nextItem={NEXT} onSetTempo={() => {}} onOpenNext={() => {}} />);
-    expect(screen.getByRole("button", { name: "Set tempo" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Next: Autumn Leaves m.1–16" })).toBeInTheDocument();
   });
 });
 

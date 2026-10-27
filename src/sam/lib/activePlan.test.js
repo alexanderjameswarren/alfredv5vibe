@@ -3,7 +3,7 @@ import {
   itemState, planSummary, itemTargetText, itemRangeText, todayKey,
   heardTempo, itemForLoadedRange, planSongFor, planLineText, planBadgeText, snippetTagText,
   planItemsInOrder, firstIncompleteItem, nextIncompleteItem, planIsComplete, itemShortRange,
-  nextItemLabel, passQualifies,
+  nextItemLabel, passQualifies, planTempoCheck, planTempoText,
 } from "./activePlan";
 
 const PLAN = {
@@ -228,6 +228,33 @@ describe("player display helpers (§7.4)", () => {
     expect(heardTempo(60, 100)).toBe(60);
     expect(heardTempo(65, 85)).toBe(55); // 55.25
     expect(heardTempo(null, 100)).toBeNull();
+  });
+
+  describe("planTempoCheck", () => {
+    const it60 = { target_effective_bpm: 60 };
+    test("no item, no target, or no tempo: none", () => {
+      expect(planTempoCheck(null, 60, 100).status).toBe("none");
+      expect(planTempoCheck({ target_effective_bpm: null }, 60, 100).status).toBe("none");
+      expect(planTempoCheck(it60, null, 100).status).toBe("none");
+    });
+    test("heard tempo is compared, rounded", () => {
+      expect(planTempoCheck(it60, 60, 100)).toEqual({ status: "on", planBpm: 60, heard: 60 });
+      expect(planTempoCheck(it60, 67, 90).status).toBe("on"); // 60.3
+      expect(planTempoCheck(it60, 80, 70)).toEqual({ status: "slower", planBpm: 60, heard: 56 });
+      expect(planTempoCheck(it60, 61, 100)).toEqual({ status: "faster", planBpm: 60, heard: 61 });
+    });
+    test("quiet below the full-tempo rung and when paused mid-ladder", () => {
+      expect(planTempoCheck(it60, 42, 100, { rungPercent: 70 }).status).toBe("warmup");
+      expect(planTempoCheck(it60, 42, 100, { pausedMidLadder: true }).status).toBe("warmup");
+      expect(planTempoCheck(it60, 55, 100, { rungPercent: 100 }).status).toBe("slower");
+      expect(planTempoCheck(it60, 60, 100, { rungPercent: 100 }).status).toBe("on");
+    });
+    test("words only for slower and faster", () => {
+      expect(planTempoText({ status: "slower", planBpm: 60 })).toBe("Below plan goal: 60");
+      expect(planTempoText({ status: "faster", planBpm: 60 })).toBe("Faster than plan (60)");
+      expect(planTempoText({ status: "on", planBpm: 60 })).toBeNull();
+      expect(planTempoText(null)).toBeNull();
+    });
   });
 
   test("plan line: item, free play, done, and amber (same text, colour elsewhere)", () => {
