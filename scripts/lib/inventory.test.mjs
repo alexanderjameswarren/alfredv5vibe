@@ -163,6 +163,28 @@ test("snapshot: a trigger reads its table and writes what its function writes", 
     ["sam_songs.log_song", ["sam_songs"], ["activity", "platform.audit_log"], "AFTER INSERT", "log_song"]);
 });
 
+test("snapshot: a trigger whose function assigns to NEW writes its own table", () => {
+  const snap = [
+    'CREATE TABLE IF NOT EXISTS "public"."inbox" (\n    "id" "text"\n);',
+    'CREATE OR REPLACE FUNCTION "public"."update_updated_at"() RETURNS "trigger"',
+    '    AS $$\nBEGIN\n  NEW.updated_at = now();\n  RETURN NEW;\nEND;\n$$;',
+    'ALTER FUNCTION "public"."update_updated_at"() OWNER TO "postgres";',
+    'CREATE OR REPLACE FUNCTION "public"."set_source"() RETURNS "trigger"',
+    '    AS $$ begin if new.source_app is null then new."source_app" := \'alfred\'; end if; return new; end $$;',
+    'ALTER FUNCTION "public"."set_source"() OWNER TO "postgres";',
+    'CREATE OR REPLACE FUNCTION "public"."just_reads"() RETURNS "trigger"',
+    '    AS $$ begin if new.id = old.id then return new; end if; perform 1 where new.x >= 2; return new; end $$;',
+    'ALTER FUNCTION "public"."just_reads"() OWNER TO "postgres";',
+    'CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."inbox" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();',
+    'CREATE OR REPLACE TRIGGER "set_source" BEFORE INSERT ON "public"."inbox" FOR EACH ROW EXECUTE FUNCTION "public"."set_source"();',
+    'CREATE OR REPLACE TRIGGER "check" AFTER UPDATE ON "public"."inbox" FOR EACH ROW EXECUTE FUNCTION "public"."just_reads"();',
+    '',
+  ].join("\n");
+  const t = snapshotParts(snap, APPS).filter((p) => p.kind === "trigger");
+  assert.deepEqual(t.map((p) => [p.name, p.reads, p.writes]),
+    [["inbox.set_updated_at", ["inbox"], ["inbox"]], ["inbox.set_source", ["inbox"], ["inbox"]], ["inbox.check", ["inbox"], []]]);
+});
+
 test("screens: VIEW_TO_PATH and *_PATH constants, one part per route", () => {
   const src = 'export const VIEW_TO_PATH = {\n  home: "/",\n  // a comment\n  "inbox-detail": "/inbox/detail",\n  sam: "/sam",\n};\n'
     + 'export const SAM_PATH = "/sam";\nexport const MONEY_PATH = "/money";\n';

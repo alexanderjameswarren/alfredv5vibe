@@ -2,6 +2,7 @@
 // text; nothing here runs Deno. Used by supabase/functions/mcp/tables.test.mjs
 // now and by scripts/inventory.mjs (Overwatch Step 44).
 
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -314,6 +315,9 @@ export function functionWrites(body, objects) {
   return [...out].sort();
 }
 
+// An assignment to NEW.<column>, with := or plpgsql's =, where a statement starts, so `if new.id = old.id` is not one.
+const ASSIGNS_NEW = /(?:^|;|\bbegin\b|\bthen\b|\belse\b)\s*new\s*\.\s*"?\w+"?\s*:?=(?![=>])/im;
+
 /** Table, view and trigger parts from the schema snapshot. */
 export function snapshotParts(text, apps) {
   const objects = snapshotObjects(text);
@@ -330,9 +334,13 @@ export function snapshotParts(text, apps) {
   const re = /CREATE (?:OR REPLACE )?TRIGGER "(\w+)" (.+?) ON "(\w+)"\."(\w+)" .*?EXECUTE FUNCTION "(\w+)"\."(\w+)"\(/g;
   for (const m of text.matchAll(re)) {
     const table = qualified(m[3], m[4]);
+    const body = functionBody(text, m[5], m[6]);
+    // A function that assigns to NEW changes the row it fires on, so it writes its own table too.
+    const writes = functionWrites(body, objects);
+    if (ASSIGNS_NEW.test(body) && !writes.includes(table)) writes.push(table);
     parts.push({
       kind: "trigger", name: `${table}.${m[1]}`, app_id: m[3] === "public" ? appFor(m[4], apps) : null,
-      reads: [table], writes: functionWrites(functionBody(text, m[5], m[6]), objects),
+      reads: [table], writes: writes.sort(),
       location, fingerprint: fingerprint(m[0]), last_changed_project: null,
       details: { timing: m[2], function: qualified(m[5], m[6]) },
     });
@@ -426,6 +434,71 @@ export function lastChangedFromLog(log) {
 }
 
 const changedBy = (lastChanged, file) => lastChanged.get(file)?.code ?? null;
+
+// ---------------------------------------------------------------------------
+// The whole rebuild from a checkout (npm run inventory and gitpush). Reads files; git is read only.
+// ---------------------------------------------------------------------------
+
+/** Every file under a repo folder, as repo paths with forward slashes. */
+function filesUnder(root, dir) {
+  const out = [];
+  const walk = (rel) => {
+    for (const e of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
+      const p = `${rel}/${e.name}`;
+      if (e.isDirectory()) walk(p);
+      else out.push(p);
+    }
+  };
+  if (fs.existsSync(path.join(root, dir))) walk(dir);
+  return out.sort();
+}
+
+function gitLog(root) {
+  try {
+    return execFileSync("git", ["log", "--name-only", "--format=%x1e%s"], {
+      cwd: root, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return "";
+  }
+}
+
+/** { parts, open_work, problems } for the checkout at `root`. */
+export function buildInventory(root) {
+  const read = (rel) => fs.readFileSync(path.join(root, rel), "utf8").replace(/\r\n/g, "\n");
+  const lastChanged = lastChangedFromLog(gitLog(root));
+  const apps = appIdsFromMigrations(filesUnder(root, "supabase/migrations").filter((f) => f.endsWith(".sql")).map(read));
+  const registered = registeredTools(read(`${FUNCTIONS_DIR}/mcp/index.ts`));
+
+  const tools = toolParts(toolSourceFiles(root).map((p) => ({ path: p, text: read(p) })), registered, apps, lastChanged);
+  const toolsByName = new Map(tools.parts.map((t) => [t.name, t]));
+  const problems = [...tools.problems];
+
+  const skills = fs.readdirSync(path.join(root, ".claude/skills"), { withFileTypes: true })
+    .filter((e) => e.isDirectory() && fs.existsSync(path.join(root, ".claude/skills", e.name, "SKILL.md")))
+    .map((e) => skillPart(`.claude/skills/${e.name}/SKILL.md`, read(`.claude/skills/${e.name}/SKILL.md`), toolsByName, apps, lastChanged));
+  for (const s of skills) if (!s.details.version) problems.push(`skill ${s.name}: no "Skill version:" line`);
+
+  const prompts = filesUnder(root, "docs").filter((f) => /task-prompt[^/]*\.md$/.test(f))
+    .map((f) => taskPromptPart(f, read(f), toolsByName, apps, lastChanged));
+  for (const p of prompts) if (!p.details.version && !p.details.history) problems.push(`task prompt ${p.name}: no PROMPT VERSION`);
+
+  const functions = fs.readdirSync(path.join(root, FUNCTIONS_DIR), { withFileTypes: true })
+    .filter((e) => e.isDirectory() && !e.name.startsWith("_"))
+    .map((e) => {
+      const folder = `${FUNCTIONS_DIR}/${e.name}`;
+      return edgeFunctionPart(folder, filesUnder(root, folder).map((p) => ({ path: p, text: read(p) })), apps, lastChanged);
+    });
+
+  const snapshot = snapshotParts(read("supabase/schema-snapshot.sql"), apps);
+  const screens = screenParts(read("src/viewPaths.js"), apps, lastChanged);
+
+  const { parts, dropped } = dedupeParts([...tools.parts, ...skills, ...functions, ...prompts, ...snapshot, ...screens]);
+  for (const d of dropped) problems.push(`duplicate ${d}: the later one was left out`);
+
+  const open_work = filesUnder(root, "docs").filter(isWorkDoc).flatMap((f) => openWork(f, read(f)));
+  return { parts, open_work, problems };
+}
 
 /** Parts that share a kind and name: the later ones are dropped and reported. */
 export function dedupeParts(parts) {
