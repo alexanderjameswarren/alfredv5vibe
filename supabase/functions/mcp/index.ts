@@ -120,6 +120,15 @@ import {
   updateOverwatchWatchTool,
 } from "../_shared/tools/overwatch-plan.ts";
 import {
+  INVENTORY_KINDS,
+  OPEN_WORK_KINDS,
+  OPEN_WORK_WHERE,
+  getFinishSummariesTool,
+  getOpenWorkTool,
+  getPlatformInventoryTool,
+  markFinishSummariesReviewedTool,
+} from "../_shared/tools/overwatch-inventory.ts";
+import {
   getRecordsTool,
   LIVE_STATUSES,
   readItems,
@@ -3435,6 +3444,80 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(updateFrictionTool, args, token),
+  );
+
+  // --- Overwatch Phase 7: the inventory, open work and finish summaries (spec 4.9, 4.13, 4.14 and 7) ---
+  server.registerTool(
+    "get_platform_inventory",
+    {
+      title: "Get Platform Inventory",
+      description:
+        "List the platform's moving parts, rebuilt by `npm run inventory`: tools (with the tables they read and write), " +
+        "skills, edge functions, task prompts, tables and views, triggers and screens. Filter by kind, name (contains), " +
+        "app_id, table (the parts that read or write it, each with uses: reads, writes or both), and reads_any: true " +
+        "(generic readers such as get_records, which read any table). The NOTE gives the counts per kind. Tier 1.",
+      inputSchema: {
+        kind: z.enum(INVENTORY_KINDS as unknown as [string, ...string[]]).optional().describe("Only this kind of part."),
+        name: z.string().optional().describe("Only parts whose name contains this."),
+        app_id: z.string().optional().describe("Only parts of this app (an id from get_apps)."),
+        table: z.string().optional().describe("Only parts that read or write this table or view, e.g. inbox or platform.registry."),
+        reads_any: z.boolean().optional().describe("true: only generic readers, which read any registered table."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getPlatformInventoryTool, args, token),
+  );
+
+  server.registerTool(
+    "get_open_work",
+    {
+      title: "Get Open Work",
+      description:
+        "List unfinished work written down in docs/ spec, progress and review files, by file and line: open checkboxes, " +
+        "deferred phases (and bullets under a Later heading), and not-fixed notes. docs/history keeps only follow-ups, " +
+        "deferred and not-fixed lines. Filter by file (contains), project_code, kind, and where: live (docs/ outside " +
+        "history), history, or all (default). Tier 1.",
+      inputSchema: {
+        file: z.string().optional().describe("Only files whose path contains this, e.g. warren_buffet."),
+        project_code: z.string().optional().describe("Only this project, from the file name."),
+        kind: z.enum(OPEN_WORK_KINDS as unknown as [string, ...string[]]).optional(),
+        where: z.enum(OPEN_WORK_WHERE as unknown as [string, ...string[]]).optional().describe("live, history or all (default)."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getOpenWorkTool, args, token),
+  );
+
+  server.registerTool(
+    "get_finish_summaries",
+    {
+      title: "Get Finish Summaries",
+      description:
+        "List what each worktree's gitpush Finish carried into main (diff stat, migrations, tools, skills, edge functions, " +
+        "task prompts, paths), newest first. Default: only those not yet reviewed; all: true for every one. Filter by " +
+        "project_code. Tier 1.",
+      inputSchema: {
+        all: z.boolean().optional().describe("true: reviewed ones too."),
+        project_code: z.string().optional().describe("Only this project."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getFinishSummariesTool, args, token),
+  );
+
+  server.registerTool(
+    "mark_finish_summaries_reviewed",
+    {
+      title: "Mark Finish Summaries Reviewed",
+      description:
+        "Mark finish summaries as reviewed by a run: sets reviewed_at to now and reviewed_by_run. Up to 50 ids. " +
+        "Returns the updated summaries and any ids not found. Tier 2.",
+      inputSchema: {
+        ids: z.array(z.string()).describe("The finish summaries' ids."),
+        run_id: z.string().describe("The platform_runs id of the run that reviewed them."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(markFinishSummariesReviewedTool, args, token),
   );
 
   // --- Warren Buffet, Phase 1 (docs/technical-spec-warren_buffet-w7b.md §8) ---
