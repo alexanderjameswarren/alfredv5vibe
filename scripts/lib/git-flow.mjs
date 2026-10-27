@@ -480,6 +480,29 @@ const NUMERIC = /^\d+(?:-\d+)?$/;
  * Commas split only when every part is numeric, so `1,2,3` works without
  * breaking a path that happens to contain one.
  */
+/**
+ * Path words against a checkout's changed files: { paths, unknown }. A changed
+ * file stays as it is; a folder becomes every changed, added or deleted file
+ * under it; anything else, a folder with nothing changed under it included, is
+ * unknown.
+ */
+export function expandPathWords(words, dirty) {
+  const changed = dirty.map((f) => f.path);
+  const paths = [];
+  const unknown = [];
+  for (const word of words) {
+    if (changed.includes(word)) {
+      paths.push(word);
+      continue;
+    }
+    const folder = word.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+    const under = folder ? changed.filter((p) => p.startsWith(`${folder}/`)) : [];
+    if (under.length) paths.push(...under);
+    else unknown.push(word);
+  }
+  return { paths: [...new Set(paths)], unknown };
+}
+
 export function parseSelection(answer, count = 0) {
   // An array is argv (`--paths`): the shell already split it, so each token is
   // whole, spaces and all. A typed answer splits on spaces outside quotes.

@@ -22,6 +22,7 @@ import {
   withoutMoved,
   defaultMessage,
   exclusive,
+  expandPathWords,
   findCheckout,
   finishFromInside,
   isInside,
@@ -105,6 +106,45 @@ test("out of range is reported, not quietly dropped", () => {
   assert.deepEqual(sel.bad, ["9", "20-30"]);
   // A range that only partly fits keeps the part that does.
   assert.deepEqual(parseSelection("3-9", 5).indexes, [3, 4, 5]);
+});
+
+// git status -uall: a new folder arrives file by file; a deletion keeps its path.
+const DIRTY = [
+  { path: "supabase/functions/mcp/index.ts", status: " M" },
+  { path: "supabase/functions/mcp/tables.test.mjs", status: "??" },
+  { path: "supabase/functions/overwatch-ingest/index.ts", status: "??" },
+  { path: "supabase/functions/overwatch-ingest/ingest.ts", status: "??" },
+  { path: "docs/old/notes.md", status: " D" },
+  { path: "docs/old/keep.md", status: " M" },
+  { path: "scripts/claims.mjs", status: " M" },
+];
+
+test("--paths: a folder with modified files", () => {
+  assert.deepEqual(expandPathWords(["supabase/functions/mcp"], DIRTY), {
+    paths: ["supabase/functions/mcp/index.ts", "supabase/functions/mcp/tables.test.mjs"],
+    unknown: [],
+  });
+});
+
+test("--paths: a new folder, file by file, with or without the slash", () => {
+  const want = ["supabase/functions/overwatch-ingest/index.ts", "supabase/functions/overwatch-ingest/ingest.ts"];
+  assert.deepEqual(expandPathWords(["supabase/functions/overwatch-ingest"], DIRTY).paths, want);
+  assert.deepEqual(expandPathWords(["supabase\\functions\\overwatch-ingest\\"], DIRTY).paths, want);
+});
+
+test("--paths: a folder holding a deletion takes it", () => {
+  assert.deepEqual(expandPathWords(["docs/old/"], DIRTY).paths, ["docs/old/notes.md", "docs/old/keep.md"]);
+});
+
+test("--paths: an unchanged folder is refused, and a prefix is not a folder", () => {
+  assert.deepEqual(expandPathWords(["src/overwatch"], DIRTY), { paths: [], unknown: ["src/overwatch"] });
+  assert.deepEqual(expandPathWords(["supabase/functions/overwatch"], DIRTY).unknown, ["supabase/functions/overwatch"]);
+});
+
+test("--paths: folders and files mixed, files as before, no duplicates", () => {
+  const r = expandPathWords(["scripts/claims.mjs", "supabase/functions/mcp", "supabase/functions/mcp/index.ts", "typo.js"], DIRTY);
+  assert.deepEqual(r.paths, ["scripts/claims.mjs", "supabase/functions/mcp/index.ts", "supabase/functions/mcp/tables.test.mjs"]);
+  assert.deepEqual(r.unknown, ["typo.js"]);
 });
 
 test("a path is not a range, and a comma in one is not a separator", () => {
