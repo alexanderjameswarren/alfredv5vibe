@@ -20,6 +20,7 @@ export default function SongRail({
   onWarmUp, warmUpVisible, warmUpPrimary, warmUpDisabledReason,
   song, bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed,
   onSongUpdate, onHideBpmEdit,
+  planItem = null, planWarmup = undefined, onSetPlanTempo = null,
   snippetsOpen = false, onToggleSnippets = null,
   moreOpen = false, onToggleMore = null,
   onBack,
@@ -57,6 +58,9 @@ export default function SongRail({
         playbackSpeed={playbackSpeed}
         onSongUpdate={onSongUpdate}
         onHideBpmEdit={onHideBpmEdit}
+        planItem={planItem}
+        planWarmup={planWarmup}
+        onSetPlanTempo={onSetPlanTempo}
       />
 
       <Divider />

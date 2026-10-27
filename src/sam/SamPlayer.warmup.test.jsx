@@ -377,6 +377,16 @@ test("a qualifying pass fills the rung; the second advances it and the NEXT cycl
   expect(screen.getByLabelText(rung2(0))).toBeInTheDocument();
 });
 
+test("a rung advance tells the scroll the tempo changes AT the wrap; a plain pass does not", async () => {
+  await openPlanItem();
+  await pressWarmUp();
+  await playPass(1);
+  expect(mockScrollProps.continueAtWrapRef.current).toBe(false);
+  await playPass(2);
+  expect(playingBpm()).toBe(60);
+  expect(mockScrollProps.continueAtWrapRef.current).toBe(true);
+});
+
 test("every ladder pass records the rung it was PLAYED at, not the one it advanced to", async () => {
   await openPlanItem();
   await pressWarmUp();

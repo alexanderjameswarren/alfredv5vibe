@@ -1,16 +1,26 @@
 import React from "react";
-import { Pause, Flame, Check, ArrowDown, OctagonX } from "lucide-react";
+import { Pause, Flame, Check, ArrowDown, ArrowUp, OctagonX } from "lucide-react";
 import LiveSessionCounter from "./LiveSessionCounter";
 import WarmupStrip from "./WarmupStrip";
 import PlanGoalLine from "./PlanGoalLine";
 import { formatAccuracy, goalState } from "../lib/practiceScoring";
+import { planTempoText } from "../lib/activePlan";
+
+// The tempo alert (sam_tempo): the run's heard tempo against the plan item, in
+// the top row beside Pause where a glance lands. Slower is the strong one, solid
+// red, because those passes cannot count; faster is a blue outline, because they
+// still do. The words and an arrow carry it without colour.
+const TEMPO_ALERT = {
+  slower: { Icon: ArrowDown, cls: "bg-red-700 border-red-700 text-white" },
+  faster: { Icon: ArrowUp, cls: "bg-card border-blue-700 text-blue-800" },
+};
 
 // Collapsed top chrome during `playbackState === "playing"`. Everything the
 // user doesn't need mid-play (song title, transport speed controls, MIDI
 // status, metronome radios, etc.) is dropped from the tree entirely — the
 // parent renders this instead of the full SettingsBar / StatsBar stack.
 //
-// Row 1  → Pause | Warm up again | Session badge + Playthrough badge + Completed Passes + live Today
+// Row 1  → Pause | Warm up again | tempo alert | Session badge + Playthrough badge + Completed Passes + live Today
 // Row 2  → Loop / Hits / Misses / Session accuracy (muted, secondary)
 // Row 3  → the warm-up ladder strip, while a ladder is running; on a warm-up
 //          plan item it ends with "Warm-up · rung n of m"
@@ -81,7 +91,10 @@ export default function FocusedPlaybackBar({
   // "Warm up again" (§7.1): only reachable mid-play, since the ladder ends with
   // the session and completion leaves him still looping.
   onWarmUp = null,
+  // planTempoCheck for the run in progress; an alert only when slower or faster.
+  planTempo = null,
 }) {
+  const tempoAlert = TEMPO_ALERT[planTempo?.status] || null;
   // Null accuracy means nothing was measured; formatAccuracy shows "—".
   const playthroughPct = hasPlaythrough && playthroughIsCurrent ? playthroughPercent : null;
   const goal = Number.isFinite(accuracyGoal) ? accuracyGoal : null;
@@ -115,6 +128,18 @@ export default function FocusedPlaybackBar({
             <Flame className="w-4 h-4" />
             Warm up again
           </button>
+        )}
+
+        {tempoAlert && (
+          <span
+            role="status"
+            data-testid="plan-tempo-alert"
+            data-state={planTempo.status}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-md border-2 min-h-[44px] text-base font-semibold whitespace-nowrap ${tempoAlert.cls}`}
+          >
+            <tempoAlert.Icon className="w-5 h-5 shrink-0" aria-hidden="true" />
+            {planTempoText(planTempo)}
+          </span>
         )}
 
         {/* LiveSessionCounter self-gates on playing; passing "playing"

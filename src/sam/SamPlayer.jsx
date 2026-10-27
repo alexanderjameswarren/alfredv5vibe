@@ -29,7 +29,7 @@ import { ensureSnippetSaved, sameLoadedRange, snippetFromRow } from "./lib/snipp
 import useActivePlan from "./lib/useActivePlan";
 import {
   firstIncompleteItem, heardTempo, itemForLoadedRange, itemState, matchPlanItem,
-  nextIncompleteItem, passQualifies, planBadgeText, planSongFor, snippetTagText,
+  nextIncompleteItem, passQualifies, planBadgeText, planSongFor, planTempoCheck, snippetTagText,
 } from "./lib/activePlan";
 import PlanLine from "./components/PlanLine";
 import useWarmupLadder, { fetchDefaultLadder } from "./lib/useWarmupLadder";
@@ -338,6 +338,9 @@ export default function SamPlayer({ onBack }) {
 
   const planItem = itemForLoadedRange(activePlan.plan, songDbId, snippet);
   const planItemState = planItem ? itemState(planItem, activePlan.progress) : null;
+  // The running rung's percent, or null with no ladder: the plan tempo warnings
+  // stay quiet below 100%.
+  const warmupRungPercent = warmup.view ? warmup.view.ladder[warmup.view.rung]?.target_percent ?? null : null;
 
   // THE CURRENT RUN ON A CONSECUTIVE ITEM (2026-09-28). The database returns the
   // LONGEST qualifying streak of the day and nothing else — which is the right
@@ -1086,8 +1089,12 @@ export default function SamPlayer({ onBack }) {
   // render, so a callback that closed over it would change identity every render
   // — and ScrollEngine captures `onLoopCount` once, so a changed identity there
   // is simply never called again.
-  const tempoSettersRef = useRef({ setBpm: null, setSpeed: null });
-  tempoSettersRef.current = { setBpm: bpm.set, setSpeed: playbackSpeed.set };
+  const tempoSettersRef = useRef({ setBpm: null, setSpeed: null, bpm: null });
+  tempoSettersRef.current = { setBpm: bpm.set, setSpeed: playbackSpeed.set, bpm: bpm.value };
+  // Set when a rung's tempo goes in the box AT the loop wrap, so ScrollEngine
+  // carries on from the top of the range instead of a fresh lead-in. The engine
+  // clears it.
+  const continueAtWrapRef = useRef(false);
 
   // Put one rung's tempo in the box. Deliberately the same two setters a human
   // typing in the box uses, so the ladder introduces no second way to change
@@ -1240,7 +1247,14 @@ export default function SamPlayer({ onBack }) {
     //
     // Guarded on n > 0 because setting the tempo re-runs ScrollEngine's scroll
     // effect, which re-emits 0; a pending tempo must not be taken by its own echo.
-    if (n > 0) applyRungTempo(takeWarmupTempo());
+    if (n > 0) {
+      const tempo = takeWarmupTempo();
+      // Only a BPM change restarts the scroll; a flag nothing consumes must not be left set.
+      if (tempo && Number.isFinite(tempo.bpm) && tempo.bpm !== tempoSettersRef.current.bpm) {
+        continueAtWrapRef.current = true;
+      }
+      applyRungTempo(tempo);
+    }
   }, [setLoopIteration, takeWarmupTempo, applyRungTempo, countGraded]);
 
   // The music of one playthrough has finished — the moment the pass is banked.
@@ -1827,7 +1841,7 @@ export default function SamPlayer({ onBack }) {
     if (Number.isFinite(item.target_playback_speed)) playbackSpeed.set(item.target_playback_speed);
   }
 
-  // "Set tempo" on the plan line: the item's tempo, for this sitting only.
+  // "Set tempo" in the rail: the item's tempo, for this sitting only.
   function applyPlanTempo() {
     if (!planItem) return;
     if (Number.isFinite(planItem.target_bpm)) bpm.set(planItem.target_bpm);
@@ -2074,6 +2088,14 @@ export default function SamPlayer({ onBack }) {
                 playbackSpeed={playbackSpeed}
                 onSongUpdate={setSong}
                 onHideBpmEdit={hideBpmEdit}
+                planItem={planItem}
+                // Quiet below the full-tempo rung, and when paused mid-ladder:
+                // Resume and Restart put rung one's tempo back in the box.
+                planWarmup={{
+                  rungPercent: warmupRungPercent,
+                  pausedMidLadder: warmupWasRunningRef.current,
+                }}
+                onSetPlanTempo={applyPlanTempo}
                 snippetsOpen={snippetsOpen}
                 onToggleSnippets={toggleSnippets}
                 moreOpen={moreOpen}
@@ -2108,6 +2130,8 @@ export default function SamPlayer({ onBack }) {
                 accuracyGoal={accuracyGoal}
                 playthroughImpossible={sessionStats.playthroughImpossible}
                 onWarmUp={handleWarmUp}
+                // The run's own tempo against the plan; quiet on a rung below 100%.
+                planTempo={planTempoCheck(planItem, bpm.value, playbackSpeed.value, { rungPercent: warmupRungPercent })}
               />
               )
             ) : (
@@ -2137,8 +2161,6 @@ export default function SamPlayer({ onBack }) {
                   <PlanLine
                     item={planItem}
                     state={planItemState}
-                    heardTempo={heardTempo(bpm.value, playbackSpeed.value)}
-                    onSetTempo={applyPlanTempo}
                     nextItem={nextPlanItem}
                     // The same path the home page checklist uses — one way in.
                     onOpenNext={openPlanItem}
@@ -2453,6 +2475,7 @@ export default function SamPlayer({ onBack }) {
                 audioEndMs={practiceMode ? null : (audioElement ? getLoopAudioEndMs() : null)}
                 handMode={snippet?.handMode || "both"}
                 onScrollStart={practiceMode ? null : scheduleAudioStartOnScroll}
+                continueAtWrapRef={continueAtWrapRef}
               />
             )}
             </div>

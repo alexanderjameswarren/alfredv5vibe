@@ -53,7 +53,7 @@ function PlanIcon({ state, tone }) {
 // plans spec §7.4). One compact line directly under the stats row, each line led
 // by an icon at a shared size and left edge so the block reads as a column:
 //
-//   ◉ Plan · 60 BPM · 90% · 2/4 today · Count out loud    [Set tempo]
+//   ◉ Plan · 60 BPM · 90% · 2/4 today · Count out loud
 //   ▲ Warm-up · 70% → 100% · from this snippet
 //   ⛰ Song goal: Master m.16–17, then start m.18.
 //
@@ -77,8 +77,7 @@ function PlanIcon({ state, tone }) {
 // (alone when the range has no item and the plan has nothing left to offer).
 // Counts come from `state` — sam_plan_item_progress — never from passes.
 //
-// "Set tempo" appears only when the heard tempo differs from the item's target.
-// It changes the tempo box for this sitting; nothing is saved to the song.
+// "Set tempo" lives in the rail, under the tempo box (TempoControls, 2026-10-27).
 //
 // Once the item is done, a "Next: <song> <range>" button appears beside it
 // (2026-09-19) — the same PlanNextButton the home page checklist uses, calling
@@ -112,10 +111,9 @@ function PlanIcon({ state, tone }) {
 // a done item keeps its check mark rather than being dimmed — and amber is
 // `amber-800` (7.1:1 on the card). The song note stays a step down in weight
 // only, not in contrast. "Not in today's plan" is plan content, so it takes the
-// same full contrast; the button beside it stays muted, exactly as it does
-// beside Set tempo.
+// same full contrast; the button beside it stays muted.
 export default function PlanLine({
-  item, state, songNote, heardTempo, onSetTempo, nextItem, onOpenNext,
+  item, state, songNote, nextItem, onOpenNext,
   warmupSummary = null, warmupSourceLabel = null,
 }) {
   const [noteOpen, setNoteOpen] = useState(false);
@@ -126,7 +124,6 @@ export default function PlanLine({
   if (!item && !songNote && !offPlan && !warmupSummary) return null;
 
   const tone = item && state.amber ? "text-amber-800" : "text-foreground";
-  const showSetTempo = item && heardTempo !== item.target_effective_bpm;
 
   return (
     <div className="mb-2 px-1 text-sm" aria-label="Practice plan">
@@ -151,16 +148,6 @@ export default function PlanLine({
           {state.done && <PlanNextButton item={nextItem} onOpen={onOpenNext} className={NEXT_LEAD} />}
           <PlanIcon state={state} tone={tone} />
           <span className={`${tone} min-w-0 truncate`} title={planLineText(item, state)}>{planLineText(item, state)}</span>
-          {showSetTempo && (
-            <button
-              type="button"
-              onClick={onSetTempo}
-              title={`Set the tempo box to ${item.target_effective_bpm} BPM for this session`}
-              className={`shrink-0 whitespace-nowrap flex items-center gap-1 px-3 py-1.5 text-sm min-h-[44px] ${UI.outline}`}
-            >
-              Set tempo
-            </button>
-          )}
         </div>
       )}
       {/* Whenever Warm up is available — see the note at the top. A ramp that

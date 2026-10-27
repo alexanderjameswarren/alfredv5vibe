@@ -335,6 +335,19 @@ test("plan line for the whole-song item; Set tempo applies the item tempo withou
   expect(mockDb.updates.filter((u) => u.table === "sam_songs")).toEqual([]);
 });
 
+test("while playing, the bar says the run is off the plan tempo, and nothing on plan", async () => {
+  renderSong();
+  await screen.findByText(/Plan · Whole song · 55 BPM/);
+  // Song default 65 against the item's 55: faster.
+  await pressPlay();
+  expect(screen.getByTestId("plan-tempo-alert")).toHaveTextContent("Faster than plan (55)");
+  fireEvent.click(screen.getByRole("button", { name: /Pause/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Set tempo" }));
+  fireEvent.click(screen.getByRole("button", { name: /^Resume$/ }));
+  await screen.findByRole("button", { name: /Pause/ });
+  expect(screen.queryByTestId("plan-tempo-alert")).not.toBeInTheDocument();
+});
+
 test("a song outside the plan shows nothing new", async () => {
   mockDb.tables.sam_practice_plan_songs = [];
   mockDb.tables.sam_practice_plan_items = [];
