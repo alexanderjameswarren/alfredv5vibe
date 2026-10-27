@@ -10,17 +10,23 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
   `push_time` (05:00), so everything lands before Alex is up at 5.
 - **App / job:** `overwatch` / `nightly` (schedule row from migration 177, with the weekly one).
   claude.ai task `trig_013sUsnchXf7L29ti7CunERU`.
-- **Tools:** the **Alfred** connector (mcp v172 or later: `get_project_estimates`, `get_friction`
-  with `status`, `get_inbox` with `source_app`) and the **Claude_Code_Remote** connector
-  (`list_triggers`), which every Claude task already has. The **`overwatch` skill** must be
+- **Tools:** the **Alfred** connector (mcp v174 or later: `get_project_estimates`, `get_friction`
+  with `status`, `get_inbox` with `source_app`, and since 2026-10-27 `get_finish_summaries`,
+  `get_platform_inventory` and `mark_finish_summaries_reviewed`) and the **Claude_Code_Remote**
+  connector (`list_triggers`), which every Claude task already has. The **`overwatch` skill** must be
   available to the task.
 - **Call budget:** the Alfred connector allows **60 calls in 5 minutes**. The prompt reads in bulk
-  and groups locally, so a typical night makes about 41 to 46 Alfred calls (up to 4 more when apps
+  and groups locally, so a typical night makes about 43 to 48 Alfred calls (up to 4 more when apps
   with no activity row need their last use read from their own data), spread over more than
-  5 minutes of run time; rule 8 keeps it under the limit on a heavy night.
+  5 minutes of run time; rule 8 keeps it under the limit on a heavy night. The impact review
+  (counts 10 and 11) adds **2 calls on a night with no finish summary** (the summaries read and the
+  freshness read), and on a night with one summary about **8 to 12** more, **at most 19** (the
+  table list, the skills, up to 5 table reads, up to 5 follow-up items, up to 2 profile rewrites and
+  the mark), which is when rule 8's pause matters.
 - **Settings it reads** from the active plan: `stall_days`, `waiting_on_alex_days`, `fading_days`,
   `overrun_factor`, `active_project_limit`, `inbox_backlog_threshold`, `routing_low_confidence`,
-  `overdue_days`, `urgent_within_days` (to add through the gate), `pushes_per_day`, `push_time`.
+  `overdue_days`, `urgent_within_days` (to add through the gate), `pushes_per_day`, `push_time`, and
+  `inventory_stale_days` (to add through the gate; **7** until then, rule 1).
 - **Needs** `first_report_at` on `get_project_plans` rows for the estimated finish (Step 33's
   change to `overwatch_project_progress`); until then every finish is "unknown".
 - **Spec:** `docs/technical-spec-overwatch-q4n.md` section 6 (the nightly job and the rule for
@@ -34,7 +40,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 > version, and Step 10 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-10-26d`
+> ### `PROMPT VERSION: 2026-10-27a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -48,7 +54,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
    "THE PROMPT" line as its instructions.
 4. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
    Check: a `platform_runs` row for `overwatch` / `nightly` closed `ok`; tonight's note in
-   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-26d`.
+   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-27a`.
 
 ## The record, the note and the nudges are SEPARATE
 
@@ -56,7 +62,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 |---|---|---|
 | **Record** | **every run**, failures and duplicates included | `platform_runs` |
 | **Note** | every run that gets past Step 3, quiet nights included; a second manual run that day replaces it | `overwatch_notes`, period `nightly` |
-| **Inbox items** | **only** for a stall, an overrun, fading or overdue intentions, or a proposal | Alfred inbox, `source_app: "overwatch"` |
+| **Inbox items** | **only** for a stall, an overrun, fading or overdue intentions, a proposal, a stale inventory, or a finish-summary follow-up | Alfred inbox, `source_app: "overwatch"`; a follow-up goes to the affected app |
 | **Nudges** | at most `pushes_per_day`, only when there are new inbox items | `create_reminder`, each linked to one of them |
 | **Failure item** | **only** when the run failed | one inbox item, "Overwatch nightly FAILED" |
 
@@ -67,8 +73,9 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 ---
 
 You are running Overwatch's nightly check for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-10-26d`. **First, load the `overwatch` skill.** It tells you how to read each
-app, what counts as fading, what counts as a deadline mention, and how to word the note. Follow
+`PROMPT VERSION: 2026-10-27a`. **First, load the `overwatch` skill.** It tells you how to read each
+app, what counts as fading, what counts as a deadline mention, what counts as a follow-up from a
+finish summary, and how to word the note. Follow
 these steps in order for everything else. **Where the skill and these steps disagree, these steps
 win.** Do not improvise.
 
@@ -77,11 +84,13 @@ win.** Do not improvise.
 1. **THE PLAN SETS EVERY NUMBER.** Every threshold, limit and time comes from the active plan's
    `settings` (Step 3.1). **Never use a number that is not there**, except the call budget in rule 8.
    If a setting a count needs is missing, skip that count and add the setting's name to
-   `settings_missing`. Never guess a default.
+   `settings_missing`. Never guess a default. **The one exception:** `inventory_stale_days` (count
+   10) is **7** while the plan lacks it; add `inventory_stale_days (used 7)` to `settings_missing`.
 2. **YOU READ, COUNT AND REPORT; YOU NEVER CHANGE.** The only tools that write that you may call
    are: `create_platform_run`, `update_platform_run`, `log_activity` (Step 4 only),
    `create_overwatch_note`, `create_inbox_item`, `create_reminder`, `update_overwatch_watch` (only
-   `expiry_noted: true`) and `update_overwatch_checks`. **Never** call `create_overwatch_plan`,
+   `expiry_noted: true`), `update_overwatch_checks`, `update_app_profile` (Step 8.4 only, and only
+   `current_state`) and `mark_finish_summaries_reviewed` (Step 8.5 only). **Never** call `create_overwatch_plan`,
    `update_project_plan`, `record_project_estimate`, `update_friction`, `create_project_link`,
    `archive_inbox_item`, `update_inbox_item`, any app's own write tools, or any tool that creates,
    changes or runs a scheduled task. A change you think is needed goes into an inbox item as a
@@ -91,8 +100,9 @@ win.** Do not improvise.
    report. If you do not have it, write `unknown`. You write the note's wording, never its numbers.
 4. **NEVER IMPROVISE.** If you hit anything this prompt and the skill do not cover, **STOP** and
    report what you saw.
-5. **EVERY INBOX ITEM IS OVERWATCH'S.** Every `create_inbox_item` call sets `source_type: "task"`
-   and `source_app: "overwatch"`.
+5. **EVERY INBOX ITEM IS OVERWATCH'S, EXCEPT A FOLLOW-UP.** Every `create_inbox_item` call sets
+   `source_type: "task"` and `source_app: "overwatch"`, except a finish-summary follow-up (Step 6.7),
+   which sets the affected app's id so it lands in that app's queue.
 6. **WHEN A CALL FAILS, QUOTE THE ERROR VERBATIM.**
 7. **EVERY RECORD ID YOU SHOW IS A LINK**, written `https://alfredv5vibe.vercel.app/<id>`, after
    the name it belongs to, in parentheses.
@@ -236,6 +246,8 @@ Each count names its setting. If a read errors, SKIP the count.
      `source_app`, `ai_confidence`. At most 10, newest first.
    - d. **Overwatch's own open items**, for Step 6: the first line of each row with
      `source_app: "overwatch"`.
+   - f. **Open follow-ups**, for Step 6.7: the first line of each row, whatever its `source_app`,
+     that starts `Overwatch: follow-up`.
    - e. **Urgent** (`stall_days`, for the backlog): the 3b rows older than a day, the 3a apps whose
      oldest item is older than `stall_days` days, and the 3c rows. The note's inbox line is
      "<total> items. Nothing urgent." when there are none; otherwise it lists only these.
@@ -282,6 +294,41 @@ Each count names its setting. If a read errors, SKIP the count.
      `urgent_within_days` days of `local_date`; while the setting is missing, none is urgent.
 8. **Watch items that ended:** the list from Step 3.3.
 9. **Checks due:** the list from Step 3.2, each with what you found about its `about`.
+10. **Inventory freshness** (`inventory_stale_days`, 7 while missing, rule 1):
+    `get_platform_inventory` with `limit: 1`, **one call**. Every part of one rebuild shares its
+    `seen_at`, so that row's `seen_at` is the last rebuild. Stale when it is more than
+    `inventory_stale_days` days before `local_date`, or when the call returns no rows. Keep
+    `seen_at` (or "never") and the days.
+11. **Impact review of finish summaries:** `get_finish_summaries` with `limit: 10`, **one call**
+    (unreviewed only, oldest work first in your handling: sort by `finished_at`). With none, this
+    count is done. Otherwise take **at most 3** tonight; the rest wait, unreviewed, for the next
+    night, and the note says how many wait. For the ones you take:
+    - a. **The inventory, once for all of them:** `get_platform_inventory` with `kind: "table"`,
+      `limit: 50`, paging until the NOTE says there is no more (at most 3 calls), and with
+      `kind: "skill"`, `limit: 50` (one call). Keep the table names, and each skill's `name`,
+      `app_id`, `location` and `details.tools`.
+    - b. **Tables each summary touched:** the tables the skill says a summary touched (a table
+      named in a migration path, and the tables its changed tools read or write, from the summary's
+      `tools` against 11a only when the skill says to look further). At most **5** tables across
+      tonight's summaries.
+    - c. **Who else uses them:** for each such table, `get_platform_inventory` with `table: <name>`,
+      `limit: 50`, **one call each**. A part whose `location` is not in the summary's `paths` was
+      not touched by that work: keep it as a candidate (`kind`, `name`, `app_id`, `uses`, the table,
+      the migration).
+    - d. **New or changed tools no skill mentions:** each name in the summary's `tools` that is in
+      no skill's `details.tools` from 11a.
+    - e. **Skills changed in the repo:** each path in the summary's `skills`. A skill in claude.ai
+      runs the pasted text, not the repo's, so each is a candidate for "paste it into claude.ai".
+    - f. Which candidates are real follow-ups is **the skill's call**. Keep, per follow-up: kind
+      (`table_users`, `tool_in_no_skill`, `skill_to_paste`), its subject, the affected `app_id`
+      (the part's, else the skill's; `overwatch` when neither has one), what to check in one line,
+      and the summary's `id` and `merge_commit`. At most **5** follow-ups tonight, most important
+      first; the rest are named in the note only.
+    - g. **What the work changed for an app:** the skill decides whether a summary changes what an
+      app does (a new screen, new tools, a new table it owns); keep the app and one or two
+      sentences for Step 8.4. At most **2** apps tonight.
+    - h. Keep the ids of the summaries you took. If 11a, 11c or the summaries read errors, SKIP the
+      whole count (`count:impact_review`) and keep no ids, so they stay unreviewed for tomorrow.
 
 ### Step 6 — Raise inbox items
 
@@ -338,6 +385,25 @@ read them with one `get_inbox` with `source_app: "overwatch"`, `limit: 50`.)
    ```
    `source_metadata.kind: "scan_gap"`.
 
+6. **One for a stale inventory** (count 10). First line:
+   `Overwatch: inventory stale — <days> days`. Then "The platform inventory was last rebuilt
+   <friendly date, or never>. gitpush sends it after every merge into main; a long gap means the
+   sends are failing or nothing has been merged." and this paste-ready prompt:
+   ```
+   FOR CLAUDE.AI, NOT THE CLI
+   Overwatch says the platform inventory has not been rebuilt since <date>. Help me check the sender log (alfred-overwatch-outbox.jsonl.log in the repo's .git folder) and, if needed, run npm run inventory -- --send.
+   ```
+   `source_metadata.kind: "inventory_stale"`.
+7. **One per follow-up** (count 11f), **`source_app` the follow-up's app** (rule 5). Dedupe against
+   count 3f, not 3d: never raise one when an open item starts with the same text up to its " — ".
+   First line, by kind:
+   - `table_users`: `Overwatch: follow-up: <part> after <table> changed — <merge_commit, 7 characters>`
+   - `tool_in_no_skill`: `Overwatch: follow-up: <tool> is in no skill — <merge_commit, 7 characters>`
+   - `skill_to_paste`: `Overwatch: follow-up: paste the <skill> skill into claude.ai — <merge_commit, 7 characters>`
+   Then the one line of what to check, "From <project_code>'s Finish on <friendly date>
+   (<merge_commit>)." and, for `table_users`, its `uses` of the table.
+   `source_metadata: { "task_name": "Overwatch nightly", "run_date": "<local_date>", "kind": "follow_up", "follow_up": "<kind>", "summary_id": "<id>" }`.
+
 Every item also sets `ai_reasoning: "Created by the overwatch/nightly scheduled task, run <run id>."`
 and nothing else: no `suggested_*` fields. Keep each returned inbox id. If one call errors, SKIP
 it (`skipped` gets `inbox:<first line>`) and go on.
@@ -360,8 +426,10 @@ Call `create_overwatch_note` with `period: "nightly"`, `for_date: <local_date>`,
   - **Order under Action Required:** time-sensitive first (overdue intentions; deadlines, the urgent
     ones first; failed or missing tasks, stopped schedules and orphan runs, each suggested as **a bug
     to log**: "Log a bug: <schedule> has had no ok run since <date>."), then anything waiting on Alex,
-    then the projects, then the rest: the over-limit count, claim blocks, fading, quiet apps, the
-    inbox, watch items that ended, checks due.
+    then the projects, then the finish-summary follow-ups (one bullet per summary: its project and
+    date, its follow-ups as sub-bullets, "N more wait" when count 11 left some), then the rest: a
+    stale inventory, the over-limit count, claim blocks, fading, quiet apps, the inbox, watch items
+    that ended, checks due.
   - **Projects:** one bullet per project with a finding, its name the link, then its estimated
     finish (count 2g), and as sub-bullets its stall or overrun, its scope changes (each with its
     reason) and, for an empty Project group, "No item or intention yet."
@@ -375,7 +443,9 @@ Call `create_overwatch_note` with `period: "nightly"`, `for_date: <local_date>`,
   `stalled`, `waiting_on_alex`, `overruns`, `over_limit`, `scope_changes`, `empty_projects`,
   `backlogs`, `unrouted`,
   `low_confidence_routing`, `stopped_schedules`, `orphan_runs`, `task_health`, `claim_blocks`,
-  `fading`, `overdue_intentions`, `deadline_no_date`, `watch_ended`, `checks_due`, plus
+  `fading`, `overdue_intentions`, `deadline_no_date`, `watch_ended`, `checks_due`,
+  `inventory_stale` (`{ "seen_at": … | "never", "days": … }`, or an empty list when fresh),
+  `impact_review` (the follow-ups from count 11f, each with its summary id), plus
   `inbox_items` (the ids from Step 6), `skipped` and `settings_missing`.
 
 A second manual run on the same day replaces the note, keeping its id; that is expected. If the call
@@ -384,7 +454,8 @@ errors, STOP with `failure_kind: "note_write"`.
 ### Step 8 — Nudges, watch items and checks
 
 1. **Nudges** (`pushes_per_day`, `push_time`). Take the inbox items raised in Step 6, most important
-   first: waiting on Alex, then overrun, stalled, overdue, scan gaps, proposals, fading. Send **at most
+   first: waiting on Alex, then overrun, stalled, overdue, scan gaps, a stale inventory, proposals,
+   fading, follow-ups. Send **at most
    `pushes_per_day`**, less any reminders an earlier run today already sent (`earlier_run_id`'s
    `details.reminders_sent`, from Step 2.3's read): one `create_reminder` per item, `inbox_id` its
    id, `text` its first line without "Overwatch: ", and `due_at`
@@ -395,6 +466,12 @@ errors, STOP with `failure_kind: "note_write"`.
 3. **Checks for the next run:** `update_overwatch_checks` with the checks kept in Step 3.2, plus a
    check for anything tonight's note asked to look at again (`text`, `check_on`, and `about` as an
    app id or group id). Pass the whole list; an empty list clears it.
+4. **An app's current state** (count 11g, at most 2): `update_app_profile` with the `app_id` and
+   `current_state` only: the app's `current_state` from Step 3.6 with what the work changed worked in
+   the way the skill says. Never `activity_recipe` or `rhythm_days`.
+5. **Mark the summaries reviewed** (count 11h): `mark_finish_summaries_reviewed` with the kept ids
+   and `run_id` this run's id, **one call**, only after Step 6's follow-ups were raised. Summaries
+   left for tomorrow are not in it.
 
 A failed call here is SKIPPED, never STOP.
 
@@ -402,8 +479,9 @@ A failed call here is SKIPPED, never STOP.
 
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-- **`details`**, always: `local_date`, `prompt_version: "2026-10-26d"`, `manual`, `plan_id`, the
+- **`details`**, always: `local_date`, `prompt_version: "2026-10-27a"`, `manual`, `plan_id`, the
   count of each flag, `note_id`, `inbox_item_ids`, `reminders_sent`, `apps_pulled`,
+  `summaries_reviewed` (the ids marked in Step 8.5), `profiles_rewritten` (app ids),
   `alfred_calls`, `paused`, `skipped` and `settings_missing`; also `earlier_run_id` when Step 2.3
   kept one, or `duplicate_of` when it stopped there.
 - **On `failed`:** `error_message` is the verbatim error, and `details.failure_kind` is one of
@@ -425,7 +503,8 @@ Run: <run id>
 ### Step 10 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-26d`;
+- `PROMPT VERSION: 2026-10-27a`;
+- the finish summaries reviewed and the follow-ups raised, and whether the inventory is stale;
 - the run id and its status, and `manual: true` or `manual: false`; `duplicate_of` if it stopped;
 - the count of each flag, the note id, the inbox item ids and the reminders sent;
 - `alfred_calls` and whether it paused;

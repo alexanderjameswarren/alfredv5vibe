@@ -5,7 +5,7 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
-Skill version: 2026-10-26a
+Skill version: 2026-10-27a
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
@@ -120,6 +120,29 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
   time period with no cutoff ("for a month", "weekly") is not a deadline. Quote the words
   that make it one, and when they name a date, read it as the next such date ("by March"
   in October is next March).
+- **The tables a finish summary touched** (count 11b). A migration's file name usually names
+  its table (`180_overwatch_platform_inventory.sql` is platform_inventory): match the inventory's
+  table names against the words in each migration path, longest name first, and take every
+  table named. Look at the summary's changed tools' tables only when it has no migration, or a
+  migration whose name matches no table. Five tables a night is plenty; take the ones the
+  migrations name first.
+- **What counts as a follow-up** (count 11f). One is a thing Alex would otherwise forget that
+  the Finish made necessary somewhere it did not touch:
+  - `table_users`: a part that reads or writes a table the work changed, outside the work. A
+    tool or skill that **reads** a table that gained or changed columns is a follow-up (does it
+    still return what it should?). One that only **writes** it, a trigger, or the audit is not,
+    unless the migration dropped or renamed something. Skip the parts of the same app as the
+    work when the summary also changed that app's tools: the work most likely covered them.
+  - `tool_in_no_skill`: a tool the work added or changed that no skill names, so no chat will
+    think to call it. Not a follow-up for tools only scheduled prompts call; say so instead.
+  - `skill_to_paste`: always a follow-up, one per skill changed. A claude.ai skill runs the
+    pasted text, so a skill changed in the repo is stale until Alex pastes it.
+  When unsure, raise it; a follow-up is cheap to archive and an unnoticed break is not.
+- **When to rewrite `current_state`** (count 11g). Only when the work changes what the app
+  **does** for Alex: a new screen or section, new tools he would use in chat, a new kind of
+  record. Not for fixes, refactors, tests, docs or plumbing. Keep the rewrite to the existing
+  page with one or two sentences added or changed, in the same plain voice; never shorten or
+  reorder the rest.
 - **The note.** Follow the plan's `instructions` for focus and tone. Plain, short lines,
   most important first, each naming the app or project and what Alex can do. Say what
   changed since the last note, not everything that is true. Never soften a count, and never
@@ -157,5 +180,22 @@ The procedure is `docs/overwatch-weekly-task-prompt.md`. The judgment it asks fo
 - **Estimate accuracy.** Report actual against original and against scope-adjusted for
   each shipped project; a project that ran over only through scope changes was well
   estimated. Keep the note to the ratios and the suggestion.
+- **Names that look like tools but are not missing tools** (drift audit). `unknown_tools` lists
+  every name shaped like a tool (get_x, create_x, set_x) that is not a registered Alfred tool.
+  Most are not missing tools: arguments and fields (`search_text`, `set_kind`, `check_on`,
+  `split_id`, `set_video_id`), placeholders in examples (`create_thing`, `get_my_thing`), SQL
+  functions and RPCs (`set_read_settings`), and **tools on other connectors**: the Workshop
+  Surface tools (`create_dj_playlist`, `get_dj_playlists`, `get_dj_album`,
+  `get_dj_library_albums`, `get_dj_artist_top_songs`, `search_dj_music`, `get_dj_history`,
+  `get_workshop_status` and the rest of that connector). A finding is a name a skill or prompt
+  tells Claude to **call** that exists nowhere: gone, renamed or misspelt.
+- **Apps with no skill.** An app with no skill is fine when it has no chat flow: a screen-only
+  app (Timer, Games), a hardware or desktop app run elsewhere (Workshop, Switchboard), or an app
+  not built yet (Arnold, Monty Don, Sports, while they are ideas). Name it only when chats about
+  it are happening (activity or inbox items routed to it) with no skill to guide them.
+- **Tables no tool touches.** Many are read by the app's screens directly, not through a tool
+  (push subscriptions, notification steps): that is not drift. A finding is a table nothing
+  reads at all: no tool, no screen you know of, no trigger. Say "may be unused" and let Alex
+  decide; never propose dropping it.
 - **The note.** As for the nightly note: the plan's `instructions`, plain short lines,
   most important first, never a softened or invented count.

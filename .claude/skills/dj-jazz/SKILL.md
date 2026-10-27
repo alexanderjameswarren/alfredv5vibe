@@ -5,6 +5,8 @@ description: Suggest jazz to listen to now, and put it in the Today's Jazz playl
 
 # Jazz
 
+Skill version: 2026-10-27a
+
 🛑 **A SUGGESTION IS A WRITE, NOT A SENTENCE.** *"Try Mingus Ah Um"* is homework — it means
 copying text off a phone and hunting for the album. *"It's in Today's Jazz"* is a suggestion.
 **Every exchange ends with something in the playlist or with nothing having been suggested.**

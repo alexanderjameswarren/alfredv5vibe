@@ -5,6 +5,8 @@ description: Build a concert playlist — for a show Alex is going to, an act he
 
 # Building a concert playlist
 
+Skill version: 2026-10-27a
+
 🛑 **PROPOSE BEFORE WRITING ANYTHING.** Show the resolved songs, the playlist name, and what will
 be created. **Nothing is created, renamed or added until he says yes.** This writes to YouTube,
 which is the only part of this system a mistake cannot be quietly undone in.
