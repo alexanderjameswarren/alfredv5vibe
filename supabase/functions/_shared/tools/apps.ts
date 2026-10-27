@@ -16,6 +16,7 @@ export const APP_COLUMNS = "id, name, description, icon, path, button_name";
 
 export const getAppsTool = defineTool({
   name: "get_apps",
+  tables: { reads: ["apps"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     // A small fixed list: up to 50 by default, by name. Shared read (MCP read access S8b).

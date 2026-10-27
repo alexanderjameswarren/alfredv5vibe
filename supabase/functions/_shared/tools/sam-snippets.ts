@@ -107,6 +107,7 @@ function view(row: Row, flags: { created: boolean; restored: boolean }) {
 
 export const createSamSnippetTool = defineTool({
   name: "create_sam_snippet",
+  tables: { reads: ["sam_songs", "sam_song_measures", "sam_snippets"], writes: ["sam_snippets"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     // --- arguments -------------------------------------------------------------

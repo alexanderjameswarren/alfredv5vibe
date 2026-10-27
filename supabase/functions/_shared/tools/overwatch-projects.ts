@@ -83,6 +83,8 @@ async function withEstimates(T: string, ctx: { db: any }, rows: Record<string, u
 
 export const getProjectPlansTool = defineTool({
   name: "get_project_plans",
+  // overwatch_project_progress reads item_groups, group_types, project_plans and clips.
+  tables: { reads: ["item_groups", "group_types", "project_plans", "clips", "project_estimates"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_project_plans";
@@ -166,6 +168,7 @@ export function planPatch(T: string, args: Record<string, unknown>): Record<stri
 
 export const updateProjectPlanTool = defineTool({
   name: "update_project_plan",
+  tables: { reads: ["project_plans"], writes: ["project_plans"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "update_project_plan";
@@ -196,6 +199,10 @@ function wholeSteps(T: string, key: string, v: unknown, { min, max }: { min: num
 
 export const recordProjectEstimateTool = defineTool({
   name: "record_project_estimate",
+  tables: {
+    reads: ["overwatch_plans", "project_estimates", "project_plans", "item_groups", "group_types", "clips"],
+    writes: ["project_estimates", "project_plans"],
+  },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "record_project_estimate";
@@ -241,6 +248,7 @@ export const recordProjectEstimateTool = defineTool({
 
 export const getProjectEstimatesTool = defineTool({
   name: "get_project_estimates",
+  tables: { reads: ["project_estimates", "project_plans"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_project_estimates";
@@ -267,6 +275,7 @@ export const getProjectEstimatesTool = defineTool({
 
 export const getProjectLinksTool = defineTool({
   name: "get_project_links",
+  tables: { reads: ["project_links"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_project_links";
@@ -296,6 +305,7 @@ export const getProjectLinksTool = defineTool({
 
 export const createProjectLinkTool = defineTool({
   name: "create_project_link",
+  tables: { reads: [], writes: ["project_links"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "create_project_link";

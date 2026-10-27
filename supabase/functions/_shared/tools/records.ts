@@ -290,6 +290,11 @@ const TABLE_NAME = /^[a-z_][a-z0-9_]*$/;
 
 export const getRecordsTool = defineTool({
   name: "get_records",
+  // "*": whichever registered table `table` names; then the registry and what the includes read.
+  tables: {
+    reads: ["*", "platform.registry", "contexts", "notes", "item_group_members", "item_groups", "group_types", "collection_items", "item_collections"],
+    writes: [],
+  },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const table = args.table;

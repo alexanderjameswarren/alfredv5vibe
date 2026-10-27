@@ -284,6 +284,10 @@ export async function planView(db: Db, tool: string, plan: Row) {
 
 export const getSamPracticePlanTool = defineTool({
   name: "get_sam_practice_plan",
+  tables: {
+    reads: ["sam_practice_plans", "sam_practice_plan_songs", "sam_practice_plan_items", "sam_songs", "sam_snippets"],
+    writes: [],
+  },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "get_sam_practice_plan";
@@ -300,6 +304,10 @@ export const getSamPracticePlanTool = defineTool({
 
 export const getSamPracticePlansTool = defineTool({
   name: "get_sam_practice_plans",
+  tables: {
+    reads: ["sam_practice_plans", "sam_practice_plan_songs", "sam_practice_plan_items", "sam_songs", "sam_snippets"],
+    writes: [],
+  },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "get_sam_practice_plans";
@@ -365,6 +373,8 @@ export const getSamPracticePlansTool = defineTool({
 
 export const getSamPlanProgressTool = defineTool({
   name: "get_sam_plan_progress",
+  // sam_plan_item_progress and sam_plan_unplanned_practice read passes against the plan.
+  tables: { reads: ["sam_practice_plans", "sam_practice_plan_items", "sam_passes", "sam_songs", "sam_snippets"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "get_sam_plan_progress";
@@ -432,6 +442,7 @@ export const getSamPlanProgressTool = defineTool({
 
 export const getSamGoalsTool = defineTool({
   name: "get_sam_goals",
+  tables: { reads: ["sam_goals", "sam_songs"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "get_sam_goals";
@@ -735,6 +746,11 @@ export async function proposePlan(db: Db, plan: PlanInput) {
 
 export const createSamPracticePlanTool = defineTool({
   name: "create_sam_practice_plan",
+  // Through sam_create_practice_plan.
+  tables: {
+    reads: ["sam_practice_plans", "sam_practice_plan_songs", "sam_practice_plan_items", "sam_songs", "sam_snippets"],
+    writes: ["sam_practice_plans", "sam_practice_plan_songs", "sam_practice_plan_items"],
+  },
   tier: 3,
   propose: async (args: Record<string, unknown>, ctx) => proposePlan(ctx.db, normalisePlanInput(args)),
   handler: async (args: Record<string, unknown>, ctx) => {
@@ -761,6 +777,7 @@ export const createSamPracticePlanTool = defineTool({
 
 export const updateSamPlanReviewNoteTool = defineTool({
   name: "update_sam_plan_review_note",
+  tables: { reads: ["sam_practice_plans"], writes: ["sam_practice_plans"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "update_sam_plan_review_note";
@@ -869,6 +886,7 @@ export async function planSongGoal(db: Db, args: Record<string, unknown>) {
 
 export const updateSamSongGoalTool = defineTool({
   name: "update_sam_song_goal",
+  tables: { reads: ["sam_songs"], writes: ["sam_songs"] },
   tier: 3,
   propose: async (args: Record<string, unknown>, ctx) => {
     const p = await planSongGoal(ctx.db, args);
@@ -937,6 +955,7 @@ async function withSongTitle(db: Db, tool: string, goal: Row) {
 
 export const createSamGoalTool = defineTool({
   name: "create_sam_goal",
+  tables: { reads: ["sam_songs"], writes: ["sam_goals"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "create_sam_goal";
@@ -965,6 +984,7 @@ export const createSamGoalTool = defineTool({
 
 export const updateSamGoalTool = defineTool({
   name: "update_sam_goal",
+  tables: { reads: ["sam_goals", "sam_songs"], writes: ["sam_goals"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "update_sam_goal";

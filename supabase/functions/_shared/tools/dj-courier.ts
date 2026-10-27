@@ -335,6 +335,8 @@ export function prepareRows(args: Record<string, unknown>, label: string): Prepa
 
 export const recordDjPlaysTool = defineTool({
   name: "record_dj_plays",
+  // resolveTrackIds reads dj_tracks and inserts new ones.
+  tables: { reads: ["dj_tracks", "dj_plays"], writes: ["dj_tracks", "dj_plays"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const { prepared, albumsDiscarded, source } = prepareRows(args, "record_dj_plays");
@@ -505,6 +507,7 @@ async function requireKnownApp(
 
 export const createPlatformRunTool = defineTool({
   name: "create_platform_run",
+  tables: { reads: ["apps"], writes: ["platform_runs"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const app = args.app as string | undefined;
@@ -629,6 +632,7 @@ export const createPlatformRunTool = defineTool({
 
 export const getPlatformRunsTool = defineTool({
   name: "get_platform_runs",
+  tables: { reads: ["platform_runs"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     // Shared read (MCP read access S8b): every filter goes into the query before
@@ -658,6 +662,7 @@ export const getPlatformRunsTool = defineTool({
 
 export const updatePlatformRunTool = defineTool({
   name: "update_platform_run",
+  tables: { reads: ["platform_runs"], writes: ["platform_runs"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const id = args.id as string | undefined;
@@ -846,6 +851,7 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 
 export const createPlatformScheduleTool = defineTool({
   name: "create_platform_schedule",
+  tables: { reads: ["apps"], writes: ["platform_schedules"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const app = args.app as string | undefined;
@@ -919,6 +925,7 @@ export const createPlatformScheduleTool = defineTool({
 
 export const getPlatformSchedulesTool = defineTool({
   name: "get_platform_schedules",
+  tables: { reads: ["platform_schedules"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     // Shared read (MCP read access S8b), re-wrapped in this tool's own shape.
@@ -968,6 +975,7 @@ export const getPlatformSchedulesTool = defineTool({
 
 export const dryRunDjPlaysTool = defineTool({
   name: "dry_run_dj_plays",
+  tables: { reads: ["dj_tracks", "dj_plays", "dj_known_disagreements"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     // Same derivation the write uses — see prepareRows. A separate estimator

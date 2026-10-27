@@ -40,6 +40,8 @@ const pgrstQuote = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\
 
 export const getKenQuizBatchTool = defineTool({
   name: "get_ken_quiz_batch",
+  // ken_select_batch reads areas, items and attempts.
+  tables: { reads: ["ken_areas", "ken_items", "ken_attempts", "ken_misconceptions"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const LIMIT = clampLimit(args.limit as number | undefined);
@@ -137,6 +139,8 @@ export const getKenQuizBatchTool = defineTool({
 
 export const recordKenAttemptsTool = defineTool({
   name: "record_ken_attempts",
+  // Through ken_record_attempts.
+  tables: { reads: ["ken_items"], writes: ["ken_attempts", "ken_items"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const attempts = args.attempts;
@@ -168,6 +172,7 @@ export const recordKenAttemptsTool = defineTool({
 
 export const createKenAreaTool = defineTool({
   name: "create_ken_area",
+  tables: { reads: [], writes: ["ken_areas"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const { data, error } = await ctx.db
@@ -193,6 +198,7 @@ export const createKenAreaTool = defineTool({
 // as unseeded in every nudge, forever.
 export const updateKenAreaTool = defineTool({
   name: "update_ken_area",
+  tables: { reads: ["ken_areas"], writes: ["ken_areas"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const id = args.id as string;
@@ -241,6 +247,7 @@ export const updateKenAreaTool = defineTool({
 
 export const createKenItemTool = defineTool({
   name: "create_ken_item",
+  tables: { reads: [], writes: ["ken_items"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const mode = args.mode as string;
@@ -286,6 +293,7 @@ export const createKenItemTool = defineTool({
 
 export const getKenAreasTool = defineTool({
   name: "get_ken_areas",
+  tables: { reads: ["ken_areas"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     // source_refs answers "which of these Alfred seeds already have an area?"
@@ -318,6 +326,7 @@ export const getKenAreasTool = defineTool({
 
 export const getKenItemsTool = defineTool({
   name: "get_ken_items",
+  tables: { reads: ["ken_items"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     // Shared read (MCP read access S8b). prompt and ground_truth stay whole: Ken
@@ -349,6 +358,7 @@ export const getKenItemsTool = defineTool({
 // Lazy-load for the one heavy column. Called only when quizzing a lyric item.
 export const getKenLyricFragmentsTool = defineTool({
   name: "get_ken_lyric_fragments",
+  tables: { reads: ["ken_items"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const { data, error } = await ctx.db
@@ -364,6 +374,7 @@ export const getKenLyricFragmentsTool = defineTool({
 
 export const getKenMisconceptionsTool = defineTool({
   name: "get_ken_misconceptions",
+  tables: { reads: ["ken_misconceptions"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const itemId = args.item_id as string | undefined;
@@ -399,6 +410,7 @@ export const getKenMisconceptionsTool = defineTool({
 
 export const createKenMisconceptionTool = defineTool({
   name: "create_ken_misconception",
+  tables: { reads: [], writes: ["ken_misconceptions"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const { data, error } = await ctx.db
@@ -419,6 +431,7 @@ export const createKenMisconceptionTool = defineTool({
 
 export const updateKenMisconceptionTool = defineTool({
   name: "update_ken_misconception",
+  tables: { reads: ["ken_misconceptions"], writes: ["ken_misconceptions"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -450,6 +463,7 @@ export const updateKenMisconceptionTool = defineTool({
 
 export const proposeKenFactUpdateTool = defineTool({
   name: "propose_ken_fact_update",
+  tables: { reads: ["ken_items"], writes: ["ken_items"] },
   tier: 3,
   handler: async (args: Record<string, unknown>, ctx) => {
     const oldId = args.item_id as string;

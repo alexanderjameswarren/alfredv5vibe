@@ -219,6 +219,7 @@ export function listResult(rows: unknown[], count: number | null | undefined, LI
 export const getWbAccountsTool = defineTool({
   name: "get_wb_accounts",
   tier: 1,
+  tables: { reads: ["wb_account_latest", "wb_accounts"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_wb_accounts";
     const role = oneOf(T, "role", args.role, WB_ROLES);
@@ -264,6 +265,7 @@ export const getWbAccountsTool = defineTool({
 export const getWbBalanceHistoryTool = defineTool({
   name: "get_wb_balance_history",
   tier: 1,
+  tables: { reads: ["wb_balance_snapshots", "wb_net_worth_daily"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_wb_balance_history";
     const accountId = absent(args.account_id) ? null : requireId(T, "account_id", args.account_id);
@@ -303,6 +305,7 @@ export const getWbBalanceHistoryTool = defineTool({
 export const getWbNetWorthTool = defineTool({
   name: "get_wb_net_worth",
   tier: 1,
+  tables: { reads: ["wb_net_worth_daily"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_wb_net_worth";
     const from = parseDate(T, "from", args.from);
@@ -326,6 +329,7 @@ export const getWbNetWorthTool = defineTool({
 export const getWbTransactionsTool = defineTool({
   name: "get_wb_transactions",
   tier: 1,
+  tables: { reads: ["wb_transaction_list"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_wb_transactions";
     const accountId = absent(args.account_id) ? null : requireId(T, "account_id", args.account_id);
@@ -377,6 +381,7 @@ export const getWbTransactionsTool = defineTool({
 export const getWbHoldingsTool = defineTool({
   name: "get_wb_holdings",
   tier: 1,
+  tables: { reads: ["wb_holding_snapshots"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_wb_holdings";
     const accountId = absent(args.account_id) ? null : requireId(T, "account_id", args.account_id);
@@ -418,6 +423,7 @@ const UPDATE_KEYS = new Set<string>(["id", ...UPDATABLE_FIELDS]);
 export const updateWbAccountTool = defineTool({
   name: "update_wb_account",
   tier: 2,
+  tables: { reads: ["wb_accounts"], writes: ["wb_accounts"] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "update_wb_account";
     const unknown = Object.keys(args).filter((k) => !UPDATE_KEYS.has(k));
@@ -496,6 +502,7 @@ export const updateWbAccountTool = defineTool({
 export const createWbManualAccountTool = defineTool({
   name: "create_wb_manual_account",
   tier: 1,
+  tables: { reads: ["wb_accounts"], writes: ["wb_accounts"] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "create_wb_manual_account";
     const name = optText(T, "name", args.name);
@@ -555,6 +562,7 @@ export const createWbManualAccountTool = defineTool({
 export const recordWbBalanceTool = defineTool({
   name: "record_wb_balance",
   tier: 2,
+  tables: { reads: ["wb_accounts", "wb_balance_snapshots"], writes: ["wb_balance_snapshots"] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "record_wb_balance";
     const accountId = requireId(T, "account_id", args.account_id);

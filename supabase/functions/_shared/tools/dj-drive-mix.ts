@@ -217,6 +217,7 @@ async function headCount(T: string, q: PromiseLike<{ count: number | null; error
 
 export const getDriveMixSongsTool = defineTool({
   name: "get_drive_mix_songs",
+  tables: { reads: ["drive_mix_songs"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_drive_mix_songs";
@@ -284,6 +285,7 @@ export const getDriveMixSongsTool = defineTool({
 
 export const createDriveMixSongsTool = defineTool({
   name: "create_drive_mix_songs",
+  tables: { reads: ["drive_mix_songs"], writes: ["drive_mix_songs"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "create_drive_mix_songs";
@@ -359,6 +361,7 @@ function parseIds(T: string, v: unknown, what = "ids"): string[] {
 
 export const updateDriveMixSongsTool = defineTool({
   name: "update_drive_mix_songs",
+  tables: { reads: ["drive_mix_songs"], writes: ["drive_mix_songs"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "update_drive_mix_songs";
@@ -447,6 +450,7 @@ export async function artistPlan(T: string, args: Record<string, unknown>, ctx: 
 
 export const updateDriveMixArtistTool = defineTool({
   name: "update_drive_mix_artist",
+  tables: { reads: ["drive_mix_songs"], writes: ["drive_mix_songs"] },
   tier: 3,
   propose: async (args: Record<string, unknown>, ctx) => {
     const p = await artistPlan("update_drive_mix_artist", args, ctx);
@@ -484,6 +488,8 @@ export const updateDriveMixArtistTool = defineTool({
 
 export const getDriveMixPickTool = defineTool({
   name: "get_drive_mix_pick",
+  // Through drive_mix_pick.
+  tables: { reads: ["drive_mix_songs", "drive_mix_servings", "dj_plays", "dj_tracks"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_drive_mix_pick";
@@ -528,6 +534,8 @@ export const getDriveMixPickTool = defineTool({
 
 export const getDriveMixSimulationTool = defineTool({
   name: "get_drive_mix_simulation",
+  // Through drive_mix_simulate, which calls drive_mix_pick.
+  tables: { reads: ["drive_mix_songs", "drive_mix_servings", "dj_plays", "dj_tracks"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_drive_mix_simulation";
@@ -574,6 +582,7 @@ export const getDriveMixSimulationTool = defineTool({
 
 export const createDriveMixServingTool = defineTool({
   name: "create_drive_mix_serving",
+  tables: { reads: ["drive_mix_servings", "drive_mix_songs"], writes: ["drive_mix_servings"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "create_drive_mix_serving";
@@ -624,6 +633,8 @@ export const createDriveMixServingTool = defineTool({
 
 export const createDriveMixSweepTool = defineTool({
   name: "create_drive_mix_sweep",
+  // Through drive_mix_sweep.
+  tables: { reads: ["drive_mix_songs", "dj_artist_tags", "dj_plays", "dj_tracks"], writes: ["drive_mix_songs"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "create_drive_mix_sweep";
@@ -681,6 +692,7 @@ type ThumbRow = {
 
 export const updateDriveMixThumbsTool = defineTool({
   name: "update_drive_mix_thumbs",
+  tables: { reads: ["drive_mix_songs"], writes: ["drive_mix_songs"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "update_drive_mix_thumbs";

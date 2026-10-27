@@ -2,7 +2,7 @@
 
 Spec: docs/technical-spec-overwatch-q4n.md
 
-## Status: Phase 6 done; closeout prepared (Step 37), waiting for Alex's gitpush Finish. Phases 7 and 8 deferred
+## Status: Phases 1 to 6 done (Phase 6 finished into main). Reopened 2026-10-27 for Phase 7 (inventory and impact review) and the new Phase 8 (project planning); Step 39 in progress
 
 ## Steps
 
@@ -213,16 +213,54 @@ Estimate tracking first (spec 4.12, added 2026-10-25), because the nightly and w
   - [x] Step 35c: MoreLess.jsx (useClamp measures scrollHeight against clientHeight; a small More / Less control that stops the click), on Friction entries (also when the text has more than its first line), Activity rows and project rows, and Ideas rows. Action Required titles still clamp with no toggle. Tests: 11 suites, 146 pass
   - [x] Step 35b C: alfred-enrich 2026-10-26a gets the `idea` tag rule (bugs get `bug` instead; Alfred code ideas also get the app tag); spec Appendix A (profile preference) and B (sweep) suggest `idea`. The hourly enrichment task's prompt is not in the repo; it follows the alfred-enrich skill
 
-- [ ] Step 37 (CLI): closeout, prepared (run tag overwatch-q4n-s37a-q6tm); Alex runs gitpush Finish
-  - Finish list: (1) Supabase SQL editor, `supabase/tests/overwatch-q4n/9_cleanup_step10_live_test.sql` removes the "OW Test close done" intention mvmwqau76q5bx129p2, its execution, event and activity row; (2) the final estimate: record_project_estimate kind final for the Overwatch group, before the group is closed (cli-workflow closeout); (3) close the Overwatch Project group as Completed in the app (writes the shipped activity row); (4) the first weekly run reviewed on the next Monday; (5) Phases 7 and 8 stay deferred. No db: claim is held
+- [x] Step 37 (CLI): closeout prepared (run tag overwatch-q4n-s37a-q6tm); Alex ran gitpush Finish for Phase 6, which merged it into main and moved this file and the spec to docs/history (Step 39 brings them back)
+  - Finish list as prepared: (1) Supabase SQL editor, `supabase/tests/overwatch-q4n/9_cleanup_step10_live_test.sql` removes the "OW Test close done" intention mvmwqau76q5bx129p2, its execution, event and activity row; (2) the final estimate: record_project_estimate kind final for the Overwatch group, before the group is closed (cli-workflow closeout); (3) close the Overwatch Project group as Completed in the app (writes the shipped activity row); (4) the first weekly run reviewed on the next Monday; (5) Phases 7 and 8 stay deferred. Which of (1) to (4) ran is not recorded here; with the project reopened, (2) and (3) wait for the new closeout (Step 61)
 
-### Phase 7: Inventory and impact review (deferred: the drift review that needs every tool's declared tables, the inventory and finish summaries)
-- [ ] defineTool tables declaration; every tool annotated; conformance rule
-- [ ] scripts/inventory.mjs and platform_inventory
-- [ ] finish_summaries table; ingest kinds finish_summary and inventory; gitpush finish sends both
+### Phase 7: Inventory and impact review (revived 2026-10-27; spec 4.9, 4.13 to 4.15, 5.4 to 5.6, 5.9, section 6)
+- [x] Step 38 (CLI, read-only): plan for Phases 7 and 8 (run tag overwatch-q4n-s38a-h4tw): file and database lists, claims check clean, 166 defineTool calls (163 registered, 3 unregistered DJ tools, none registered without defineTool), the snapshot lag confirmed, 22 steps estimated. Alex confirmed every recommendation, replacing the project_plans ranking with the portfolio plan
+- [x] Step 39 (CLI): claim, docs back to docs/, the Oct 27 decisions in the spec, this file (run tag overwatch-q4n-s39-m2kd)
+  - [x] Claimed 40 files and folders in one command; reserved db items with their steps (43, 45, 53, 57)
+  - [x] Spec and progress written back to docs/; the docs/history copies deleted
+  - [x] Spec: Phase 7 decisions (5.6, 5.9, 4.9, 4.13 to 4.15, section 6, section 7), new Phase 8 (8a families, chat work, 8b portfolio plan in 4.16, section 7 and section 9, 8c in 4.17), old Phase 8 moved out
+- [x] Step 40 (CLI): `tables` on defineTool, first batch of annotations; lanes in the spec (run tag overwatch-q4n-s40-p7cv)
+  - [x] Spec 4.16, section 7 and section 9: lanes are rows of a plan version (portfolio_lanes: name, position, note); slices belong to a lane, ordered within it, one in progress per lane; create_portfolio_plan takes lanes with their slices; Now is one line per lane. db:table:portfolio_lanes reserved for Step 53; Steps 53 to 56 unchanged
+  - [x] platform.ts: `ToolTables` and an optional `tables` on DefineToolOptions (required from Step 41)
+  - [x] Annotated 74 tools: mcp/index.ts 23, warren-buffet 8, warren-buffet-p2 25, warren-buffet-p3 18. RPC-backed tools list the tables the RPC and the functions it calls touch (from the schema snapshot); views and platform.* names as they are; defineTool's own plumbing (budget, settings, audit) is not declared. Every declared name exists in schema-snapshot.sql
+  - [x] Tests: mcp index, the three Money suites and the platform tests, 156 pass. `deno check --no-lock` on mcp/index.ts: 111 type errors already in the code (implicit any, zod's z.record arity, Supabase result types), none about `tables`
+- [x] Step 41 (CLI): annotate the other 92; compare type errors with main (run tag overwatch-q4n-s41-w3fq)
+  - [x] 92 annotated across 22 files in _shared/tools/ (the three unregistered DJ tools included); 166 of 166 defineTool calls now carry `tables`, every name in schema-snapshot.sql
+  - [x] `deno check --no-lock` on mcp/index.ts: main (8094166) and this worktree both 111 errors, messages identical; none new
+  - [x] Tests: mcp index, every _shared tool and platform suite, alfred-tools: 776 pass
+- [ ] Step 41b (CLI): `tables` required, the conformance test, the mcp-platform skill (run tag overwatch-q4n-s41b-k8rz). One step added (scope_increase +1 at step 41)
+  - [x] scripts/lib/inventory.mjs: snapshotObjects, parseDefineTools (name and literal tables from the properties before handler or propose), tableProblems ("*" in reads only), toolSourceFiles; inventory.test.mjs (8 tests)
+  - [x] supabase/functions/mcp/tables.test.mjs: every defineTool under supabase/functions, 166 found. Failed as it should with get_apps' tables removed ("no tables before the handler") and with get_reminders reading "reminders_made_up" ("not in the schema snapshot"); both restored; passes
+  - [x] get_records reads "*"; platform.ts `tables` required (deno check: the same 111 existing errors, none about tables)
+  - [x] Spec 5.6: tables before handler, "*" for generic readers, triggers and shared plumbing not declared. mcp-platform skill 2026-10-27a (first version line): the `tables` rule, both examples, an anti-pattern line; Alex pastes it into claude.ai
+  - [x] Tests: functions 777 pass; CLI suite 258 pass; app suite 207 suites, 3098 pass
+- [ ] Step 42 (CLI): schema snapshot label fix (`--through N` from the newest merged migration) and `--no-snapshot` for Checkpoint, Finish and main Push; tests
+- [ ] Step 43 (CLI, SQL): platform_inventory, platform_open_work, finish_summaries and replace_platform_inventory (db items reserved)
+- [ ] Step 44 (CLI): scripts/inventory.mjs and `npm run inventory` (parts and open work; prints a summary, `--send` queues it)
+- [ ] Step 45 (CLI): overwatch-ingest kinds `inventory` and `finish_summary`; the outbox sends an inventory on its own; deploy overwatch-ingest (db:deploy reserved)
+- [ ] Step 46 (CLI): get_platform_inventory, get_finish_summaries, mark_finish_summaries_reviewed; deploy mcp
+- [ ] Step 47 (CLI): gitpush Finish rebuilds and queues the inventory and a finish_summary (scripts/lib/finish-summary.mjs); tests
+- [ ] Step 48 (CLI, docs): nightly prompt (finish summaries against the inventory, follow-up items, current_state, mark reviewed); weekly drift audit Phase 7 checks; overwatch skill; Alex pastes prompts and skills
+- [ ] Step 49 (CLI): end-to-end check (a real inventory send, a finish summary, the next audit run)
 
-### Phase 8: Switchboard state (deferred, optional)
-- [ ] Switchboard posts session state through overwatch-ingest
+### Phase 8: Project planning (new 2026-10-27; spec section 10 item 8, 4.16, 4.17)
+The old Phase 8 (Switchboard state through overwatch-ingest) moved out of this project to an Alfred intention.
+- [ ] Step 50 (CLI, read-only): 8a review pass 1, Alfred core (alfred, overwatch, timer, games); findings saved to current_state from claude.ai
+- [ ] Step 51 (CLI, read-only): 8a review pass 2, Money and SAM (warren_buffet, sam)
+- [ ] Step 52 (CLI, read-only): 8a review pass 3, chat-and-tool apps (dj, drive_mix, ken, jobs; workshop, switchboard, arnold, monty_don, sports)
+- [ ] Chat work in claude.ai (no step number): Alfred items and intentions review, including the roadmap item and SAM; friction log turned into intentions attached to projects; ideas from other Claude chats swept into Alfred
+- [ ] Step 53 (CLI, SQL): 8b portfolios, portfolio_plans, portfolio_slices, create_portfolio_plan, the two guards (db items reserved)
+- [ ] Step 54 (CLI): 8b tools in overwatch-portfolio.ts (get_portfolios, upsert_portfolio, get_portfolio_plan, create_portfolio_plan tier 3, update_portfolio_slice); deploy mcp
+- [ ] Step 55 (CLI): 8b Projects section: portfolio switch; Now, Next, Later; "Not in the plan"
+- [ ] Step 56 (CLI): 8b plan page /overwatch/plan/<portfolio_id> (theory, notes, review_by, versions); nightly review_by item; overwatch skill
+- [ ] Step 57 (CLI, SQL): 8c inbox.suggested_group_id; process_inbox_item `group` payload (db items reserved)
+- [ ] Step 58 (CLI): 8c create_inbox_item and update_inbox_item accept suggested_group_id; alfred-enrich skill; deploy mcp
+- [ ] Step 59 (CLI): 8c inbox detail: SuggestedGroup with an accept toggle
+- [ ] Step 60 (CLI): full app and CLI suites, mobile check
+- [ ] Step 61 (CLI): closeout
 
 ## Notes
 - 2026-10-24: Alex agreed: proposals are plain task inbox items (no Phase 9 dependency); project planning fields in a one-to-one project_plans table, not on item_groups; Overwatch fixes the plumbing gaps it needs; the wider drift list is a separate bug (inbox item fe062cd4-832d-4a3c-a67b-ecdba5699b30).
@@ -231,3 +269,5 @@ Estimate tracking first (spec 4.12, added 2026-10-25), because the nightly and w
 - 2026-10-24, gitpush follow-up (not fixed here): Checkpoint `--paths` refuses a new folder ("not changed in overwatch-q4n: supabase/functions/overwatch-ingest") because it compares each path against git's per-file list. It should accept a folder whose files are new or changed. Until then, name the files one by one.
 - 2026-10-24, during Step 5: process friction log added (spec 4.11): any thread logs snags in how the work runs with log_friction, without asking; the weekly job groups open entries by process and proposes a fix once one process has three or more in 30 days. Table in Step 12, tools in Step 14, logging instructions in Phase 4. The overwatch skill also enriches and routes on the spot any item the hourly job has not reached yet.
 - 2026-10-25, during Step 22, Alex's friction decisions: a status column (open, fixed, wont_fix, the last with a one-line reason), with only open entries counting toward the trigger (Step 25); a Friction section on the tab (Phase 6); friction covers every workflow, not just coding, and the logging line is now in his claude.ai profile preferences (spec 4.11 reworded). Adds one step.
+- 2026-10-27, Steps 38 and 39, Alex's decisions: Phase 7 as specced plus open work from docs (platform_open_work), the snapshot label fix with a `--no-snapshot` opt-out, literal `tables` arrays checked by a test in the mcp suite, the three unregistered DJ tools annotated but not inventoried, reviewed_at on finish_summaries; old Phase 8 out; new Phase 8 project planning with the portfolio plan (slices in two lanes, versioned per portfolio) in place of a project ranking. The portfolio plan needs four steps, not three (53 to 56), so 8c moves to 57 to 59, and the project ends at Step 61 (23 steps from 39, one more than the Step 38 estimate).
+- 2026-10-27, Step 38: the claims guard read the `=>` arrow in a read-only `node -e` as a `>` redirect and blocked it; reported, not retried.

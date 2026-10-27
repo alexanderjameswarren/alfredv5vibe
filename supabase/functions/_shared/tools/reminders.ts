@@ -71,6 +71,8 @@ function requireText(T: string, value: unknown): string {
 
 export const createReminderTool = defineTool({
   name: "create_reminder",
+  // Through the create_reminder RPC.
+  tables: { reads: ["inbox", "intents"], writes: ["reminders", "inbox"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "create_reminder";
@@ -100,6 +102,7 @@ export const createReminderTool = defineTool({
 
 export const getRemindersTool = defineTool({
   name: "get_reminders",
+  tables: { reads: ["reminders"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_reminders";
@@ -140,6 +143,7 @@ export const getRemindersTool = defineTool({
 
 export const updateReminderTool = defineTool({
   name: "update_reminder",
+  tables: { reads: ["reminders"], writes: ["reminders"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "update_reminder";

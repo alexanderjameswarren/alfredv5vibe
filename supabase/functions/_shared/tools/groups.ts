@@ -90,6 +90,10 @@ export function shapeGroups(
 
 export const getGroupsTool = defineTool({
   name: "get_groups",
+  tables: {
+    reads: ["item_groups", "group_types", "item_group_members", "contexts", "intents", "items", "events", "notes"],
+    writes: [],
+  },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const status = (args.status as string[] | undefined)?.filter((s) => STATUSES.includes(s));

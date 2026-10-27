@@ -341,6 +341,7 @@ function requireDate(tool: string, name: string, v: unknown): string {
 
 export const getJobApplicationsTool = defineTool({
   name: "get_job_applications",
+  tables: { reads: ["job_applications"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_job_applications";
@@ -424,6 +425,7 @@ function applyJobFilters(T: string, query: any, args: Record<string, unknown>) {
 
 export const createJobApplicationTool = defineTool({
   name: "create_job_application",
+  tables: { reads: ["job_applications", "inbox"], writes: ["job_applications"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "create_job_application";
@@ -710,6 +712,7 @@ export const createJobApplicationTool = defineTool({
 
 export const updateJobApplicationTool = defineTool({
   name: "update_job_application",
+  tables: { reads: ["job_applications"], writes: ["job_applications"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "update_job_application";
@@ -968,6 +971,7 @@ export const updateJobApplicationTool = defineTool({
 
 export const getJobApplicationSourcesTool = defineTool({
   name: "get_job_application_sources",
+  tables: { reads: ["job_applications"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_job_application_sources";

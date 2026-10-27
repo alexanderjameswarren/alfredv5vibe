@@ -402,6 +402,7 @@ export async function fixPlan(T: string, db: Db, input: FixInput) {
 export const getWbReviewQueueTool = defineTool({
   name: "get_wb_review_queue",
   tier: 1,
+  tables: { reads: ["wb_review_queue"], writes: [] },
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_review_queue";
     const reason = oneOf(T, "reason", args.reason, REVIEW_REASONS);
@@ -438,6 +439,7 @@ export const getWbReviewQueueTool = defineTool({
 export const getWbTagsTool = defineTool({
   name: "get_wb_tags",
   tier: 1,
+  tables: { reads: ["wb_tag_groups", "wb_tags", "wb_split_tags"], writes: [] },
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_tags";
     const group = optText(T, "group", args.group);
@@ -472,6 +474,7 @@ export const getWbTagsTool = defineTool({
 export const createWbTagTool = defineTool({
   name: "create_wb_tag",
   tier: 1,
+  tables: { reads: ["wb_tag_groups", "wb_tags"], writes: ["wb_tags"] },
   handler: async (args: Obj, ctx) => {
     const T = "create_wb_tag";
     const group = optText(T, "group", args.group);
@@ -512,6 +515,7 @@ export const createWbTagTool = defineTool({
 export const updateWbTagTool = defineTool({
   name: "update_wb_tag",
   tier: 2,
+  tables: { reads: ["wb_tags"], writes: ["wb_tags"] },
   handler: async (args: Obj, ctx) => {
     const T = "update_wb_tag";
     const id = uuidOf(T, "tag_id", args.tag_id);
@@ -546,6 +550,7 @@ export const updateWbTagTool = defineTool({
 export const getWbMerchantsTool = defineTool({
   name: "get_wb_merchants",
   tier: 1,
+  tables: { reads: ["wb_merchants"], writes: [] },
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_merchants";
     const search = searchTerm(T, args.search);
@@ -569,6 +574,15 @@ export const getWbMerchantsTool = defineTool({
 export const upsertWbMerchantTool = defineTool({
   name: "upsert_wb_merchant",
   tier: 2,
+  // Reprocessing runs wb_process_transactions, which reads and writes most of the money tables.
+  tables: {
+    reads: [
+      "wb_merchants", "wb_transactions", "wb_transaction_list", "wb_accounts", "wb_rules", "wb_splits", "wb_split_tags",
+      "wb_tags", "wb_tag_groups", "wb_tag_exclusions", "wb_subscriptions", "wb_subscription_prices", "wb_planned_items",
+      "wb_planned_matches",
+    ],
+    writes: ["wb_merchants", "wb_transactions", "wb_rules", "wb_splits", "wb_split_tags", "wb_subscriptions", "wb_planned_matches"],
+  },
   handler: async (args: Obj, ctx) => {
     const T = "upsert_wb_merchant";
     const id = optUuid(T, "id", args.id);
@@ -628,6 +642,7 @@ export const upsertWbMerchantTool = defineTool({
 export const getWbRulesTool = defineTool({
   name: "get_wb_rules",
   tier: 1,
+  tables: { reads: ["wb_rules", "wb_projects", "wb_tags", "wb_merchants"], writes: [] },
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_rules";
     const active = optBool(T, "active", args.active);
@@ -658,6 +673,14 @@ export const getWbRulesTool = defineTool({
 export const createWbRuleTool = defineTool({
   name: "create_wb_rule",
   tier: 2,
+  tables: {
+    reads: [
+      "wb_rules", "wb_transactions", "wb_transaction_list", "wb_projects", "wb_tags", "wb_merchants", "wb_accounts",
+      "wb_splits", "wb_split_tags", "wb_tag_groups", "wb_tag_exclusions", "wb_subscriptions", "wb_subscription_prices",
+      "wb_planned_items", "wb_planned_matches",
+    ],
+    writes: ["wb_rules", "wb_transactions", "wb_splits", "wb_split_tags", "wb_subscriptions", "wb_planned_matches"],
+  },
   handler: async (args: Obj, ctx) => {
     const T = "create_wb_rule";
     const fields = ruleFields(T, args);
@@ -688,6 +711,14 @@ export const createWbRuleTool = defineTool({
 export const updateWbRuleTool = defineTool({
   name: "update_wb_rule",
   tier: 2,
+  tables: {
+    reads: [
+      "wb_rules", "wb_transactions", "wb_transaction_list", "wb_projects", "wb_tags", "wb_merchants", "wb_accounts",
+      "wb_splits", "wb_split_tags", "wb_tag_groups", "wb_tag_exclusions", "wb_subscriptions", "wb_subscription_prices",
+      "wb_planned_items", "wb_planned_matches",
+    ],
+    writes: ["wb_rules", "wb_transactions", "wb_splits", "wb_split_tags", "wb_subscriptions", "wb_planned_matches"],
+  },
   handler: async (args: Obj, ctx) => {
     const T = "update_wb_rule";
     const id = uuidOf(T, "rule_id", args.rule_id);
@@ -726,6 +757,7 @@ export const updateWbRuleTool = defineTool({
 export const getWbRulePreviewTool = defineTool({
   name: "get_wb_rule_preview",
   tier: 1,
+  tables: { reads: ["wb_transaction_list", "wb_transactions", "wb_rules", "wb_merchants", "wb_projects", "wb_tags"], writes: [] },
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_rule_preview";
     if (!absent(args.match)) {
@@ -764,6 +796,15 @@ function fixAction(T: string, args: Obj) {
 export const createWbRuleFromTransactionTool = defineTool({
   name: "create_wb_rule_from_transaction",
   tier: 3,
+  // wb_fix_plan, then wb_apply_fix, which reprocesses through wb_process_transactions.
+  tables: {
+    reads: [
+      "wb_rules", "wb_merchants", "wb_transactions", "wb_transaction_list", "wb_projects", "wb_tags", "wb_tag_groups",
+      "wb_accounts", "wb_splits", "wb_split_tags", "wb_tag_exclusions", "wb_subscriptions", "wb_subscription_prices",
+      "wb_planned_items", "wb_planned_matches",
+    ],
+    writes: ["wb_merchants", "wb_rules", "wb_transactions", "wb_splits", "wb_split_tags", "wb_subscriptions", "wb_planned_matches"],
+  },
   propose: async (args: Obj, ctx) => {
     const T = "create_wb_rule_from_transaction";
     const action = fixAction(T, args);
@@ -814,6 +855,11 @@ export const createWbRuleFromTransactionTool = defineTool({
 export const tagWbTransactionsTool = defineTool({
   name: "tag_wb_transactions",
   tier: 2,
+  // Through wb_apply_tags.
+  tables: {
+    reads: ["wb_splits", "wb_split_tags", "wb_tags", "wb_tag_groups", "wb_tag_exclusions"],
+    writes: ["wb_split_tags", "wb_tag_exclusions"],
+  },
   handler: async (args: Obj, ctx) => {
     const T = "tag_wb_transactions";
     const ids = idList(T, "transaction_ids", args.transaction_ids, MAX_TAG_ROWS);
@@ -836,6 +882,14 @@ export const tagWbTransactionsTool = defineTool({
 export const setWbTransactionKindTool = defineTool({
   name: "set_wb_transaction_kind",
   tier: 2,
+  tables: {
+    reads: [
+      "wb_transactions", "wb_transaction_list", "wb_accounts", "wb_merchants", "wb_rules", "wb_splits", "wb_split_tags",
+      "wb_tags", "wb_tag_groups", "wb_tag_exclusions", "wb_subscriptions", "wb_subscription_prices", "wb_planned_items",
+      "wb_planned_matches",
+    ],
+    writes: ["wb_transactions", "wb_rules", "wb_splits", "wb_split_tags", "wb_subscriptions", "wb_planned_matches"],
+  },
   handler: async (args: Obj, ctx) => {
     const T = "set_wb_transaction_kind";
     const ids = idList(T, "transaction_ids", args.transaction_ids, MAX_TAG_ROWS);
@@ -892,6 +946,11 @@ export const setWbTransactionKindTool = defineTool({
 export const splitWbTransactionTool = defineTool({
   name: "split_wb_transaction",
   tier: 2,
+  // Through wb_replace_splits.
+  tables: {
+    reads: ["wb_transactions", "wb_splits", "wb_split_tags", "wb_tags", "wb_tag_groups", "wb_tag_exclusions", "wb_planned_matches"],
+    writes: ["wb_splits", "wb_split_tags", "wb_tag_exclusions", "wb_planned_matches"],
+  },
   handler: async (args: Obj, ctx) => {
     const T = "split_wb_transaction";
     const id = uuidOf(T, "transaction_id", args.transaction_id);
@@ -933,6 +992,7 @@ export const MAX_NOTE_CHARS = 2000;
 export const markWbReviewedTool = defineTool({
   name: "mark_wb_reviewed",
   tier: 2,
+  tables: { reads: ["wb_transactions"], writes: ["wb_transactions"] },
   handler: async (args: Obj, ctx) => {
     const T = "mark_wb_reviewed";
     const ids = idList(T, "transaction_ids", args.transaction_ids, MAX_REVIEW_ROWS);
@@ -967,6 +1027,13 @@ export const markWbReviewedTool = defineTool({
 export const reprocessWbTransactionsTool = defineTool({
   name: "reprocess_wb_transactions",
   tier: 2,
+  tables: {
+    reads: [
+      "wb_transactions", "wb_accounts", "wb_merchants", "wb_rules", "wb_splits", "wb_split_tags", "wb_tags", "wb_tag_groups",
+      "wb_tag_exclusions", "wb_subscriptions", "wb_subscription_prices", "wb_planned_items", "wb_planned_matches",
+    ],
+    writes: ["wb_transactions", "wb_rules", "wb_splits", "wb_split_tags", "wb_subscriptions", "wb_planned_matches"],
+  },
   handler: async (args: Obj, ctx) => {
     const T = "reprocess_wb_transactions";
     const from = parseDate(T, "from", args.from);
@@ -999,6 +1066,7 @@ export const reprocessWbTransactionsTool = defineTool({
 export const getWbSpendingTool = defineTool({
   name: "get_wb_spending",
   tier: 1,
+  tables: { reads: ["wb_spending_by_tag"], writes: [] },
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_spending";
     const fromMonth = parseMonth(T, "from_month", args.from_month);
@@ -1025,6 +1093,7 @@ export const getWbSpendingTool = defineTool({
 export const getWbCashFlowTool = defineTool({
   name: "get_wb_cash_flow",
   tier: 1,
+  tables: { reads: ["wb_cash_flow_monthly"], writes: [] },
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_cash_flow";
     const fromMonth = parseMonth(T, "from_month", args.from_month);
@@ -1068,6 +1137,7 @@ function positiveMoney(T: string, key: string, v: unknown): number | null {
 export const getWbSubscriptionsTool = defineTool({
   name: "get_wb_subscriptions",
   tier: 1,
+  tables: { reads: ["wb_subscription_overview", "wb_subscription_prices"], writes: [] },
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_subscriptions";
     const status = oneOf(T, "status", args.status, SUB_STATUSES);
@@ -1104,6 +1174,14 @@ export const getWbSubscriptionsTool = defineTool({
 export const upsertWbSubscriptionTool = defineTool({
   name: "upsert_wb_subscription",
   tier: 2,
+  tables: {
+    reads: [
+      "wb_subscription_overview", "wb_subscriptions", "wb_transactions", "wb_accounts", "wb_merchants", "wb_rules", "wb_splits",
+      "wb_split_tags", "wb_tags", "wb_tag_groups", "wb_tag_exclusions", "wb_subscription_prices", "wb_planned_items",
+      "wb_planned_matches",
+    ],
+    writes: ["wb_merchants", "wb_subscriptions", "wb_transactions", "wb_rules", "wb_splits", "wb_split_tags", "wb_planned_matches"],
+  },
   handler: async (args: Obj, ctx) => {
     const T = "upsert_wb_subscription";
     const subId = optUuid(T, "id", args.id);
@@ -1199,6 +1277,11 @@ export const upsertWbSubscriptionTool = defineTool({
 export const setWbTransactionSubscriptionTool = defineTool({
   name: "set_wb_transaction_subscription",
   tier: 2,
+  // Through wb_link_subscription, which refreshes the subscriptions.
+  tables: {
+    reads: ["wb_transactions", "wb_subscriptions", "wb_subscription_overview"],
+    writes: ["wb_transactions", "wb_subscriptions"],
+  },
   handler: async (args: Obj, ctx) => {
     const T = "set_wb_transaction_subscription";
     const ids = idList(T, "transaction_ids", args.transaction_ids, MAX_LINK_ROWS);
@@ -1220,6 +1303,10 @@ export const setWbTransactionSubscriptionTool = defineTool({
 export const recordWbSubscriptionPriceTool = defineTool({
   name: "record_wb_subscription_price",
   tier: 2,
+  tables: {
+    reads: ["wb_subscription_overview", "wb_transaction_list", "wb_subscription_prices", "wb_subscriptions", "wb_transactions"],
+    writes: ["wb_subscription_prices", "wb_transactions", "wb_subscriptions"],
+  },
   handler: async (args: Obj, ctx) => {
     const T = "record_wb_subscription_price";
     const subId = uuidOf(T, "subscription_id", args.subscription_id);
@@ -1268,6 +1355,7 @@ export const recordWbSubscriptionPriceTool = defineTool({
 export const getWbRuleHealthTool = defineTool({
   name: "get_wb_rule_health",
   tier: 1,
+  tables: { reads: ["wb_rule_health", "wb_rule_health_all"], writes: [] },
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_rule_health";
     const finding = oneOf(T, "finding", args.finding, RULE_HEALTH_FINDINGS);
@@ -1312,6 +1400,7 @@ export const RULE_FINDINGS = ["never_fires", "often_overridden"];
 export const acknowledgeWbRuleHealthTool = defineTool({
   name: "acknowledge_wb_rule_health",
   tier: 2,
+  tables: { reads: ["wb_rule_health_all", "wb_rule_health_acks"], writes: ["wb_rule_health_acks"] },
   handler: async (args: Obj, ctx) => {
     const T = "acknowledge_wb_rule_health";
     const finding = oneOf(T, "finding", args.finding, RULE_HEALTH_FINDINGS);
@@ -1384,6 +1473,14 @@ const bulkErrors = (res: Obj) =>
 export const bulkCreateWbTaxonomyTool = defineTool({
   name: "bulk_create_wb_taxonomy",
   tier: 3,
+  // wb_bulk_create, then reprocessing the merchants it touched.
+  tables: {
+    reads: [
+      "contexts", "wb_merchants", "wb_rules", "wb_tags", "wb_tag_groups", "wb_transactions", "wb_accounts", "wb_splits",
+      "wb_split_tags", "wb_tag_exclusions", "wb_subscriptions", "wb_subscription_prices", "wb_planned_items", "wb_planned_matches",
+    ],
+    writes: ["wb_merchants", "wb_rules", "wb_tags", "wb_transactions", "wb_splits", "wb_split_tags", "wb_subscriptions", "wb_planned_matches"],
+  },
   // The proposal is the dry run: what would be created, reused or refused. Nothing is written.
   propose: async (args: Obj, ctx) => {
     const T = "bulk_create_wb_taxonomy";

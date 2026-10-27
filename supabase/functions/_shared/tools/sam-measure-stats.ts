@@ -389,6 +389,10 @@ export function isSatOut(rows: Row[]): boolean {
 
 export const getSamMeasureStatsTool = defineTool({
   name: "get_sam_measure_stats",
+  tables: {
+    reads: ["sam_songs", "sam_snippets", "sam_sessions", "sam_session_events", "sam_passes", "sam_song_measures"],
+    writes: [],
+  },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     // --- arguments -----------------------------------------------------------

@@ -379,6 +379,10 @@ const makeRecordHandler = (toolName: string, tracksCap: number) =>
 
 export const recordDjPlaylistTool = defineTool({
   name: "record_dj_playlist",
+  tables: {
+    reads: ["dj_playlists", "dj_playlist_tracks", "dj_tracks"],
+    writes: ["dj_playlists", "dj_playlist_tracks", "dj_tracks"],
+  },
   tier: 2,
   handler: makeRecordHandler("record_dj_playlist", TRACKS_CAP),
 });
@@ -393,6 +397,10 @@ export const recordDjPlaylistTool = defineTool({
 // visible in the source, absent from the manifest, and costs no reconnect.
 export const recordDjPlaylistBulkTool = defineTool({
   name: "record_dj_playlist_bulk",
+  tables: {
+    reads: ["dj_playlists", "dj_playlist_tracks", "dj_tracks"],
+    writes: ["dj_playlists", "dj_playlist_tracks", "dj_tracks"],
+  },
   tier: 2,
   handler: makeRecordHandler("record_dj_playlist_bulk", BULK_TRACKS_CAP),
 });
@@ -403,6 +411,7 @@ export const recordDjPlaylistBulkTool = defineTool({
 
 export const createDjConcertTool = defineTool({
   name: "create_dj_concert",
+  tables: { reads: ["dj_artists", "dj_concerts"], writes: ["dj_artists", "dj_concerts"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const artistName = args.artist_name as string | undefined;
@@ -580,6 +589,7 @@ export const createDjConcertTool = defineTool({
 // exactly as it found it.
 export const dryRunDjPlaylistTool = defineTool({
   name: "dry_run_dj_playlist",
+  tables: { reads: ["dj_playlists", "dj_tracks", "dj_playlist_tracks"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     // The bulk ceiling: this tool is reachable only from the import endpoint,

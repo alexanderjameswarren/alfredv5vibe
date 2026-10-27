@@ -42,6 +42,7 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export const getDjConcertsTool = defineTool({
   name: "get_dj_concerts",
+  tables: { reads: ["dj_concerts", "dj_artists", "dj_playlists"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const LIMIT = clampLimit(args.limit as number | undefined);
@@ -299,6 +300,7 @@ export const getDjConcertsTool = defineTool({
 
 export const updateDjConcertTool = defineTool({
   name: "update_dj_concert",
+  tables: { reads: ["dj_concerts"], writes: ["dj_concerts"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const id = args.concert_id as string | undefined;
@@ -454,6 +456,7 @@ export const updateDjConcertTool = defineTool({
 
 export const recordDjFeedbackTool = defineTool({
   name: "record_dj_feedback",
+  tables: { reads: [], writes: ["dj_feedback"] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const subjects = ["artist_id", "concert_id", "album_id", "track_id", "venue_id"];

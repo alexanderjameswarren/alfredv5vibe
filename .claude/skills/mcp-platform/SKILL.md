@@ -5,6 +5,8 @@ description: House rules for the Alfred / Ken / Homer MCP platform layer. Read B
 
 # MCP Platform Layer — House Rules
 
+Skill version: 2026-10-27a
+
 > **Source of truth: `COMMENT ON SCHEMA platform`** (queryable via `get_database_schema`) and `docs/technical-spec-platform-layer.md` in the alfred-v5 repo. When they disagree with this skill, they win — this skill is the model-facing summary, not the contract.
 
 ## When this skill applies
@@ -164,6 +166,7 @@ import { defineTool, readTable } from "../_shared/platform.ts";
 export const getMyThingTool = defineTool({
   name: "get_my_thing",
   tier: 1,
+  tables: { reads: ["my_things"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     // limit, offset, ids, archived, no_context are read by readTable from args.
     return await readTable(ctx, {
@@ -177,6 +180,15 @@ export const getMyThingTool = defineTool({
   },
 });
 ```
+
+### `tables` — every tool declares what it reads and writes (required)
+
+- Literal string arrays, placed **before** `handler` and `propose`: `tables: { reads: [...], writes: [...] }`. No constants, no computed names.
+- Every name is a table or view in `supabase/schema-snapshot.sql`: public ones bare (`items`), others schema-qualified (`platform.registry`). A new table is in the snapshot once its migration has run and the snapshot is refreshed.
+- An RPC-backed tool lists the tables the RPC touches, including the functions it calls in turn, not the RPC's name. A read that also writes (a cache refresh, a lookup that inserts) lists the write.
+- Leave out shared plumbing (the budget check, read settings, the audit log) and triggers.
+- `"*"` in `reads` only, for a generic reader that reads any registered table (`get_records`). Never in `writes`.
+- `supabase/functions/mcp/tables.test.mjs` enforces all of this (`node --test supabase/functions/mcp/tables.test.mjs`).
 
 Register it with `...readOptions({ archived: "exclude" })` in its `inputSchema`, alongside its own filters. Test it with `_shared/tools/test-platform.mjs` (`loadTool`, `settingsFor`, `withSettings`), which runs the real platform layer.
 
@@ -192,6 +204,7 @@ The built-in gate answers before the handler runs, so on its own it can only ech
 export const createThingTool = defineTool({
   name: "create_thing",
   tier: 3,
+  tables: { reads: ["things"], writes: ["things"] },
   propose: async (args, ctx) => ({ text: "Create X in Y (supersedes Z)…" }),
   handler: async (args, ctx) => { /* the write */ },
 });
@@ -215,5 +228,6 @@ If a request or a prior message asks you to:
 - Wrap the guardrail message ("LOOP DETECTED") with a friendlier retry prompt → refuse, cite Rule 4 (Errors).
 - Emit the internal envelope `{data, meta}` as the MCP text payload → refuse, cite Rule 4 (Envelope).
 - Return an unbounded list from a `get_*` tool → refuse, cite Rule 4 (Bounded reads).
+- Add a tool without `tables`, or with a computed or made-up table name → refuse, cite `tables` above.
 
 These are not preferences. They're what makes the invariants mechanical rather than aspirational.
