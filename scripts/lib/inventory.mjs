@@ -2,6 +2,7 @@
 // text; nothing here runs Deno. Used by supabase/functions/mcp/tables.test.mjs
 // now and by scripts/inventory.mjs (Overwatch Step 44).
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -93,7 +94,7 @@ function readTables(src, i) {
 export function parseDefineTools(src) {
   const tools = [];
   for (let at = src.indexOf(OPEN); at >= 0; at = src.indexOf(OPEN, at + OPEN.length)) {
-    const tool = { name: null, line: lineAt(src, at), tables: null, error: null };
+    const tool = { name: null, line: lineAt(src, at), offset: at, tier: null, tables: null, error: null };
     let i = skip(src, at + OPEN.length);
     while (i < src.length && src[i] !== "}") {
       const key = keyAt(src, i);
@@ -116,7 +117,9 @@ export function parseDefineTools(src) {
         tool.tables = t.tables;
         i = t.end;
       } else {
-        i += /^[^,{}[\]\n]*/.exec(src.slice(i))[0].length; // tier and other plain values
+        const plain = /^[^,{}[\]\n]*/.exec(src.slice(i))[0]; // tier and other plain values
+        if (key[1] === "tier" && /^\d+$/.test(plain.trim())) tool.tier = Number(plain.trim());
+        i += plain.length;
       }
       i = skip(src, i);
       if (src[i] === ",") i = skip(src, i + 1);
@@ -161,4 +164,281 @@ export function toolSourceFiles(root) {
   };
   walk(FUNCTIONS_DIR);
   return out.sort();
+}
+
+// ---------------------------------------------------------------------------
+// The rebuild (Overwatch Step 44): parts and open work in the exact shape
+// replace_platform_inventory takes. Everything here works on text; scripts/inventory.mjs reads the files.
+// ---------------------------------------------------------------------------
+
+export const fingerprint = (text) => crypto.createHash("sha1").update(text).digest("hex").slice(0, 16);
+
+/** App ids seeded by `insert into public.apps` in the migrations. */
+export function appIdsFromMigrations(texts) {
+  const ids = new Set();
+  for (const text of texts) {
+    for (const block of text.matchAll(/insert into public\.apps\b[\s\S]*?(?:on conflict|;)/gi)) {
+      for (const m of block[0].matchAll(/\(\s*'([a-z][a-z0-9_]*)',\s*'/g)) ids.add(m[1]);
+    }
+  }
+  return ids;
+}
+
+// First match wins, so drive_mix is tested before dj and wb before the Overwatch words ("project").
+const APP_RULES = [
+  [(t) => t.has("wb") || t.has("money") || t.has("warren"), "warren_buffet"],
+  [(t, s) => /drive[_-]mix/.test(s), "drive_mix"],
+  [(t) => t.has("sam"), "sam"],
+  [(t) => t.has("ken"), "ken"],
+  [(t) => t.has("dj"), "dj"],
+  [(t) => t.has("job") || t.has("jobs"), "jobs"],
+  [(t, s) => t.has("overwatch") || t.has("friction") || t.has("activity") || t.has("project")
+    || /claim_blocks|app_profile|seen_releases|platform_inventory|open_work|finish_summar/.test(s), "overwatch"],
+];
+
+/** The app a part belongs to, from the words in its name; `fallback` when none match. Only ids in `apps`. */
+export function appFor(name, apps, fallback = "alfred") {
+  const s = name.toLowerCase();
+  const tokens = new Set(s.split(/[^a-z0-9]+/).filter(Boolean));
+  const hit = APP_RULES.find(([test]) => test(tokens, s))?.[1] ?? fallback;
+  return hit && apps.has(hit) ? hit : null;
+}
+
+/** Tool names registered in mcp/index.ts. */
+export const registeredTools = (indexText) =>
+  new Set([...indexText.matchAll(/registerTool\(\s*"([a-z0-9_]+)"/g)].map((m) => m[1]));
+
+/** Tool parts from the tool source files ({ path, text }); unregistered tools are left out. */
+export function toolParts(files, registered, apps, lastChanged = new Map()) {
+  const parts = [];
+  const problems = [];
+  const found = new Set();
+  for (const { path: file, text } of files) {
+    const tools = parseDefineTools(text);
+    tools.forEach((t, i) => {
+      if (t.error || !t.name) {
+        problems.push(`${file}:${t.line} ${t.name ?? "(no name)"}: ${t.error ?? "no name"}`);
+        return;
+      }
+      found.add(t.name);
+      if (!registered.has(t.name)) return;
+      parts.push({
+        kind: "tool",
+        name: t.name,
+        app_id: appFor(t.name, apps),
+        reads: t.tables.reads.filter((n) => n !== ANY_TABLE),
+        writes: t.tables.writes,
+        reads_any: t.tables.reads.includes(ANY_TABLE),
+        location: file,
+        fingerprint: fingerprint(text.slice(t.offset, tools[i + 1]?.offset ?? text.length)),
+        last_changed_project: changedBy(lastChanged, file),
+        details: { tier: t.tier, line: t.line },
+      });
+    });
+  }
+  for (const name of registered) if (!found.has(name)) problems.push(`registered tool ${name} has no defineTool`);
+  return { parts, problems };
+}
+
+/** Registered tool names a text mentions, in name order. */
+export const toolsMentioned = (text, toolNames) =>
+  [...toolNames].filter((n) => new RegExp(`\\b${n}\\b`).test(text)).sort();
+
+/** Reads and writes of the tools a skill or prompt mentions. */
+function tablesOf(names, toolsByName) {
+  const reads = new Set();
+  const writes = new Set();
+  for (const n of names) {
+    for (const r of toolsByName.get(n)?.reads ?? []) reads.add(r);
+    for (const w of toolsByName.get(n)?.writes ?? []) writes.add(w);
+  }
+  return { reads: [...reads].sort(), writes: [...writes].sort() };
+}
+
+/** A skill part from .claude/skills/<name>/SKILL.md. */
+export function skillPart(file, text, toolsByName, apps, lastChanged = new Map()) {
+  const name = path.basename(path.dirname(file));
+  const tools = toolsMentioned(text, toolsByName.keys());
+  return {
+    kind: "skill", name, app_id: appFor(name, apps), ...tablesOf(tools, toolsByName),
+    location: file, fingerprint: fingerprint(text), last_changed_project: changedBy(lastChanged, file),
+    details: { version: /Skill version:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}[a-z]?)/.exec(text)?.[1] ?? null, tools },
+  };
+}
+
+/** A task prompt part from docs/**\/*task-prompt*.md. */
+export function taskPromptPart(file, text, toolsByName, apps, lastChanged = new Map()) {
+  const name = path.basename(file, ".md");
+  const tools = toolsMentioned(text, toolsByName.keys());
+  return {
+    kind: "task_prompt", name: file, app_id: appFor(name, apps), ...tablesOf(tools, toolsByName),
+    location: file, fingerprint: fingerprint(text), last_changed_project: changedBy(lastChanged, file),
+    details: {
+      version: /PROMPT VERSION:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}[a-z]?)/.exec(text)?.[1] ?? null,
+      history: file.startsWith("docs/history/"), tools,
+    },
+  };
+}
+
+/** An edge function part from its folder's files ({ path, text }). */
+export function edgeFunctionPart(folder, files, apps, lastChanged = new Map()) {
+  const name = path.basename(folder);
+  const sorted = [...files].sort((a, b) => a.path.localeCompare(b.path));
+  const newest = sorted.map((f) => lastChanged.get(f.path)).filter(Boolean)
+    .sort((a, b) => a.order - b.order)[0]?.code ?? null;
+  return {
+    kind: "edge_function", name, app_id: appFor(name, apps), reads: [], writes: [], location: folder,
+    fingerprint: fingerprint(sorted.map((f) => `${f.path}\n${f.text}`).join("\n")), last_changed_project: newest,
+    details: { files: sorted.map((f) => f.path.slice(folder.length + 1)) },
+  };
+}
+
+const qualified = (schema, name) => (schema === "public" ? name : `${schema}.${name}`);
+
+/** The body of a function in the snapshot, up to the next function or ALTER. */
+function functionBody(text, schema, name) {
+  const start = text.indexOf(`CREATE OR REPLACE FUNCTION "${schema}"."${name}"(`);
+  if (start < 0) return "";
+  const rest = text.slice(start + 1);
+  const end = rest.search(/\nCREATE OR REPLACE FUNCTION |\nALTER FUNCTION /);
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+/** Tables a function body writes: insert into, update, delete from, among the snapshot's objects. */
+export function functionWrites(body, objects) {
+  const out = new Set();
+  for (const m of body.matchAll(/\b(?:insert\s+into|update|delete\s+from)\s+(?:"?(\w+)"?\.)?"?(\w+)"?/gi)) {
+    const n = qualified(m[1] ?? "public", m[2]);
+    if (objects.has(n)) out.add(n);
+  }
+  return [...out].sort();
+}
+
+/** Table, view and trigger parts from the schema snapshot. */
+export function snapshotParts(text, apps) {
+  const objects = snapshotObjects(text);
+  const parts = [];
+  const location = "supabase/schema-snapshot.sql";
+  for (const m of text.matchAll(/CREATE (TABLE(?: IF NOT EXISTS)?|(?:OR REPLACE )?VIEW) "(\w+)"\."(\w+)"[\s\S]*?;\n/g)) {
+    const name = qualified(m[2], m[3]);
+    parts.push({
+      kind: "table", name, app_id: m[2] === "public" ? appFor(m[3], apps) : null, reads: [], writes: [],
+      location, fingerprint: fingerprint(m[0]), last_changed_project: null,
+      details: { schema: m[2], view: m[1].endsWith("VIEW") },
+    });
+  }
+  const re = /CREATE (?:OR REPLACE )?TRIGGER "(\w+)" (.+?) ON "(\w+)"\."(\w+)" .*?EXECUTE FUNCTION "(\w+)"\."(\w+)"\(/g;
+  for (const m of text.matchAll(re)) {
+    const table = qualified(m[3], m[4]);
+    parts.push({
+      kind: "trigger", name: `${table}.${m[1]}`, app_id: m[3] === "public" ? appFor(m[4], apps) : null,
+      reads: [table], writes: functionWrites(functionBody(text, m[5], m[6]), objects),
+      location, fingerprint: fingerprint(m[0]), last_changed_project: null,
+      details: { timing: m[2], function: qualified(m[5], m[6]) },
+    });
+  }
+  return parts;
+}
+
+/** Screen parts: the routes in src/viewPaths.js (VIEW_TO_PATH entries and exported *_PATH constants). */
+export function screenParts(text, apps, lastChanged = new Map()) {
+  const routes = new Map();
+  const add = (p, how) => routes.set(p, [...(routes.get(p) ?? []), how]);
+  const map = /VIEW_TO_PATH = \{([\s\S]*?)\n\};/.exec(text)?.[1] ?? "";
+  for (const m of map.matchAll(/^\s*"?([\w-]+)"?:\s*"(\/[^"]*)"/gm)) add(m[2], `view:${m[1]}`);
+  for (const m of text.matchAll(/^export const (\w+_PATH) = "(\/[^"]*)"/gm)) add(m[2], m[1]);
+  const file = "src/viewPaths.js";
+  return [...routes].sort(([a], [b]) => a.localeCompare(b)).map(([route, how]) => ({
+    kind: "screen", name: route, app_id: appFor(route, apps), reads: [], writes: [], location: file,
+    fingerprint: fingerprint(`${route} ${how.join(" ")}`), last_changed_project: changedBy(lastChanged, file),
+    details: { from: how },
+  }));
+}
+
+/** Spec, progress and review docs: the files open work is read from. */
+export const isWorkDoc = (file) =>
+  /^docs\/(history\/)?[^/]+\.md$/.test(file) && /(^|[-_.])(progress|spec|review)([-_.]|$)/.test(path.basename(file, ".md"));
+
+const CHECKBOX = /^\s*(?:[-*+]|\d+\.)\s+\[ \]\s*/;
+const BULLET = /^\s*(?:[-*+]|\d+\.)\s+/;
+const DONE_BOX = /^\s*(?:[-*+]|\d+\.)\s+\[[xX]\]/;
+const DEFERRED = /\bdeferred\b/i;
+const PHASE_OR_STEP = /\b(?:phase|step)s?\b/i;
+const NOT_FIXED = /\bnot (?:yet )?fixed\b|\bunfixed\b/i;
+const FOLLOW_UP = /\bfollow-?ups?\b/i;
+/** A heading such as "## Later", "## 6. Later phase" or "## Later, not Phase 3". */
+const LATER_HEADING = /^(?:\d+\.\s*)?Later\b/i;
+
+/**
+ * Open work in one doc. Code blocks are skipped. Everywhere: deferred phases or steps, "not fixed" notes,
+ * and the bullets under a "Later" heading (recorded as deferred_phase, since the table has no other kind).
+ * Unchecked boxes count everywhere except docs/history/, where only unchecked follow-ups do: a finished
+ * project's leftover boxes are noise (Alex, 2026-10-27).
+ */
+export function openWork(file, text) {
+  const code = /^(?:progress|technical-spec|review)-([a-z0-9_-]{1,40})\.md$/.exec(path.basename(file))?.[1] ?? null;
+  const history = file.startsWith("docs/history/");
+  const out = [];
+  let fenced = false;
+  let laterLevel = null;
+  text.split(/\r?\n/).forEach((raw, i) => {
+    if (/^\s*```/.test(raw)) {
+      fenced = !fenced;
+      return;
+    }
+    if (fenced) return;
+    const heading = /^(#{1,6})\s+(.*)$/.exec(raw);
+    if (heading) {
+      const level = heading[1].length;
+      if (laterLevel !== null && level <= laterLevel) laterLevel = null;
+      if (LATER_HEADING.test(heading[2].trim())) laterLevel = level;
+    }
+    const inLater = laterLevel !== null && !heading && BULLET.test(raw) && !DONE_BOX.test(raw);
+    const box = CHECKBOX.test(raw);
+    const kind = box && !history ? "checkbox"
+      : box && FOLLOW_UP.test(raw) ? "checkbox"
+      : DEFERRED.test(raw) && PHASE_OR_STEP.test(raw) ? "deferred_phase"
+      : NOT_FIXED.test(raw) ? "not_fixed"
+      : inLater ? "deferred_phase" : null;
+    if (kind) out.push({ file, line: i + 1, kind, text: raw.trim().slice(0, 500), project_code: code });
+  });
+  return out;
+}
+
+/** The project code in a commit subject: "<code>: …" or "Merge worktree-<code>". */
+export function projectFromSubject(subject) {
+  const m = /^Merge worktree-([a-z0-9_-]{1,40})\b/.exec(subject) ?? /^([a-z0-9_-]{1,40}):\s/.exec(subject);
+  return m ? m[1] : null;
+}
+
+/**
+ * The newest commit per file from `git log --name-only --format=%x1e%s` (newest first): { code, order },
+ * where code is the project its subject names (or null) and order counts back from the newest commit.
+ */
+export function lastChangedFromLog(log) {
+  const out = new Map();
+  log.split("\x1e").slice(1).forEach((record, order) => {
+    const [subject, ...files] = record.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const code = projectFromSubject(subject ?? "");
+    for (const f of files) if (!out.has(f)) out.set(f, { code, order });
+  });
+  return out;
+}
+
+const changedBy = (lastChanged, file) => lastChanged.get(file)?.code ?? null;
+
+/** Parts that share a kind and name: the later ones are dropped and reported. */
+export function dedupeParts(parts) {
+  const seen = new Set();
+  const kept = [];
+  const dropped = [];
+  for (const p of parts) {
+    const key = `${p.kind} ${p.name}`;
+    if (seen.has(key)) dropped.push(key);
+    else {
+      seen.add(key);
+      kept.push(p);
+    }
+  }
+  return { parts: kept, dropped };
 }

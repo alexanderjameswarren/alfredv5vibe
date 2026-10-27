@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseBody, parseEvent, plan, MAX_EVENTS } from "./ingest.ts";
+import { isRefusal, parseBody, parseEvent, plan, MAX_EVENTS, MAX_PARTS } from "./ingest.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const T0 = "2026-10-24T10:00:00.000Z";
@@ -52,7 +52,7 @@ test("bad events are refused with a reason", () => {
 });
 
 test("the body takes claim_block only, and a bad event does not sink the batch", () => {
-  assert.match(parseBody({ kind: "inventory", events: [ev()] }).error, /only "claim_block"/);
+  assert.match(parseBody({ kind: "bogus", events: [ev()] }).error, /accepts claim_block, inventory, finish_summary/);
   assert.match(parseBody({ kind: "claim_block", events: [] }).error, /non-empty/);
   assert.match(parseBody({ kind: "claim_block", events: Array(MAX_EVENTS + 1).fill(ev()) }).error, /at most/);
   const r = parseBody({ kind: "claim_block", events: [ev(), ev({ event: "nope" }), ev({ event: "clear", at: T1 })] });
@@ -95,6 +95,62 @@ test("index.ts checks the secret before reading the body, and scopes every inser
   assert.match(src, /expectedSecret\.length < 32/);
   assert.match(src, /\.insert\(\{ \.\.\.p\.row, user_id: userId \}\)/);
   assert.match(src, /\.eq\("user_id", userId\)/);
+});
+
+const part = (o = {}) => ({ kind: "tool", name: "get_items", reads: ["items"], writes: [], ...o });
+const line = (o = {}) => ({ file: "docs/progress-x.md", line: 3, kind: "checkbox", text: "- [ ] x", ...o });
+
+test("inventory: parts and open work taken whole", () => {
+  const r = parseBody({ kind: "inventory", parts: [part()], open_work: [line()] });
+  assert.equal(r.ok, true);
+  assert.equal(r.kind, "inventory");
+  assert.deepEqual([r.parts.length, r.open_work.length], [1, 1]);
+  assert.equal(parseBody({ kind: "inventory", parts: [part()], open_work: [] }).ok, true);
+});
+
+test("inventory: refused whole when its shape is wrong", () => {
+  assert.match(parseBody({ kind: "inventory", parts: [], open_work: [] }).error, /non-empty/);
+  assert.match(parseBody({ kind: "inventory", parts: [part()] }).error, /open_work must be an array/);
+  assert.match(parseBody({ kind: "inventory", parts: [part(), part({ name: 7 })], open_work: [] }).error, /parts\[1\]/);
+  assert.match(parseBody({ kind: "inventory", parts: [part({ reads: "items" })], open_work: [] }).error, /parts\[0\]/);
+  assert.match(parseBody({ kind: "inventory", parts: [part()], open_work: [line({ line: "3" })] }).error, /open_work\[0\]/);
+  assert.match(parseBody({ kind: "inventory", parts: Array(MAX_PARTS + 1).fill(part()), open_work: [] }).error, /at most/);
+});
+
+const summary = (o = {}) => ({
+  project_code: "overwatch-q4n", branch: "worktree-overwatch-q4n", merge_commit: "1303ffd",
+  finished_at: T0, diff_stat: { files: 3 }, migrations: ["supabase/migrations/180_x.sql"], ...o,
+});
+
+test("finish_summary: one row, lists defaulted, no reviewed_at", () => {
+  const r = parseBody({ kind: "finish_summary", summary: summary() });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.row, {
+    project_code: "overwatch-q4n", branch: "worktree-overwatch-q4n", merge_commit: "1303ffd", finished_at: T0,
+    diff_stat: { files: 3 }, migrations: ["supabase/migrations/180_x.sql"], tools: [], skills: [], functions: [],
+    task_prompts: [], paths: [],
+  });
+});
+
+test("finish_summary: refused when a field is wrong", () => {
+  assert.match(parseBody({ kind: "finish_summary" }).error, /summary must be an object/);
+  assert.match(parseBody({ kind: "finish_summary", summary: summary({ project_code: "Bad Code" }) }).error, /project_code/);
+  assert.match(parseBody({ kind: "finish_summary", summary: summary({ merge_commit: "main" }) }).error, /merge_commit/);
+  assert.match(parseBody({ kind: "finish_summary", summary: summary({ finished_at: "soon" }) }).error, /finished_at/);
+  assert.match(parseBody({ kind: "finish_summary", summary: summary({ tools: "get_items" }) }).error, /tools must be a list/);
+});
+
+test("database refusals answer 400, the rest 500", () => {
+  assert.equal(isRefusal("23514"), true);
+  assert.equal(isRefusal("22023"), true);
+  assert.equal(isRefusal("08006"), false);
+  assert.equal(isRefusal(undefined), false);
+});
+
+test("index.ts scopes the inventory and the summary to the fixed user", () => {
+  const src = readFileSync(join(HERE, "index.ts"), "utf-8");
+  assert.match(src, /p_user_id: userId/);
+  assert.match(src, /\.upsert\(\{ \.\.\.parsed\.row, user_id: userId \}, \{ onConflict: "user_id,merge_commit" \}\)/);
 });
 
 test("config.toml declares verify_jwt = false for it", () => {

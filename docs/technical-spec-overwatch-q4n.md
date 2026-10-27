@@ -341,6 +341,8 @@ Unfinished work written down in `docs/`: its own table, not a kind in platform_i
 
 The scan reads spec, progress and review files in `docs/` and `docs/history/` (`technical-spec-*`, `progress-*`, `review-*`, `*-progress.md`). Not audited (rebuilt wholesale); owner RLS like the rest.
 
+**docs/history is filtered (Alex, 2026-10-27, Step 45).** There, plain unchecked boxes are left out (a finished project's leftovers); only unchecked follow-ups, deferred phases or steps, "not fixed" notes, and the bullets under a heading named "Later" ("## Later", "## 6. Later phase", "## Later, not Phase 3") are kept. Files in `docs/` keep every kind. "Later" bullets are recorded as `deferred_phase`, since the table's kinds are fixed.
+
 ### 4.14 finish_summaries (Phase 7, decided 2026-10-27)
 
 What a worktree's Finish carried into main, sent by gitpush (5.4) and reviewed by the nightly job.
@@ -490,6 +492,8 @@ A script, `scripts/inventory.mjs` (logic in `scripts/lib/inventory.mjs`), walks 
 - open work: spec, progress and review files in `docs/` and `docs/history/` (4.13)
 
 Schedules come from `platform_schedules` directly; the script does not rebuild them. It runs at finish and by hand with `npm run inventory` (prints a summary; `--send` queues it).
+
+**As built (Step 44).** `npm run inventory` writes the payload to `.scratch/inventory.json` (git-ignored) and prints counts per kind, open work per file, and anything it could not use; `--json` prints the payload instead. Triggers come from the snapshot too: reads is the table a trigger fires on, writes the tables its function inserts into, updates or deletes from (a pattern search, so dynamic SQL is missed). `fingerprint` is a sha1 of the part's source text; `last_changed_project` is the project code in the subject of the newest commit touching its file ("<code>: …" or "Merge worktree-<code>"), else null; snapshot parts carry null. **App rule:** the first match among the words of a part's name: wb, money or warren → warren_buffet; drive_mix → drive_mix; sam; ken; dj; job or jobs → jobs; overwatch, friction, activity, project, claim_blocks, app_profile, seen_releases, platform_inventory, open_work, finish_summaries → overwatch; anything else alfred (a platform.* table: none). Only ids seeded in the migrations' `insert into public.apps` are used.
 
 ### 5.6 Tools declare their tables
 

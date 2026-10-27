@@ -4,7 +4,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts";
-import { type BlockRow, parseBody, plan } from "./ingest.ts";
+import { type BlockRow, isRefusal, parseBody, plan } from "./ingest.ts";
 
 // overwatch-ingest — the desktop's one door into Overwatch (claims script now; gitpush and Switchboard later).
 //
@@ -27,6 +27,14 @@ import { type BlockRow, parseBody, plan } from "./ingest.ts";
 //
 // A bad event is rejected and reported; the rest still apply, so the sender can drop what will never succeed.
 // A database error answers 500 and the sender keeps the batch to resend: new and clear are idempotent.
+//
+//   POST { kind: "inventory", parts: [...], open_work: [...] }          (Overwatch Step 45, spec 5.1 and 5.5)
+//     -> { ok, parts, open_work, removed_parts, removed_open_work }
+//     The whole inventory, replaced in one transaction by replace_platform_inventory; a refusal keeps the old one.
+//   POST { kind: "finish_summary", summary: { project_code, merge_commit, finished_at, … } }   (spec 4.14 and 5.4)
+//     -> { ok, id }   upserted on merge_commit, so a resend is harmless; reviewed_at is never touched.
+//
+// For both, a value the database refuses answers 400 (resending cannot help); anything else 500.
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -76,6 +84,27 @@ Deno.serve(async (req) => {
   if (!parsed.ok) return fail(400, parsed.error);
 
   const client = createServiceClient();
+
+  if (parsed.kind === "inventory") {
+    const { data, error } = await client.rpc("replace_platform_inventory", {
+      p_user_id: userId,
+      p_parts: parsed.parts,
+      p_open_work: parsed.open_work,
+    });
+    if (error) return fail(isRefusal(error.code) ? 400 : 500, `could not replace the inventory: ${error.message}`);
+    return json({ ok: true, ...(data as Record<string, unknown>) });
+  }
+
+  if (parsed.kind === "finish_summary") {
+    const { data, error } = await client
+      .from("finish_summaries")
+      .upsert({ ...parsed.row, user_id: userId }, { onConflict: "user_id,merge_commit" })
+      .select("id")
+      .single();
+    if (error) return fail(isRefusal(error.code) ? 400 : 500, `could not write finish_summaries: ${error.message}`);
+    return json({ ok: true, id: (data as { id: string }).id });
+  }
+
   let inserted = 0, updated = 0, unchanged = 0;
 
   // One event at a time, re-reading each episode, so two events for the same episode in one batch both land.
