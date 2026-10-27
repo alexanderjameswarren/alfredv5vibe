@@ -331,16 +331,19 @@ test("the tool count is 72 after the job-search tools", () => {
     "get_friction", "update_friction"];
   // Overwatch Step 22, +2.
   const EXPECTED_ADDED_OVERWATCH_22 = ["record_project_estimate", "get_project_estimates"];
+  // Overwatch Step 46, +4.
+  const EXPECTED_ADDED_OVERWATCH_46 = ["get_platform_inventory", "get_open_work", "get_finish_summaries",
+    "mark_finish_summaries_reviewed"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
                       ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C, ...EXPECTED_ADDED_P5,
                       ...EXPECTED_ADDED_READ, ...EXPECTED_ADDED_OVERWATCH_13, ...EXPECTED_ADDED_OVERWATCH_14,
-                      ...EXPECTED_ADDED_OVERWATCH_22]) {
+                      ...EXPECTED_ADDED_OVERWATCH_22, ...EXPECTED_ADDED_OVERWATCH_46]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 163,
-    `expected 163 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 167,
+    `expected 167 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -666,7 +669,7 @@ test("Drive Mix schemas advertise exactly the args their handlers read, at the s
 
 test("Overwatch Steps 13 and 14 schemas advertise exactly the args their handlers read, at the spec's tiers", () => {
   const tiers = {};
-  for (const file of ["overwatch-activity.ts", "overwatch-projects.ts", "overwatch-plan.ts"]) {
+  for (const file of ["overwatch-activity.ts", "overwatch-projects.ts", "overwatch-plan.ts", "overwatch-inventory.ts"]) {
     let src = readFileSync(join(TOOLS, file), "utf-8");
     // planPatch reads the plan fields for update_project_plan; they are listed in PLAN_FIELDS.
     const planFields = [...(/const PLAN_FIELDS = \[([\s\S]*?)\]/.exec(src)?.[1] ?? "").matchAll(/"(\w+)"/g)].map((m) => m[1]);
@@ -699,6 +702,7 @@ test("Overwatch Steps 13 and 14 schemas advertise exactly the args their handler
     get_overwatch_watch: 1, create_overwatch_watch: 2, update_overwatch_watch: 2,
     get_overwatch_notes: 1, create_overwatch_note: 2, get_claim_blocks: 1, update_app_profile: 2,
     record_seen_releases: 1, log_friction: 1, get_friction: 1, update_friction: 2,
+    get_platform_inventory: 1, get_open_work: 1, get_finish_summaries: 1, mark_finish_summaries_reviewed: 2,
   });
 });
 

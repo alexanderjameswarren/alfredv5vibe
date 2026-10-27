@@ -588,7 +588,8 @@ All via `defineTool` with declared tables (once 5.6 lands).
 | update_overwatch_checks | 2 | replace checks_next_run on the active plan |
 | get_overwatch_watch / create_overwatch_watch / update_overwatch_watch | 1 / 2 / 2 | |
 | get_overwatch_notes / create_overwatch_note | 1 / 2 | |
-| get_platform_inventory | 1 | (Phase 7) parts by kind, name, app or table read or written; `open_work: true` reads platform_open_work instead (file, kind, project code filters) |
+| get_platform_inventory | 1 | (Phase 7) parts by kind, name (contains), app_id, `table` (parts that read or write it, each with `uses`: reads, writes or both) and `reads_any`; the NOTE gives counts per kind |
+| get_open_work | 1 | (Phase 7, Step 46) platform_open_work by file (contains), project_code, kind, and `where`: live, history or all |
 | get_finish_summaries | 1 | (Phase 7) unreviewed by default; project code and date filters; paged via readTable |
 | mark_finish_summaries_reviewed | 2 | (Phase 7) set reviewed_at and reviewed_by_run on the given ids |
 | get_claim_blocks | 1 | |

@@ -259,9 +259,12 @@ Estimate tracking first (spec 4.12, added 2026-10-25), because the nightly and w
   - [x] overwatch-post: sendGroups (a `_kind` event goes alone, in order; blocks still batch); scripts/inventory.mjs `--send` queues one inventory event under the claims lock and runs the sender. Payload about 185 KB on the wire, one request. Tests: overwatch-post 13; CLI suite 285 pass
   - [x] gitsync (fast-forward cd8b120 to 1303ffd: only the snapshot, through migration 180, labelled right by Step 42's fix); db:deploy claimed; overwatch-ingest deployed (version 2, verify_jwt false, unauthenticated POST gets its own 401 `{"ok":false,"error":"unauthorized"}`)
   - [x] First send (run tag overwatch-q4n-s45b-c3tz): 501 parts (8 functions, 39 screens, 12 skills, 109 tables and views, 5 task prompts, 163 tools, 165 triggers), 124 open-work lines (32 checkbox, 59 deferred, 33 not fixed); the function returned parts 501, open_work 124, removed 0 and 0
-  - [ ] Alex runs the check query; then checkpoint the Step 44 and 45 files and release db:deploy
+  - [x] Alex runs the check query; checkpointed (main 9c3c9c1), db:deploy released
 - [ ] Step 45 (CLI): overwatch-ingest kinds `inventory` and `finish_summary`; the outbox sends an inventory on its own; deploy overwatch-ingest (db:deploy reserved)
-- [ ] Step 46 (CLI): get_platform_inventory, get_finish_summaries, mark_finish_summaries_reviewed; deploy mcp
+- [ ] Step 46 (CLI): get_platform_inventory, get_open_work, get_finish_summaries, mark_finish_summaries_reviewed; deploy mcp (run tag overwatch-q4n-s46-j5ry)
+  - [x] `_shared/tools/overwatch-inventory.ts` (new): the four tools through readTable (inventory counts per kind in a NOTE; `table` marks uses), mark sets reviewed_at and reviewed_by_run; registered in mcp/index.ts (167 tools); spec section 7. Tests: overwatch-inventory 6, all function tests 798 pass; deno check back to the 111 existing errors
+  - [x] gitsync (fast-forward 124521a to 9c3c9c1, this project's checkpoint only; nothing under mcp/, migrations or the snapshot), db:deploy claimed, mcp deployed (version 174, verify_jwt false, unauthenticated POST gets its own 401 "Unauthorized")
+  - [ ] Alex runs the four new-thread prompts (inbox users, reads_any, warren_buffet history, finish summaries); then checkpoint and release db:deploy
 - [ ] Step 47 (CLI): gitpush Finish rebuilds and queues the inventory and a finish_summary (scripts/lib/finish-summary.mjs); tests
 - [ ] Step 48 (CLI, docs): nightly prompt (finish summaries against the inventory, follow-up items, current_state, mark reviewed); weekly drift audit Phase 7 checks; overwatch skill; Alex pastes prompts and skills
 - [ ] Step 49 (CLI): end-to-end check (a real inventory send, a finish summary, the next audit run)
