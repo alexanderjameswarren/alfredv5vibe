@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-26 15:26, through migration 178 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-27 12:01, through migration 180 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -4205,6 +4205,86 @@ ALTER FUNCTION "public"."reminders_touch_updated_at"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."reminders_touch_updated_at"() IS 'Alfred: stamps reminders.updated_at.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."replace_platform_inventory"("p_user_id" "uuid", "p_parts" "jsonb", "p_open_work" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_now        timestamptz := clock_timestamp();
+  v_dupe       text;
+  v_parts      int;
+  v_work       int;
+  v_gone_parts int;
+  v_gone_work  int;
+begin
+  if p_user_id is null then
+    raise exception 'replace_platform_inventory: p_user_id is required.' using errcode = '22023';
+  end if;
+  if p_parts is null or jsonb_typeof(p_parts) <> 'array' or jsonb_array_length(p_parts) = 0 then
+    raise exception 'replace_platform_inventory: parts must be a non-empty JSON array; nothing was changed.'
+      using errcode = '22023';
+  end if;
+  if p_open_work is null or jsonb_typeof(p_open_work) <> 'array' then
+    raise exception 'replace_platform_inventory: open_work must be a JSON array; nothing was changed.'
+      using errcode = '22023';
+  end if;
+
+  select e->>'kind' || ' ' || (e->>'name') into v_dupe
+    from jsonb_array_elements(p_parts) e
+   group by e->>'kind', e->>'name' having count(*) > 1 limit 1;
+  if v_dupe is not null then
+    raise exception 'replace_platform_inventory: % appears twice; nothing was changed.', v_dupe using errcode = '22023';
+  end if;
+  select (e->>'file') || ':' || (e->>'line') into v_dupe
+    from jsonb_array_elements(p_open_work) e
+   group by e->>'file', e->>'line' having count(*) > 1 limit 1;
+  if v_dupe is not null then
+    raise exception 'replace_platform_inventory: open work % appears twice; nothing was changed.', v_dupe
+      using errcode = '22023';
+  end if;
+
+  insert into public.platform_inventory
+    (user_id, kind, name, app_id, reads, writes, reads_any, location, fingerprint, last_changed_project, details, seen_at)
+  select p_user_id, e->>'kind', e->>'name',
+         (select a.id from public.apps a where a.id = e->>'app_id'),
+         array(select x from jsonb_array_elements_text(coalesce(e->'reads', '[]'::jsonb)) x where x <> '*'),
+         array(select x from jsonb_array_elements_text(coalesce(e->'writes', '[]'::jsonb)) x),
+         coalesce((e->>'reads_any')::boolean, false)
+           or (coalesce(e->'reads', '[]'::jsonb) ? '*'),
+         e->>'location', e->>'fingerprint', e->>'last_changed_project',
+         coalesce(e->'details', '{}'::jsonb), v_now
+    from jsonb_array_elements(p_parts) e
+  on conflict (user_id, kind, name) do update set
+    app_id = excluded.app_id, reads = excluded.reads, writes = excluded.writes, reads_any = excluded.reads_any,
+    location = excluded.location, fingerprint = excluded.fingerprint,
+    last_changed_project = excluded.last_changed_project, details = excluded.details, seen_at = excluded.seen_at;
+  get diagnostics v_parts = row_count;
+
+  insert into public.platform_open_work (user_id, file, line, kind, text, project_code, seen_at)
+  select p_user_id, e->>'file', (e->>'line')::int, e->>'kind', left(trim(e->>'text'), 500), e->>'project_code', v_now
+    from jsonb_array_elements(p_open_work) e
+  on conflict (user_id, file, line) do update set
+    kind = excluded.kind, text = excluded.text, project_code = excluded.project_code, seen_at = excluded.seen_at;
+  get diagnostics v_work = row_count;
+
+  delete from public.platform_inventory where user_id = p_user_id and seen_at < v_now;
+  get diagnostics v_gone_parts = row_count;
+  delete from public.platform_open_work where user_id = p_user_id and seen_at < v_now;
+  get diagnostics v_gone_work = row_count;
+
+  return jsonb_build_object('parts', v_parts, 'open_work', v_work,
+                            'removed_parts', v_gone_parts, 'removed_open_work', v_gone_work);
+end;
+$$;
+
+
+ALTER FUNCTION "public"."replace_platform_inventory"("p_user_id" "uuid", "p_parts" "jsonb", "p_open_work" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."replace_platform_inventory"("p_user_id" "uuid", "p_parts" "jsonb", "p_open_work" "jsonb") IS 'Overwatch: replace one user''s whole platform_inventory and platform_open_work in one transaction. Upserts every part (kind + name) and open-work line (file + line) with this call''s seen_at, then deletes the rows it did not see. Any error (a bad kind, a duplicate, a malformed line) rolls back the whole call, so a failed send leaves the previous inventory in place. A "*" in a part''s reads becomes reads_any. Service role only: called by overwatch-ingest, which passes the user id.';
 
 
 
@@ -10093,6 +10173,101 @@ COMMENT ON COLUMN "public"."executions"."parent_execution_id" IS 'Restructure P5
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."finish_summaries" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "project_code" "text" NOT NULL,
+    "branch" "text",
+    "merge_commit" "text" NOT NULL,
+    "finished_at" timestamp with time zone NOT NULL,
+    "diff_stat" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "migrations" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "tools" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "skills" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "functions" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "task_prompts" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "paths" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "reviewed_at" timestamp with time zone,
+    "reviewed_by_run" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "finish_summaries_commit_format" CHECK (("merge_commit" ~ '^[0-9a-f]{7,40}$'::"text")),
+    CONSTRAINT "finish_summaries_diff_stat_object" CHECK (("jsonb_typeof"("diff_stat") = 'object'::"text")),
+    CONSTRAINT "finish_summaries_project_format" CHECK (("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text")),
+    CONSTRAINT "finish_summaries_reviewed_pair" CHECK ((("reviewed_by_run" IS NULL) OR ("reviewed_at" IS NOT NULL)))
+);
+
+
+ALTER TABLE "public"."finish_summaries" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."finish_summaries" IS 'OVERWATCH. What a worktree''s gitpush Finish carried into main: the diff stat and the migrations, tools, skills, edge functions and task prompts it changed. Sent by gitpush through overwatch-ingest; the nightly job compares each unreviewed one with the inventory, raises follow-up items, then sets reviewed_at. Spec: docs/technical-spec-overwatch-q4n.md 4.14 and 5.4.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."user_id" IS 'Owner. Set explicitly by overwatch-ingest (service role). Owner RLS scopes every read.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."project_code" IS 'The worktree that finished, e.g. overwatch-q4n.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."branch" IS 'Its branch, e.g. worktree-overwatch-q4n.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."merge_commit" IS 'The merge commit in main (short or full hash). One summary per merge.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."finished_at" IS 'When the Finish merged.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."diff_stat" IS 'JSON object: { files, insertions, deletions } for the merge.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."migrations" IS 'Numbered migration paths new or changed in the merge.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."tools" IS 'Tool names whose defineTool block changed.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."skills" IS 'Skill files changed (.claude/skills/*/SKILL.md).';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."functions" IS 'Edge function folders changed (supabase/functions/*).';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."task_prompts" IS 'Task prompt docs changed (docs/**/*task-prompt*.md).';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."paths" IS 'Every path in the merge.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."reviewed_at" IS 'When the nightly job compared it with the inventory; null until then, so a failed night leaves it for the next.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."reviewed_by_run" IS 'The platform_runs id of the run that reviewed it.';
+
+
+
+COMMENT ON COLUMN "public"."finish_summaries"."created_at" IS 'When overwatch-ingest wrote the row.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."group_types" (
     "id" "text" DEFAULT ("gen_random_uuid"())::"text" NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -11161,6 +11336,144 @@ COMMENT ON COLUMN "public"."overwatch_watch"."expiry_noted_at" IS 'Set once a no
 
 
 COMMENT ON COLUMN "public"."overwatch_watch"."created_at" IS 'Row creation.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."platform_inventory" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "kind" "text" NOT NULL,
+    "name" "text" NOT NULL,
+    "app_id" "text",
+    "reads" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "writes" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "reads_any" boolean DEFAULT false NOT NULL,
+    "location" "text",
+    "fingerprint" "text",
+    "last_changed_project" "text",
+    "details" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "seen_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "platform_inventory_details_object" CHECK (("jsonb_typeof"("details") = 'object'::"text")),
+    CONSTRAINT "platform_inventory_kind_check" CHECK (("kind" = ANY (ARRAY['tool'::"text", 'skill'::"text", 'edge_function'::"text", 'schedule'::"text", 'table'::"text", 'screen'::"text", 'task_prompt'::"text", 'trigger'::"text"]))),
+    CONSTRAINT "platform_inventory_name_length" CHECK ((("length"("name") >= 1) AND ("length"("name") <= 300))),
+    CONSTRAINT "platform_inventory_no_star" CHECK (((NOT ('*'::"text" = ANY ("reads"))) AND (NOT ('*'::"text" = ANY ("writes"))))),
+    CONSTRAINT "platform_inventory_project_format" CHECK ((("last_changed_project" IS NULL) OR ("last_changed_project" ~ '^[a-z0-9_-]{1,40}$'::"text"))),
+    CONSTRAINT "platform_inventory_reads_any_tool" CHECK (((NOT "reads_any") OR ("kind" = 'tool'::"text")))
+);
+
+
+ALTER TABLE "public"."platform_inventory" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."platform_inventory" IS 'OVERWATCH. Every moving part of the platform, one row each: MCP tools with the tables they declare, skills, edge functions, schedules, tables, screens, task prompts and triggers. Rebuilt whole by scripts/inventory.mjs and replaced in one transaction by replace_platform_inventory (via overwatch-ingest); never hand-edited. Read by the nightly finish-summary review and the weekly drift audit. Spec: docs/technical-spec-overwatch-q4n.md 4.9.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."id" IS 'Row id. Kept across rebuilds while the part keeps its kind and name.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."user_id" IS 'Owner. Set explicitly by replace_platform_inventory, since overwatch-ingest writes with the service role. Owner RLS scopes every read.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."kind" IS 'tool, skill, edge_function, schedule, table, screen, task_prompt or trigger. Triggers come from the schema snapshot, not from tool declarations.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."name" IS 'The part''s name, unique within its kind: a tool or skill name, a function folder, a table name, a route, a prompt file, or <table>.<trigger> for a trigger.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."app_id" IS 'The app it belongs to, when the inventory can tell; null otherwise.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."reads" IS 'Tables and views it reads: a tool''s declared reads, a skill''s or prompt''s tools'' reads, a trigger''s own table.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."writes" IS 'Tables it writes: a tool''s declared writes, a trigger''s targets.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."reads_any" IS 'True for a generic reader that reads any registered table (a tool declaring "*" in reads, e.g. get_records). The named tables it always reads are still in reads.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."location" IS 'Repo path of its source, e.g. supabase/functions/_shared/tools/ken.ts.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."fingerprint" IS 'Hash of its source text, so a rebuild can tell a part changed.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."last_changed_project" IS 'Project code of the last Finish that changed its source, when known; null otherwise.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."details" IS 'Kind-specific facts as a JSON object, e.g. a skill''s tool names, a trigger''s timing and events, a tool''s tier.';
+
+
+
+COMMENT ON COLUMN "public"."platform_inventory"."seen_at" IS 'When the latest rebuild saw it.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."platform_open_work" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "file" "text" NOT NULL,
+    "line" integer NOT NULL,
+    "kind" "text" NOT NULL,
+    "text" "text" NOT NULL,
+    "project_code" "text",
+    "seen_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "platform_open_work_file_format" CHECK ((("file" ~ '^docs/.+\.md$'::"text") AND ("length"("file") <= 300))),
+    CONSTRAINT "platform_open_work_kind_check" CHECK (("kind" = ANY (ARRAY['checkbox'::"text", 'deferred_phase'::"text", 'not_fixed'::"text"]))),
+    CONSTRAINT "platform_open_work_line_positive" CHECK (("line" >= 1)),
+    CONSTRAINT "platform_open_work_project_format" CHECK ((("project_code" IS NULL) OR ("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text"))),
+    CONSTRAINT "platform_open_work_text_length" CHECK ((("length"("text") >= 1) AND ("length"("text") <= 500)))
+);
+
+
+ALTER TABLE "public"."platform_open_work" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."platform_open_work" IS 'OVERWATCH. Unfinished work written down in docs/: open checkboxes, deferred phases and "not fixed here" notes in spec, progress and review files (docs/ and docs/history/), each with its file and line. Rebuilt whole with the inventory by replace_platform_inventory; never hand-edited. Feeds the Phase 8 review passes and the weekly audit. Spec: docs/technical-spec-overwatch-q4n.md 4.13.';
+
+
+
+COMMENT ON COLUMN "public"."platform_open_work"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."platform_open_work"."user_id" IS 'Owner. Set explicitly by replace_platform_inventory (service role). Owner RLS scopes every read.';
+
+
+
+COMMENT ON COLUMN "public"."platform_open_work"."file" IS 'Repo path of the doc, e.g. docs/history/progress-dj.md.';
+
+
+
+COMMENT ON COLUMN "public"."platform_open_work"."line" IS 'Line number in the file, 1-based, as of the latest rebuild.';
+
+
+
+COMMENT ON COLUMN "public"."platform_open_work"."kind" IS 'checkbox (an open "- [ ]"), deferred_phase (a phase or step marked deferred) or not_fixed (a "not fixed here" or follow-up note).';
+
+
+
+COMMENT ON COLUMN "public"."platform_open_work"."text" IS 'The line, trimmed, at most 500 characters.';
+
+
+
+COMMENT ON COLUMN "public"."platform_open_work"."project_code" IS 'The project code from the file name (progress-<code>.md, technical-spec-<code>.md, review-<code>.md), else null.';
+
+
+
+COMMENT ON COLUMN "public"."platform_open_work"."seen_at" IS 'When the latest rebuild saw it.';
 
 
 
@@ -14527,6 +14840,16 @@ ALTER TABLE ONLY "public"."executions"
 
 
 
+ALTER TABLE ONLY "public"."finish_summaries"
+    ADD CONSTRAINT "finish_summaries_merge_key" UNIQUE ("user_id", "merge_commit");
+
+
+
+ALTER TABLE ONLY "public"."finish_summaries"
+    ADD CONSTRAINT "finish_summaries_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."group_types"
     ADD CONSTRAINT "group_types_pkey" PRIMARY KEY ("id");
 
@@ -14629,6 +14952,26 @@ ALTER TABLE ONLY "public"."overwatch_seen_releases"
 
 ALTER TABLE ONLY "public"."overwatch_watch"
     ADD CONSTRAINT "overwatch_watch_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."platform_inventory"
+    ADD CONSTRAINT "platform_inventory_part_key" UNIQUE ("user_id", "kind", "name");
+
+
+
+ALTER TABLE ONLY "public"."platform_inventory"
+    ADD CONSTRAINT "platform_inventory_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."platform_open_work"
+    ADD CONSTRAINT "platform_open_work_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."platform_open_work"
+    ADD CONSTRAINT "platform_open_work_place_key" UNIQUE ("user_id", "file", "line");
 
 
 
@@ -15103,6 +15446,10 @@ COMMENT ON INDEX "public"."executions_one_open_per_intent" IS 'Restructure P1. A
 
 
 
+CREATE INDEX "finish_summaries_unreviewed_idx" ON "public"."finish_summaries" USING "btree" ("user_id", "finished_at") WHERE ("reviewed_at" IS NULL);
+
+
+
 CREATE INDEX "idx_contexts_user" ON "public"."contexts" USING "btree" ("user_id");
 
 
@@ -15411,6 +15758,18 @@ CREATE INDEX "overwatch_watch_user_ends_idx" ON "public"."overwatch_watch" USING
 
 
 
+CREATE INDEX "platform_inventory_reads_idx" ON "public"."platform_inventory" USING "gin" ("reads");
+
+
+
+CREATE INDEX "platform_inventory_writes_idx" ON "public"."platform_inventory" USING "gin" ("writes");
+
+
+
+CREATE INDEX "platform_open_work_project_idx" ON "public"."platform_open_work" USING "btree" ("user_id", "project_code");
+
+
+
 CREATE INDEX "platform_runs_recent_idx" ON "public"."platform_runs" USING "btree" ("user_id", "app", "job", "started_at" DESC);
 
 
@@ -15684,6 +16043,10 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."executions" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."finish_summaries" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
 
@@ -16452,6 +16815,11 @@ ALTER TABLE ONLY "public"."executions"
 
 
 
+ALTER TABLE ONLY "public"."finish_summaries"
+    ADD CONSTRAINT "finish_summaries_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
 ALTER TABLE ONLY "public"."group_types"
     ADD CONSTRAINT "group_types_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
 
@@ -16614,6 +16982,21 @@ ALTER TABLE ONLY "public"."overwatch_watch"
 
 ALTER TABLE ONLY "public"."overwatch_watch"
     ADD CONSTRAINT "overwatch_watch_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."platform_inventory"
+    ADD CONSTRAINT "platform_inventory_app_id_fkey" FOREIGN KEY ("app_id") REFERENCES "public"."apps"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."platform_inventory"
+    ADD CONSTRAINT "platform_inventory_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."platform_open_work"
+    ADD CONSTRAINT "platform_open_work_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
 
 
@@ -17444,6 +17827,13 @@ CREATE POLICY "executions_access" ON "public"."executions" USING ((("user_id" = 
 
 
 
+ALTER TABLE "public"."finish_summaries" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "finish_summaries_owner_access" ON "public"."finish_summaries" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
 ALTER TABLE "public"."group_types" ENABLE ROW LEVEL SECURITY;
 
 
@@ -17635,6 +18025,20 @@ ALTER TABLE "public"."overwatch_watch" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "overwatch_watch_owner_access" ON "public"."overwatch_watch" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."platform_inventory" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "platform_inventory_owner_access" ON "public"."platform_inventory" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."platform_open_work" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "platform_open_work_owner_access" ON "public"."platform_open_work" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
 
 
 
@@ -18311,6 +18715,11 @@ GRANT ALL ON FUNCTION "public"."reminders_touch_updated_at"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."replace_platform_inventory"("p_user_id" "uuid", "p_parts" "jsonb", "p_open_work" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."replace_platform_inventory"("p_user_id" "uuid", "p_parts" "jsonb", "p_open_work" "jsonb") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."replace_sam_song_scores"("p_song_id" "uuid", "p_scores_version" integer, "p_computed_from" timestamp with time zone, "p_rows" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."replace_sam_song_scores"("p_song_id" "uuid", "p_scores_version" integer, "p_computed_from" timestamp with time zone, "p_rows" "jsonb") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."replace_sam_song_scores"("p_song_id" "uuid", "p_scores_version" integer, "p_computed_from" timestamp with time zone, "p_rows" "jsonb") TO "service_role";
@@ -18877,6 +19286,11 @@ GRANT ALL ON TABLE "public"."executions" TO "service_role";
 
 
 
+GRANT ALL ON TABLE "public"."finish_summaries" TO "authenticated";
+GRANT ALL ON TABLE "public"."finish_summaries" TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."group_types" TO "authenticated";
 GRANT ALL ON TABLE "public"."group_types" TO "service_role";
 
@@ -18964,6 +19378,16 @@ GRANT ALL ON TABLE "public"."overwatch_seen_releases" TO "service_role";
 
 GRANT ALL ON TABLE "public"."overwatch_watch" TO "authenticated";
 GRANT ALL ON TABLE "public"."overwatch_watch" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."platform_inventory" TO "authenticated";
+GRANT ALL ON TABLE "public"."platform_inventory" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."platform_open_work" TO "authenticated";
+GRANT ALL ON TABLE "public"."platform_open_work" TO "service_role";
 
 
 

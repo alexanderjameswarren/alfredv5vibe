@@ -242,7 +242,11 @@ Estimate tracking first (spec 4.12, added 2026-10-25), because the nightly and w
   - [x] `--no-snapshot` on Checkpoint: snapshotDecision `skip`, the plan says the snapshot is skipped and stays behind; refused on Finish and main; in --help
   - [x] Tests: schema-snapshot 16 pass (5 new)
   - [x] Step 42b, `--paths` folders (Alex confirmed claiming git-flow.mjs and its test): expandPathWords in git-flow.mjs (a changed file as before; a folder becomes every changed, added or deleted file under it; a folder with nothing changed under it is refused); doCheckpoint uses it for `--paths` and for typed answers. Fixes the 2026-10-24 note below. Tests: 5 new; CLI suite 268 pass
-- [ ] Step 43 (CLI, SQL): platform_inventory, platform_open_work, finish_summaries and replace_platform_inventory (db items reserved)
+- [ ] Step 43 (CLI, SQL): platform_inventory, platform_open_work, finish_summaries and replace_platform_inventory (run tag overwatch-q4n-s43-r6tb)
+  - [x] `_pending_overwatch-q4n_platform_inventory.sql`: platform_inventory (kinds include trigger; reads_any for a "*" reader; details jsonb; unique kind + name; not audited), platform_open_work (docs/ files only; unique file + line; not audited), finish_summaries (one per merge commit; reviewed_by_run needs reviewed_at; audited); replace_platform_inventory (upsert then delete unseen, one transaction, refuses empty or duplicate sends; service_role only); owner RLS, grants via register_table, every column commented, check query with conformance
+  - [x] `24_platform_inventory_test.sql` (24 checks, rolls itself back) and `25_verify_platform_inventory.sql`
+  - [x] gitsync (fast-forward fe80fd3 to 96091f9, only this project's two checkpoints; no migration, snapshot or name drift), the four db items claimed, numbered `180_overwatch_platform_inventory.sql` (claimed; the _pending_ file deleted)
+  - [ ] Alex runs 180, `24_platform_inventory_test.sql` and `25_verify_platform_inventory.sql`; then checkpoint 180 and the two test files
 - [ ] Step 44 (CLI): scripts/inventory.mjs and `npm run inventory` (parts and open work; prints a summary, `--send` queues it)
 - [ ] Step 45 (CLI): overwatch-ingest kinds `inventory` and `finish_summary`; the outbox sends an inventory on its own; deploy overwatch-ingest (db:deploy reserved)
 - [ ] Step 46 (CLI): get_platform_inventory, get_finish_summaries, mark_finish_summaries_reviewed; deploy mcp
