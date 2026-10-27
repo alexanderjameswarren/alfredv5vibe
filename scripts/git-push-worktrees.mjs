@@ -75,6 +75,7 @@ import {
   changedFiles,
   choose,
   exclusive,
+  expandPathWords,
   applyDocsMove,
   docsClashRefusal,
   docsMovePaths,
@@ -121,6 +122,8 @@ const USAGE = `gitpush — bring work into main and push it.
   --paths <paths or numbers…>            Checkpoint: what to commit
   --all                                  Checkpoint: every uncommitted path
   --release-db / --keep-db               Checkpoint: the db: claims
+  --no-snapshot                          Checkpoint: skip the schema snapshot (no Docker);
+                                         its label stays behind until a push with a migration
   --include-unclaimed all|none|<paths…>  main: changes nobody claimed
   --message, -m "..."                    the commit message
   --dry-run                              show the plan, then stop: nothing changes
@@ -146,6 +149,9 @@ let OPTS = {};
 function checkOptionsFor(mode, w) {
   const refusal = misplacedOptions(mode, w, OPTS);
   if (refusal) stop(refusal, 2);
+  if (OPTS["no-snapshot"] && mode !== "c" && mode !== "s") {
+    stop(`--no-snapshot is for a worktree Checkpoint only, not ${w.isMain ? "main" : `a Finish of ${w.owner}`}.\nNothing was changed.`, 2);
+  }
 }
 
 /** Refuse a Finish run from inside the worktree it removes, before anything is asked. */
@@ -222,10 +228,11 @@ function commitIn(w, paths, message) {
   return true;
 }
 
-/** Run npm run schema:snapshot's script in a checkout. */
-function runSnapshot(cwd) {
+/** Run npm run schema:snapshot's script in a checkout, labelled through at least `newest`. */
+function runSnapshot(cwd, newest) {
   say(`\n  Regenerating ${SNAPSHOT_PATH} (needs Docker)…`);
-  const r = spawnSync(process.execPath, [path.join(cwd, "scripts", "schema-snapshot.mjs")], {
+  const through = Number.isInteger(newest) ? ["--through", String(newest)] : [];
+  const r = spawnSync(process.execPath, [path.join(cwd, "scripts", "schema-snapshot.mjs"), ...through], {
     cwd,
     stdio: "inherit",
   });
@@ -279,16 +286,19 @@ function dryRunStop() {
 /** The plan line, and the worktree merge run with the snapshot when it is needed. */
 function snapshotPlan(w, root, toCommit) {
   const through = readSnapshotThrough(root);
-  const decision = snapshotDecision(mergedPaths(w, toCommit), through);
+  const decision = snapshotDecision(mergedPaths(w, toCommit), through, { skip: !!OPTS["no-snapshot"] });
   if (decision.run) {
-    say(`Snapshot regenerate ${SNAPSHOT_PATH} in main, into the merge commit — ${decision.reason}.`);
+    say(`Snapshot regenerate ${SNAPSHOT_PATH} in main, into the merge commit, through migration ${decision.newest} — ${decision.reason}.`);
+  } else if (decision.skipped) {
+    say(`Snapshot skipped — ${decision.reason}.`);
   }
 }
 
 function mergeWorktree(w, ctx, toCommit, commitWorktree) {
   const result = worktreeMergeWithSnapshot(mergedPaths(w, toCommit), {
     through: readSnapshotThrough(ctx.root),
-    runSnapshot: () => runSnapshot(ctx.root),
+    skip: !!OPTS["no-snapshot"],
+    runSnapshot: (newest) => runSnapshot(ctx.root, newest),
     restoreSnapshot: snapshotKeeper(ctx.root),
     commitWorktree,
     merge: (includeSnapshot) => mergeAndPush(w, ctx.root, includeSnapshot),
@@ -378,7 +388,7 @@ function doMain(w, ctx, release) {
     // if the snapshot fails, nothing is committed.
     const result = commitWithSnapshot(toCommit, {
       through,
-      runSnapshot: () => runSnapshot(w.path),
+      runSnapshot: (newest) => runSnapshot(w.path, newest),
       commit: (paths) => stageAndCommit(w.path, paths, message),
     });
     if (result.message) say(`\n  Stopped: ${result.message}`);
@@ -593,16 +603,15 @@ function doCheckpoint(w, ctx) {
     // Given on the command line, so a path that is not here is a typo, and a
     // typo'd migration path silently dropped is the whole reason this is an
     // error rather than a shrug.
+    // A folder names every changed file under it.
     const sel = parseSelection(OPTS.paths, w.dirty.length);
-    const named = [...sel.words, ...sel.bad].filter(
-      (p) => !w.dirty.some((f) => f.path === p),
-    );
-    if (named.length) {
-      throw new UsageError(`--paths: not changed in ${w.owner}: ${named.join(", ")}`);
+    const named = expandPathWords([...sel.words, ...sel.bad], w.dirty);
+    if (named.unknown.length) {
+      throw new UsageError(`--paths: not changed in ${w.owner}: ${named.unknown.join(", ")}`);
     }
     picked = sel.all
       ? w.dirty.map((f) => f.path)
-      : [...sel.indexes.map((n) => w.dirty[n - 1].path), ...sel.words];
+      : [...sel.indexes.map((n) => w.dirty[n - 1].path), ...named.paths];
     say(`\n--paths: ${picked.length} path(s).`);
   } else {
     const chosen = askSelection(
@@ -612,16 +621,14 @@ function doCheckpoint(w, ctx) {
     );
     if (chosen === null) return "cancelled";
 
-    const answered = chosen.all
-      ? chosen.picked.map((f) => f.path)
-      : [...chosen.picked.map((f) => f.path), ...chosen.words, ...chosen.bad];
-
-    const unknown = answered.filter((p) => !w.dirty.some((f) => f.path === p));
-    if (unknown.length) {
-      say(`\nNot changed in this worktree: ${unknown.join(", ")}`);
+    const typed = expandPathWords([...chosen.words, ...chosen.bad], w.dirty);
+    if (!chosen.all && typed.unknown.length) {
+      say(`\nNot changed in this worktree: ${typed.unknown.join(", ")}`);
       if (!confirm("Carry on without them?")) return "cancelled";
     }
-    picked = answered.filter((p) => !unknown.includes(p));
+    picked = chosen.all
+      ? chosen.picked.map((f) => f.path)
+      : [...chosen.picked.map((f) => f.path), ...typed.paths];
   }
 
   const paths = [...new Set(picked)];
@@ -695,6 +702,7 @@ function main() {
         all: { kind: "bool" },
         "release-db": { kind: "bool" },
         "keep-db": { kind: "bool" },
+        "no-snapshot": { kind: "bool" },
         "include-unclaimed": { kind: "list" },
         "dry-run": { kind: "bool" },
         "pretend-migration": { kind: "value" },

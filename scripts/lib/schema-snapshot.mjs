@@ -53,27 +53,43 @@ export function readSnapshotThrough(root) {
 
 /**
  * Should a commit of `paths` regenerate the snapshot? Only when it carries a
- * numbered migration newer than the one the snapshot was taken through.
+ * numbered migration newer than the one the snapshot was taken through, and
+ * `skip` (--no-snapshot) is not set.
  */
-export function snapshotDecision(paths, through) {
+export function snapshotDecision(paths, through, { skip = false } = {}) {
   const nums = paths.map(migrationNumber).filter((n) => n !== null);
   if (!nums.length) return { run: false, reason: "no migration in this commit" };
   const newest = Math.max(...nums);
   if (newest <= through) {
     return { run: false, newest, reason: `migration ${newest} is not newer than the snapshot (${through})` };
   }
+  if (skip) {
+    return {
+      run: false, skipped: true, newest,
+      reason: `--no-snapshot: migration ${newest} is newer than the snapshot (${through}), which stays behind until a push that carries a migration`,
+    };
+  }
   return { run: true, newest, reason: `migration ${newest} is newer than the snapshot (${through})` };
+}
+
+/**
+ * The "through migration N" a new snapshot records. gitpush regenerates before a
+ * worktree merge, when main's own folder does not yet hold the merged migration,
+ * so the newest merged number is passed in and the larger one wins.
+ */
+export function snapshotLabel(highestInCheckout, newestMerged) {
+  return Math.max(highestInCheckout, Number.isInteger(newestMerged) ? newestMerged : 0);
 }
 
 /**
  * Regenerate the snapshot if the commit needs it, then commit. `commit` is
  * called only when there is nothing to do or the snapshot succeeded, so a
- * failed snapshot leaves nothing committed.
+ * failed snapshot leaves nothing committed. `runSnapshot(newest)` gets the label.
  */
 export function commitWithSnapshot(paths, { through, runSnapshot, commit }) {
   const decision = snapshotDecision(paths, through);
   if (!decision.run) return { ok: commit(paths), decision };
-  const result = runSnapshot();
+  const result = runSnapshot(decision.newest);
   if (!result.ok) return { ok: false, decision, message: result.message };
   const withSnap = paths.includes(SNAPSHOT_PATH) ? paths : [...paths, SNAPSHOT_PATH];
   return { ok: commit(withSnap), decision };
@@ -97,15 +113,15 @@ export function mergeBranch(run, branch, includeSnapshot) {
  * A worktree Checkpoint or Finish, snapshot first. The snapshot runs BEFORE the
  * worktree commits anything, so if it fails nothing has moved anywhere. If the
  * worktree commit or the merge fails afterwards, main's snapshot file is put back.
- * `merge(includeSnapshot)` returns { merged, pushed }.
+ * `merge(includeSnapshot)` returns { merged, pushed }; `skip` is --no-snapshot.
  */
 export function worktreeMergeWithSnapshot(
   mergedPaths,
-  { through, runSnapshot, restoreSnapshot, commitWorktree, merge },
+  { through, runSnapshot, restoreSnapshot, commitWorktree, merge, skip = false },
 ) {
-  const decision = snapshotDecision(mergedPaths, through);
+  const decision = snapshotDecision(mergedPaths, through, { skip });
   if (decision.run) {
-    const snap = runSnapshot();
+    const snap = runSnapshot(decision.newest);
     if (!snap.ok) return { ok: false, decision, message: snap.message };
   }
   if (!commitWorktree()) {

@@ -5,6 +5,8 @@
 //
 //   npm run schema:snapshot
 //   npm run schema:snapshot -- --decide <paths…>   what gitpush would decide, no Docker
+//   --through <n>   gitpush only: label the snapshot through n when that is newer than
+//                   this checkout's own migrations (a worktree's, before it is merged)
 //
 // Nothing is saved unless the dump is non-trivial and holds the known tables.
 
@@ -21,6 +23,7 @@ import {
   inspectDump,
   readSnapshotThrough,
   snapshotDecision,
+  snapshotLabel,
 } from "./lib/schema-snapshot.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -79,6 +82,10 @@ function main() {
     return;
   }
 
+  const at = args.indexOf("--through");
+  const given = at >= 0 ? Number(args[at + 1]) : null;
+  if (at >= 0 && !Number.isInteger(given)) fail(`--through needs a migration number, got ${JSON.stringify(args[at + 1])}.`);
+
   if (!ensureDocker()) fail("Docker did not become ready within 2 minutes.");
 
   const tmp = path.join(os.tmpdir(), `schema-snapshot-${process.pid}.sql`);
@@ -95,7 +102,7 @@ function main() {
   const { counts, missing } = inspectDump(text);
   if (missing.length) fail(`the dump is missing known tables: ${missing.join(", ")}.`);
 
-  const through = highestMigration(ROOT);
+  const through = snapshotLabel(highestMigration(ROOT), given);
   fs.writeFileSync(path.join(ROOT, SNAPSHOT_PATH), `${headerLine(stamp(), through)}\n${text}`);
   say(`\nSaved ${SNAPSHOT_PATH} (through migration ${through}).`);
   for (const [schema, n] of Object.entries(counts)) say(`  ${schema}: ${n} tables`);

@@ -8,6 +8,7 @@ import {
   mergeBranch,
   migrationNumber,
   snapshotDecision,
+  snapshotLabel,
   snapshotThrough,
   worktreeMergeWithSnapshot,
 } from "./schema-snapshot.mjs";
@@ -85,13 +86,15 @@ function fakeGit(failing = []) {
 }
 
 // A worktree merge with stand-ins for every side effect.
-function worktreeRun({ paths, snapshotOk = true, gitFails = [] }) {
-  const calls = { snapshot: 0, restored: 0, worktreeCommits: 0 };
+function worktreeRun({ paths, snapshotOk = true, gitFails = [], skip = false }) {
+  const calls = { snapshot: 0, restored: 0, worktreeCommits: 0, label: null };
   const git = fakeGit(gitFails);
   const result = worktreeMergeWithSnapshot(paths, {
     through: 138,
-    runSnapshot: () => {
+    skip,
+    runSnapshot: (newest) => {
       calls.snapshot += 1;
+      calls.label = newest;
       return snapshotOk ? { ok: true } : { ok: false, message: "no docker" };
     },
     restoreSnapshot: () => (calls.restored += 1),
@@ -134,6 +137,38 @@ test("worktree: a failed merge commit aborts the merge and restores the snapshot
   assert.equal(result.ok, false);
   assert.equal(log.at(-1), "merge --abort");
   assert.equal(calls.restored, 1);
+});
+
+test("worktree: the snapshot is labelled with the newest merged migration", () => {
+  const { calls } = worktreeRun({ paths: [MIG, "supabase/migrations/141_later.sql"] });
+  assert.equal(calls.label, 141);
+});
+
+test("label: the merged number wins over main's folder, which lags before the merge", () => {
+  assert.equal(snapshotLabel(178, 179), 179);
+  assert.equal(snapshotLabel(179, 178), 179);
+  assert.equal(snapshotLabel(179, null), 179);
+});
+
+test("label: after the fix, pushing the same migration again runs nothing", () => {
+  // 179 merged and labelled 179; an edit to 179 later is not newer.
+  const d = snapshotDecision(["supabase/migrations/179_x.sql"], snapshotLabel(178, 179));
+  assert.equal(d.run, false);
+});
+
+test("worktree: --no-snapshot merges with no snapshot and says it stays behind", () => {
+  const { result, calls, log } = worktreeRun({ paths: [MIG], skip: true });
+  assert.equal(result.ok, true);
+  assert.equal(calls.snapshot, 0);
+  assert.equal(result.decision.skipped, true);
+  assert.match(result.decision.reason, /--no-snapshot: migration 139 is newer than the snapshot \(138\), which stays behind/);
+  assert.deepEqual(log, ["merge --no-ff worktree-x -m Merge worktree-x"]);
+});
+
+test("--no-snapshot changes nothing when no snapshot was due", () => {
+  const d = snapshotDecision(["src/a.js"], 138, { skip: true });
+  assert.equal(d.skipped, undefined);
+  assert.equal(d.run, false);
 });
 
 test("inspectDump counts tables per schema and finds missing ones", () => {

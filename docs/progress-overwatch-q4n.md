@@ -231,13 +231,17 @@ Estimate tracking first (spec 4.12, added 2026-10-25), because the nightly and w
   - [x] 92 annotated across 22 files in _shared/tools/ (the three unregistered DJ tools included); 166 of 166 defineTool calls now carry `tables`, every name in schema-snapshot.sql
   - [x] `deno check --no-lock` on mcp/index.ts: main (8094166) and this worktree both 111 errors, messages identical; none new
   - [x] Tests: mcp index, every _shared tool and platform suite, alfred-tools: 776 pass
-- [ ] Step 41b (CLI): `tables` required, the conformance test, the mcp-platform skill (run tag overwatch-q4n-s41b-k8rz). One step added (scope_increase +1 at step 41)
+- [x] Step 41b (CLI): `tables` required, the conformance test, the mcp-platform skill (run tag overwatch-q4n-s41b-k8rz). One step added (scope_increase +1 at step 41). Checkpointed with Steps 39 to 41 (main 2a7ac3c)
   - [x] scripts/lib/inventory.mjs: snapshotObjects, parseDefineTools (name and literal tables from the properties before handler or propose), tableProblems ("*" in reads only), toolSourceFiles; inventory.test.mjs (8 tests)
   - [x] supabase/functions/mcp/tables.test.mjs: every defineTool under supabase/functions, 166 found. Failed as it should with get_apps' tables removed ("no tables before the handler") and with get_reminders reading "reminders_made_up" ("not in the schema snapshot"); both restored; passes
   - [x] get_records reads "*"; platform.ts `tables` required (deno check: the same 111 existing errors, none about tables)
   - [x] Spec 5.6: tables before handler, "*" for generic readers, triggers and shared plumbing not declared. mcp-platform skill 2026-10-27a (first version line): the `tables` rule, both examples, an anti-pattern line; Alex pastes it into claude.ai
   - [x] Tests: functions 777 pass; CLI suite 258 pass; app suite 207 suites, 3098 pass
-- [ ] Step 42 (CLI): schema snapshot label fix (`--through N` from the newest merged migration) and `--no-snapshot` for Checkpoint, Finish and main Push; tests
+- [x] Step 42 (CLI): gitpush fixes: snapshot label, `--no-snapshot` (Checkpoint only, Alex's call), folders in `--paths` (run tags overwatch-q4n-s42-d5jn, overwatch-q4n-s42b-x4hm)
+  - [x] Label: the snapshot runs with `--through <newest merged migration>` and records the larger of that and the checkout's own (snapshotLabel); worktree merges and main pushes both pass it. Today's 178-with-179-merged corrects itself at the next push that carries a migration; a one-off `npm run schema:snapshot` makes it right now
+  - [x] `--no-snapshot` on Checkpoint: snapshotDecision `skip`, the plan says the snapshot is skipped and stays behind; refused on Finish and main; in --help
+  - [x] Tests: schema-snapshot 16 pass (5 new)
+  - [x] Step 42b, `--paths` folders (Alex confirmed claiming git-flow.mjs and its test): expandPathWords in git-flow.mjs (a changed file as before; a folder becomes every changed, added or deleted file under it; a folder with nothing changed under it is refused); doCheckpoint uses it for `--paths` and for typed answers. Fixes the 2026-10-24 note below. Tests: 5 new; CLI suite 268 pass
 - [ ] Step 43 (CLI, SQL): platform_inventory, platform_open_work, finish_summaries and replace_platform_inventory (db items reserved)
 - [ ] Step 44 (CLI): scripts/inventory.mjs and `npm run inventory` (parts and open work; prints a summary, `--send` queues it)
 - [ ] Step 45 (CLI): overwatch-ingest kinds `inventory` and `finish_summary`; the outbox sends an inventory on its own; deploy overwatch-ingest (db:deploy reserved)
