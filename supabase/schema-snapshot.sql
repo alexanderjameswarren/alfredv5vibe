@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-27 12:01, through migration 180 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-28 08:56, through migration 181 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -1218,6 +1218,124 @@ ALTER FUNCTION "public"."create_overwatch_plan"("p_instructions" "text", "p_sett
 
 
 COMMENT ON FUNCTION "public"."create_overwatch_plan"("p_instructions" "text", "p_settings" "jsonb", "p_reason" "text", "p_written_by" "text", "p_checks" "jsonb") IS 'Overwatch: supersede the caller''s active plan in one transaction: the old row goes inactive, the new one is inserted with supersedes_id, carrying the old checks_next_run unless p_checks is given. Returns the new row. Called by the tier-3 create_overwatch_plan tool.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."create_portfolio_plan"("p_portfolio_id" "uuid", "p_theory" "text", "p_notes_for_next_review" "text", "p_review_by" "date", "p_reason" "text", "p_written_by" "text", "p_lanes" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $_$
+declare
+  v_portfolio public.portfolios%rowtype;
+  v_old       uuid;
+  v_new       public.portfolio_plans%rowtype;
+  v_lane      jsonb;
+  v_slice     jsonb;
+  v_lane_id   uuid;
+  v_bad       text;
+  v_slices    int := 0;
+begin
+  if coalesce(btrim(p_theory), '') = '' then
+    raise exception 'create_portfolio_plan: a theory is required.' using errcode = '22023';
+  end if;
+  if coalesce(btrim(p_reason), '') = '' then
+    raise exception 'create_portfolio_plan: a reason is required.' using errcode = '22023';
+  end if;
+  if p_lanes is null or jsonb_typeof(p_lanes) <> 'array' or jsonb_array_length(p_lanes) = 0 then
+    raise exception 'create_portfolio_plan: lanes must be a non-empty JSON array.' using errcode = '22023';
+  end if;
+
+  -- Shape: each lane an object with a name, a whole-number position and (optionally) a slices array; each slice an
+  -- object with a whole-number position and a group_id.
+  select coalesce(l->>'name', '(number ' || ord || ')') into v_bad
+    from jsonb_array_elements(p_lanes) with ordinality as x(l, ord)
+   where jsonb_typeof(l) <> 'object' or coalesce(btrim(l->>'name'), '') = ''
+      or coalesce(l->>'position', '') !~ '^[0-9]{1,6}$'
+      or (l ? 'slices' and jsonb_typeof(l->'slices') <> 'array')
+   limit 1;
+  if v_bad is not null then
+    raise exception 'create_portfolio_plan: lane % needs a name, a whole-number position and a slices array.', v_bad
+      using errcode = '22023';
+  end if;
+  select l->>'name' into v_bad
+    from jsonb_array_elements(p_lanes) l, jsonb_array_elements(coalesce(l->'slices', '[]'::jsonb)) s
+   where jsonb_typeof(s) <> 'object' or coalesce(s->>'position', '') !~ '^[0-9]{1,6}$'
+      or coalesce(s->>'group_id', '') = ''
+   limit 1;
+  if v_bad is not null then
+    raise exception 'create_portfolio_plan: every slice in lane "%" needs a whole-number position and a group_id.',
+      v_bad using errcode = '22023';
+  end if;
+
+  -- Duplicates, named before the constraints would catch them.
+  select n into v_bad from (select btrim(l->>'name') n from jsonb_array_elements(p_lanes) l) x
+   group by n having count(*) > 1 limit 1;
+  if v_bad is not null then
+    raise exception 'create_portfolio_plan: lane name "%" appears twice.', v_bad using errcode = '23505';
+  end if;
+  select p into v_bad from (select l->>'position' p from jsonb_array_elements(p_lanes) l) x
+   group by p having count(*) > 1 limit 1;
+  if v_bad is not null then
+    raise exception 'create_portfolio_plan: two lanes have position %.', v_bad using errcode = '23505';
+  end if;
+  select format('"%s" has two slices at position %s', l->>'name', s->>'position') into v_bad
+    from jsonb_array_elements(p_lanes) l, jsonb_array_elements(coalesce(l->'slices', '[]'::jsonb)) s
+   group by l->>'name', s->>'position' having count(*) > 1 limit 1;
+  if v_bad is not null then
+    raise exception 'create_portfolio_plan: lane %.', v_bad using errcode = '23505';
+  end if;
+  select l->>'name' into v_bad
+    from jsonb_array_elements(p_lanes) l, jsonb_array_elements(coalesce(l->'slices', '[]'::jsonb)) s
+   where s->>'status' = 'in_progress'
+   group by l->>'name' having count(*) > 1 limit 1;
+  if v_bad is not null then
+    raise exception 'create_portfolio_plan: lane "%" has more than one slice in progress.', v_bad
+      using errcode = '23505';
+  end if;
+
+  -- Lock the portfolio so two writers cannot both supersede its active plan.
+  select * into v_portfolio from public.portfolios where id = p_portfolio_id and user_id = auth.uid() for update;
+  if v_portfolio.id is null then
+    raise exception 'create_portfolio_plan: portfolio % was not found.', p_portfolio_id using errcode = 'P0002';
+  end if;
+  if v_portfolio.archived then
+    raise exception 'create_portfolio_plan: portfolio "%" is archived.', v_portfolio.name using errcode = '22023';
+  end if;
+
+  update public.portfolio_plans set active = false
+   where portfolio_id = p_portfolio_id and active
+  returning id into v_old;
+
+  insert into public.portfolio_plans
+    (portfolio_id, active, theory, notes_for_next_review, review_by, reason, written_by, supersedes_id)
+  values (p_portfolio_id, true, p_theory, nullif(btrim(p_notes_for_next_review), ''), p_review_by, p_reason,
+          coalesce(p_written_by, 'alex'), v_old)
+  returning * into v_new;
+
+  for v_lane in select l from jsonb_array_elements(p_lanes) l order by (l->>'position')::int loop
+    insert into public.portfolio_lanes (plan_id, name, position, note)
+    values (v_new.id, btrim(v_lane->>'name'), (v_lane->>'position')::int, nullif(btrim(v_lane->>'note'), ''))
+    returning id into v_lane_id;
+
+    for v_slice in select s from jsonb_array_elements(coalesce(v_lane->'slices', '[]'::jsonb)) s
+                    order by (s->>'position')::int loop
+      insert into public.portfolio_slices (plan_id, lane_id, position, group_id, phases, why, status, paused_reason)
+      values (v_new.id, v_lane_id, (v_slice->>'position')::int, v_slice->>'group_id',
+              nullif(btrim(v_slice->>'phases'), ''), nullif(btrim(v_slice->>'why'), ''),
+              coalesce(v_slice->>'status', 'planned'), nullif(btrim(v_slice->>'paused_reason'), ''));
+      v_slices := v_slices + 1;
+    end loop;
+  end loop;
+
+  return to_jsonb(v_new) || jsonb_build_object('lanes', jsonb_array_length(p_lanes), 'slices', v_slices);
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."create_portfolio_plan"("p_portfolio_id" "uuid", "p_theory" "text", "p_notes_for_next_review" "text", "p_review_by" "date", "p_reason" "text", "p_written_by" "text", "p_lanes" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."create_portfolio_plan"("p_portfolio_id" "uuid", "p_theory" "text", "p_notes_for_next_review" "text", "p_review_by" "date", "p_reason" "text", "p_written_by" "text", "p_lanes" "jsonb") IS 'Overwatch: write a new version of the caller''s portfolio plan in one transaction: the active version goes inactive, the new one is inserted with supersedes_id, then its lanes and their slices with their given statuses. p_lanes is [{ name, position, note, slices: [{ position, group_id, phases, why, status, paused_reason }] }]. Any bad input (a group that is not the caller''s Project, duplicate positions or names, two slices in progress in a lane) refuses the whole call. Returns the new plan with lane and slice counts. Called by the tier-3 create_portfolio_plan tool.';
 
 
 SET default_tablespace = '';
@@ -3743,6 +3861,106 @@ ALTER FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search
 
 
 COMMENT ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[], "p_offset" integer, "p_archived" "text", "p_no_context" boolean) IS 'Alfred: the reader behind get_items and search_items. Items the caller can see (RLS: own, or in a shared context), filtered by context (or no context), archived (exclude, include, only), tags (any-of), status (any-of) and search text before the page window. Search text is split into words; every word must appear in the name, the description, or a note on the item, its intentions or its executions; %, _ and \ match literally. Notes are matched once per word and mapped to items (migration 164), not re-scanned per item. Rows whose name holds every word come first, then by name. Returns { rows, total }. Security invoker.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."portfolio_plans_guard"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if tg_op = 'INSERT' then
+    if not new.active then
+      raise exception 'portfolio_plans: a plan is written active; use create_portfolio_plan.' using errcode = '23514';
+    end if;
+    new.created_at := now();
+    return new;
+  end if;
+
+  if new.id is distinct from old.id or new.user_id is distinct from old.user_id
+     or new.portfolio_id is distinct from old.portfolio_id or new.theory is distinct from old.theory
+     or new.notes_for_next_review is distinct from old.notes_for_next_review
+     or new.review_by is distinct from old.review_by or new.reason is distinct from old.reason
+     or new.written_by is distinct from old.written_by or new.supersedes_id is distinct from old.supersedes_id
+     or new.created_at is distinct from old.created_at then
+    raise exception 'portfolio_plans rows are not edited: write a new version with create_portfolio_plan.'
+      using errcode = '23514';
+  end if;
+  if new.active and not old.active then
+    raise exception 'portfolio_plans: a superseded plan cannot become active again; write a new version instead.'
+      using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."portfolio_plans_guard"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."portfolio_plans_guard"() IS 'Overwatch: a portfolio plan is inserted active, stamped with the transaction time; after that only active may change, true to false.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."portfolio_slices_guard"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_plan  public.portfolio_plans%rowtype;
+  v_kind  text;
+  v_owner uuid;
+begin
+  select * into v_plan from public.portfolio_plans where id = new.plan_id;
+
+  if tg_op = 'INSERT' then
+    -- The plan's created_at is its writing transaction's now(), so this allows only create_portfolio_plan's inserts.
+    if v_plan.id is null or not v_plan.active or v_plan.created_at <> now() then
+      raise exception '%: lanes and slices are written with their plan, in one create_portfolio_plan call.',
+        tg_table_name using errcode = '23514';
+    end if;
+    if tg_table_name = 'portfolio_slices' then
+      select t.kind, g.user_id into v_kind, v_owner
+        from public.item_groups g join public.group_types t on t.id = g.group_type_id
+       where g.id = new.group_id;
+      if v_owner is null or v_owner <> new.user_id then
+        raise exception 'portfolio_slices: group % is not one of your groups.', new.group_id using errcode = '23514';
+      end if;
+      if v_kind is distinct from 'project' then
+        raise exception 'portfolio_slices: group % is not a Project group.', new.group_id using errcode = '23514';
+      end if;
+      new.status_changed_at := now();
+    end if;
+    return new;
+  end if;
+
+  if tg_table_name = 'portfolio_lanes' then
+    raise exception 'portfolio_lanes are not edited: renaming, adding or removing a lane is a new version.'
+      using errcode = '23514';
+  end if;
+  if not v_plan.active then
+    raise exception 'portfolio_slices: this plan version has been superseded and is frozen.' using errcode = '23514';
+  end if;
+  if new.id is distinct from old.id or new.user_id is distinct from old.user_id
+     or new.plan_id is distinct from old.plan_id or new.lane_id is distinct from old.lane_id
+     or new.position is distinct from old.position or new.group_id is distinct from old.group_id
+     or new.phases is distinct from old.phases or new.why is distinct from old.why
+     or new.created_at is distinct from old.created_at then
+    raise exception 'portfolio_slices: only status and paused_reason change in place; moving or editing a slice is '
+      'a new version.' using errcode = '23514';
+  end if;
+  if new.status is distinct from old.status then
+    new.status_changed_at := now();
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."portfolio_slices_guard"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."portfolio_slices_guard"() IS 'Overwatch: lanes and slices are inserted only with their plan (same transaction, plan active); a slice must name a Project group of the same user. After that lanes never change, a superseded version''s slices never change, and the active version''s slices change only status and paused_reason (status_changed_at stamped).';
 
 
 
@@ -11575,6 +11793,251 @@ COMMENT ON COLUMN "public"."platform_schedules"."enabled" IS 'False suspends sta
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."portfolio_lanes" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "plan_id" "uuid" NOT NULL,
+    "name" "text" NOT NULL,
+    "position" integer NOT NULL,
+    "note" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "portfolio_lanes_name_length" CHECK ((("length"("btrim"("name")) >= 1) AND ("length"("btrim"("name")) <= 60))),
+    CONSTRAINT "portfolio_lanes_position_positive" CHECK (("position" >= 1))
+);
+
+
+ALTER TABLE "public"."portfolio_lanes" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."portfolio_lanes" IS 'OVERWATCH. The lanes a plan version names, as many as it needs (e.g. "Main", "SAM", "Client work"). A lane belongs to its version and is frozen once written: renaming, adding or removing one is a new version (portfolio_slices_guard). Spec: docs/technical-spec-overwatch-q4n.md 4.16.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_lanes"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_lanes"."user_id" IS 'Owner. Owner RLS; must own the plan (portfolio_lanes_plan_fk).';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_lanes"."plan_id" IS 'The plan version this lane belongs to.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_lanes"."name" IS 'Unique within the version.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_lanes"."position" IS 'The order lanes show in, from 1; unique within the version.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_lanes"."note" IS 'What the lane is for, or null, e.g. "the heavy work, one slice at a time". Shown on the plan page.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_lanes"."created_at" IS 'Row creation.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."portfolio_plans" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "portfolio_id" "uuid" NOT NULL,
+    "active" boolean DEFAULT true NOT NULL,
+    "theory" "text" NOT NULL,
+    "notes_for_next_review" "text",
+    "review_by" "date",
+    "reason" "text" NOT NULL,
+    "written_by" "text" DEFAULT 'alex'::"text" NOT NULL,
+    "supersedes_id" "uuid",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "portfolio_plans_reason_present" CHECK (("length"("btrim"("reason")) > 0)),
+    CONSTRAINT "portfolio_plans_theory_present" CHECK (("length"("btrim"("theory")) > 0)),
+    CONSTRAINT "portfolio_plans_written_by_values" CHECK (("written_by" = ANY (ARRAY['alex'::"text", 'overwatch'::"text"])))
+);
+
+
+ALTER TABLE "public"."portfolio_plans" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."portfolio_plans" IS 'OVERWATCH. A version of a portfolio''s plan: the theory that ordered it, its lanes (portfolio_lanes) and their slices (portfolio_slices). Rows are only inserted, by create_portfolio_plan; one is active per portfolio (portfolio_plans_one_active). portfolio_plans_guard lets only active go from true to false. Spec: docs/technical-spec-overwatch-q4n.md 4.16.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_plans"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_plans"."user_id" IS 'Owner. Owner RLS; must own the portfolio (portfolio_plans_portfolio_fk).';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_plans"."portfolio_id" IS 'The portfolio this version plans.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_plans"."active" IS 'True on the version in force. Goes false only when create_portfolio_plan writes the next; never back to true.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_plans"."theory" IS 'Alex''s ordering principles for this version, e.g. "bugs first, then tools that make the work faster, then X because it solves Y". The next review reads it.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_plans"."notes_for_next_review" IS 'What to reconsider at the next review, and when; or null.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_plans"."review_by" IS 'The date to review the plan by, or null. The plan page shows it red once passed.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_plans"."reason" IS 'Why this version replaced the last.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_plans"."written_by" IS 'alex, or overwatch when the nightly job''s proposal was accepted.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_plans"."supersedes_id" IS 'The version this one replaced, or null for the first.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_plans"."created_at" IS 'When this version was written: always the writing transaction''s time (portfolio_plans_guard), which is how the guard knows lanes and slices are being written with their plan.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."portfolio_slices" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "plan_id" "uuid" NOT NULL,
+    "lane_id" "uuid" NOT NULL,
+    "position" integer NOT NULL,
+    "group_id" "text" NOT NULL,
+    "phases" "text",
+    "why" "text",
+    "status" "text" DEFAULT 'planned'::"text" NOT NULL,
+    "paused_reason" "text",
+    "status_changed_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "portfolio_slices_paused_reason" CHECK ((("status" = 'paused'::"text") = (("paused_reason" IS NOT NULL) AND ("length"("btrim"("paused_reason")) > 0)))),
+    CONSTRAINT "portfolio_slices_phases_present" CHECK ((("phases" IS NULL) OR ("length"("btrim"("phases")) > 0))),
+    CONSTRAINT "portfolio_slices_position_positive" CHECK (("position" >= 1)),
+    CONSTRAINT "portfolio_slices_status_values" CHECK (("status" = ANY (ARRAY['planned'::"text", 'in_progress'::"text", 'done'::"text", 'paused'::"text"])))
+);
+
+
+ALTER TABLE "public"."portfolio_slices" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."portfolio_slices" IS 'OVERWATCH. The ordered work of a plan version, within its lanes: a Project group plus the phases done in that slice, so a project can be partly done, paused, and resumed in a later slice (A phases 2-3, B phase 1, A phase 4). Written with its plan by create_portfolio_plan; on the active plan only the status may change (portfolio_slices_guard). Spec: docs/technical-spec-overwatch-q4n.md 4.16.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_slices"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_slices"."user_id" IS 'Owner. Owner RLS; must own the lane (portfolio_slices_lane_fk).';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_slices"."plan_id" IS 'The plan version, kept for the guard and for reads; must be the lane''s plan (portfolio_slices_lane_fk).';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_slices"."lane_id" IS 'The lane it sits in.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_slices"."position" IS 'The order within the lane, from 1; unique within the lane.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_slices"."group_id" IS 'The Project group (group_types.kind = project) of the same user; checked by portfolio_slices_guard. Deleting the group deletes its slices.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_slices"."phases" IS 'The phases this slice covers, e.g. "Phases 2 and 3"; null means the whole project.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_slices"."why" IS 'Its place in terms of the plan''s theory.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_slices"."status" IS 'planned, in_progress, done or paused. At most one in_progress per lane (portfolio_slices_one_in_progress).';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_slices"."paused_reason" IS 'Why it is paused: required when paused, null otherwise.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_slices"."status_changed_at" IS 'When status last changed. Stamped by portfolio_slices_guard.';
+
+
+
+COMMENT ON COLUMN "public"."portfolio_slices"."created_at" IS 'Row creation.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."portfolios" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "name" "text" NOT NULL,
+    "context_ids" "text"[] DEFAULT '{}'::"text"[] NOT NULL,
+    "position" integer DEFAULT 0 NOT NULL,
+    "archived" boolean DEFAULT false NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "portfolios_name_length" CHECK ((("length"("btrim"("name")) >= 1) AND ("length"("btrim"("name")) <= 100))),
+    CONSTRAINT "portfolios_position_nonnegative" CHECK (("position" >= 0))
+);
+
+
+ALTER TABLE "public"."portfolios" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."portfolios" IS 'OVERWATCH. A body of work planned on its own: the Alfred ecosystem is one, client work (Team IMPACT, ActBlue) another. Each has its own versioned plans (portfolio_plans). Spec: docs/technical-spec-overwatch-q4n.md 4.16.';
+
+
+
+COMMENT ON COLUMN "public"."portfolios"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."portfolios"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."portfolios"."name" IS 'Unique per user, e.g. "Alfred ecosystem", "Client work".';
+
+
+
+COMMENT ON COLUMN "public"."portfolios"."context_ids" IS 'The contexts the portfolio covers (contexts.id). Its Project groups in these contexts that no slice names are listed as "Not in the plan". Not a foreign key: an unknown id simply matches nothing.';
+
+
+
+COMMENT ON COLUMN "public"."portfolios"."position" IS 'The order of the portfolio switch on the Overwatch tab, lowest first.';
+
+
+
+COMMENT ON COLUMN "public"."portfolios"."archived" IS 'True hides it from the switch. Its plans are kept.';
+
+
+
+COMMENT ON COLUMN "public"."portfolios"."created_at" IS 'Row creation.';
+
+
+
+COMMENT ON COLUMN "public"."portfolios"."updated_at" IS 'Last change. Stamped by the set_updated_at trigger.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."process_friction" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -14990,6 +15453,61 @@ ALTER TABLE ONLY "public"."platform_schedules"
 
 
 
+ALTER TABLE ONLY "public"."portfolio_lanes"
+    ADD CONSTRAINT "portfolio_lanes_id_plan_user_key" UNIQUE ("id", "plan_id", "user_id");
+
+
+
+ALTER TABLE ONLY "public"."portfolio_lanes"
+    ADD CONSTRAINT "portfolio_lanes_name_key" UNIQUE ("plan_id", "name");
+
+
+
+ALTER TABLE ONLY "public"."portfolio_lanes"
+    ADD CONSTRAINT "portfolio_lanes_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."portfolio_lanes"
+    ADD CONSTRAINT "portfolio_lanes_position_key" UNIQUE ("plan_id", "position");
+
+
+
+ALTER TABLE ONLY "public"."portfolio_plans"
+    ADD CONSTRAINT "portfolio_plans_id_user_key" UNIQUE ("id", "user_id");
+
+
+
+ALTER TABLE ONLY "public"."portfolio_plans"
+    ADD CONSTRAINT "portfolio_plans_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."portfolio_slices"
+    ADD CONSTRAINT "portfolio_slices_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."portfolio_slices"
+    ADD CONSTRAINT "portfolio_slices_position_key" UNIQUE ("lane_id", "position");
+
+
+
+ALTER TABLE ONLY "public"."portfolios"
+    ADD CONSTRAINT "portfolios_id_user_key" UNIQUE ("id", "user_id");
+
+
+
+ALTER TABLE ONLY "public"."portfolios"
+    ADD CONSTRAINT "portfolios_name_key" UNIQUE ("user_id", "name");
+
+
+
+ALTER TABLE ONLY "public"."portfolios"
+    ADD CONSTRAINT "portfolios_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."process_friction"
     ADD CONSTRAINT "process_friction_pkey" PRIMARY KEY ("id");
 
@@ -15778,6 +16296,26 @@ CREATE INDEX "platform_runs_unnotified_idx" ON "public"."platform_runs" USING "b
 
 
 
+CREATE UNIQUE INDEX "portfolio_plans_one_active" ON "public"."portfolio_plans" USING "btree" ("portfolio_id") WHERE "active";
+
+
+
+CREATE INDEX "portfolio_plans_portfolio_idx" ON "public"."portfolio_plans" USING "btree" ("portfolio_id", "created_at" DESC);
+
+
+
+CREATE INDEX "portfolio_slices_group_idx" ON "public"."portfolio_slices" USING "btree" ("group_id");
+
+
+
+CREATE UNIQUE INDEX "portfolio_slices_one_in_progress" ON "public"."portfolio_slices" USING "btree" ("lane_id") WHERE ("status" = 'in_progress'::"text");
+
+
+
+CREATE INDEX "portfolio_slices_plan_idx" ON "public"."portfolio_slices" USING "btree" ("plan_id");
+
+
+
 CREATE INDEX "process_friction_open_idx" ON "public"."process_friction" USING "btree" ("user_id", "process", "occurred_at" DESC) WHERE ("status" = 'open'::"text");
 
 
@@ -16126,6 +16664,22 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."portfolio_lanes" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."portfolio_plans" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."portfolio_slices" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."portfolios" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."process_friction" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -16346,6 +16900,18 @@ CREATE OR REPLACE TRIGGER "overwatch_plans_guard" BEFORE UPDATE ON "public"."ove
 
 
 
+CREATE OR REPLACE TRIGGER "portfolio_plans_guard" BEFORE INSERT OR UPDATE ON "public"."portfolio_plans" FOR EACH ROW EXECUTE FUNCTION "public"."portfolio_plans_guard"();
+
+
+
+CREATE OR REPLACE TRIGGER "portfolio_slices_guard" BEFORE INSERT OR UPDATE ON "public"."portfolio_lanes" FOR EACH ROW EXECUTE FUNCTION "public"."portfolio_slices_guard"();
+
+
+
+CREATE OR REPLACE TRIGGER "portfolio_slices_guard" BEFORE INSERT OR UPDATE ON "public"."portfolio_slices" FOR EACH ROW EXECUTE FUNCTION "public"."portfolio_slices_guard"();
+
+
+
 CREATE OR REPLACE TRIGGER "project_estimates_guard" BEFORE INSERT OR UPDATE ON "public"."project_estimates" FOR EACH ROW EXECUTE FUNCTION "public"."project_estimates_guard"();
 
 
@@ -16463,6 +17029,10 @@ CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."item_group
 
 
 CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."items" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."portfolios" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
 
 
 
@@ -17007,6 +17577,51 @@ ALTER TABLE ONLY "public"."platform_runs"
 
 ALTER TABLE ONLY "public"."platform_schedules"
     ADD CONSTRAINT "platform_schedules_app_fkey" FOREIGN KEY ("app") REFERENCES "public"."apps"("id");
+
+
+
+ALTER TABLE ONLY "public"."portfolio_lanes"
+    ADD CONSTRAINT "portfolio_lanes_plan_fk" FOREIGN KEY ("plan_id", "user_id") REFERENCES "public"."portfolio_plans"("id", "user_id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."portfolio_lanes"
+    ADD CONSTRAINT "portfolio_lanes_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."portfolio_plans"
+    ADD CONSTRAINT "portfolio_plans_portfolio_fk" FOREIGN KEY ("portfolio_id", "user_id") REFERENCES "public"."portfolios"("id", "user_id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."portfolio_plans"
+    ADD CONSTRAINT "portfolio_plans_supersedes_id_fkey" FOREIGN KEY ("supersedes_id") REFERENCES "public"."portfolio_plans"("id");
+
+
+
+ALTER TABLE ONLY "public"."portfolio_plans"
+    ADD CONSTRAINT "portfolio_plans_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."portfolio_slices"
+    ADD CONSTRAINT "portfolio_slices_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."item_groups"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."portfolio_slices"
+    ADD CONSTRAINT "portfolio_slices_lane_fk" FOREIGN KEY ("lane_id", "plan_id", "user_id") REFERENCES "public"."portfolio_lanes"("id", "plan_id", "user_id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."portfolio_slices"
+    ADD CONSTRAINT "portfolio_slices_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."portfolios"
+    ADD CONSTRAINT "portfolios_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
 
 
@@ -18056,6 +18671,34 @@ CREATE POLICY "platform_schedules_owner_access" ON "public"."platform_schedules"
 
 
 
+ALTER TABLE "public"."portfolio_lanes" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "portfolio_lanes_owner_access" ON "public"."portfolio_lanes" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."portfolio_plans" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "portfolio_plans_owner_access" ON "public"."portfolio_plans" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."portfolio_slices" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "portfolio_slices_owner_access" ON "public"."portfolio_slices" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."portfolios" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "portfolios_owner_access" ON "public"."portfolios" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
 ALTER TABLE "public"."process_friction" ENABLE ROW LEVEL SECURITY;
 
 
@@ -18435,6 +19078,12 @@ GRANT ALL ON FUNCTION "public"."create_overwatch_plan"("p_instructions" "text", 
 
 
 
+REVOKE ALL ON FUNCTION "public"."create_portfolio_plan"("p_portfolio_id" "uuid", "p_theory" "text", "p_notes_for_next_review" "text", "p_review_by" "date", "p_reason" "text", "p_written_by" "text", "p_lanes" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."create_portfolio_plan"("p_portfolio_id" "uuid", "p_theory" "text", "p_notes_for_next_review" "text", "p_review_by" "date", "p_reason" "text", "p_written_by" "text", "p_lanes" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."create_portfolio_plan"("p_portfolio_id" "uuid", "p_theory" "text", "p_notes_for_next_review" "text", "p_review_by" "date", "p_reason" "text", "p_written_by" "text", "p_lanes" "jsonb") TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."reminders" TO "authenticated";
 GRANT ALL ON TABLE "public"."reminders" TO "service_role";
 
@@ -18654,6 +19303,18 @@ GRANT ALL ON FUNCTION "public"."platform_search_executions"("p_intent_id" "text"
 REVOKE ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[], "p_offset" integer, "p_archived" "text", "p_no_context" boolean) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[], "p_offset" integer, "p_archived" "text", "p_no_context" boolean) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."platform_search_items"("p_context_id" "text", "p_search_text" "text", "p_tags" "text"[], "p_limit" integer, "p_status" "text"[], "p_offset" integer, "p_archived" "text", "p_no_context" boolean) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."portfolio_plans_guard"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."portfolio_plans_guard"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."portfolio_plans_guard"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."portfolio_slices_guard"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."portfolio_slices_guard"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."portfolio_slices_guard"() TO "service_role";
 
 
 
@@ -19398,6 +20059,26 @@ GRANT ALL ON TABLE "public"."platform_runs" TO "service_role";
 
 GRANT ALL ON TABLE "public"."platform_schedules" TO "authenticated";
 GRANT ALL ON TABLE "public"."platform_schedules" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."portfolio_lanes" TO "authenticated";
+GRANT ALL ON TABLE "public"."portfolio_lanes" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."portfolio_plans" TO "authenticated";
+GRANT ALL ON TABLE "public"."portfolio_plans" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."portfolio_slices" TO "authenticated";
+GRANT ALL ON TABLE "public"."portfolio_slices" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."portfolios" TO "authenticated";
+GRANT ALL ON TABLE "public"."portfolios" TO "service_role";
 
 
 

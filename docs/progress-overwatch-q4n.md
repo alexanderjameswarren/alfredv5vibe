@@ -293,7 +293,12 @@ The old Phase 8 (Switchboard state through overwatch-ingest) moved out of this p
 - [ ] Step 51 (CLI, read-only): 8a review pass 2, Money and SAM (warren_buffet, sam)
 - [ ] Step 52 (CLI, read-only): 8a review pass 3, chat-and-tool apps (dj, drive_mix, ken, jobs; workshop, switchboard, arnold, monty_don, sports)
 - [ ] Chat work in claude.ai (no step number): Alfred items and intentions review, including the roadmap item and SAM; friction log turned into intentions attached to projects; ideas from other Claude chats swept into Alfred
-- [ ] Step 53 (CLI, SQL): 8b portfolios, portfolio_plans, portfolio_slices, create_portfolio_plan, the two guards (db items reserved)
+- [ ] Step 53 (CLI, SQL): 8b portfolios, portfolio_plans, portfolio_slices, create_portfolio_plan, the two guards (db items reserved) (run tag overwatch-q4n-s53-r8kd)
+  - [x] supabase/migrations/_pending_overwatch-q4n_portfolio_plans.sql: portfolios, portfolio_plans, portfolio_lanes, portfolio_slices (owner RLS, audited); composite foreign keys tie owner, plan and lane together, so a slice cannot sit in another version's lane; one active plan per portfolio, one in-progress slice per lane; create_portfolio_plan (invoker) names bad input before writing; portfolio_plans_guard and portfolio_slices_guard (lanes and slices only with their plan, in its transaction; a slice's group must be the same user's Project; afterwards only a slice's status and paused_reason on the active plan); apps rows homer (BookOpen), guy (Ticket), handyman (Hammer), no screen
+  - [x] supabase/tests/overwatch-q4n/26_portfolio_plans_test.sql (ends in an error on purpose) and 27_verify_portfolio_plans.sql
+  - [x] gitsync (1980b16 to ea7820f, SAM and docs/history only: no drift); db items claimed (run tag overwatch-q4n-s53b-m4qz); numbered 181_overwatch_portfolio_plans.sql, pending file deleted
+  - [x] src/apps/AppIcon.jsx bundles BookOpen, Ticket and Hammer; QuietSection.test.jsx checks them (2 suites, 12 pass)
+  - [ ] Alex runs 181, then 26 and 27, then check_platform_conformance
 - [ ] Step 54 (CLI): 8b tools in overwatch-portfolio.ts (get_portfolios, upsert_portfolio, get_portfolio_plan, create_portfolio_plan tier 3, update_portfolio_slice); deploy mcp
 - [ ] Step 55 (CLI): 8b Projects section: portfolio switch; Now, Next, Later; "Not in the plan"
 - [ ] Step 56 (CLI): 8b plan page /overwatch/plan/<portfolio_id> (theory, notes, review_by, versions); nightly review_by item; overwatch skill
