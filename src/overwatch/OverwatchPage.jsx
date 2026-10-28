@@ -13,8 +13,8 @@ import ActivitySection from "./ActivitySection";
 import IdeasSection from "./IdeasSection";
 import FrictionSection from "./FrictionSection";
 import {
-  getApps, getIdeaRecords, getIdeas, getLatestRuns, getNeedsYou, getNote, getNotes, getOpenFriction, getProjects, getQuiet,
-  getRunForNote,
+  getApps, getIdeaRecords, getIdeas, getLatestRuns, getNeedsYou, getNote, getNotes, getOpenFriction, getPortfolioPlans,
+  getProjects, getQuiet, getRunForNote,
 } from "./overwatchApi";
 import { ideaGroups } from "./ideasModel";
 import { ideaCount } from "./IdeasSection";
@@ -29,7 +29,7 @@ const ICON = "w-4 h-4 text-primary";
 
 export const SECTIONS = [
   { id: "action-required", title: "Action Required", icon: <ObjectIcon type="inbox" className={ICON} />, defaultOpen: true },
-  { id: "projects", title: "Active Projects", icon: <GroupTypeIcon icon="SquareKanban" className={ICON} />, defaultOpen: true,
+  { id: "projects", title: "Projects", icon: <GroupTypeIcon icon="SquareKanban" className={ICON} />, defaultOpen: true,
     empty: "No active Projects." },
   { id: "quiet", title: "Quiet lately", icon: <MoonStar className={ICON} aria-hidden="true" />,
     empty: "No app is past its rhythm." },
@@ -55,11 +55,11 @@ function useLoad(load, key) {
 }
 
 async function loadTab() {
-  const [notes, runs, needsYou, projects, quiet, ideas, ideaRecords, friction, apps] = await Promise.all([
+  const [notes, runs, needsYou, projects, quiet, ideas, ideaRecords, friction, apps, portfolios] = await Promise.all([
     getNotes(), getLatestRuns(), getNeedsYou(), getProjects(), getQuiet(), getIdeas(), getIdeaRecords(), getOpenFriction(),
-    getApps(),
+    getApps(), getPortfolioPlans(),
   ]);
-  return { notes, runs, needsYou, projects, quiet, ideas: { projects: ideas, ...ideaRecords }, friction, apps };
+  return { notes, runs, needsYou, projects, quiet, ideas: { projects: ideas, ...ideaRecords }, friction, apps, portfolios };
 }
 
 /** One briefing by id, or the latest nightly and this week's weekly, each with the run that wrote it. */
@@ -127,7 +127,7 @@ function TabPage() {
     if (loading) return <p className="m-0 text-sm text-muted-foreground">Loading…</p>;
     if (!data) return null;
     if (id === "action-required") return <ActionRequiredSection rows={needsYou} />;
-    if (id === "projects") return <ProjectsSection data={data.projects} today={today} />;
+    if (id === "projects") return <ProjectsSection data={data.projects} portfolios={data.portfolios} today={today} />;
     if (id === "quiet") return <QuietSection rows={quiet} apps={apps} />;
     if (id === "activity") return <ActivitySection />;
     if (id === "ideas") return <IdeasSection groups={ideas} projectIcon={data.projects.projectIcon} apps={apps} />;

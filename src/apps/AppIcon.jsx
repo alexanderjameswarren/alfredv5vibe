@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 
 // apps.icon holds a lucide name; only the names the apps rows use are bundled (116, Overwatch's,
-// Switchboard, Monty Don and Sports from 2026-10-26, and Homer, Guy and Handyman from 181).
+// Switchboard, Monty Don and Sports from 2026-10-26, and Homer, Guy and Wall-E from 181).
 export const APP_ICONS = {
   BookOpen,
   Briefcase,

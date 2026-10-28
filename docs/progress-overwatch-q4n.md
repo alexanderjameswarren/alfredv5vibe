@@ -310,7 +310,12 @@ The old Phase 8 (Switchboard state through overwatch-ingest) moved out of this p
   - [x] Alex accepted the rename rule (a new lane name at the position of an old lane whose name is gone). It misfires in two ways: a lane removed and a different one added at the same position shows as a rename, so slices taken from the removed lane do not show as moved; a lane renamed and moved to another position shows as removed and added, so its slices show as moved
   - [x] gitsync: already up to date; db:deploy claimed, mcp redeployed (version 176), released (run tag overwatch-q4n-s54d-w3jn)
   - [ ] Alex retests the proposal text ("Test portfolio s54d"), runs the cleanup, checkpoints
-- [ ] Step 55 (CLI): 8b Projects section: portfolio switch; Now, Next, Later; "Not in the plan"
+- [ ] Step 55 (CLI): 8b Projects section: portfolio switch; Now, Next, Later; "Not in the plan" (run tag overwatch-q4n-s55-k7xa)
+  - [x] overwatchApi.getPortfolioPlans; portfolioModel.js (portfolioView, pickPortfolio, sliceCopy, slicesCopy, notInPlanCopy); PortfolioPlan.jsx (switch remembered per browser, Now, Next, Later with paused reasons and done counts, Not in the plan); ProjectCard takes a slice and an optional copy; no portfolio: the active cards as before; spec 9 "As built (Step 55)"
+  - [x] Tests: PortfolioPlan.test.jsx 7; src/overwatch 11 suites, 85 pass
+  - [x] Wall-E: tests 26 and 27 and the AppIcon comment name wall_e. Alex's pre-check found no apps.id reference to handyman; the "handyman" tag on Home items and intents means "needs a tradesperson" and stays. 182_overwatch_rename_wall_e.sql touches apps only, with a guard that refuses if a reference appears (run tag overwatch-q4n-s55b-v8rt); db:table:apps claimed
+  - [x] Section renamed "Projects" (count still active Projects); full app suite 3126 of 3126 (one run had ItemDetailView.test fail once; it passed alone and in a second full run)
+  - [ ] Alex runs 182; UI test Part 1 with "Test portfolio s55"; cleanup; checkpoint
 - [ ] Step 56 (CLI): 8b plan page /overwatch/plan/<portfolio_id> (theory, notes, review_by, versions); nightly review_by item; overwatch skill
 - [ ] Step 57 (CLI, SQL): 8c inbox.suggested_group_id; process_inbox_item `group` payload (db items reserved)
 - [ ] Step 58 (CLI): 8c create_inbox_item and update_inbox_item accept suggested_group_id; alfred-enrich skill; deploy mcp

@@ -21,6 +21,7 @@ jest.mock("./overwatchApi", () => ({
   getIdeaRecords: jest.fn(),
   getApps: jest.fn(),
   getOpenFriction: jest.fn(),
+  getPortfolioPlans: jest.fn(),
 }));
 
 const NIGHTLY = { id: "n1", period: "nightly", for_date: "2026-10-26",
@@ -58,6 +59,7 @@ beforeEach(() => {
   api.getApps.mockResolvedValue([{ id: "warren_buffet", name: "Warren Buffet", icon: "Wallet", path: "/money" }]);
   api.getOpenFriction.mockResolvedValue({ entries: [{ id: "f1", process: "todos", occurred_at: "2026-10-25T10:00:00Z",
     what_happened: "x" }], settings: {} });
+  api.getPortfolioPlans.mockResolvedValue({ portfolios: [], plans: [], lanes: [], slices: [], progress: [], groupNames: {} });
   Object.assign(navigator, { clipboard: { writeText: jest.fn().mockResolvedValue() } });
 });
 
@@ -71,7 +73,7 @@ test("live tab: just the title, the status line, six sections; Action Required a
   const order = screen.getAllByRole("region").map((r) => r.getAttribute("aria-labelledby"));
   expect(order).toEqual(["overwatch-action-required", "overwatch-projects", "overwatch-quiet",
     "overwatch-activity", "overwatch-ideas", "overwatch-friction"]);
-  for (const t of ["Action Required (1)", "Active Projects (0)"]) {
+  for (const t of ["Action Required (1)", "Projects (0)"]) {
     expect(screen.getByRole("button", { name: t })).toHaveAttribute("aria-expanded", "true");
   }
   // Jobs has a rhythm and no activity anywhere: one quiet app, the section collapsed.
