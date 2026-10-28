@@ -139,8 +139,11 @@ function lineageFields(doc) {
 // changing the taxonomy shouldn't require re-parsing every stored song.
 // Raw parseWarnings strings and parseWarningsStructured both go into
 // generation_notes.importer verbatim; classify-on-render.
+// `range`, `dropped` and `cut` (sam_xml_import) change what is scored or
+// heard, so they are shown, not folded into the FYI line. `marking` is FYI.
 const BLOCK_KINDS = new Set([
   "ornament", "grace", "truncated", "overflow", "hand-assignment",
+  "range", "dropped", "cut",
 ]);
 
 // Fold validateSongDocument's duration-sum warnings into the same structured
@@ -189,6 +192,20 @@ function composeBlockSentence(w) {
   }
   if (w.kind === "grace") {
     return `${w.count} grace note${w.count > 1 ? "s" : ""} dropped — silently missing from playback`;
+  }
+  const notes = `${w.count} note${w.count > 1 ? "s" : ""}`;
+  if (w.kind === "range") {
+    return `${notes}${at} outside the piano's keys (A0–C8) — shown grey and not scored`;
+  }
+  if (w.kind === "dropped") {
+    if (w.tag === "cue") return `${notes}${at} were cue notes — dropped, not played`;
+    if (w.tag === "nested-tuplet") {
+      return `${notes}${at} in a triplet inside a triplet — dropped, the run kept as its first chord`;
+    }
+    return `${notes}${at} were hidden in the score — dropped, not played`;
+  }
+  if (w.kind === "cut") {
+    return `${notes}${at} ran past the barline — cut at the barline`;
   }
   if (w.kind === "truncated") {
     return `Measure${w.count > 1 ? "s" : ""}${at} left short — parser could not decompose the gap into rest tokens`;

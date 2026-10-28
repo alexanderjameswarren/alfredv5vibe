@@ -6,6 +6,12 @@ import { render, act } from "@testing-library/react";
 
 jest.mock("../lib/scoreRender", () => ({
   playClick: () => {},
+  scorePadding: () => ({ gap: 0, bottom: 0 }),
+  placeBarLabels: () => ({ lifted: [], minY: 0 }),
+  topRoomFor: () => 0,
+  growSvgTop: () => {},
+  PRACTICE_TREBLE_Y: 40,
+  PRACTICE_BASS_Y: 210,
   // Four beats a measure, 300px apart per measure, the first 30px in.
   renderCopy: (VF, ctx, measures, c, xStart, w, durations, starts) => {
     const beatMeta = [];

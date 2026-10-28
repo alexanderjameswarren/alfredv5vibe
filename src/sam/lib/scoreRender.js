@@ -130,9 +130,10 @@ function wrapSectionText(text, maxWidth, fontSize) {
  * stable regardless of label length.
  */
 export function drawSectionLabel(svgParent, xOffset, measWidth, staffTopY, sectionText) {
-  if (!sectionText) return;
+  if (!sectionText) return [];
   const lines = wrapSectionText(sectionText, measWidth, SECTION_FONT_SIZE);
   const bottomBaselineY = staffTopY - SECTION_OFFSET_ABOVE_STAFF;
+  const els = [];
   for (let i = 0; i < lines.length; i++) {
     const lineY = bottomBaselineY - (lines.length - 1 - i) * SECTION_LINE_HEIGHT;
     const textEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
@@ -143,7 +144,9 @@ export function drawSectionLabel(svgParent, xOffset, measWidth, staffTopY, secti
     textEl.setAttribute("fill", "black");
     textEl.textContent = lines[i];
     svgParent.appendChild(textEl);
+    els.push(textEl);
   }
+  return els;
 }
 
 // Draw ties between consecutive notes with matching tie:start → tie:end.
@@ -398,14 +401,286 @@ function noteheadYsFor(note, stave) {
   return note.getKeyProps().map((kp) => stave.getYForNote(kp.line));
 }
 
+// ── Vertical room for very high and very low notes ───────────────────────
+// Measured once per song. Each view passes its own layout (stave y's and the
+// SVG height); the result is extra render-space px above the treble stave,
+// between the staves, and below the bass stave, only past what fits today, so
+// a normal song gets all zeros and renders exactly as before.
+export const SCORE_PAD_CAP = 120;
+const PAD_STEP = 10;
+const LINE_GAP = 10; // VexFlow stave line spacing
+const HEAD_HALF = 5;
+const LABEL_H = 10; // bar-number font size
+const LETTER_STEP = { c: 0, d: 1, e: 2, f: 3, g: 4, a: 5, b: 6 };
+const BOTTOM_LINE_STEP = { treble: 4 * 7 + 2, bass: 2 * 7 + 4 }; // E4, G2
+
+function diatonicStep(note) {
+  const [letters, octave] = noteToVexKeyParts(note);
+  return parseInt(octave, 10) * 7 + LETTER_STEP[letters[0]];
+}
+
+function noteToVexKeyParts(note) {
+  const { keys } = toVexKeys([note]);
+  return keys[0].split("/");
+}
+
+// y of a notehead on a stave whose top is at staveY (VexFlow: top line at
+// staveY + 4 spaces, bottom line one stave-height below).
+export function noteHeadY(note, clef, staveY) {
+  const line = (diatonicStep(note) - BOTTOM_LINE_STEP[clef]) / 2 + 1;
+  return staveY + 9 * LINE_GAP - line * LINE_GAP;
+}
+
+const padUp = (px) => Math.min(SCORE_PAD_CAP, Math.ceil(Math.max(0, px) / PAD_STEP) * PAD_STEP);
+
+export function barLabelText(measure) {
+  return measure.sourceMeasure != null && String(measure.sourceMeasure) !== String(measure.number)
+    ? `${measure.number} (${measure.sourceMeasure})`
+    : String(measure.number);
+}
+
+// ── Measuring what VexFlow actually drew ─────────────────────────────────
+// Boxes come from the SVG's own geometry (path data, rect/line attributes,
+// text position), not from getBBox, so the same numbers come out in the
+// browser and in jsdom. Bezier control points are counted as extents, which
+// can only over-estimate — safe for "does anything reach here".
+const LABEL_CHAR_W = 6.02; // 10px monospace advance
+const NUM = /[a-zA-Z]|-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/g;
+const ARGS = { m: 2, l: 2, t: 2, c: 6, s: 4, q: 4, h: 1, v: 1, a: 7, z: 0 };
+
+function pathBox(d) {
+  const tokens = d.match(NUM) || [];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  let cx = 0, cy = 0, sx = 0, sy = 0, cmd = null;
+  const add = (x, y) => { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); };
+  for (let i = 0; i < tokens.length;) {
+    if (/[a-zA-Z]/.test(tokens[i])) cmd = tokens[i++];
+    if (!cmd) break;
+    const lc = cmd.toLowerCase();
+    if (lc === "z") { cx = sx; cy = sy; cmd = null; continue; }
+    const n = ARGS[lc];
+    const v = tokens.slice(i, i + n).map(Number);
+    if (v.length < n || v.some(Number.isNaN)) break;
+    i += n;
+    const rel = cmd !== cmd.toUpperCase();
+    const pt = (px, py) => [rel ? cx + px : px, rel ? cy + py : py];
+    if (lc === "h") { cx = rel ? cx + v[0] : v[0]; add(cx, cy); }
+    else if (lc === "v") { cy = rel ? cy + v[0] : v[0]; add(cx, cy); }
+    else if (lc === "a") {
+      // An arc stays within its radius of its endpoints (VexFlow's dots are arcs).
+      const r = Math.max(Math.abs(v[0]), Math.abs(v[1]));
+      add(cx - r, cy - r); add(cx + r, cy + r);
+      [cx, cy] = pt(v[5], v[6]);
+      add(cx - r, cy - r); add(cx + r, cy + r);
+    }
+    else {
+      for (let k = 0; k < n; k += 2) { const [px, py] = pt(v[k], v[k + 1]); add(px, py); }
+      [cx, cy] = pt(v[n - 2], v[n - 1]);
+    }
+    if (lc === "m") { sx = cx; sy = cy; cmd = rel ? "l" : "L"; }
+  }
+  return x0 === Infinity ? null : { x0, y0, x1, y1 };
+}
+
+const num = (el, a) => parseFloat(el.getAttribute(a)) || 0;
+
+/** Bounding box of one SVG shape in its own (render-space) coordinates. */
+export function shapeBox(el) {
+  let b = null;
+  const tag = el.tagName.toLowerCase();
+  if (tag === "path") b = pathBox(el.getAttribute("d") || "");
+  else if (tag === "rect") b = { x0: num(el, "x"), y0: num(el, "y"), x1: num(el, "x") + num(el, "width"), y1: num(el, "y") + num(el, "height") };
+  else if (tag === "line") b = { x0: Math.min(num(el, "x1"), num(el, "x2")), x1: Math.max(num(el, "x1"), num(el, "x2")), y0: Math.min(num(el, "y1"), num(el, "y2")), y1: Math.max(num(el, "y1"), num(el, "y2")) };
+  else if (tag === "text") {
+    const size = parseFloat(el.getAttribute("font-size")) || 10;
+    const x = num(el, "x"), y = num(el, "y");
+    b = { x0: x, y0: y - size, x1: x + (el.textContent || "").length * size * 0.602, y1: y + size * 0.25 };
+  }
+  if (!b) return null;
+  const w = parseFloat(el.getAttribute("stroke-width"));
+  const sw = (Number.isFinite(w) ? w : 1) / 2;
+  return { x0: b.x0 - sw, y0: b.y0 - sw, x1: b.x1 + sw, y1: b.y1 + sw };
+}
+
+/** Boxes of every drawn shape under `root`, skipping anything in `skip`. */
+export function drawnBoxes(root, skip = new Set()) {
+  const out = [];
+  for (const el of root.querySelectorAll("path, rect, line, text")) {
+    if (skip.has(el)) continue;
+    const b = shapeBox(el);
+    if (b) out.push(b);
+  }
+  return out;
+}
+
+const LABEL_CLEAR = 2;
+
+/**
+ * Bar numbers, placed from what is actually drawn. A label stays exactly where
+ * it was put unless a drawn shape overlaps it; then it moves up, with its
+ * followers (section label, badge background), to LABEL_CLEAR px above the
+ * highest shape under its width.
+ *
+ * @param root    the score's <svg>
+ * @param labels  [{ el, followers }] — the bar-number <text> and what moves with it
+ * @param skip    elements that are not obstacles (labels, chord symbols, followers)
+ * @returns {{ lifted: number[], minY: number }} indices of moved labels, and the
+ *          highest y of anything drawn (music and bar numbers; section labels excluded)
+ */
+export function placeBarLabels(root, labels, skip = new Set()) {
+  const boxes = drawnBoxes(root, skip);
+  const lifted = [];
+  let minY = boxes.reduce((m, b) => Math.min(m, b.y0), Infinity);
+  labels.forEach(({ el, followers = [] }, i) => {
+    const x0 = num(el, "x");
+    const x1 = x0 + (el.textContent || "").length * LABEL_CHAR_W;
+    const base = num(el, "y");
+    const top = base - LABEL_H, bottom = base + 2;
+    const under = boxes.filter((b) => b.x1 > x0 && b.x0 < x1);
+    if (under.some((b) => b.y0 < bottom && b.y1 > top)) {
+      const highest = under.reduce((m, b) => Math.min(m, b.y0), Infinity);
+      const newBase = highest - LABEL_CLEAR - 2;
+      el.setAttribute("y", newBase);
+      for (const s of followers) s.setAttribute("y", num(s, "y") - (base - newBase));
+      lifted.push(i);
+      minY = Math.min(minY, newBase - LABEL_H);
+    } else {
+      minY = Math.min(minY, top);
+    }
+  });
+  return { lifted, minY };
+}
+
+/** Render px to add above the score so nothing drawn starts above y = 0. */
+export function topRoomFor(minY) {
+  return minY < 0 ? padUp(-minY) : 0;
+}
+
+/**
+ * Grow an already drawn SVG upward by `extra` render px: the viewBox starts
+ * above 0, so nothing is re-laid-out and every coordinate stays valid.
+ */
+export function growSvgTop(svg, extra, scale) {
+  if (!extra) return;
+  const [x, y, w, h] = (svg.getAttribute("viewBox") || "").split(/\s+/).map(Number);
+  svg.setAttribute("viewBox", `${x} ${y - extra} ${w} ${h + extra}`);
+  const height = (h + extra) * scale;
+  svg.setAttribute("height", height);
+  svg.style.height = `${height}px`;
+}
+
+/**
+ * @param measures  song measures (voice format; legacy beats[] measures are ignored)
+ * @param layout    { trebleY, bassY, height } of the view, before padding
+ * @returns {{ gap, bottom }} extra render-space px, each 0..SCORE_PAD_CAP. Room
+ *          above the score is measured after drawing (placeBarLabels/topRoomFor).
+ */
+export function scorePadding(measures, { trebleY, bassY, height }) {
+  let trebleMax = -Infinity, bassMin = Infinity, bassMax = -Infinity;
+  for (const m of measures || []) {
+    for (const evt of m.rh || []) for (const n of evt.notes || []) {
+      const y = noteHeadY(n, "treble", trebleY);
+      trebleMax = Math.max(trebleMax, y);
+    }
+    for (const evt of m.lh || []) for (const n of evt.notes || []) {
+      const y = noteHeadY(n, "bass", bassY);
+      bassMin = Math.min(bassMin, y);
+      bassMax = Math.max(bassMax, y);
+    }
+  }
+  const trebleBottomLine = trebleY + 8 * LINE_GAP;
+  const bassTopLine = bassY + 4 * LINE_GAP;
+  const overTreble = trebleMax > -Infinity ? trebleMax + HEAD_HALF - trebleBottomLine : 0;
+  const overBass = bassMin < Infinity ? bassTopLine - (bassMin - HEAD_HALF) : 0;
+  return {
+    gap: padUp(Math.max(0, overTreble) + Math.max(0, overBass) - (bassTopLine - trebleBottomLine)),
+    bottom: bassMax > -Infinity ? padUp(bassMax + HEAD_HALF - height) : 0,
+  };
+}
+
+// ── Notes the player is not asked for, and stored markings ───────────────
+const UNSCORED_STYLE = { fillStyle: "#9ca3af", strokeStyle: "#9ca3af" };
+
+// Grey every notehead (and the ledger lines) of notes stored `unscored`.
+export function styleUnscored(sn, heads) {
+  let any = false;
+  heads.forEach((n, ki) => {
+    if (!n.unscored) return;
+    any = true;
+    if (typeof sn.setKeyStyle === "function") sn.setKeyStyle(ki, UNSCORED_STYLE);
+  });
+  if (any && typeof sn.setLedgerLineStyle === "function") sn.setLedgerLineStyle(UNSCORED_STYLE);
+}
+
+// What a drawn note needs for drawNotationMarks. Single tremolos are attached
+// here as a VexFlow modifier; two-note tremolos and glissandos are drawn after.
+export function noteMarks(VF, sn, notes, keyIndexFor) {
+  const tremolo = (notes || []).find((n) => n.tremolo)?.tremolo;
+  if (tremolo?.type === "single" && VF.Tremolo) sn.addModifier(new VF.Tremolo(tremolo.marks), 0);
+  const i = (notes || []).findIndex((n) => n.gliss);
+  const gliss = i >= 0 ? { ...notes[i].gliss, keyIdx: keyIndexFor[i] } : null;
+  return tremolo || gliss ? { vexNote: sn, tremolo, gliss } : null;
+}
+
+/**
+ * Draw two-note tremolo strokes and glissando/slide lines for one staff, in
+ * note order, after the notes have their final positions. `state` carries an
+ * open tremolo or glissando across barlines and must persist per staff.
+ */
+export function drawNotationMarks(ctx, entries, state) {
+  for (const e of entries) {
+    const ys = e.vexNote.getYs();
+    const x = e.vexNote.getAbsoluteX() + e.vexNote.getXShift();
+    const headW = 10;
+    const midY = ys.reduce((a, b) => a + b, 0) / ys.length;
+    const t = e.tremolo;
+    if (t?.type === "stop" && state.trem) {
+      const cx = (state.trem.x + x) / 2;
+      const cy = (state.trem.y + midY) / 2;
+      ctx.save();
+      ctx.setLineWidth(3);
+      for (let k = 0; k < t.marks; k++) {
+        const dy = (k - (t.marks - 1) / 2) * 7;
+        ctx.beginPath();
+        ctx.moveTo(cx - 8, cy + dy + 4);
+        ctx.lineTo(cx + 8, cy + dy - 4);
+        ctx.stroke();
+      }
+      ctx.restore();
+      state.trem = null;
+    }
+    if (t?.type === "start") state.trem = { x: x + headW, y: midY };
+    const g = e.gliss;
+    if (!g) continue;
+    const y = ys[g.keyIdx] ?? midY;
+    if ((g.type === "stop" || g.type === "both") && state.gliss) {
+      ctx.save();
+      ctx.setLineWidth(1.5);
+      ctx.beginPath();
+      ctx.moveTo(state.gliss.x, state.gliss.y);
+      ctx.lineTo(x - 3, y);
+      ctx.stroke();
+      ctx.restore();
+      state.gliss = null;
+    }
+    if (g.type === "start" || g.type === "both") state.gliss = { x: x + headW + 3, y };
+  }
+}
+
 // Renders a single copy of the score into the given VexFlow context.
 // Returns { beatMeta[], copyWidth, geometry[], labelEls[] } for that copy.
 // `geometry` is this copy's fingering geometry (buildGeometry entries, with this
 // copy's x offsets); `labelEls` are the measure-number/chord <text> nodes used by
 // the overlay for badge collision. ScrollEngine concatenates them across copies.
-export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurations, measStartBeats) {
-  const TREBLE_Y = 40;
-  const BASS_Y = 210;
+export const PRACTICE_TREBLE_Y = 40;
+export const PRACTICE_BASS_Y = 210;
+
+// `pad` is scorePadding()'s result for this song; omitted = no extra room.
+export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, measDurations, measStartBeats, pad) {
+  const TREBLE_Y = PRACTICE_TREBLE_Y;
+  const BASS_Y = PRACTICE_BASS_Y + (pad?.gap || 0);
+  const markState = { treble: {}, bass: {} };
+  const barLabels = [];
 
   const measureWidths = measures.map((m) => getMeasureWidth(m.timeSignature, false, measureWidth));
   const copyWidth = measureWidths.reduce((a, b) => a + b, 0);
@@ -448,6 +723,8 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
     let voiceTuplets = []; // VF.Tuplet objects (drawn after notes/beams)
     let trebleBeamEvents = null; // parallel events for tuplet-aware beam breaks
     let bassBeamEvents = null;
+    const trebleMarks = [];
+    const bassMarks = [];
     const durationQ = measDurations[measIdx];
 
     if (measure.rh || measure.lh) {
@@ -478,6 +755,9 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
               0
             );
           }
+          styleUnscored(sn, heads);
+          const marks = noteMarks(VF, sn, notes, keyIndexFor);
+          if (marks) trebleMarks.push(marks);
           trebleNotes.push(sn);
           // Track tie info for cross-barline tie rendering
           const { starts, ends } = tieEndpoints(notes, keyIndexFor);
@@ -508,6 +788,9 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
             const acc = noteAccidental(n);
             if (acc) sn.addModifier(new VF.Accidental(acc), ki);
           });
+          styleUnscored(sn, heads);
+          const marks = noteMarks(VF, sn, notes, keyIndexFor);
+          if (marks) bassMarks.push(marks);
           bassNotes.push(sn);
           // Track tie info for cross-barline tie rendering
           const { starts, ends } = tieEndpoints(notes, keyIndexFor);
@@ -754,9 +1037,11 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
       }
     });
 
-    // 6. Draw beams after notes
+    // 6. Draw beams after notes, then tremolo strokes and glissando lines
     trebleBeams.forEach((b) => b.setContext(ctx).draw());
     bassBeams.forEach((b) => b.setContext(ctx).draw());
+    drawNotationMarks(ctx, trebleMarks, markState.treble);
+    drawNotationMarks(ctx, bassMarks, markState.bass);
 
     // 7. Draw tuplet brackets + labels. Tuplets observe their notes' final
     // positions at draw time, so this must run after format + note draw.
@@ -782,7 +1067,8 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
     }
     svgEl.appendChild(measGroupEl);
 
-    // Measure number above treble staff
+    // Measure number above treble staff. Its final height is set by
+    // placeBarLabels once everything is drawn.
     const measNumEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
     measNumEl.setAttribute("x", xOffset + 5);
     measNumEl.setAttribute("y", TREBLE_Y - 2);
@@ -794,10 +1080,7 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
     // Entertainer's second half renumbers after repeats. When they match
     // (a normal-form measure) or sourceMeasure is absent (pre-M4 stored
     // song), show the bare number.
-    measNumEl.textContent =
-      measure.sourceMeasure != null && String(measure.sourceMeasure) !== String(measure.number)
-        ? `${measure.number} (${measure.sourceMeasure})`
-        : String(measure.number);
+    measNumEl.textContent = barLabelText(measure);
     measGroupEl.appendChild(measNumEl);
     labelEls.push(measNumEl); // collision target for fingering badges
 
@@ -817,7 +1100,8 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
     // Section label (Verse 1 / Chorus / etc.) above measure number, wrapped
     // to the measure width. Appended into the measure's <g> so it scrolls
     // with the measure and lands in the same hide/show flow as notes/beams.
-    drawSectionLabel(measGroupEl, xOffset, measWidth, TREBLE_Y, measure.section);
+    const followers = drawSectionLabel(measGroupEl, xOffset, measWidth, TREBLE_Y, measure.section);
+    barLabels.push({ el: measNumEl, followers });
 
     beatMetaOffset += measBeatCount;
     xOffset += measWidth;
@@ -826,7 +1110,9 @@ export function renderCopy(VF, ctx, measures, copyIdx, xStart, measureWidth, mea
   drawStaveTies(VF, ctx, tieTracker.treble);
   drawStaveTies(VF, ctx, tieTracker.bass);
 
-  return { beatMeta, copyWidth, geometry, labelEls };
+  // barLabels go to placeBarLabels once every copy is drawn; labelEls (bar
+  // numbers, chord symbols) and section labels are never obstacles.
+  return { beatMeta, copyWidth, geometry, labelEls, barLabels };
 }
 
 // Play a short click sound at the given audioContext time.

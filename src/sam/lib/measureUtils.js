@@ -78,10 +78,11 @@ export function isContinuation(note) {
  * The MIDI numbers an event actually asks the player to strike: its notes
  * minus the ones already sounding. Empty for a rest, and empty for an event
  * that is nothing but continuations — which is what makes such a beat
- * unscoreable rather than a miss waiting to happen.
+ * unscoreable rather than a miss waiting to happen. `unscored` notes (outside
+ * the piano's keys, set by the parser) are never asked for either.
  */
 export function struckMidi(evt) {
-  return (evt?.notes || []).filter((n) => !isContinuation(n)).map((n) => n.midi);
+  return (evt?.notes || []).filter((n) => !isContinuation(n) && !n.unscored).map((n) => n.midi);
 }
 
 /**

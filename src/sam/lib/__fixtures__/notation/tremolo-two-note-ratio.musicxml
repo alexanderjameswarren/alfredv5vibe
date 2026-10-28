@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MuseScore style (Great Balls of Fire m69): each note displayed whole, duration halved, 2:1 ratio. -->
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>18</divisions><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves></attributes>
+      <note><pitch><step>C</step><octave>8</octave></pitch><duration>36</duration><voice>1</voice><type>whole</type>
+        <time-modification><actual-notes>2</actual-notes><normal-notes>1</normal-notes></time-modification><staff>1</staff>
+        <notations><ornaments><tremolo type="start">3</tremolo></ornaments></notations></note>
+      <note><pitch><step>G</step><octave>7</octave></pitch><duration>36</duration><voice>1</voice><type>whole</type>
+        <time-modification><actual-notes>2</actual-notes><normal-notes>1</normal-notes></time-modification><staff>1</staff>
+        <notations><ornaments><tremolo type="stop">3</tremolo></ornaments></notations></note>
+      <backup><duration>72</duration></backup>
+      <note><pitch><step>C</step><octave>2</octave></pitch><duration>72</duration><voice>5</voice><type>whole</type><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>

@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { noteAccidental, toVexKeys, tieEndpoints, getBeamGroups, getMeasureWidth, getFormatWidth } from "../lib/vexflowHelpers";
 import { measureDurationQ, getEventBeats, formatTimeSignature } from "../lib/measureUtils";
 import {
@@ -9,6 +9,14 @@ import {
   buildTuplets,
   drawSectionLabel,
   buildGeometry,
+  scorePadding,
+  barLabelText,
+  placeBarLabels,
+  topRoomFor,
+  growSvgTop,
+  styleUnscored,
+  noteMarks,
+  drawNotationMarks,
 } from "../lib/scoreRender";
 import { drawFingeringOverlay } from "../lib/fingeringOverlay";
 import { drawGhostOverlay } from "../lib/ghostOverlay";
@@ -21,10 +29,12 @@ import { UI } from "./uiStyles";
 // Stopped view leaves extra room between the staves for lyrics + the lyric-edit
 // arrow controls (←→ above, ⇐⇒ below). ScrollEngine/playback uses a tighter
 // layout because it doesn't render the arrow controls.
+// These are the unpadded values; a song with very high or low notes gets more
+// room from scorePadding (see `staffLayout` in the component).
 const TREBLE_Y = 40;
 const BASS_Y = 290;                // was 210; +80 of inter-stave room
 const STAFF_H = 430;                // was 350; matches BASS_Y bump
-const LYRIC_Y = TREBLE_Y + 145;     // centered between staves with the new gap
+const LYRIC_OFFSET = 145;           // below TREBLE_Y, centered between staves
 
 // FIT TO HEIGHT (song rail, step 5). The stopped score shrinks — never grows —
 // so the whole system shows without page scroll. Below FIT_MIN_SCALE notes get
@@ -79,6 +89,20 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
   // taps itself. Render-space, SCORE_SCALE and every timing figure are untouched.
   const outerRef = useRef(null);
   const [fitScale, setFitScale] = useState(1);
+
+  // Stave positions for this song, with room between and below the staves.
+  // Room above is measured from the drawn score (extraTop).
+  const staffLayout = useMemo(() => {
+    const pad = scorePadding(measures, { trebleY: TREBLE_Y, bassY: BASS_Y, height: STAFF_H });
+    return {
+      trebleY: TREBLE_Y,
+      bassY: BASS_Y + pad.gap,
+      height: STAFF_H + pad.gap + pad.bottom,
+      lyricY: TREBLE_Y + LYRIC_OFFSET,
+    };
+  }, [measures]);
+  const [extraTop, setExtraTop] = useState(0);
+  const naturalH = (staffLayout.height + extraTop) * SCORE_SCALE;
   useEffect(() => {
     if (!fitHeight) {
       setFitScale(1);
@@ -98,7 +122,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
       const below = Math.max(0, (column ? column.bottom - outerRect.bottom : 0)) + fitBottomPad;
       // The frame around the SVG (padding, border, any scrollbar) is not zoomed.
       const chrome = Math.max(0, outerRect.height - inner.getBoundingClientRect().height);
-      setFitScale(computeFitScale(doc.clientHeight - top - below - chrome));
+      setFitScale(computeFitScale(doc.clientHeight - top - below - chrome, naturalH));
     }
     measure();
     // Rows appearing or disappearing move the score; the window can resize.
@@ -112,7 +136,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
       ro?.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [fitHeight, fitBottomPad]);
+  }, [fitHeight, fitBottomPad, naturalH]);
 
   showEditorRef.current = (measure, xOffset) => {
     setEditor({
@@ -148,6 +172,10 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
 
     const container = containerRef.current;
     container.innerHTML = "";
+    // This song's padded layout, under the names the drawing code below uses.
+    const { trebleY: TREBLE_Y, bassY: BASS_Y, height: STAFF_H, lyricY: LYRIC_Y } = staffLayout;
+    const markState = { treble: {}, bass: {} };
+    const barLabels = [];
 
     // Calculate total width — fixed width per measure
     const measureWidths = measures.map((m, i) => getMeasureWidth(m.timeSignature, i === 0, measureWidth));
@@ -231,26 +259,26 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
         el.addEventListener("pointerup", (e) => e.stopPropagation());
       }
 
-      // Measure number (with optional audio-offset badge) above treble staff
+      // Measure number (with optional audio-offset badge) above treble staff.
+      // Stopped UI: show source measure in parens when playback flattening
+      // has renumbered it (spec §M4). Für Elise m1 pickup is source "0",
+      // Entertainer's second half renumbers after repeats. When they match
+      // or sourceMeasure is absent (pre-M4 stored song), show the bare
+      // number. audioOffset badge takes priority when active.
+      const labelFollowers = []; // move with the bar number if it is lifted
+      const numberLabel = barLabelText(measure);
+      const labelText =
+        showAudioOffset && measure.audioOffsetMs != null
+          ? `${numberLabel} ⚓${measure.audioOffsetMs}`
+          : numberLabel;
+      // Final height is set by placeBarLabels once everything is drawn.
       const measNumEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
       measNumEl.setAttribute("x", xOffset + 5);
       measNumEl.setAttribute("y", TREBLE_Y - 2);
       measNumEl.setAttribute("font-size", "10");
       measNumEl.setAttribute("font-family", "monospace");
       measNumEl.setAttribute("fill", showAudioOffset ? "var(--primary)" : "var(--muted-foreground)");
-      // Stopped UI: show source measure in parens when playback flattening
-      // has renumbered it (spec §M4). Für Elise m1 pickup is source "0",
-      // Entertainer's second half renumbers after repeats. When they match
-      // or sourceMeasure is absent (pre-M4 stored song), show the bare
-      // number. audioOffset badge takes priority when active.
-      const numberLabel =
-        measure.sourceMeasure != null && String(measure.sourceMeasure) !== String(measure.number)
-          ? `${measure.number} (${measure.sourceMeasure})`
-          : String(measure.number);
-      measNumEl.textContent =
-        showAudioOffset && measure.audioOffsetMs != null
-          ? `${numberLabel} ⚓${measure.audioOffsetMs}`
-          : numberLabel;
+      measNumEl.textContent = labelText;
 
       if (showAudioOffset) {
         // Wrap in a group with a subtle button-style background rect.
@@ -272,6 +300,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
         bgEl.setAttribute("rx", 2);
         bgEl.setAttribute("class", "sam-meas-btn-bg");
         measGroup.insertBefore(bgEl, measNumEl);
+        labelFollowers.push(bgEl);
       } else {
         svg.appendChild(measNumEl);
       }
@@ -291,7 +320,8 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
       }
 
       // Section label (Verse 1 / Chorus / etc.) above the staff
-      drawSectionLabel(svg, xOffset, measWidth, TREBLE_Y, measure.section);
+      labelFollowers.push(...drawSectionLabel(svg, xOffset, measWidth, TREBLE_Y, measure.section));
+      barLabels.push({ el: measNumEl, followers: labelFollowers });
 
       // Build VexFlow notes and beat metadata
       const trebleNotes = [];
@@ -304,6 +334,8 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
       let voiceTuplets = []; // VF.Tuplet objects (drawn after notes/beams)
       let trebleBeamEvents = null; // parallel events for tuplet-aware beam breaks
       let bassBeamEvents = null;
+      const trebleMarks = [];
+      const bassMarks = [];
 
       if (measure.rh || measure.lh) {
         // === Voice format: independent RH/LH voices ===
@@ -334,6 +366,9 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
                 0
               );
             }
+            styleUnscored(sn, heads);
+            const marks = noteMarks(VF, sn, notes, keyIndexFor);
+            if (marks) trebleMarks.push(marks);
             trebleNotes.push(sn);
             // Track tie info for cross-barline tie rendering
             const { starts, ends } = tieEndpoints(notes, keyIndexFor);
@@ -364,6 +399,9 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
             const acc = noteAccidental(n);
             if (acc) sn.addModifier(new VF.Accidental(acc), ki);
             });
+            styleUnscored(sn, heads);
+            const marks = noteMarks(VF, sn, notes, keyIndexFor);
+            if (marks) bassMarks.push(marks);
             bassNotes.push(sn);
             // Track tie info for cross-barline tie rendering
             const { starts, ends } = tieEndpoints(notes, keyIndexFor);
@@ -620,6 +658,8 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
       // 6. Draw beams after notes
       trebleBeams.forEach((b) => b.setContext(ctx).draw());
       bassBeams.forEach((b) => b.setContext(ctx).draw());
+      drawNotationMarks(ctx, trebleMarks, markState.treble);
+      drawNotationMarks(ctx, bassMarks, markState.bass);
 
       // 7. Draw tuplet brackets + labels. Mirrors scoreRender.js: tuplets
       // observe their notes' final positions at draw time, so this runs
@@ -643,6 +683,15 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
     // view and the scroll engine produce identical output.
     drawStaveTies(VF, ctx, tieTracker.treble);
     drawStaveTies(VF, ctx, tieTracker.bass);
+
+    // Bar numbers clear whatever was actually drawn under them; anything drawn
+    // above the top edge grows the score upward.
+    const { minY } = placeBarLabels(
+      svg, barLabels, new Set([...fingeringLabelEls, ...barLabels.flatMap((l) => l.followers)])
+    );
+    const top = topRoomFor(minY);
+    growSvgTop(svg, top, SCORE_SCALE);
+    setExtraTop(top);
 
     // Lyric editing arrow controls (stopped mode only)
     if (lyricPlacements && lyricEditRef.current && lyricPositions.length > 0) {
@@ -736,7 +785,7 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
       onSelect: (coord) => onSelectFingeringRef.current?.(coord),
     });
     drawSelectionRing(svg, geometry, fingeringModeRef.current ? fingeringSelectionRef.current : null);
-  }, [measures, onBeatEvents, onGeometry, measureWidth, lyricPlacements, showAudioOffset, notePrefix]);
+  }, [measures, onBeatEvents, onGeometry, measureWidth, lyricPlacements, showAudioOffset, notePrefix, staffLayout]);
 
   // Ghost overlay (Phase 6 M1). A layer-only effect, same shape as the
   // fingering overlay: it reads the last render's layout from a ref and draws
