@@ -549,6 +549,8 @@ export async function updateInboxItem(
     suggested_event_date?: string;
     suggested_tags?: string[];
     suggested_collection_id?: string;
+    // Overwatch 8c. Checked by the caller (checkSuggestedGroupId) and by migration 184's guard; null clears it.
+    suggested_group_id?: string | null;
     suggested_status?: "someday" | "active";
     // Restructure P3. Validated by the caller (checkSourceApp); null clears it.
     source_app?: string | null;
@@ -598,6 +600,7 @@ export async function updateInboxItem(
     // covers the MCP update_inbox_item tool, which delegates here.
     if (params.suggested_tags !== undefined) updates.suggested_tags = normaliseTags(params.suggested_tags);
     if (params.suggested_collection_id !== undefined) updates.suggested_collection_id = params.suggested_collection_id;
+    if (params.suggested_group_id !== undefined) updates.suggested_group_id = params.suggested_group_id;
     if (params.suggested_status !== undefined) updates.suggested_status = params.suggested_status;
     if (params.source_app !== undefined) updates.source_app = params.source_app;
 

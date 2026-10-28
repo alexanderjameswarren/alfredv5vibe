@@ -76,6 +76,7 @@ import {
   updateReminderTool,
 } from "../_shared/tools/reminders.ts";
 import { getAppsTool, checkSourceApp } from "../_shared/tools/apps.ts";
+import { checkSuggestedGroupId, suggestedGroupError, withSuggestedGroups } from "../_shared/tools/inbox-groups.ts";
 import { getGroupsTool } from "../_shared/tools/groups.ts";
 import {
   ACTIVITY_KINDS,
@@ -331,7 +332,7 @@ function checkSuggestedStatus(tool: string, value: unknown): string | undefined 
 
 const createInboxItemTool = defineTool({
   name: "create_inbox_item",
-  tables: { reads: ["apps"], writes: ["inbox"] },
+  tables: { reads: ["apps", "item_groups", "group_types"], writes: ["inbox"] },
   // Tier 1: the inbox IS the human-approval gateway. This write appends to
   // a staging table that affects nothing until triaged in the Alfred UI.
   // Gating it would mean confirming a capture in order to queue it for
@@ -414,6 +415,8 @@ const createInboxItemTool = defineTool({
     // tag box. See _shared/tags.ts.
     const suggestedTags = normaliseTags(args.suggested_tags);
     const suggestedCollectionId = (args.suggested_collection_id as string) || null;
+    // Overwatch 8c: any open group of the user's; migration 184's guard has the last word.
+    const suggestedGroupId = checkSuggestedGroupId("create_inbox_item", args.suggested_group_id) ?? null;
     const suggestedStatus = checkSuggestedStatus("create_inbox_item", args.suggested_status) ?? "someday";
     // Restructure P3: set only when the caller knows the app. Left null, the insert
     // trigger copies source_metadata.app when it names an app.
@@ -450,7 +453,8 @@ const createInboxItemTool = defineTool({
       suggestEvent ||
       suggestedEventDate !== null ||
       suggestedTags.length > 0 ||
-      suggestedCollectionId !== null;
+      suggestedCollectionId !== null ||
+      suggestedGroupId !== null;
 
     const record = {
       id: crypto.randomUUID(),
@@ -497,6 +501,7 @@ const createInboxItemTool = defineTool({
       suggested_event_date: suggestedEventDate,
       suggested_tags: suggestedTags,
       suggested_collection_id: suggestedCollectionId,
+      suggested_group_id: suggestedGroupId,
       suggested_status: suggestedStatus,
       ai_confidence: (args.ai_confidence as number) ?? null,
       ai_reasoning: (args.ai_reasoning as string) || null,
@@ -506,8 +511,9 @@ const createInboxItemTool = defineTool({
       .insert(record)
       .select()
       .single();
-    if (error) throw new Error(`create_inbox_item: ${error.message}`);
-    return data; // defineTool wraps in envelope; MCP wrapper unwraps for the model.
+    if (error) throw new Error(suggestedGroupError("create_inbox_item", error.message, suggestedGroupId));
+    // defineTool wraps in envelope; MCP wrapper unwraps for the model.
+    return (await withSuggestedGroups(ctx.db, [data]))[0];
   },
 });
 
@@ -675,7 +681,7 @@ const getCollectionsTool = defineTool({
 const getInboxTool = defineTool({
   name: "get_inbox",
   tier: 1,
-  tables: { reads: ["inbox"], writes: [] },
+  tables: { reads: ["inbox", "item_groups", "group_types"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const aiStatus = args.ai_status as string | undefined;
     const sourceType = args.source_type as string | undefined;
@@ -701,6 +707,8 @@ const getInboxTool = defineTool({
       },
       order: [{ column: "created_at", ascending: false }],
       fullText: ["captured_text"],
+      // The suggested group's name and type label beside its id, for lists and ids fetches alike.
+      attach: async (rows) => ({ rows: await withSuggestedGroups(ctx.db, rows) }),
     });
   },
 });
@@ -718,7 +726,7 @@ const getTagsTool = defineTool({
 
 const updateInboxItemTool = defineTool({
   name: "update_inbox_item",
-  tables: { reads: ["inbox", "apps"], writes: ["inbox"] },
+  tables: { reads: ["inbox", "apps", "item_groups", "group_types"], writes: ["inbox"] },
   // Tier 2: updates existing rows. Audited via trigger. Rollback available
   // through platform.rollback_audit_entry() if a bad enrichment lands.
   tier: 2,
@@ -748,8 +756,10 @@ const updateInboxItemTool = defineTool({
     const itemName = await split("suggested_item_text", "suggested_item_description");
     const intentName = await split("suggested_intent_text", "suggested_intent_description");
     const sourceApp = await checkSourceApp("update_inbox_item", args.source_app, ctx.db);
+    const suggestedGroupId = checkSuggestedGroupId("update_inbox_item", args.suggested_group_id, { allowNull: true });
 
     const result = await updateInboxItem(ctx.db, {
+      suggested_group_id: suggestedGroupId,
       source_app: sourceApp,
       inbox_id: args.inbox_id as string,
       ai_confidence: args.ai_confidence as number,
@@ -773,8 +783,8 @@ const updateInboxItemTool = defineTool({
       suggested_status: checkSuggestedStatus("update_inbox_item", args.suggested_status) as
         | "someday" | "active" | undefined,
     });
-    if (result.error) throw new Error(`update_inbox_item: ${result.error}`);
-    return result.data;
+    if (result.error) throw new Error(suggestedGroupError("update_inbox_item", result.error, suggestedGroupId));
+    return (await withSuggestedGroups(ctx.db, [result.data as Record<string, unknown>]))[0];
   },
 });
 
@@ -1341,7 +1351,8 @@ export function createMcpServer(token: string) {
       description:
         "Get pending inbox items that haven't been triaged yet. The inbox is a universal capture bucket where thoughts, emails, and tasks land before being organized into contexts. Results are capped (default 20, max 50) — the response NOTE tells you when there's more. " +
         "Archived items are left out unless archived says otherwise; get_recent_clips with include_archived is the better tool for handled clips. captured_text is always whole; other long text is previewed (fetch by ids for all of it). Paging: offset; the NOTE gives the next offset. " +
-        "Each row carries source_app (its app id, see get_apps, or null) and outcome (the records it became; empty while open).",
+        "Each row carries source_app (its app id, see get_apps, or null) and outcome (the records it became; empty while open). " +
+        "suggested_group_id is the group enrichment suggested the capture joins (any type: a Project, a Menu, a Series…), and suggested_group gives its id, name and type_label (null when there is none).",
       inputSchema: {
         ai_status: z
           .string()
@@ -1416,6 +1427,7 @@ export function createMcpServer(token: string) {
         suggested_event_date: z.string().optional().describe("Suggested date in YYYY-MM-DD format. Resolve relative dates like 'tomorrow', 'next Tuesday' to absolute dates."),
         suggested_tags: z.array(z.string()).optional().describe("Suggested tags — use get_tags first to match existing taxonomy. Lowercase, spaces between words, no punctuation (e.g. \"whole foods\"). Normalised on save."),
         suggested_collection_id: z.string().optional().describe("ID of an existing collection to add to (use get_collections to find it). E.g., grocery list."),
+        suggested_group_id: z.string().optional().describe("ID of an existing open group (any type: a Project, a Menu, a Series…; use get_groups) the capture clearly belongs in. Filing it adds the new intention, or else the item, to that group. Leave it out when unsure. A closed, archived or unknown group is refused."),
         suggested_status: z.enum(["someday", "active"]).optional().describe("Status for the item and/or intention this becomes. Default 'someday'. 'active' only for a deadline, a named date, an explicit commitment, or a health or money urgency signal."),
         ai_confidence: z.number().optional().describe("Your confidence in these suggestions, 0.0 to 1.0"),
         ai_reasoning: z.string().optional().describe("Brief explanation of why you made these suggestions"),
@@ -1450,6 +1462,7 @@ export function createMcpServer(token: string) {
         suggested_event_date: z.string().optional().describe("Date in YYYY-MM-DD format"),
         suggested_tags: z.array(z.string()).optional().describe("Suggested tags: lowercase, spaces between words, no punctuation (e.g. \"whole foods\"). Normalised on save. Use get_tags to match existing taxonomy."),
         suggested_collection_id: z.string().optional().describe("ID of an existing collection (use get_collections to find it)"),
+        suggested_group_id: z.string().nullable().optional().describe("ID of an existing open group (any type; use get_groups) the capture clearly belongs in; null clears it. Leave it out when unsure. A closed, archived or unknown group is refused."),
         suggested_status: z.enum(["someday", "active"]).optional().describe("Status for the item and/or intention this becomes. 'someday' unless there is a deadline, a named date, an explicit commitment, or a health or money urgency signal."),
       },
     },

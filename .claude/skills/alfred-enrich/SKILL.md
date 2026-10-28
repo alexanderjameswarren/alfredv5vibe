@@ -5,7 +5,7 @@ description: "Enrich Alfred inbox items with AI-powered suggestions for organizi
 
 # Alfred Inbox Enrichment
 
-Skill version: 2026-10-26a
+Skill version: 2026-10-28a
 
 This skill defines how to analyze Alfred inbox captures and write structured suggestions back using the `update_inbox_item` MCP tool.
 
@@ -100,6 +100,7 @@ thread, never a reason to record it.
 2a. **Then search what was dropped.** Run the same words with `search_items` `status: ["closed"]`, and `get_intents` with `status: ["closed"]` and `search_text`. A match closed as won't do (`closed_reason: "wont_do"`) means Alex already decided against it: read its notes for why (`include: ["notes"]`), and say so in `ai_reasoning`, e.g. "Dropped before on 2026-09-02 as won't do: too expensive for now." Suggest it again only if the capture gives a new reason. A match closed as done is just history; link it only if the capture is about doing it again
 3. **Check `get_tags`** and reuse the existing taxonomy. Read the counts as well as the names — a tag used many times is a real axis the user filters on; a tag used once is a mistake waiting to be cleaned up, not a precedent to follow
 4. **If the captured text contains a URL**, note this in your reasoning (you can't fetch URLs via MCP, but flag it for the user)
+5. **Call `get_groups` once per session** with `status: ["someday", "active", "background"]` (archived ones are left out by default; page with `offset` until the NOTE says there is no more) and keep the list: each group's `id`, `name`, `type.label` (Project, Menu, Series…) and `context_id`. You use it to suggest a group (see "Group" below)
 
 Do not call `get_collections`. Collections are not part of enrichment any more — see
 "Never suggest a collection" below.
@@ -109,6 +110,15 @@ Do not call `get_collections`. Collections are not part of enrichment any more �
 For each inbox item, determine:
 
 **Context**: Which existing context does this belong to? Always map to an existing context.
+
+**Code work for any Alfred app goes in the Alfred context.** A bug, a feature or an app idea for any of the apps (Money, SAM, DJ, Overwatch, Homer, Wall-E and the rest) is suggested in the **Alfred** context, with the owning app as `source_app` and the app's tag (`sam`, `dj`, `overwatch` and so on). The app's own context, where it has one, is for its *data* (a bill, a song, a workout), never for work on its code. Agreed in the friction review, 2026-10-28.
+
+**Group** (`suggested_group_id`): does the capture clearly belong to one of the open groups from Step 2.5, of any type? A step of a Project ("Overwatch: fix the plan page's back link" → the Overwatch Project), a dish for a Menu ("add garlic bread to Thanksgiving dinner" → that Menu), a session of a Series.
+- **Prefer the group whose `context_id` matches** the context you are suggesting.
+- **Never guess between two.** If two groups fit about equally, set neither and say which two in `ai_reasoning` ("Group left blank: could be Overwatch or Switchboard").
+- **Leave it empty when unsure.** An empty suggestion costs Alex nothing; a wrong one files the record into the wrong group when he accepts it.
+- Filing with the suggestion adds the new intention (or, with none, the item) to the group. A closed, archived or unknown group is refused by the server, with a plain message.
+- Say the group by name and type in `ai_reasoning` ("Group: Project Overwatch").
 
 **App**: Which app does this capture belong to? Choose from the `get_apps` descriptions, the same way a context description chooses a context, and write the app's `id` as `source_app` with `update_inbox_item`.
 - Do it for every capture you enrich, including ones you otherwise leave alone.
@@ -300,7 +310,7 @@ Re-enrichment is also a chance to drop a tag the first pass shouldn't have sugge
 ## Batch Processing
 
 When enriching multiple items:
-- Research contexts and tags once, then reuse across items (no need to call `get_contexts` and `get_tags` for every single item)
+- Research contexts, tags and groups once, then reuse across items (no need to call `get_contexts`, `get_tags` and `get_groups` for every single item)
 - Do item-specific searches (like `search_items`) per item
 - Report progress as you go: "Enriched 3 of 7 items..."
 - If an item is genuinely unclear, set low confidence and move on rather than getting stuck

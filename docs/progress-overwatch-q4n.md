@@ -330,8 +330,13 @@ The old Phase 8 (Switchboard state through overwatch-ingest) moved out of this p
   - [x] supabase/tests/overwatch-q4n/28_inbox_suggested_group_test.sql (ends in an error on purpose) and 29_verify_inbox_suggested_group.sql
   - [x] Full app suite 3136 of 3137 (the flaky SamPlayer.plan.test, passes alone); CLI suite 298
   - [x] Alex decided (Step 57b, run tag overwatch-q4n-s57b-x6pk): any group type, not closed and not archived (Background allowed); Step 59 labels the suggestion by the group's type label; the joining rule is unchanged. gitsync brought 183 (SAM data only: no drift). The four db items claimed; numbered 184_overwatch_inbox_suggested_group.sql, pending file deleted; test 28 widened (Menu and Background accepted; closed, archived, unknown and another user's group refused); spec 4.17, 8 and 9 updated
-  - [ ] Alex runs 184, then 28 and 29
-- [ ] Step 58 (CLI): 8c create_inbox_item and update_inbox_item accept suggested_group_id; alfred-enrich skill; deploy mcp
+  - [x] 184 ran, CONFORMANT; test 28 passed all 23 checks (23 is right: 7 + 3 + 3 + 5 + 3 + 2; my 22 was a miscount); verify 29 as expected; checkpointed (main 726ddd6)
+- [ ] Step 58 (CLI): 8c create_inbox_item and update_inbox_item accept suggested_group_id; alfred-enrich skill; deploy mcp (run tag overwatch-q4n-s57c-b3tz)
+  - [x] supabase/functions/_shared/tools/inbox-groups.ts (checkSuggestedGroupId, suggestedGroupError, withSuggestedGroups) and its tests (4); create_inbox_item and update_inbox_item take suggested_group_id (null clears it on update), and return the row with suggested_group { id, name, type_label }; get_inbox attaches the same for lists and ids; the guard's refusal said plainly; tables declare item_groups and group_types; updateInboxItem passes it through; index.test checks the wiring
+  - [x] alfred-enrich 2026-10-28a: get_groups once per session; the Group rule (any open group, prefer the matching context, never guess between two, empty when unsure); code work for any Alfred app goes in the Alfred context with the owning app as source_app and the app's tag
+  - [x] Function tests 732; CLI 298; full app suite 3155 (7 skipped); deno check 111
+  - [x] gitsync (scoreRender.js and our 184 snapshot only: no drift); db:deploy claimed, mcp deployed (version 177), released; no db: claims left (run tag overwatch-q4n-s58-q2mv)
+  - [ ] Alex tests Part 1 in a fresh thread ("Test s58 suggested group"); cleanup as its own step; checkpoint; pastes alfred-enrich
 - [ ] Step 59 (CLI): 8c inbox detail: SuggestedGroup with an accept toggle
 - [ ] Step 60 (CLI): full app and CLI suites, mobile check
 - [ ] Step 61 (CLI): closeout

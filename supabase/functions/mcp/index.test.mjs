@@ -716,6 +716,19 @@ test("get_inbox filters by source_app, and none means unrouted", () => {
   assert.match(block, /source_app must be an app id from get_apps, or "none"/);
 });
 
+test("the inbox tools take suggested_group_id and show the group beside it (Overwatch 8c)", () => {
+  const src = readFileSync(join(HERE, "index.ts"), "utf-8");
+  const block = (name) => src.split(`const ${name} = defineTool({`)[1].split("\n});\n")[0];
+  assert.match(block("createInboxItemTool"), /suggested_group_id: suggestedGroupId/);
+  assert.match(block("createInboxItemTool"), /withSuggestedGroups\(ctx\.db, \[data\]\)/);
+  assert.match(block("updateInboxItemTool"), /checkSuggestedGroupId\("update_inbox_item", args\.suggested_group_id, \{ allowNull: true \}\)/);
+  assert.match(block("getInboxTool"), /attach: async \(rows\) => \(\{ rows: await withSuggestedGroups\(ctx\.db, rows\) \}\)/);
+  for (const name of ["create_inbox_item", "update_inbox_item"]) {
+    const t = registered.find((r) => r.name === name);
+    assert.ok(Object.keys(t.cfg.inputSchema).includes("suggested_group_id"), `${name} does not advertise suggested_group_id`);
+  }
+});
+
 test("the platform tools take any app id, not a fixed list", () => {
   // Overwatch Step 5: apps(id) is the list, enforced by a foreign key.
   const src = readFileSync(join(HERE, "index.ts"), "utf-8");
