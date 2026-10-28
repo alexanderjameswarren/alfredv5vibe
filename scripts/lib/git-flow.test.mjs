@@ -38,6 +38,11 @@ import {
   resultExit,
   today,
   UsageError,
+  buildFailedText,
+  buildPlanLine,
+  folderInUse,
+  needsAppBuild,
+  runAppBuild,
 } from "./git-flow.mjs";
 
 // What changedFiles returns after `git mv old.js new.js`, `git rm gone.js`,
@@ -586,5 +591,71 @@ test("removeEmptyDir deletes only an empty folder", () => {
     assert.equal(existsSync(path.join(full, "x.txt")), true);
   } finally {
     rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("needsAppBuild: src/, public/ and the package files only", () => {
+  assert.equal(needsAppBuild(["src/sam/lib/scoreRender.js"]), true);
+  assert.equal(needsAppBuild(["public/index.html"]), true);
+  assert.equal(needsAppBuild(["package.json"]), true);
+  assert.equal(needsAppBuild(["package-lock.json"]), true);
+  assert.equal(needsAppBuild(["docs/x.md", "supabase/migrations/184_x.sql", "scripts/a.mjs", ".claude/skills/a/SKILL.md",
+    "supabase/functions/mcp/index.ts", "tools/sam-tools/package.json"]), false);
+  assert.equal(needsAppBuild([]), false);
+});
+
+test("buildPlanLine: build, not needed, or skipped by the flag", () => {
+  assert.match(buildPlanLine(["src/a.js"]), /^Build {3}the app, as Vercel does \(CI=true npm run build\), before pushing/);
+  assert.match(buildPlanLine(["docs/a.md"]), /^Build {3}not needed: no app files/);
+  assert.match(buildPlanLine(["src/a.js"], { skip: true }), /SKIPPED by --skip-build/);
+  assert.match(buildPlanLine(["docs/a.md"], { skip: true }), /not needed/);
+});
+
+test("runAppBuild: npm run build with CI=true in the environment, through a shell on Windows", () => {
+  const calls = [];
+  const spawn = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return { status: 0 }; };
+  assert.equal(runAppBuild("C:/main", { spawn, platform: "win32", env: { PATH: "p", CI: "false" } }), true);
+  assert.equal(calls[0].cmd, "npm run build");
+  assert.deepEqual(calls[0].args, []);
+  assert.equal(calls[0].opts.cwd, "C:/main");
+  assert.equal(calls[0].opts.env.CI, "true");
+  assert.equal(calls[0].opts.env.PATH, "p");
+  assert.equal(calls[0].opts.shell, true);
+  assert.equal(runAppBuild("/m", { spawn: (cmd, args, opts) => { calls.push({ cmd, args, opts }); return { status: 1 }; },
+    platform: "linux" }), false);
+  assert.deepEqual([calls[1].cmd, calls[1].args, calls[1].opts.shell], ["npm", ["run", "build"], false]);
+});
+
+test("buildFailedText: nothing pushed, what was undone, and the rerun", () => {
+  const t = buildFailedText({ undone: "  The merge was undone.", where: "in the x worktree", rerun: "gitpush x finish" });
+  assert.match(t, /NOTHING WAS PUSHED/);
+  assert.match(t, /The merge was undone/);
+  assert.match(t, /fix the error in the x worktree, then run the same gitpush again:\n {4}gitpush x finish/);
+  assert.match(t, /--skip-build/);
+});
+
+test("folderInUse: a refused rename means open; a clean one is put straight back", () => {
+  const moves = [];
+  const ok = (from, to) => moves.push([from, to]);
+  assert.deepEqual(folderInUse("C:/w/x", { rename: ok, exists: () => true, platform: "win32" }), { inUse: false, checked: true });
+  assert.deepEqual(moves, [["C:/w/x", "C:/w/x.gitpush-check"], ["C:/w/x.gitpush-check", "C:/w/x"]]);
+  const busy = () => { const e = new Error("busy"); e.code = "EBUSY"; throw e; };
+  assert.deepEqual(folderInUse("C:/w/x", { rename: busy, exists: () => true, platform: "win32" }), { inUse: true, checked: true });
+  const perm = () => { const e = new Error("perm"); e.code = "EPERM"; throw e; };
+  assert.equal(folderInUse("C:/w/x", { rename: perm, exists: () => true, platform: "win32" }).inUse, true);
+  let n = 0;
+  const stuck = () => { if (n++) { const e = new Error("x"); e.code = "EPERM"; throw e; } };
+  assert.match(folderInUse("C:/w/x", { rename: stuck, exists: () => true, platform: "win32" }).error, /left at C:\/w\/x\.gitpush-check/);
+  assert.deepEqual(folderInUse("/w/x", { rename: busy, exists: () => true, platform: "linux" }), { inUse: false, checked: false });
+});
+
+test("folderInUse, for real: a folder with nothing in it open renames and comes back", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "gitpush-inuse-"));
+  try {
+    const r = folderInUse(dir);
+    assert.equal(r.inUse, false);
+    assert.equal(existsSync(dir), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

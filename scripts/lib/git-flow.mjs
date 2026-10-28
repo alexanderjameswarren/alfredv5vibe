@@ -928,3 +928,83 @@ export function resultExit(result, owner, { done = [], remaining = [] } = {}) {
   }
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Build before push (Overwatch Step 60)
+// ---------------------------------------------------------------------------
+// A push to main deploys on Vercel, which builds with CI=true, so a lint warning fails it. sam_xml_import-g4w's
+// Finish pushed a no-loop-func warning that way. gitpush now runs the same build first when the push carries the
+// app, and does not push when it fails.
+
+const APP_PATH = /^(src|public)\/|^package(-lock)?\.json$/;
+
+/** True when any of these paths is part of the app Vercel builds. */
+export function needsAppBuild(paths) {
+  return paths.some((p) => APP_PATH.test(p));
+}
+
+/** The plan's Build line. */
+export function buildPlanLine(paths, { skip = false } = {}) {
+  if (!needsAppBuild(paths)) return "Build   not needed: no app files (src/, public/, package.json) in this push.";
+  if (skip) return "Build   SKIPPED by --skip-build. Vercel builds it anyway, and may fail after the push.";
+  return "Build   the app, as Vercel does (CI=true npm run build), before pushing. A failure stops the push.";
+}
+
+/**
+ * CI=true npm run build in `cwd`, its output straight to the terminal. CI goes in the child's environment, not the
+ * command line, so it works the same from PowerShell, cmd and bash. True when it passed.
+ */
+export function runAppBuild(cwd, { spawn = spawnSync, platform = process.platform, env = process.env } = {}) {
+  // npm is npm.cmd on Windows, which only runs through a shell; there the command goes as one string, since Node
+  // warns (DEP0190) about separate arguments with a shell.
+  const win = platform === "win32";
+  const r = spawn(win ? "npm run build" : "npm", win ? [] : ["run", "build"], {
+    cwd,
+    stdio: "inherit",
+    env: { ...env, CI: "true" },
+    shell: win,
+  });
+  return r.status === 0;
+}
+
+/** What to say when the build fails: nothing was pushed, and how to get going again. */
+export function buildFailedText({ undone, where, rerun }) {
+  return [
+    "",
+    "  The build failed (its errors are above), so NOTHING WAS PUSHED.",
+    undone,
+    "  To recover: fix the error " + where + ", then run the same gitpush again:",
+    `    ${rerun}`,
+    "  It builds again before it pushes. (In an emergency, --skip-build pushes without the check.)",
+  ].filter(Boolean).join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Is the worktree still open? (Overwatch Step 60)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether something still has `dir` open, found by renaming it aside and straight back. Windows refuses to rename a
+ * folder while any process has a handle inside it: a terminal or a Claude session whose current directory is in it,
+ * VS Code's file watcher on it, an editor holding one of its files. That is the same thing that makes
+ * `git worktree remove` fail after the merge, so asking it first is asking the real question.
+ *
+ * Off Windows a rename succeeds whatever is open, so it is not tried: { checked: false }.
+ * { inUse, checked, error } — `error` only when the folder could not be put back, which must be said loudly.
+ */
+export function folderInUse(dir, { rename = renameSync, exists = existsSync, platform = process.platform } = {}) {
+  if (platform !== "win32" || !exists(dir)) return { inUse: false, checked: false };
+  const aside = `${dir}.gitpush-check`;
+  try {
+    rename(dir, aside);
+  } catch (err) {
+    if (["EPERM", "EBUSY", "EACCES"].includes(err.code)) return { inUse: true, checked: true };
+    return { inUse: false, checked: false, error: `could not test the folder (${err.code ?? err.message})` };
+  }
+  try {
+    rename(aside, dir);
+  } catch (err) {
+    return { inUse: false, checked: true, error: `the folder was left at ${aside}; rename it back to ${dir} (${err.code ?? err.message})` };
+  }
+  return { inUse: false, checked: true };
+}

@@ -195,6 +195,10 @@ const APP_RULES = [
   [(t) => t.has("job") || t.has("jobs"), "jobs"],
   [(t, s) => t.has("overwatch") || t.has("friction") || t.has("activity") || t.has("project")
     || /claim_blocks|app_profile|seen_releases|platform_inventory|open_work|finish_summar/.test(s), "overwatch"],
+  // Step 60: the screens /timer and /games, and anything of Switchboard's (tools/claude-sessions).
+  [(t) => t.has("timer"), "timer"],
+  [(t) => t.has("games") || t.has("game"), "games"],
+  [(t, s) => t.has("switchboard") || /claude[_-]sessions/.test(s), "switchboard"],
 ];
 
 /** The app a part belongs to, from the words in its name; `fallback` when none match. Only ids in `apps`. */

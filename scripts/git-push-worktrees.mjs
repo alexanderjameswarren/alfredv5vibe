@@ -73,6 +73,11 @@ import {
 import {
   addPaths,
   ask,
+  buildFailedText,
+  buildPlanLine,
+  folderInUse,
+  needsAppBuild,
+  runAppBuild,
   askMessage,
   askSelection,
   changedFiles,
@@ -129,6 +134,8 @@ const USAGE = `gitpush — bring work into main and push it.
                                          its label stays behind until a push with a migration
   --include-unclaimed all|none|<paths…>  main: changes nobody claimed
   --message, -m "..."                    the commit message
+  --skip-build                           push without building the app first (emergencies only:
+                                         Vercel still builds it, and may fail after the push)
   --dry-run                              show the plan, then stop: nothing changes
   --pretend-migration <n>                with --dry-run: plan as if migration n were included
   --help, -h
@@ -244,8 +251,13 @@ function runSnapshot(cwd, newest) {
     : { ok: false, message: "the schema snapshot failed (see above), so nothing was committed." };
 }
 
-/** Merge a worktree's branch into main and push: { merged, pushed }. */
-function mergeAndPush(w, root, includeSnapshot = false) {
+/**
+ * Merge a worktree's branch into main, build the app when the merge carries it, and push: { merged, pushed }.
+ * A failed build undoes the merge (reset --keep, which leaves other uncommitted work in main alone), so main is
+ * never left holding an unpushed broken merge that another gitpush would carry out with it.
+ */
+function mergeAndPush(w, root, includeSnapshot = false, { buildPaths = [], rerun = "" } = {}) {
+  const before = tryGit(["rev-parse", "HEAD"], root).stdout;
   if (!mergeBranch((args) => gitLive(args, root), w.branch, includeSnapshot)) {
     const conflicts = tryGit(["diff", "--name-only", "--diff-filter=U"], root);
     say("\n  The merge stopped.");
@@ -255,6 +267,22 @@ function mergeAndPush(w, root, includeSnapshot = false) {
     }
     say(`  To back out:  git -C "${root}" merge --abort`);
     return { merged: false, pushed: false };
+  }
+  if (needsAppBuild(buildPaths) && !OPTS["skip-build"]) {
+    say("\n  Building the app, as Vercel does (CI=true npm run build)…");
+    if (!runAppBuild(root)) {
+      const undone = before && gitLive(["reset", "--keep", before], root);
+      say(buildFailedText({
+        undone: undone
+          ? `  The merge was undone: main is back at ${before.slice(0, 7)}. ${w.owner}'s own commit is kept in its branch.`
+          : `  The merge could NOT be undone automatically. Undo it before anything else pushes main:\n` +
+            `    git -C "${root}" reset --keep ${before || "<main's commit before the merge>"}`,
+        where: `in the ${w.owner} worktree`,
+        rerun,
+      }));
+      return { merged: false, pushed: false };
+    }
+    say("  The build passed.");
   }
   if (!gitLive(["push"], root)) {
     say("\n  The push failed. The merge is in main locally but not pushed.");
@@ -340,14 +368,15 @@ function snapshotPlan(w, root, toCommit) {
   }
 }
 
-function mergeWorktree(w, ctx, toCommit, commitWorktree) {
-  const result = worktreeMergeWithSnapshot(mergedPaths(w, toCommit), {
+function mergeWorktree(w, ctx, toCommit, commitWorktree, rerun) {
+  const paths = mergedPaths(w, toCommit);
+  const result = worktreeMergeWithSnapshot(paths, {
     through: readSnapshotThrough(ctx.root),
     skip: !!OPTS["no-snapshot"],
     runSnapshot: (newest) => runSnapshot(ctx.root, newest),
     restoreSnapshot: snapshotKeeper(ctx.root),
     commitWorktree,
-    merge: (includeSnapshot) => mergeAndPush(w, ctx.root, includeSnapshot),
+    merge: (includeSnapshot) => mergeAndPush(w, ctx.root, includeSnapshot, { buildPaths: paths, rerun }),
   });
   if (result.message) say(`\n  Stopped: ${result.message} Main and ${w.owner} are unchanged.`);
   return result.ok;
@@ -401,6 +430,13 @@ function doMain(w, ctx, release) {
     through,
   );
   if (snap.run) say(`Snapshot regenerate ${SNAPSHOT_PATH} into the same commit — ${snap.reason}.`);
+  // What the push carries: commits not yet on the upstream, plus this commit.
+  const unpushedPaths = () => {
+    const r = w.ahead.hasUpstream ? tryGit(["diff", "--name-only", "@{u}..HEAD"], w.path) : { ok: false };
+    return r.ok && r.stdout ? r.stdout.split(/\r?\n/) : [];
+  };
+  const planned = [...unpushedPaths(), ...staging.map((f) => f.path), ...docs.moves.flatMap((m) => [m.from, m.to])];
+  say(buildPlanLine(planned, { skip: !!OPTS["skip-build"] }));
   if (dryRunStop()) return "cancelled";
   say(
     w.ahead.hasUpstream
@@ -440,6 +476,19 @@ function doMain(w, ctx, release) {
     });
     if (result.message) say(`\n  Stopped: ${result.message}`);
     if (!result.ok) return "failed";
+  }
+
+  if (needsAppBuild(unpushedPaths()) && !OPTS["skip-build"]) {
+    say("\n  Building the app, as Vercel does (CI=true npm run build)…");
+    if (!runAppBuild(w.path)) {
+      say(buildFailedText({
+        undone: "  The commit is kept in main, unpushed. Fix it before anything else pushes main.",
+        where: "in the main checkout",
+        rerun: `gitpush main ${release ? "finish" : "push"}`,
+      }));
+      return "failed";
+    }
+    say("  The build passed.");
   }
 
   if (!gitLive(["push"], w.path)) {
@@ -577,6 +626,7 @@ function doFinish(w, ctx) {
   for (const f of docs.missing) say(`  No ${f} here — nothing to move for it.`);
   say(`\nMerge   ${w.branch} into ${BASE}, then push.`);
   snapshotPlan(w, ctx.root, claimedChanges.map((f) => f.path));
+  say(buildPlanLine(mergedPaths(w, claimedChanges.map((f) => f.path)), { skip: !!OPTS["skip-build"] }));
   say(`Release all ${w.files.length + w.db.length} claim(s) held by ${w.owner}.`);
   say(`Remove  the worktree, then delete branch ${w.branch}.`);
   say(sendPlanLine("f"));
@@ -595,6 +645,19 @@ function doFinish(w, ctx) {
   // A terminal inside the worktree was refused before this: checkFinishFrom.
 
   if (!confirm("\nClosed? Do all of that?")) return "cancelled";
+
+  // Checked, not just asked: an open window would fail the worktree removal AFTER the merge and push.
+  const busy = folderInUse(w.path);
+  if (busy.error) {
+    say(`\n  Could not check whether ${w.owner} is still open: ${busy.error}. Nothing was changed.`);
+    return "failed";
+  }
+  if (busy.inUse) {
+    say(`\n  Close the ${w.owner} VS Code window first, then run this again. Nothing was changed.`);
+    say(`  (Something still has ${w.path} open: a VS Code window, a terminal or a Claude session in it, or a`);
+    say(`  file from it open in an editor. Windows would refuse to remove the folder after the merge.)`);
+    return "failed";
+  }
 
   const claimedPaths = claimedChanges.map((f) => f.path);
   const message =
@@ -616,7 +679,7 @@ function doFinish(w, ctx) {
     }
     return toCommit.length ? commitIn(w, toCommit, message) : true;
   };
-  if (!mergeWorktree(w, ctx, claimedPaths, commitWorktree)) return "failed";
+  if (!mergeWorktree(w, ctx, claimedPaths, commitWorktree, `gitpush ${w.owner} finish`)) return "failed";
 
   const released = removeClaims(ctx, w.owner);
   say(`\n  Released ${released.length} claim(s): ${released.join(", ") || "none"}`);
@@ -715,6 +778,7 @@ function doCheckpoint(w, ctx) {
   say(`Commit  ${paths.length} path(s): ${paths.join(", ")}`);
   say(`Merge   ${w.branch} into ${BASE}, then push.`);
   snapshotPlan(w, ctx.root, paths);
+  say(buildPlanLine(mergedPaths(w, paths), { skip: !!OPTS["skip-build"] }));
   say(
     `Release ${dbToRelease.length} database claim(s)${dbToRelease.length ? `: ${dbToRelease.join(", ")}` : ""}.`,
   );
@@ -729,7 +793,8 @@ function doCheckpoint(w, ctx) {
   if (!confirm("\nDo all of that?")) return "cancelled";
 
   const message = OPTS.message ?? askMessage(w.owner, "checkpoint");
-  if (!mergeWorktree(w, ctx, paths, () => commitIn(w, paths, message))) return "failed";
+  const rerun = `gitpush ${w.owner} checkpoint --paths ${paths.join(" ")}`;
+  if (!mergeWorktree(w, ctx, paths, () => commitIn(w, paths, message), rerun)) return "failed";
 
   if (dbToRelease.length) {
     const released = removeClaims(ctx, w.owner, (item) =>
@@ -752,6 +817,7 @@ function main() {
         "release-db": { kind: "bool" },
         "keep-db": { kind: "bool" },
         "no-snapshot": { kind: "bool" },
+        "skip-build": { kind: "bool" },
         "include-unclaimed": { kind: "list" },
         "dry-run": { kind: "bool" },
         "pretend-migration": { kind: "value" },

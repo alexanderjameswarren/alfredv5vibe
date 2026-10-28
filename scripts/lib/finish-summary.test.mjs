@@ -6,6 +6,7 @@ import {
   parseSendSummaryArgs,
   classifyPaths,
   collectFinishSummary,
+  migrationTables,
   parseNumstat,
   queueOverwatch,
   sendPlanLine,
@@ -135,4 +136,30 @@ test("queue: under the lock, then the sender; never throws", () => {
   assert.deepEqual(queueOverwatch({ outboxFile: "/o" }, [], deps), { queued: 0, error: null });
   const broken = queueOverwatch({ outboxFile: "/o" }, [{}], { ...deps, queue: () => { throw new Error("disk full"); } });
   assert.deepEqual(broken, { queued: 0, error: "disk full" });
+});
+
+test("migrationTables: the tables a migration's SQL touches, not its file name", () => {
+  const sql = `
+    -- update public.not_this set x = 1   (a comment)
+    begin;
+    alter table public.inbox add column if not exists suggested_group_id text;
+    create table if not exists public.portfolios (id uuid);
+    CREATE UNIQUE INDEX portfolios_one ON public.portfolios (id);
+    create or replace function public.process_inbox_item(p text) returns jsonb as $$
+    begin
+      insert into public.item_group_members (group_id) values ('g');
+      update public.inbox i set archived = true where id = p;
+      delete from only "public"."reminders" where false;
+      perform 1 from public.items;
+    end; $$;
+    create trigger inbox_check before insert or update of suggested_group_id on public.inbox for each row execute function f();
+    create policy owner_rows on public.portfolios for all using (true);
+    select platform.register_table('public.portfolios');
+    update platform.registry set notes = 'x';
+    /* insert into public.not_this_either */
+  `;
+  assert.deepEqual(migrationTables(sql),
+    ["inbox", "item_group_members", "platform.registry", "portfolios", "reminders"]);
+  assert.deepEqual(migrationTables(""), []);
+  assert.deepEqual(migrationTables(null), []);
 });
