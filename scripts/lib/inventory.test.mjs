@@ -96,6 +96,11 @@ test("apps from migrations, and the name rules", () => {
   };
   for (const [name, app] of Object.entries(cases)) assert.equal(appFor(name, APPS), app, name);
   assert.equal(appFor("arnold_sessions", new Set(["sam"])), null); // fallback alfred is not an app here
+  const more = new Set([...APPS, "timer", "games", "switchboard"]);
+  for (const [name, app] of Object.entries({ "/timer": "timer", "/games": "games", "/games/drop": "games",
+    switchboard: "switchboard", "tools/claude-sessions/bridge/host.mjs": "switchboard" })) {
+    assert.equal(appFor(name, more), app, name);
+  }
 });
 
 test("tools: registered only, * as reads_any, tier, app, last change", () => {

@@ -260,7 +260,6 @@ Estimate tracking first (spec 4.12, added 2026-10-25), because the nightly and w
   - [x] gitsync (fast-forward cd8b120 to 1303ffd: only the snapshot, through migration 180, labelled right by Step 42's fix); db:deploy claimed; overwatch-ingest deployed (version 2, verify_jwt false, unauthenticated POST gets its own 401 `{"ok":false,"error":"unauthorized"}`)
   - [x] First send (run tag overwatch-q4n-s45b-c3tz): 501 parts (8 functions, 39 screens, 12 skills, 109 tables and views, 5 task prompts, 163 tools, 165 triggers), 124 open-work lines (32 checkbox, 59 deferred, 33 not fixed); the function returned parts 501, open_work 124, removed 0 and 0
   - [x] Alex runs the check query; checkpointed (main 9c3c9c1), db:deploy released
-- [ ] Step 45 (CLI): overwatch-ingest kinds `inventory` and `finish_summary`; the outbox sends an inventory on its own; deploy overwatch-ingest (db:deploy reserved)
 - [ ] Step 46 (CLI): get_platform_inventory, get_open_work, get_finish_summaries, mark_finish_summaries_reviewed; deploy mcp (run tag overwatch-q4n-s46-j5ry)
   - [x] `_shared/tools/overwatch-inventory.ts` (new): the four tools through readTable (inventory counts per kind in a NOTE; `table` marks uses), mark sets reviewed_at and reviewed_by_run; registered in mcp/index.ts (167 tools); spec section 7. Tests: overwatch-inventory 6, all function tests 798 pass; deno check back to the 111 existing errors
   - [x] gitsync (fast-forward 124521a to 9c3c9c1, this project's checkpoint only; nothing under mcp/, migrations or the snapshot), db:deploy claimed, mcp deployed (version 174, verify_jwt false, unauthenticated POST gets its own 401 "Unauthorized")
@@ -284,8 +283,6 @@ Estimate tracking first (spec 4.12, added 2026-10-25), because the nightly and w
   - [x] `npm run inventory -- --send-summary <commit> --project <code>`: a finish summary of one commit against its first parent, files read with `git show <commit>:<path>`, queued and sent like `--send` (parseSendSummaryArgs and branchFromSubject in finish-summary.mjs; tests 12; CLI suite 298 pass)
   - [x] Sent for 1303ffd (Step 43's merge), project overwatch-q4n, branch worktree-overwatch-q4n: 5 files +916 -2, migrations 180_overwatch_platform_inventory.sql, no tools, skills, functions or task prompts; overwatch-ingest answered id f886a5f6-f288-453f-882a-1045c54735ba
   - [ ] A manual nightly run from claude.ai reviews it (impact review, follow-ups, marked reviewed)
-- [ ] Step 48 (CLI, docs): nightly prompt (finish summaries against the inventory, follow-up items, current_state, mark reviewed); weekly drift audit Phase 7 checks; overwatch skill; Alex pastes prompts and skills
-- [ ] Step 49 (CLI): end-to-end check (a real inventory send, a finish summary, the next audit run)
 
 ### Phase 8: Project planning (new 2026-10-27; spec section 10 item 8, 4.16, 4.17)
 The old Phase 8 (Switchboard state through overwatch-ingest) moved out of this project to an Alfred intention.
@@ -343,7 +340,13 @@ The old Phase 8 (Switchboard state through overwatch-ingest) moved out of this p
   - [x] Alex UI tested Part 1: all passed (the browser alert for a refused group stays)
   - [x] Cleanup scripts (run tag overwatch-q4n-s59b-w7ce): supabase/tests/overwatch-q4n/30_cleanup_step59_test.sql (checks first; records found through outcome and source_inbox_id) and 31_verify_step59_cleanup.sql
   - [ ] Alex runs 30 then 31; checkpoints
-- [ ] Step 60 (CLI): full app and CLI suites, mobile check
+- [ ] Step 60 (CLI): gitpush safety and small Overwatch fixes (run tag overwatch-q4n-s60-m3tq; the full suites and mobile check move to Step 61)
+  - [x] gitpush builds before pushing (Finish and Checkpoint on a worktree, Push and Finish on main) when the push carries src/, public/, package.json or package-lock.json: CI=true npm run build in the child's environment; a failure pushes nothing, undoes a worktree's merge (reset --keep) and says how to rerun; `--skip-build` for emergencies; a Build line in every plan (needsAppBuild, buildPlanLine, runAppBuild, buildFailedText in git-flow.mjs)
+  - [x] Finish on a worktree refuses while its folder is open ("Close the <code> VS Code window first…"), found by renaming the folder aside and back (folderInUse; Windows only)
+  - [x] Inventory: /timer and /games screens get their apps; Switchboard's rule is in, but it has no parts (no inventory kind for tools/ files)
+  - [x] migrationTables(sql) in finish-summary.mjs, tested; not yet sent with a summary (needs a place in finish_summaries: Alex to decide)
+  - [x] The stale Step 45, 48 and 49 lines removed from this file
+  - [x] Tests: git-flow 59, inventory 24, finish-summary 13; the real build check passed (decision on a docs-only and an app change, the build itself run with CI=true in 11 to 26 s); folderInUse saw this worktree open
 - [ ] Step 61 (CLI): closeout
 
 ## Notes

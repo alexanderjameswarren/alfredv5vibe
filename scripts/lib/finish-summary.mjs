@@ -51,6 +51,34 @@ export function toolsIn(paths, readFile) {
 }
 
 /** The finish_summaries row, as overwatch-ingest's finish_summary kind takes it. */
+/**
+ * The tables a migration's SQL touches (Step 60): created, altered, inserted into, updated, deleted from, or given a
+ * trigger, index or policy. public.x is written x; other schemas stay qualified (platform.registry). Comments are
+ * ignored. A pattern search, so dynamic SQL (execute format(...)) is missed.
+ */
+export function migrationTables(sql) {
+  const text = (sql ?? "").replace(/--[^\n]*/g, " ").replace(/\/\*[\s\S]*?\*\//g, " ");
+  const name = String.raw`((?:"?[a-z_][a-z0-9_]*"?\.)?"?[a-z_][a-z0-9_]*"?)`;
+  const patterns = [
+    String.raw`create\s+(?:unlogged\s+)?table\s+(?:if\s+not\s+exists\s+)?${name}`,
+    String.raw`alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?${name}`,
+    String.raw`insert\s+into\s+${name}`,
+    String.raw`update\s+(?:only\s+)?${name}\s+(?:as\s+\w+\s+|\w+\s+)?set\b`,
+    String.raw`delete\s+from\s+(?:only\s+)?${name}`,
+    String.raw`create\s+(?:or\s+replace\s+)?(?:constraint\s+)?trigger\s+\w+[\s\S]*?\son\s+${name}`,
+    String.raw`create\s+(?:unique\s+)?index\s+(?:if\s+not\s+exists\s+)?\w+\s+on\s+${name}`,
+    String.raw`create\s+policy\s+\w+\s+on\s+${name}`,
+  ];
+  const found = new Set();
+  for (const p of patterns) {
+    for (const m of text.matchAll(new RegExp(p, "gi"))) {
+      const t = m[1].replace(/"/g, "").toLowerCase().replace(/^public\./, "");
+      if (t !== "set") found.add(t);
+    }
+  }
+  return [...found].sort();
+}
+
 export function buildFinishSummary({ projectCode, branch, mergeCommit, finishedAt, numstat, readFile }) {
   const { paths, diff_stat } = parseNumstat(numstat);
   return {
