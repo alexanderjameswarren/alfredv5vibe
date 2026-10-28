@@ -129,6 +129,14 @@ import {
   markFinishSummariesReviewedTool,
 } from "../_shared/tools/overwatch-inventory.ts";
 import {
+  SLICE_STATUSES,
+  createPortfolioPlanTool,
+  getPortfolioPlanTool,
+  getPortfoliosTool,
+  updatePortfolioSliceTool,
+  upsertPortfolioTool,
+} from "../_shared/tools/overwatch-portfolio.ts";
+import {
   getRecordsTool,
   LIVE_STATUSES,
   readItems,
@@ -3514,10 +3522,123 @@ export function createMcpServer(token: string) {
         "Returns the updated summaries and any ids not found. Tier 2.",
       inputSchema: {
         ids: z.array(z.string()).describe("The finish summaries' ids."),
-        run_id: z.string().describe("The platform_runs id of the run that reviewed them."),
+        run_id: z.string().describe(
+          "The id create_platform_run returned for the run doing the review (a platform_runs id, a uuid), " +
+            "stored as reviewed_by_run. Not a run tag.",
+        ),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(markFinishSummariesReviewedTool, args, token),
+  );
+
+  // --- Overwatch Phase 8b: portfolios and their plans (spec 4.16 and 7) ---
+  const pfSlice = z.object({
+    position: z.number().describe("Order within the lane, from 1."),
+    group_id: z.string().describe("A Project group id (get_project_plans)."),
+    phases: z.string().optional().describe("The phases this slice covers, e.g. \"Phases 2 and 3\"; omit for the whole project."),
+    why: z.string().optional().describe("Its place in terms of the theory."),
+    status: z.enum(SLICE_STATUSES as unknown as [string, ...string[]]).optional().describe("Default planned."),
+    paused_reason: z.string().optional().describe("Required when paused."),
+  });
+  const pfLane = z.object({
+    name: z.string().describe("Unique in the version, e.g. Main, SAM, Client work."),
+    position: z.number().describe("Order of the lane, from 1."),
+    note: z.string().optional().describe("What the lane is for."),
+    slices: z.array(pfSlice).optional().describe("The lane's slices, at most one in_progress."),
+  });
+
+  server.registerTool(
+    "get_portfolios",
+    {
+      title: "Get Portfolios",
+      description:
+        "List the portfolios (the Alfred ecosystem, client work, …) in switch order, each with its context_ids and its " +
+        "active plan in brief: id, the theory's first line, review_by, and slice counts by status (null when it has no " +
+        "plan yet). Archived ones are left out unless archived is include or only. Tier 1.",
+      inputSchema: { ...readOptions({ archived: "exclude" }) },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getPortfoliosTool, args, token),
+  );
+
+  server.registerTool(
+    "upsert_portfolio",
+    {
+      title: "Upsert Portfolio",
+      description:
+        "Create a portfolio, or change one: with id, change that portfolio (rename it, set its contexts, position or " +
+        "archived); without id, name creates it, or updates the one already called that. context_ids are the contexts " +
+        "it covers, so its Project groups there that no slice names show as not in the plan. Tier 2.",
+      inputSchema: {
+        id: z.string().optional().describe("The portfolio to change; omit to create by name."),
+        name: z.string().optional().describe("Its name; required to create."),
+        context_ids: z.array(z.string()).optional().describe("The contexts it covers (get_contexts). Replaces the list."),
+        position: z.number().optional().describe("Order on the Overwatch tab's switch, from 0."),
+        archived: z.boolean().optional().describe("true hides it from the switch; its plans are kept."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(upsertPortfolioTool, args, token),
+  );
+
+  server.registerTool(
+    "get_portfolio_plan",
+    {
+      title: "Get Portfolio Plan",
+      description:
+        "Read a portfolio's plan: its active version (or the version plan_id names), with the theory, notes for next " +
+        "review, review_by and reason, and its lanes in order, each with its slices in order (Project group name and " +
+        "status, project code, phases, why, status, paused_reason). versions lists every version, newest first (id, " +
+        "active, written_by, reason, review_by, created_at); read an older one by its plan_id. Name the portfolio by " +
+        "portfolio_id or portfolio (its name), or pass plan_id alone. Tier 1.",
+      inputSchema: {
+        portfolio_id: z.string().optional().describe("The portfolio's id (get_portfolios)."),
+        portfolio: z.string().optional().describe("The portfolio's name, instead of its id."),
+        plan_id: z.string().optional().describe("A version to read instead of the active one."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getPortfolioPlanTool, args, token),
+  );
+
+  server.registerTool(
+    "create_portfolio_plan",
+    {
+      title: "Create Portfolio Plan",
+      description:
+        "Write a new version of a portfolio's plan, replacing the active one, which stays as history. Pass the whole " +
+        "plan: the theory (the ordering principles), a reason, and every lane with its slices; a slice is a Project " +
+        "group plus the phases done in it, so one project can appear in several slices. Starting, finishing or pausing " +
+        "a slice is not a new version: use update_portfolio_slice. Only when Alex has agreed the plan in this " +
+        "conversation. Tier 3: the first call writes nothing and returns a proposal (theory change, lanes added, " +
+        "removed or renamed, slices added, removed or moved); show it to Alex and call again with confirmed: true " +
+        "after he approves. Returns the new version with its lanes and slices.",
+      inputSchema: {
+        portfolio_id: z.string().describe("The portfolio (get_portfolios)."),
+        theory: z.string().describe("The ordering principles behind this version, whole."),
+        reason: z.string().describe("Why this version replaces the last."),
+        notes_for_next_review: z.string().optional().describe("What to reconsider at the next review, and when."),
+        review_by: z.string().optional().describe("Review the plan by this date, YYYY-MM-DD."),
+        written_by: z.enum(["alex", "overwatch"]).optional().describe("Default alex; overwatch when its proposal was accepted."),
+        lanes: z.array(pfLane).describe("Every lane of the new version, with its slices."),
+        confirmed: z.boolean().optional().describe("true to write, after Alex approves the proposal."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createPortfolioPlanTool, args, token),
+  );
+
+  server.registerTool(
+    "update_portfolio_slice",
+    {
+      title: "Update Portfolio Slice",
+      description:
+        "Change a slice's status on the active plan: in_progress (at most one per lane), done, paused (with " +
+        "paused_reason) or back to planned. Moving, adding or editing a slice is a new version (create_portfolio_plan); " +
+        "a superseded version's slices cannot change. Tier 2.",
+      inputSchema: {
+        id: z.string().describe("The slice's id (get_portfolio_plan)."),
+        status: z.enum(SLICE_STATUSES as unknown as [string, ...string[]]),
+        paused_reason: z.string().optional().describe("Required for paused: one line on why."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updatePortfolioSliceTool, args, token),
   );
 
   // --- Warren Buffet, Phase 1 (docs/technical-spec-warren_buffet-w7b.md §8) ---

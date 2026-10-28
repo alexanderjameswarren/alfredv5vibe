@@ -299,7 +299,17 @@ The old Phase 8 (Switchboard state through overwatch-ingest) moved out of this p
   - [x] gitsync (1980b16 to ea7820f, SAM and docs/history only: no drift); db items claimed (run tag overwatch-q4n-s53b-m4qz); numbered 181_overwatch_portfolio_plans.sql, pending file deleted
   - [x] src/apps/AppIcon.jsx bundles BookOpen, Ticket and Hammer; QuietSection.test.jsx checks them (2 suites, 12 pass)
   - [ ] Alex runs 181, then 26 and 27, then check_platform_conformance
-- [ ] Step 54 (CLI): 8b tools in overwatch-portfolio.ts (get_portfolios, upsert_portfolio, get_portfolio_plan, create_portfolio_plan tier 3, update_portfolio_slice); deploy mcp
+- [ ] Step 54 (CLI): 8b tools in overwatch-portfolio.ts (get_portfolios, upsert_portfolio, get_portfolio_plan, create_portfolio_plan tier 3, update_portfolio_slice); deploy mcp (run tag overwatch-q4n-s54-t2wn)
+  - [x] overwatch-portfolio.ts: the five tools; get_portfolio_plan takes portfolio_id, portfolio (name) or plan_id and always lists versions; create_portfolio_plan's propose names theory, lane and slice changes and the handler returns the version with lanes and slices; get_portfolios uses readTable's shared archived option; tests 9
+  - [x] Registered in mcp/index.ts (172 tools); mark_finish_summaries_reviewed's run_id description names create_platform_run's id; tables.test minimum 171
+  - [x] Function tests 715 of 716 (tables.test waits for the 181 snapshot from gitsync); CLI suite 298; deno check 111, as main
+  - [x] Read only: every public table in the snapshot (101) has GRANT ALL to authenticated and service_role, so TRUNCATE, REFERENCES and TRIGGER come from default privileges, not from platform.grant_table, which adds only select, insert, update and delete; the portfolio tables match the rest
+  - [x] gitsync (1eb62fe to ff9a30b, snapshot through 181 only: no drift); function tests 716 of 716; db:deploy claimed, mcp deployed (version 175), db:deploy released (run tag overwatch-q4n-s54b-h6vc)
+  - [x] Alex tested the five tools live ("Test portfolio s54"), cleanup left no rows
+  - [x] Proposal text (run tag overwatch-q4n-s54c-p9fe): a first plan shows the whole theory and every slice with phases, status and paused reason; a later version lists status changes; a renamed lane's slices are compared under the new name, so they no longer show as moved; tests 12; function tests 719
+  - [x] Alex accepted the rename rule (a new lane name at the position of an old lane whose name is gone). It misfires in two ways: a lane removed and a different one added at the same position shows as a rename, so slices taken from the removed lane do not show as moved; a lane renamed and moved to another position shows as removed and added, so its slices show as moved
+  - [x] gitsync: already up to date; db:deploy claimed, mcp redeployed (version 176), released (run tag overwatch-q4n-s54d-w3jn)
+  - [ ] Alex retests the proposal text ("Test portfolio s54d"), runs the cleanup, checkpoints
 - [ ] Step 55 (CLI): 8b Projects section: portfolio switch; Now, Next, Later; "Not in the plan"
 - [ ] Step 56 (CLI): 8b plan page /overwatch/plan/<portfolio_id> (theory, notes, review_by, versions); nightly review_by item; overwatch skill
 - [ ] Step 57 (CLI, SQL): 8c inbox.suggested_group_id; process_inbox_item `group` payload (db items reserved)
