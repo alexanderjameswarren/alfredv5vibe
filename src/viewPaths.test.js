@@ -34,6 +34,8 @@ import {
   groupRouteFromPath,
   overwatchRouteFromPath,
   overwatchBriefingPath,
+  overwatchPlanPath,
+  overwatchSlicePath,
 } from "./viewPaths";
 import { uid } from "./utils/flattenElements";
 
@@ -57,6 +59,16 @@ describe("the map itself", () => {
     expect(overwatchRouteFromPath(overwatchBriefingPath("n-1"))).toEqual({ screen: "briefing", noteId: "n-1" });
     expect(isKnownPath("/overwatch/briefing/a/b")).toBe(false);
     expect(isKnownPath("/overwatch/note")).toBe(false);
+  });
+
+  it("serves the plan page, an older version and a slice's status page", () => {
+    expect(overwatchRouteFromPath(overwatchPlanPath("pf-1"))).toEqual({ screen: "plan", portfolioId: "pf-1", planId: null });
+    expect(overwatchRouteFromPath(overwatchPlanPath("pf-1", "p-2"))).toEqual({ screen: "plan", portfolioId: "pf-1", planId: "p-2" });
+    expect(overwatchRouteFromPath(overwatchSlicePath("pf-1", "s-3"))).toEqual({ screen: "slice", portfolioId: "pf-1", sliceId: "s-3" });
+    expect(pathToView("/overwatch/plan/pf-1")).toBe("overwatch");
+    expect(isKnownPath("/overwatch/plan")).toBe(false);
+    expect(isKnownPath("/overwatch/plan/pf-1/version")).toBe(false);
+    expect(isKnownPath("/overwatch/plan/pf-1/slice/s-3/x")).toBe(false);
   });
 
   it("is a bijection — no two views share a path", () => {

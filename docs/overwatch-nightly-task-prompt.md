@@ -12,7 +12,8 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
   claude.ai task `trig_013sUsnchXf7L29ti7CunERU`.
 - **Tools:** the **Alfred** connector (mcp v174 or later: `get_project_estimates`, `get_friction`
   with `status`, `get_inbox` with `source_app`, and since 2026-10-27 `get_finish_summaries`,
-  `get_platform_inventory` and `mark_finish_summaries_reviewed`) and the **Claude_Code_Remote**
+  `get_platform_inventory` and `mark_finish_summaries_reviewed`; mcp v176 or later for
+  `get_portfolios`) and the **Claude_Code_Remote**
   connector (`list_triggers`), which every Claude task already has. The **`overwatch` skill** must be
   available to the task.
 - **Call budget:** the Alfred connector allows **60 calls in 5 minutes**. The prompt reads in bulk
@@ -22,7 +23,8 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
   (counts 10 and 11) adds **2 calls on a night with no finish summary** (the summaries read and the
   freshness read), and on a night with one summary about **8 to 12** more, **at most 19** (the
   table list, the skills, up to 5 table reads, up to 5 follow-up items, up to 2 profile rewrites and
-  the mark), which is when rule 8's pause matters.
+  the mark), which is when rule 8's pause matters. The portfolio review check (count 12) adds
+  **1 call** every night.
 - **Settings it reads** from the active plan: `stall_days`, `waiting_on_alex_days`, `fading_days`,
   `overrun_factor`, `active_project_limit`, `inbox_backlog_threshold`, `routing_low_confidence`,
   `overdue_days`, `urgent_within_days` (to add through the gate), `pushes_per_day`, `push_time`, and
@@ -40,7 +42,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 > version, and Step 10 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-10-27a`
+> ### `PROMPT VERSION: 2026-10-28a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -54,7 +56,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
    "THE PROMPT" line as its instructions.
 4. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
    Check: a `platform_runs` row for `overwatch` / `nightly` closed `ok`; tonight's note in
-   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-27a`.
+   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-28a`.
 
 ## The record, the note and the nudges are SEPARATE
 
@@ -73,7 +75,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 ---
 
 You are running Overwatch's nightly check for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-10-27a`. **First, load the `overwatch` skill.** It tells you how to read each
+`PROMPT VERSION: 2026-10-28a`. **First, load the `overwatch` skill.** It tells you how to read each
 app, what counts as fading, what counts as a deadline mention, what counts as a follow-up from a
 finish summary, and how to word the note. Follow
 these steps in order for everything else. **Where the skill and these steps disagree, these steps
@@ -329,6 +331,10 @@ Each count names its setting. If a read errors, SKIP the count.
       sentences for Step 8.4. At most **2** apps tonight.
     - h. Keep the ids of the summaries you took. If 11a, 11c or the summaries read errors, SKIP the
       whole count (`count:impact_review`) and keep no ids, so they stay unreviewed for tomorrow.
+12. **Portfolio plans due a review:** `get_portfolios` with `limit: 20`, **one call**. Keep each
+    portfolio whose `active_plan.review_by` is before `local_date`: its `name`, `id` and the
+    `review_by` date. A portfolio with no active plan, or no `review_by`, is not due. No inbox item:
+    this is one line in the note (Step 7). If the call errors, SKIP (`count:portfolio_review`).
 
 ### Step 6 — Raise inbox items
 
@@ -426,7 +432,9 @@ Call `create_overwatch_note` with `period: "nightly"`, `for_date: <local_date>`,
   - **Order under Action Required:** time-sensitive first (overdue intentions; deadlines, the urgent
     ones first; failed or missing tasks, stopped schedules and orphan runs, each suggested as **a bug
     to log**: "Log a bug: <schedule> has had no ok run since <date>."), then anything waiting on Alex,
-    then the projects, then the finish-summary follow-ups (one bullet per summary: its project and
+    then the projects, then the portfolio plans due a review (count 12, one bullet each:
+    "Review the [<name> plan](https://alfredv5vibe.vercel.app/overwatch/plan/<portfolio id>): review
+    by <friendly date> has passed."), then the finish-summary follow-ups (one bullet per summary: its project and
     date, its follow-ups as sub-bullets, "N more wait" when count 11 left some), then the rest: a
     stale inventory, the over-limit count, claim blocks, fading, quiet apps, the inbox, watch items
     that ended, checks due.
@@ -445,7 +453,8 @@ Call `create_overwatch_note` with `period: "nightly"`, `for_date: <local_date>`,
   `low_confidence_routing`, `stopped_schedules`, `orphan_runs`, `task_health`, `claim_blocks`,
   `fading`, `overdue_intentions`, `deadline_no_date`, `watch_ended`, `checks_due`,
   `inventory_stale` (`{ "seen_at": … | "never", "days": … }`, or an empty list when fresh),
-  `impact_review` (the follow-ups from count 11f, each with its summary id), plus
+  `impact_review` (the follow-ups from count 11f, each with its summary id),
+  `portfolio_review_due` (count 12: `{ "portfolio_id": …, "name": …, "review_by": … }` each), plus
   `inbox_items` (the ids from Step 6), `skipped` and `settings_missing`.
 
 A second manual run on the same day replaces the note, keeping its id; that is expected. If the call
@@ -479,7 +488,7 @@ A failed call here is SKIPPED, never STOP.
 
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-- **`details`**, always: `local_date`, `prompt_version: "2026-10-27a"`, `manual`, `plan_id`, the
+- **`details`**, always: `local_date`, `prompt_version: "2026-10-28a"`, `manual`, `plan_id`, the
   count of each flag, `note_id`, `inbox_item_ids`, `reminders_sent`, `apps_pulled`,
   `summaries_reviewed` (the ids marked in Step 8.5), `profiles_rewritten` (app ids),
   `alfred_calls`, `paused`, `skipped` and `settings_missing`; also `earlier_run_id` when Step 2.3
@@ -503,7 +512,7 @@ Run: <run id>
 ### Step 10 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-27a`;
+- `PROMPT VERSION: 2026-10-28a`;
 - the finish summaries reviewed and the follow-ups raised, and whether the inventory is stale;
 - the run id and its status, and `manual: true` or `manual: false`; `duplicate_of` if it stopped;
 - the count of each flag, the note id, the inbox item ids and the reminders sent;

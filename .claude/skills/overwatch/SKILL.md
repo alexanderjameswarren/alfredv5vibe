@@ -1,11 +1,11 @@
 ---
 name: overwatch
-description: "Overwatch, Alex's view across every Alfred app: what he did, is doing and wants to do, what has stalled or gone quiet, and what has drifted. Load it whenever he asks what needs his attention, for triage or routing of his inbox across apps (\"scan Alfred for money to-dos\"), about his projects, stalls, plans or ideas, about Overwatch's note, watch items or plan, or about process friction; and for the Overwatch nightly and weekly scheduled runs. Load it alongside an app's own skill when the question is about one app."
+description: "Overwatch, Alex's view across every Alfred app: what he did, is doing and wants to do, what has stalled or gone quiet, and what has drifted. Load it whenever he asks what needs his attention, for triage or routing of his inbox across apps (\"scan Alfred for money to-dos\"), about his projects, stalls, plans or ideas, about a portfolio plan (what to work on in what order, its lanes, slices and theory), about Overwatch's note, watch items or plan, or about process friction; and for the Overwatch nightly and weekly scheduled runs. Load it alongside an app's own skill when the question is about one app."
 ---
 
 # Overwatch
 
-Skill version: 2026-10-27a
+Skill version: 2026-10-28a
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
@@ -66,6 +66,45 @@ Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
   and attach: `create_inbox_item` with `suggest_item: true`, `suggested_item_text`,
   `suggested_item_description`, `suggested_item_elements`, `suggested_context_id` and
   `source_app` when known. The nightly note lists Projects that are still empty.
+
+### Portfolio plans (the order Alex means to work in)
+
+- **A portfolio is a body of work planned on its own.** The Alfred ecosystem is one, and client
+  work (Team IMPACT, ActBlue) is another. **Keep client work in its own portfolio:** never put a
+  client Project in the Alfred plan, or the other way round. `get_portfolios` lists them, each with
+  its contexts and its active plan in brief (the theory's first line, `review_by`, slice counts by
+  status). `upsert_portfolio` creates one, or renames it, sets its contexts, position or archived.
+- **A plan version** is a `theory`, its lanes, and their slices. `get_portfolio_plan` reads the
+  active version, or one named by `plan_id`, plus the list of versions.
+  - **The theory** is Alex's ordering principles, in his words, e.g. "bugs first, then tools that
+    make the work faster, then X because it solves Y". Read it before you suggest any change, and
+    weigh the change against it.
+  - **`notes_for_next_review`** says what to reconsider next time, and `review_by` says when.
+  - **Lanes** are named per version, as many as the plan needs ("Main", "SAM", "Client work"), each
+    with an optional note on what it is for. Renaming, adding or removing a lane is a new version.
+  - **A slice** is a Project group plus the phases done in it (`phases`; none means the whole
+    project). The same project can appear in several slices, so it can be partly done, paused and
+    resumed later (A phases 2-3, B phase 1, A phase 4). Each slice has a `why` in terms of the
+    theory, and a status: `planned`, `in_progress` (at most one per lane), `done`, or `paused` with
+    `paused_reason`.
+- **Two kinds of change.**
+  - Starting, finishing or pausing a slice is **not** a new version: `update_portfolio_slice`,
+    tier 2, or "Change status" on the plan page.
+  - Anything else (reordering, adding or removing slices or lanes, a new theory) is a new version:
+    `create_portfolio_plan`, **tier 3**. Pass the whole plan: the theory, a `reason`, and every lane
+    with its slices. **The first call writes nothing and returns a proposal. Always show Alex that
+    proposal, word for word, and wait for him to approve it before calling again with
+    `confirmed: true`.** Never confirm on your own, in chat or in a scheduled run.
+- **Talking a plan through:** theory first, then the lanes, then the slices in order, each with its
+  why. Ask about the theory before you argue about any one slice.
+- **When to suggest a review:**
+  - `review_by` has passed (the nightly note flags it);
+  - a slice was marked done, so what comes next may have changed;
+  - a Project in the plan was closed, or a Project in the portfolio's contexts is in no slice ("Not
+    in the plan" on the tab);
+  - `notes_for_next_review` names something that has now happened.
+  Suggest it in one line, with the plan link
+  (`https://alfredv5vibe.vercel.app/overwatch/plan/<portfolio_id>`). Do not write a version unasked.
 
 ### Watch items
 

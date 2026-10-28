@@ -427,12 +427,33 @@ export function overwatchBriefingPath(noteId) {
   return `${OVERWATCH_BRIEFING_PATH}/${encodeURIComponent(noteId)}`;
 }
 
+// The portfolio plan page (Step 56): /overwatch/plan/<portfolio_id> for its active version,
+// .../version/<plan_id> for an older one (read only), .../slice/<slice_id> to change a slice's status.
+export const OVERWATCH_PLAN_PATH = "/overwatch/plan";
+
+export function overwatchPlanPath(portfolioId, planId = null) {
+  const base = `${OVERWATCH_PLAN_PATH}/${encodeURIComponent(portfolioId)}`;
+  return planId ? `${base}/version/${encodeURIComponent(planId)}` : base;
+}
+
+export function overwatchSlicePath(portfolioId, sliceId) {
+  return `${OVERWATCH_PLAN_PATH}/${encodeURIComponent(portfolioId)}/slice/${encodeURIComponent(sliceId)}`;
+}
+
 export function overwatchRouteFromPath(pathname) {
   const path = normalizePath(pathname);
   if (path === OVERWATCH_PATH) return { screen: "tab" };
   if (path === OVERWATCH_BRIEFING_PATH) return { screen: "briefing", noteId: null };
   const id = path.startsWith(`${OVERWATCH_BRIEFING_PATH}/`) ? path.slice(OVERWATCH_BRIEFING_PATH.length + 1) : "";
   if (id && !id.includes("/")) return { screen: "briefing", noteId: decodeURIComponent(id) };
+  if (path.startsWith(`${OVERWATCH_PLAN_PATH}/`)) {
+    const [portfolio, kind, other, ...rest] = path.slice(OVERWATCH_PLAN_PATH.length + 1).split("/");
+    if (!portfolio || rest.length) return null;
+    const portfolioId = decodeURIComponent(portfolio);
+    if (kind === undefined) return { screen: "plan", portfolioId, planId: null };
+    if (kind === "version" && other) return { screen: "plan", portfolioId, planId: decodeURIComponent(other) };
+    if (kind === "slice" && other) return { screen: "slice", portfolioId, sliceId: decodeURIComponent(other) };
+  }
   return null;
 }
 
