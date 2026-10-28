@@ -325,7 +325,12 @@ The old Phase 8 (Switchboard state through overwatch-ingest) moved out of this p
   - [x] overwatch skill 2026-10-28a: "Portfolio plans" section (reading, the theory and notes, lanes and slices, status change versus a new version, the tier 3 proposal always shown, client work kept apart, when to suggest a review); description names portfolio plans
   - [x] CLI suite 298; full app suite 3137
   - [ ] Alex checkpoints; pastes the nightly prompt into its task and the overwatch skill into claude.ai
-- [ ] Step 57 (CLI, SQL): 8c inbox.suggested_group_id; process_inbox_item `group` payload (db items reserved)
+- [ ] Step 57 (CLI, SQL): 8c inbox.suggested_group_id; process_inbox_item `group` payload (db items reserved) (run tag overwatch-q4n-s57-j4dr)
+  - [x] supabase/migrations/_pending_overwatch-q4n_inbox_suggested_group.sql: the column (FK on delete set null), inbox_check_suggested_group, process_inbox_item with the group key (diffed against the snapshot: only the group check, the member insert and group_member in the result change); spec 4.17 "As built (Step 57)"
+  - [x] supabase/tests/overwatch-q4n/28_inbox_suggested_group_test.sql (ends in an error on purpose) and 29_verify_inbox_suggested_group.sql
+  - [x] Full app suite 3136 of 3137 (the flaky SamPlayer.plan.test, passes alone); CLI suite 298
+  - [x] Alex decided (Step 57b, run tag overwatch-q4n-s57b-x6pk): any group type, not closed and not archived (Background allowed); Step 59 labels the suggestion by the group's type label; the joining rule is unchanged. gitsync brought 183 (SAM data only: no drift). The four db items claimed; numbered 184_overwatch_inbox_suggested_group.sql, pending file deleted; test 28 widened (Menu and Background accepted; closed, archived, unknown and another user's group refused); spec 4.17, 8 and 9 updated
+  - [ ] Alex runs 184, then 28 and 29
 - [ ] Step 58 (CLI): 8c create_inbox_item and update_inbox_item accept suggested_group_id; alfred-enrich skill; deploy mcp
 - [ ] Step 59 (CLI): 8c inbox detail: SuggestedGroup with an accept toggle
 - [ ] Step 60 (CLI): full app and CLI suites, mobile check

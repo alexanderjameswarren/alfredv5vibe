@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-28 11:32, through migration 183 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-28 12:01, through migration 184 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -3123,6 +3123,32 @@ only, never row data.';
 
 
 
+CREATE OR REPLACE FUNCTION "public"."inbox_check_suggested_group"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if new.suggested_group_id is null then return new; end if;
+  if tg_op = 'UPDATE' and new.suggested_group_id is not distinct from old.suggested_group_id then return new; end if;
+  if not exists (
+    select 1 from public.item_groups g
+     where g.id = new.suggested_group_id and g.user_id = new.user_id and g.status <> 'closed' and not g.archived
+  ) then
+    raise exception 'inbox refused: suggested group % is not one of your open groups (not closed, not archived).',
+      new.suggested_group_id using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."inbox_check_suggested_group"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."inbox_check_suggested_group"() IS 'Overwatch 8c: a suggested_group_id, when it is set or changed, must be one of the same user''s groups of any type that is not closed and not archived. A group that later closes keeps the suggestion; filing then refuses it.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."inbox_outcome_valid"("p_outcome" "jsonb") RETURNS boolean
     LANGUAGE "sql" IMMUTABLE
     SET "search_path" TO ''
@@ -3975,9 +4001,11 @@ declare
   v_intent     public.intents%rowtype;
   v_event      public.events%rowtype;
   v_member     public.collection_items%rowtype;
+  v_group_row  public.item_group_members%rowtype;
   v_p          jsonb;
   v_item_id    text;
   v_member_item text;
+  v_group_id   text;
   v_created    jsonb := '[]'::jsonb;
   v_moved      int := 0;
   v_source_app text;
@@ -4009,6 +4037,22 @@ begin
     end if;
   else
     v_source_app := v_inbox.source_app;
+  end if;
+
+  -- The group is checked before anything is written.
+  v_p := nullif(p_payload -> 'group', 'null'::jsonb);
+  if v_p is not null then
+    v_group_id := nullif(btrim(v_p ->> 'group_id'), '');
+    if v_group_id is null then
+      raise exception 'process_inbox_item: group.group_id is required' using errcode = '22023';
+    end if;
+    if not exists (
+      select 1 from public.item_groups g
+       where g.id = v_group_id and g.user_id = v_user and g.status <> 'closed' and not g.archived
+    ) then
+      raise exception 'process_inbox_item: group % is not one of your open groups (not closed, not archived). Nothing was changed.',
+        v_group_id using errcode = '22023';
+    end if;
   end if;
 
   -- Item
@@ -4107,6 +4151,23 @@ begin
     end if;
   end if;
 
+  -- Group member: the intention when one was filed, else the item, at the end of the live members
+  -- (restoreMember's rule). Already a live member is not an error.
+  if v_group_id is not null then
+    if v_intent.id is null and v_item.id is null then
+      raise exception 'process_inbox_item: a group needs an item or an intent to add. Nothing was changed.'
+        using errcode = '22023';
+    end if;
+    insert into public.item_group_members (group_id, member_type, member_id, position)
+    values (v_group_id,
+            case when v_intent.id is not null then 'intention' else 'item' end,
+            coalesce(v_intent.id, v_item.id),
+            coalesce((select max(position) from public.item_group_members
+                       where group_id = v_group_id and removed_at is null), 0) + 1)
+    on conflict (group_id, member_type, member_id) where removed_at is null do nothing
+    returning * into v_group_row;
+  end if;
+
   -- Archive last: the capture is filed only if everything above was written.
   update public.inbox
      set archived = true,
@@ -4123,6 +4184,7 @@ begin
     'intent', case when v_intent.id is null then null else to_jsonb(v_intent) end,
     'event', case when v_event.id is null then null else to_jsonb(v_event) end,
     'collection_item', case when v_member.id is null then null else to_jsonb(v_member) end,
+    'group_member', case when v_group_row.id is null then null else to_jsonb(v_group_row) end,
     'reminders_moved', v_moved,
     'outcome', v_created);
 end;
@@ -4132,7 +4194,7 @@ $$;
 ALTER FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "jsonb") IS 'Alfred: process an inbox capture in one transaction: create its item, intention (taking the capture''s reminders) and event, add a collection member, then archive the capture as processed with outcome appended and source_app. Any failure writes nothing. Only the capture''s owner can process it. Does not use intents.is_item. Security invoker. Returns the rows written.';
+COMMENT ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payload" "jsonb") IS 'Alfred: process an inbox capture in one transaction: create its item, intention (taking the capture''s reminders) and event, add a collection member, add the intention (else the item) to a group (the group key, Overwatch 8c: any of the caller''s groups that is not closed or archived), then archive the capture as processed with outcome appended and source_app. Any failure writes nothing. Only the capture''s owner can process it. Does not use intents.is_item. Security invoker. Returns the rows written.';
 
 
 
@@ -10562,6 +10624,7 @@ CREATE TABLE IF NOT EXISTS "public"."inbox" (
     "source_app" "text",
     "outcome" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
     "archived_at" timestamp with time zone,
+    "suggested_group_id" "text",
     CONSTRAINT "inbox_archive_reason_check" CHECK ((("archive_reason" IS NULL) OR ("archive_reason" = ANY (ARRAY['discarded'::"text", 'processed'::"text"])))),
     CONSTRAINT "inbox_archive_reason_needs_archived" CHECK ((("archive_reason" IS NULL) OR ("archived" IS TRUE))),
     CONSTRAINT "inbox_outcome_shape" CHECK ("public"."inbox_outcome_valid"("outcome")),
@@ -10644,6 +10707,10 @@ COMMENT ON COLUMN "public"."inbox"."outcome" IS 'Every record this capture becam
 
 
 COMMENT ON COLUMN "public"."inbox"."archived_at" IS 'When this row was archived; null while it is not. Set only by the set_archived_at trigger. Archived lists sort by it, newest first.';
+
+
+
+COMMENT ON COLUMN "public"."inbox"."suggested_group_id" IS 'Overwatch 8c. The group this capture belongs in, as enrichment suggested it: any group type (Project, Menu, Series, …), the same user''s, not closed and not archived when set (inbox_check_suggested_group). Filing with the group key in process_inbox_item adds the filed record to it. Null when no group fits. Kept after filing, as a record of the suggestion.';
 
 
 
@@ -16840,6 +16907,10 @@ CREATE OR REPLACE TRIGGER "executions_status_activate" AFTER INSERT ON "public".
 
 
 
+CREATE OR REPLACE TRIGGER "inbox_check_suggested_group" BEFORE INSERT OR UPDATE OF "suggested_group_id" ON "public"."inbox" FOR EACH ROW EXECUTE FUNCTION "public"."inbox_check_suggested_group"();
+
+
+
 CREATE OR REPLACE TRIGGER "inbox_set_source_app" BEFORE INSERT ON "public"."inbox" FOR EACH ROW EXECUTE FUNCTION "public"."inbox_set_source_app"();
 
 
@@ -17397,6 +17468,11 @@ ALTER TABLE ONLY "public"."group_types"
 
 ALTER TABLE ONLY "public"."inbox"
     ADD CONSTRAINT "inbox_source_app_fkey" FOREIGN KEY ("source_app") REFERENCES "public"."apps"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."inbox"
+    ADD CONSTRAINT "inbox_suggested_group_id_fkey" FOREIGN KEY ("suggested_group_id") REFERENCES "public"."item_groups"("id") ON DELETE SET NULL;
 
 
 
@@ -19192,6 +19268,12 @@ GRANT ALL ON FUNCTION "public"."get_platform_contract"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."get_schema_info"("target_table" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_schema_info"("target_table" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_schema_info"("target_table" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."inbox_check_suggested_group"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."inbox_check_suggested_group"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."inbox_check_suggested_group"() TO "service_role";
 
 
 
