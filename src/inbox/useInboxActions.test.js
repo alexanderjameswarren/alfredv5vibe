@@ -81,6 +81,18 @@ describe("processInboxPayload", () => {
     expect(processInboxPayload(ITEM, { sourceApp: "" }).source_app).toBeNull();
     expect("source_app" in processInboxPayload(ITEM)).toBe(false);
   });
+
+  it("sends the group only when something is filed (Overwatch 8c)", () => {
+    expect(processInboxPayload(ITEM, { groupId: "g-ow" }).group).toEqual({ group_id: "g-ow" });
+    expect(processInboxPayload(ITEM, { groupId: null }).group).toBeUndefined();
+    expect(processInboxPayload({ createItem: false, createIntention: false }, { groupId: "g-ow" })).toEqual({});
+  });
+
+  it("says a refused group in plain words", () => {
+    expect(processFailedMessage({ code: "22023",
+      message: "process_inbox_item: group g9 is not one of your open groups (not closed, not archived). Nothing was changed." }))
+      .toMatch(/^That group is closed, archived or no longer yours, so nothing was filed/);
+  });
 });
 
 describe("handleInboxSave", () => {

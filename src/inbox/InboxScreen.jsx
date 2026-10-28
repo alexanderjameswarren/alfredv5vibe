@@ -8,6 +8,7 @@ import { useNavigate } from "react-router-dom";
 import InboxListCard from "./InboxListCard";
 import RecentlyArchived from "./RecentlyArchived";
 import useOutcomeNames from "./useOutcomeNames";
+import useOpenGroups from "./useOpenGroups";
 import useApps from "../apps/useApps";
 import { recordPath } from "../viewPaths";
 
@@ -46,6 +47,8 @@ export default function InboxScreen({
   const navigate = useNavigate();
   const apps = useApps();
   const outcomeNames = useOutcomeNames(archivedInboxItems);
+  // Overwatch 8c: to name each card's suggested group.
+  const groups = useOpenGroups();
   return (
     <div>
       <h2 className="text-lg sm:text-xl font-medium mb-3 sm:mb-4">Inbox</h2>
@@ -89,6 +92,7 @@ export default function InboxScreen({
               key={inboxItem.id}
               inboxItem={inboxItem}
               contexts={contexts}
+              groups={groups}
               onOpen={openInboxDetail}
               onProcess={processInboxItemFromList}
               onCopy={copyTaskInboxItem}

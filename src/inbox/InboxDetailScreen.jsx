@@ -4,6 +4,7 @@ import { clipIdFor } from "../utils/capturedClip";
 import InboxDetailView from "./InboxDetailView";
 import ClipboardCapture from "./ClipboardCapture";
 import PendingReminder from "./PendingReminder";
+import useOpenGroups from "./useOpenGroups";
 
 // The inbox detail route, moved out of Alfred.jsx unchanged apart from the
 // `view === "inbox-detail" && routeInboxItem` test, which stays in Alfred.
@@ -18,6 +19,8 @@ export default function InboxDetailScreen({
   setUnsavedChanges,
   updateInboxCaptureText,
 }) {
+  // Overwatch 8c: read here, not in the view, so the view's tests need no database.
+  const groups = useOpenGroups();
   return (
     <InboxDetailView
       key={routeInboxItem.id}
@@ -25,6 +28,7 @@ export default function InboxDetailScreen({
       contexts={contexts}
       items={items}
       tagPool={tagPool}
+      groups={groups}
       onProcess={handleInboxSave}
       onDiscard={discardInboxItem}
       // Guarded: Back is the one exit that can be taken with a form full of

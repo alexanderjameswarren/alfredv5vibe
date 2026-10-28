@@ -274,6 +274,15 @@ describe("the shared pieces are not rebuilt elsewhere", () => {
   });
 });
 
+test("the suggested group shows on one line as its type and name (Overwatch 8c)", () => {
+  const groups = [{ id: "g-ow", name: "Overwatch", typeLabel: "Project", typeIcon: "SquareKanban" }];
+  const item = { id: "inbox-1", capturedText: "x", sourceType: "mcp", aiStatus: "enriched", createdAt: "2026-09-24T09:10:00.000Z" };
+  const { rerender } = render(<InboxListCard inboxItem={{ ...item, suggestedGroupId: "g-ow" }} groups={groups} onOpen={jest.fn()} />);
+  expect(screen.getByText("Project: Overwatch")).toBeInTheDocument();
+  rerender(<InboxListCard inboxItem={{ ...item, suggestedGroupId: "g-closed" }} groups={groups} onOpen={jest.fn()} />);
+  expect(screen.queryByText(/Project:/)).not.toBeInTheDocument();
+});
+
 test("the Active status pill is tan, not teal", () => {
   render(
     <InboxListCard

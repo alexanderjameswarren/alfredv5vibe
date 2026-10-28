@@ -337,7 +337,12 @@ The old Phase 8 (Switchboard state through overwatch-ingest) moved out of this p
   - [x] Function tests 732; CLI 298; full app suite 3155 (7 skipped); deno check 111
   - [x] gitsync (scoreRender.js and our 184 snapshot only: no drift); db:deploy claimed, mcp deployed (version 177), released; no db: claims left (run tag overwatch-q4n-s58-q2mv)
   - [ ] Alex tests Part 1 in a fresh thread ("Test s58 suggested group"); cleanup as its own step; checkpoint; pastes alfred-enrich
-- [ ] Step 59 (CLI): 8c inbox detail: SuggestedGroup with an accept toggle
+- [ ] Step 59 (CLI): 8c inbox detail: SuggestedGroup with an accept toggle (run tag overwatch-q4n-s59-f8ln)
+  - [x] src/inbox/SuggestedGroup.jsx (the Group picklist: context's groups first, show all, chosen kept, Open link, no-longer-open note), useOpenGroups.js (open groups of any type, with type labels and derived names); InboxDetailView (groupId state, dirty, sent with Process); useInboxActions (payload `group` only with something filed, one-tap sends the suggestion, plain refusal message, suggestedGroupId cleared with the enrichment); InboxDetailScreen and InboxScreen read the groups; InboxListCard's one line; spec 9 "As built (Step 59)"
+  - [x] Tests: SuggestedGroup.test 5, InboxDetailView 2 more, useInboxActions 2 more, InboxListCard 1 more; src/inbox 236; full app suite 3165 (7 skipped)
+  - [x] Alex UI tested Part 1: all passed (the browser alert for a refused group stays)
+  - [x] Cleanup scripts (run tag overwatch-q4n-s59b-w7ce): supabase/tests/overwatch-q4n/30_cleanup_step59_test.sql (checks first; records found through outcome and source_inbox_id) and 31_verify_step59_cleanup.sql
+  - [ ] Alex runs 30 then 31; checkpoints
 - [ ] Step 60 (CLI): full app and CLI suites, mobile check
 - [ ] Step 61 (CLI): closeout
 

@@ -69,6 +69,7 @@ import {
   LayoutGrid,
 } from "lucide-react";
 import AppSelect from "../apps/AppSelect";
+import SuggestedGroup from "./SuggestedGroup";
 import useApps from "../apps/useApps";
 import ItemPicker, { PickedItem } from "../shared/ItemPicker";
 import TagPicker from "../shared/TagPicker";
@@ -92,7 +93,12 @@ import ToggleButton from "../shared/ToggleButton";
  * object seeds the fields and is what the dirty check compares against.
  */
 export function detailBaseline(inboxItem) {
-  return { ...computeBaseline(inboxItem), appId: inboxItem?.sourceApp || "" };
+  return {
+    ...computeBaseline(inboxItem),
+    appId: inboxItem?.sourceApp || "",
+    // Overwatch 8c: the group the filed record joins; "" for none.
+    groupId: inboxItem?.suggestedGroupId || "",
+  };
 }
 
 /**
@@ -209,6 +215,8 @@ export default function InboxDetailView({
   contexts = [],
   items = [],
   tagPool = [],
+  // Overwatch 8c: the open groups the capture may join (useOpenGroups, read by the screen).
+  groups = [],
   onProcess,
   onDiscard,
   onBack,
@@ -244,6 +252,7 @@ export default function InboxDetailView({
   const [contextId, setContextId] = useState(baseline.contextId);
   // The capture's app (116). Never filled from the context's app_id.
   const [appId, setAppId] = useState(baseline.appId);
+  const [groupId, setGroupId] = useState(baseline.groupId);
   const [tags, setTags] = useState(baseline.tags);
   // What the filed item and intention start as (088): someday or active.
   const [status, setStatus] = useState(baseline.status);
@@ -305,6 +314,7 @@ export default function InboxDetailView({
     captureDirty ||
     contextId !== baseline.contextId ||
     appId !== baseline.appId ||
+    groupId !== baseline.groupId ||
     !sameStrings(tags, baseline.tags) ||
     status !== baseline.status ||
     itemOn !== baseline.itemOn ||
@@ -615,7 +625,7 @@ export default function InboxDetailView({
       // Collections are hidden on this page for now — README, Rules.
       addToCollection: false,
       collectionData: null,
-    }, { sourceApp: appId || null });
+    }, { sourceApp: appId || null, groupId: groupId || null });
   }
 
   function handleCancel() {
@@ -721,6 +731,15 @@ export default function InboxDetailView({
               label="Status for what this files as"
             />
           </div>
+
+          <SuggestedGroup
+            groups={groups}
+            contextId={contextId}
+            value={groupId}
+            onChange={setGroupId}
+            fieldClass={FIELD}
+            labelClass={LABEL}
+          />
         </div>
 
         {/* The two toggles. Either, both, or neither. */}
