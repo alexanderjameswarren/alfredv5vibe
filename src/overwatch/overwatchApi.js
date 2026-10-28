@@ -4,7 +4,8 @@ import { rowDay } from "./activityModel";
 
 /**
  * Overwatch tab reads. Spec: docs/technical-spec-overwatch-q4n.md section 9.
- * Straight to PostgREST under owner RLS, read only: nothing on the tab writes.
+ * Straight to PostgREST under owner RLS. Read only, except one write on the plan page: a slice's
+ * status (updateSliceStatus), which portfolio_slices_guard checks.
  */
 
 const NOTE_COLUMNS = "id, period, for_date, body, flags, plan_id, created_at";
@@ -138,6 +139,84 @@ export async function getPortfolioPlans() {
     progress: progress.data || [],
     groupNames: Object.fromEntries((names.data || []).map((g) => [g.id, g.name])),
   };
+}
+
+const PLAN_COLUMNS = "id, portfolio_id, active, theory, notes_for_next_review, review_by, reason, written_by, created_at";
+
+/** Names and project codes for these groups. */
+async function groupInfo(ids) {
+  if (!ids.length) return {};
+  const [groups, codes] = await Promise.all([
+    supabase.from("item_groups").select("id, name, status").in("id", ids),
+    supabase.from("project_plans").select("group_id, project_code").in("group_id", ids),
+  ]);
+  if (groups.error) fail("Could not load the plan's projects", groups.error);
+  const code = Object.fromEntries((codes.data || []).map((c) => [c.group_id, c.project_code]));
+  return Object.fromEntries((groups.data || []).map((g) => [g.id, { ...g, project_code: code[g.id] || null }]));
+}
+
+/**
+ * The plan page: a portfolio, every version newest first, and one version (the active one unless
+ * planId names another) with its lanes and slices. plan is null when the version is not found.
+ */
+export async function getPlanPage(portfolioId, planId = null) {
+  const [portfolio, versions] = await Promise.all([
+    supabase.from("portfolios").select("id, name, context_ids, archived").eq("id", portfolioId).maybeSingle(),
+    supabase.from("portfolio_plans").select(PLAN_COLUMNS).eq("portfolio_id", portfolioId)
+      .order("created_at", { ascending: false }).limit(50),
+  ]);
+  if (portfolio.error) fail("Could not load the portfolio", portfolio.error);
+  if (versions.error) fail("Could not load the plan's versions", versions.error);
+  const all = versions.data || [];
+  const plan = (planId ? all.find((v) => v.id === planId) : all.find((v) => v.active)) || null;
+  if (!portfolio.data || !plan) return { portfolio: portfolio.data || null, plan: null, versions: all, lanes: [], slices: [], groups: {} };
+  const [lanes, slices] = await Promise.all([
+    supabase.from("portfolio_lanes").select("id, name, position, note").eq("plan_id", plan.id).order("position", { ascending: true }),
+    supabase.from("portfolio_slices").select(SLICE_COLUMNS).eq("plan_id", plan.id).order("position", { ascending: true }),
+  ]);
+  if (lanes.error) fail("Could not load the plan's lanes", lanes.error);
+  if (slices.error) fail("Could not load the plan's slices", slices.error);
+  const groups = await groupInfo([...new Set((slices.data || []).map((s) => s.group_id))]);
+  return { portfolio: portfolio.data, plan, versions: all, lanes: lanes.data || [], slices: slices.data || [], groups };
+}
+
+/** One slice for its status page, with its lane, its plan (active or not) and its group's name; null if not found. */
+export async function getSlice(sliceId) {
+  const { data: slice, error } = await supabase.from("portfolio_slices").select(SLICE_COLUMNS).eq("id", sliceId).maybeSingle();
+  if (error) fail("Could not load the slice", error);
+  if (!slice) return null;
+  const [lane, plan, groups] = await Promise.all([
+    supabase.from("portfolio_lanes").select("id, name").eq("id", slice.lane_id).maybeSingle(),
+    supabase.from("portfolio_plans").select("id, portfolio_id, active").eq("id", slice.plan_id).maybeSingle(),
+    groupInfo([slice.group_id]),
+  ]);
+  if (lane.error || plan.error) fail("Could not load the slice", lane.error || plan.error);
+  return { ...slice, lane: lane.data?.name || "", plan: plan.data, group: groups[slice.group_id] || null };
+}
+
+/** The database's refusals, in plain words. */
+export function sliceErrorText(error) {
+  const msg = error?.message || "";
+  if (error?.code === "23505" || /one_in_progress/.test(msg)) {
+    return "That lane already has a slice in progress. Mark that one done or paused first.";
+  }
+  if (/superseded/.test(msg)) return "This plan version has been replaced, so its slices can no longer change.";
+  if (/paused_reason/.test(msg)) return "A paused slice needs a reason.";
+  if (/only status and paused_reason/.test(msg)) return "Only a slice's status can change here; anything else is a new plan version.";
+  return "The slice was not saved. Please try again.";
+}
+
+/** A slice's status on the active plan, as update_portfolio_slice does it; the guard checks the rest. */
+export async function updateSliceStatus(sliceId, status, pausedReason) {
+  const { data, error } = await supabase.from("portfolio_slices")
+    .update({ status, paused_reason: status === "paused" ? pausedReason : null })
+    .eq("id", sliceId).select(SLICE_COLUMNS).maybeSingle();
+  if (error) {
+    console.warn("[overwatch] slice status:", error.message); // eslint-disable-line no-console
+    throw new Error(sliceErrorText(error));
+  }
+  if (!data) throw new Error("That slice could not be found.");
+  return data;
 }
 
 /** Quiet lately's live reads: each app's newest activity, the profiles' rhythms, and the ease_off watch items. */

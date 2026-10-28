@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { groupDetailPath } from "../viewPaths";
+import { groupDetailPath, overwatchPlanPath } from "../viewPaths";
 import { GroupTypeIcon } from "../shared/ObjectIcon";
 import OverwatchCopyButton from "./OverwatchCopyButton";
 import { ProjectCard } from "./ProjectsSection";
@@ -129,6 +129,12 @@ export default function PortfolioPlan({ projects, portfolios, today, fallback })
   return (
     <div className="space-y-4">
       <Switch portfolios={portfolios.portfolios} current={portfolio} onPick={pick} />
+      {view.plan && (
+        <Link to={overwatchPlanPath(portfolio.id)}
+          className="inline-flex items-center min-h-[44px] text-sm text-primary hover:text-primary-hover">
+          Open the {name} plan: theory, versions, status changes
+        </Link>
+      )}
       {!view.plan ? (
         <>
           <p className="m-0 text-sm text-muted-foreground">No plan for {name} yet.</p>

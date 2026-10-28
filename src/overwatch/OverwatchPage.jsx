@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Lightbulb, MoonStar, TriangleAlert } from "lucide-react";
 import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
@@ -21,6 +21,9 @@ import { ideaCount } from "./IdeasSection";
 import { quietApps } from "./quietModel";
 import { statusLine } from "./statusLine";
 import { pacificToday } from "../money/moneyFormat";
+import useLoad from "./useLoad";
+import PlanPage from "./PlanPage";
+import SliceStatusPage from "./SliceStatusPage";
 
 // The Overwatch tab (spec section 9): a live snapshot, read fresh when the page opens. The
 // status line links to the latest briefing; the sections below never copy from it.
@@ -40,19 +43,6 @@ export const SECTIONS = [
   { id: "friction", title: "Friction", icon: <TriangleAlert className={ICON} aria-hidden="true" />,
     empty: "No open friction." },
 ];
-
-function useLoad(load, key) {
-  const [state, setState] = useState({ loading: true, error: null, data: null });
-  useEffect(() => {
-    let live = true;
-    setState({ loading: true, error: null, data: null });
-    load()
-      .then((data) => live && setState({ loading: false, error: null, data }))
-      .catch((err) => live && setState({ loading: false, error: err.message, data: null }));
-    return () => { live = false; };
-  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  return state;
-}
 
 async function loadTab() {
   const [notes, runs, needsYou, projects, quiet, ideas, ideaRecords, friction, apps, portfolios] = await Promise.all([
@@ -159,5 +149,7 @@ export default function OverwatchPage() {
   const location = useLocation();
   const route = overwatchRouteFromPath(location.pathname) || { screen: "tab" };
   if (route.screen === "briefing") return <BriefingPage noteId={route.noteId} />;
+  if (route.screen === "plan") return <PlanPage portfolioId={route.portfolioId} planId={route.planId} />;
+  if (route.screen === "slice") return <SliceStatusPage portfolioId={route.portfolioId} sliceId={route.sliceId} />;
   return <TabPage />;
 }

@@ -317,6 +317,14 @@ The old Phase 8 (Switchboard state through overwatch-ingest) moved out of this p
   - [x] Section renamed "Projects" (count still active Projects); full app suite 3126 of 3126 (one run had ItemDetailView.test fail once; it passed alone and in a second full run)
   - [ ] Alex runs 182; UI test Part 1 with "Test portfolio s55"; cleanup; checkpoint
 - [ ] Step 56 (CLI): 8b plan page /overwatch/plan/<portfolio_id> (theory, notes, review_by, versions); nightly review_by item; overwatch skill
+  - [x] Plan page (run tag overwatch-q4n-s56-n5gy): routes plan, version and slice in viewPaths; PlanPage.jsx (theory, notes, review_by red once passed, reason, written by, lanes and slices, versions newest first, older versions read only, one copy button); SliceStatusPage.jsx (EditCard, Save then Cancel, the guard's refusals in plain words); getPlanPage, getSlice, updateSliceStatus, sliceErrorText; the link under the switch; useLoad.js shared; spec 9 "As built (Step 56)"
+  - [x] Tests: PlanPage.test.jsx 8, viewPaths 1 more; full app suite 3135 (SamPlayer.plan.test failed in two full runs and passed alone and in a third; this step does not touch src/sam)
+  - [x] Alex UI tested Part 1 ("Test portfolio s56"), cleaned up
+  - [x] Version list (run tag overwatch-q4n-s56b-c2hq): every version but the one on screen, "Earlier versions" on the current plan, "Other versions" on an older one (the active one labelled and linking to the current plan), hidden when empty; tests 10
+  - [x] Nightly prompt 2026-10-28a: count 12, portfolio plans due a review (get_portfolios, 1 call), one note bullet each with the plan link, flags `portfolio_review_due`; no inbox item
+  - [x] overwatch skill 2026-10-28a: "Portfolio plans" section (reading, the theory and notes, lanes and slices, status change versus a new version, the tier 3 proposal always shown, client work kept apart, when to suggest a review); description names portfolio plans
+  - [x] CLI suite 298; full app suite 3137
+  - [ ] Alex checkpoints; pastes the nightly prompt into its task and the overwatch skill into claude.ai
 - [ ] Step 57 (CLI, SQL): 8c inbox.suggested_group_id; process_inbox_item `group` payload (db items reserved)
 - [ ] Step 58 (CLI): 8c create_inbox_item and update_inbox_item accept suggested_group_id; alfred-enrich skill; deploy mcp
 - [ ] Step 59 (CLI): 8c inbox detail: SuggestedGroup with an accept toggle
