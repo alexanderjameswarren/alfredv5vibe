@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  branchFromSubject,
   buildFinishSummary,
+  parseSendSummaryArgs,
   classifyPaths,
   collectFinishSummary,
   parseNumstat,
@@ -103,6 +105,23 @@ test("the plan line names the sends, or why there are none", () => {
   assert.match(sendPlanLine("c", {}), /^Send {4}the rebuilt inventory to Overwatch, through the outbox/);
   assert.match(sendPlanLine("f", {}), /inventory and a finish summary/);
   assert.equal(sendPlanLine("c", { OVERWATCH_SENDER: "off" }), "Send    nothing to Overwatch (OVERWATCH_SENDER=off).");
+});
+
+test("--send-summary: a commit and a project, or a plain error", () => {
+  assert.equal(parseSendSummaryArgs(["--send"]), null);
+  assert.deepEqual(parseSendSummaryArgs(["--send-summary", "1303FFD", "--project", "overwatch-q4n"]),
+    { commit: "1303ffd", project: "overwatch-q4n" });
+  assert.deepEqual(parseSendSummaryArgs(["--project", "overwatch-q4n", "--send-summary", "1303ffd"]),
+    { commit: "1303ffd", project: "overwatch-q4n" });
+  assert.match(parseSendSummaryArgs(["--send-summary"]).error, /needs a commit hash/);
+  assert.match(parseSendSummaryArgs(["--send-summary", "main", "--project", "x"]).error, /needs a commit hash/);
+  assert.match(parseSendSummaryArgs(["--send-summary", "1303ffd"]).error, /needs --project/);
+  assert.match(parseSendSummaryArgs(["--send-summary", "1303ffd", "--project", "Bad Code"]).error, /needs --project/);
+});
+
+test("the branch from a merge subject", () => {
+  assert.equal(branchFromSubject("Merge worktree-overwatch-q4n"), "worktree-overwatch-q4n");
+  assert.equal(branchFromSubject("overwatch-q4n: checkpoint"), null);
 });
 
 test("queue: under the lock, then the sender; never throws", () => {

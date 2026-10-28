@@ -102,6 +102,24 @@ export function sendPlanLine(mode, env = process.env) {
     "after the push (a failed send never stops this).";
 }
 
+/**
+ * `--send-summary <commit> --project <code>` from argv (npm run inventory): { commit, project }, null when
+ * --send-summary is absent, or { error }.
+ */
+export function parseSendSummaryArgs(argv) {
+  const at = argv.indexOf("--send-summary");
+  if (at < 0) return null;
+  const commit = argv[at + 1];
+  if (!commit || !/^[0-9a-f]{7,40}$/i.test(commit)) return { error: "--send-summary needs a commit hash (7 to 40 hex characters)." };
+  const p = argv.indexOf("--project");
+  const project = p >= 0 ? argv[p + 1] : undefined;
+  if (!project || !/^[a-z0-9_-]{1,40}$/.test(project)) return { error: "--send-summary needs --project <code>, e.g. --project overwatch-q4n." };
+  return { commit: commit.toLowerCase(), project };
+}
+
+/** The merged branch named in a merge commit's subject ("Merge worktree-x"), else null. */
+export const branchFromSubject = (subject) => /^Merge (worktree-[a-z0-9_-]{1,40})\b/.exec(subject ?? "")?.[1] ?? null;
+
 /** Queue the events and start the detached sender. Never throws: { queued, error }. */
 export function queueOverwatch(ctx, events, { lock, queue = queueEvents, kick = kickSender } = {}) {
   if (!events.length) return { queued: 0, error: null };
