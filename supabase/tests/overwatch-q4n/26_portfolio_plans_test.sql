@@ -221,7 +221,7 @@ begin
   -- h. The three new apps, with no screen.
   v_res := v_res || jsonb_build_object(
     'h_new_apps', (select count(*) = 3 and bool_and(path is null and button_name is null)
-                     from public.apps where id in ('homer', 'guy', 'handyman')));
+                     from public.apps where id in ('homer', 'guy', 'wall_e')));
 
   select string_agg(key, ', ' order by key) into v_failed
     from jsonb_each(v_res) where value is distinct from 'true'::jsonb;

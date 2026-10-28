@@ -96,6 +96,50 @@ export async function getProjects() {
   };
 }
 
+const SLICE_COLUMNS = "id, plan_id, lane_id, position, group_id, phases, why, status, paused_reason, status_changed_at";
+
+/**
+ * The portfolio plans (spec 4.16, section 9 item 3): unarchived portfolios in switch order, each one's
+ * active plan, its lanes and slices, every unclosed Project's progress (for the Now cards and "Not in
+ * the plan"), and the names of slice groups that progress does not cover (closed ones).
+ */
+export async function getPortfolioPlans() {
+  const empty = { portfolios: [], plans: [], lanes: [], slices: [], progress: [], groupNames: {} };
+  const { data: portfolios, error } = await supabase.from("portfolios").select("id, name, context_ids, position")
+    .eq("archived", false).order("position", { ascending: true }).order("name", { ascending: true });
+  if (error) fail("Could not load the portfolios", error);
+  if (!portfolios?.length) return empty;
+  const plans = await supabase.from("portfolio_plans").select("id, portfolio_id, theory, review_by, created_at")
+    .eq("active", true).in("portfolio_id", portfolios.map((p) => p.id));
+  if (plans.error) fail("Could not load the portfolio plans", plans.error);
+  const planIds = (plans.data || []).map((p) => p.id);
+  const none = Promise.resolve({ data: [], error: null });
+  const [lanes, slices, progress] = await Promise.all([
+    planIds.length
+      ? supabase.from("portfolio_lanes").select("id, plan_id, name, position, note").in("plan_id", planIds)
+        .order("position", { ascending: true })
+      : none,
+    planIds.length
+      ? supabase.from("portfolio_slices").select(SLICE_COLUMNS).in("plan_id", planIds).order("position", { ascending: true })
+      : none,
+    supabase.rpc("overwatch_project_progress", { p_status: ["someday", "active", "background"] }),
+  ]);
+  for (const [what, res] of [["lanes", lanes], ["slices", slices], ["projects", progress]]) {
+    if (res.error) fail(`Could not load the plan's ${what}`, res.error);
+  }
+  const known = new Set((progress.data || []).map((p) => p.group_id));
+  const missing = [...new Set((slices.data || []).map((s) => s.group_id))].filter((id) => !known.has(id));
+  const names = missing.length ? await supabase.from("item_groups").select("id, name").in("id", missing) : { data: [] };
+  return {
+    portfolios,
+    plans: plans.data || [],
+    lanes: lanes.data || [],
+    slices: slices.data || [],
+    progress: progress.data || [],
+    groupNames: Object.fromEntries((names.data || []).map((g) => [g.id, g.name])),
+  };
+}
+
 /** Quiet lately's live reads: each app's newest activity, the profiles' rhythms, and the ease_off watch items. */
 export async function getQuiet() {
   const [last, profiles, watch] = await Promise.all([

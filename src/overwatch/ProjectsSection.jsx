@@ -5,6 +5,7 @@ import { GroupTypeIcon } from "../shared/ObjectIcon";
 import { groupLink } from "./overwatchCopy";
 import OverwatchCopyButton from "./OverwatchCopyButton";
 import { projectView, shortDay } from "./projectsModel";
+import PortfolioPlan from "./PortfolioPlan";
 
 function stepsText(v, unit = " steps") {
   if (!v.effort_estimate) return `${v.steps_used} steps, no estimate`;
@@ -53,8 +54,11 @@ function Line({ label, children }) {
   );
 }
 
-/** The whole card is one real link to the group, stretched over it; inner links and the copy button sit above it. */
-function ProjectCard({ v, icon }) {
+/**
+ * The whole card is one real link to the group, stretched over it; inner links and the copy button sit above it.
+ * In the portfolio plan's Now group it also shows its slice's phases and why, and copies only when told to.
+ */
+export function ProjectCard({ v, icon, slice = null, copy = projectCopy(v) }) {
   return (
     <article
       className={`relative px-4 py-3.5 bg-card border rounded-lg hover:border-primary transition-colors ${
@@ -66,7 +70,7 @@ function ProjectCard({ v, icon }) {
           <GroupTypeIcon icon={icon} className="w-4 h-4 text-primary" align="first-line" />
           <Link to={groupDetailPath(v.group_id)} className="text-foreground after:absolute after:inset-0">{v.name}</Link>
         </h3>
-        <OverwatchCopyButton copy={projectCopy(v)} className="relative z-10" />
+        {copy && <OverwatchCopyButton copy={copy} className="relative z-10" />}
       </div>
       <p className="m-0 mt-1 mb-2 flex items-center gap-1.5 flex-wrap text-xs text-muted-foreground">
         {v.project_code && <><span>{v.project_code}</span><span aria-hidden="true">·</span></>}
@@ -79,6 +83,8 @@ function ProjectCard({ v, icon }) {
         <span>Finish {v.finish.label}</span>
       </p>
       <div className="space-y-1">
+        {slice?.phases && <Line label="Phases">{slice.phases}</Line>}
+        {slice?.why && <Line label="Why now">{slice.why}</Line>}
         {v.where_now && <Line label="Where now">{v.where_now}</Line>}
         {v.next_step && <Line label="Next">{v.next_step}</Line>}
         {v.waiting && (
@@ -111,7 +117,7 @@ function ProjectCard({ v, icon }) {
   );
 }
 
-export default function ProjectsSection({ data, today }) {
+function ActiveCards({ data, today }) {
   if (!data.projects.length) return <p className="m-0 text-sm text-muted-foreground">No active Projects.</p>;
   return (
     <div className="space-y-2">
@@ -120,4 +126,10 @@ export default function ProjectsSection({ data, today }) {
       ))}
     </div>
   );
+}
+
+/** With any portfolio, the portfolio plan; with none, the active Project cards as before. */
+export default function ProjectsSection({ data, portfolios = null, today }) {
+  if (!portfolios?.portfolios?.length) return <ActiveCards data={data} today={today} />;
+  return <PortfolioPlan projects={data} portfolios={portfolios} today={today} fallback={<ActiveCards data={data} today={today} />} />;
 }

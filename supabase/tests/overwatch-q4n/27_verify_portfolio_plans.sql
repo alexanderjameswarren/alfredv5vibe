@@ -43,7 +43,7 @@ select json_build_object(
         from unnest(array['anon', 'authenticated', 'service_role']) r
     ) t),
   'new_apps', (select coalesce(json_agg(t), '[]'::json) from (
-      select id, name, icon, path, button_name from public.apps where id in ('homer', 'guy', 'handyman') order by id
+      select id, name, icon, path, button_name from public.apps where id in ('homer', 'guy', 'wall_e') order by id
     ) t),
   'conformance', public.platform_check_conformance()
 ) as result;
