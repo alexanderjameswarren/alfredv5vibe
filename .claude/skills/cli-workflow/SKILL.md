@@ -5,7 +5,7 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
-Skill version: 2026-10-26a
+Skill version: 2026-10-28a
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -31,6 +31,11 @@ do with it; the block holds only the literal text. Expected results go on a
 separate line after the block, never inside it. See Rule 3b and the
 before-sending check for the details.
 
+**Copy boxes are only for text he must paste or type.** Text he only reads (a
+proposal a tool returned, a summary, the wording a screen should show) goes in a
+plain quote (`>`), not a copy box. A reply word he must send ("yes", "approve")
+is something he types, so it gets its own copy box.
+
 ## The step format
 
 Every instruction this skill gives Alex — to-dos, set up, testing, git
@@ -39,8 +44,18 @@ in a table. It sits on top of the copy-box rule; it does not replace it.
 
 - **Every action he takes is a numbered step.** Nothing he must do sits in
   prose above, between or after the steps.
-- **One physical action is one step.** Copying from a file and pasting it into
-  claude.ai is one step, not two.
+- **When prose comes before the numbered steps**, put a bold
+  **Instructions:** heading on its own line before step 1, so the steps are
+  easy to find.
+- **In to-dos, set up, git commands and closeout, one action is one step.**
+  Copying from a file and pasting it into claude.ai is one step, not two;
+  approving an inbox item and then adding it to a group are two steps.
+  **Testing is numbered by test, not by click** (Rule 3).
+- **A decision he must make is its own numbered step**, with each possible
+  answer in its own copy box. Never fold a decision into another step's
+  Feedback line.
+- **Name claude.ai settings by the label he sees** (for example Settings,
+  Connectors). When unsure of the exact label or path, say so rather than guess.
 - **The step line** is the number in bold (**1.**), then the location, a colon,
   then the action. Only the number is bold.
 - **The location is always stated and exact.** Use one of: "Worktree
@@ -59,9 +74,11 @@ in a table. It sits on top of the copy-box rule; it does not replace it.
 - **Then an "Expected:" line**, only when there is something specific to see.
   **Every terminal step has one**, so a command that fails silently shows.
 - **Then a "Feedback:" line**, only when he must send something back. Use
-  "screenshot" when the result is visual, "pass or fail" when it is a behavior,
-  and "paste the result cell here" for SQL. Leave the line off entirely when
-  nothing is needed.
+  "screenshot" when the result is visual and "pass or fail" when it is a
+  behavior. For SQL, name where the answer appears: "paste the result cell in
+  the Results grid", "paste the red error line in the Results panel", or "paste
+  the line in the Messages tab". Leave the line off entirely when nothing is
+  needed.
 - **A "Why:" line** only for an unusual or risky step, such as a checkpoint
   that merges specific files into main. Never for routine steps: finish, push,
   sync, running a migration, renaming the chat.
@@ -78,7 +95,7 @@ in a table. It sits on top of the copy-box rule; it does not replace it.
   the same step as the action that triggered it: "remove the Elise tag, then
   tap Undo before it disappears". The Expected line covers both. Split into
   separate steps, the Undo is gone before he reaches the second step. This is
-  the one exception to one action per step.
+  the one exception to one action per step in to-dos.
 
 Example:
 
@@ -100,6 +117,9 @@ Expected: the worktree is removed. If it reports uncommitted changes, paste the 
 email_capture_fix-r2w Email capture follow-up
 ```
 ````
+
+**Run tag numbers.** A new step always gets the next `s<number>`. A letter
+(`s18b`) is only for a follow-up within the same step, never for a new one.
 
 ## When to Use This Skill
 
@@ -209,9 +229,12 @@ and it can only do that if there is a tag.
   step: `s18c` after `s18b`.
 - **CLI output comes back through `get_recent_clips` by run tag**, never pasted.
   If the clip is missing, say so and wait; do not ask him to paste it.
-- **A changed skill is offered from main**, after its checkpoint, as the complete
-  file with its version line at the top ("Skill version: 2026-10-26a"), shown as
-  a skill update card. Never ask him to copy a skill out of a worktree.
+- **A changed skill is offered from main**, after its checkpoint, with the
+  `propose_skills` tool: a skill update card, kind `improvement`, carrying the
+  complete file from main with its version line at the top ("Skill version:
+  2026-10-28a"). Never as a file to paste, and never copied out of a worktree.
+- **A changed scheduled-task prompt is updated by Claude**, not pasted by Alex
+  (see "Changing a scheduled task's prompt").
 
 ### One prompt at a time
 
@@ -248,15 +271,21 @@ writing it, call `record_project_estimate` `kind: "final"` with a one-line
 `reason` (leave `estimate` out to use `steps_used`); the group must still be open.
 That reply is a list of steps in the step format, in this order:
 
-1. Worktree only: close the worktree's VS Code window.
-2. **MAIN** terminal: the `gitpush` Finish command.
+1. Worktree only: close the worktree's VS Code window. Keep this step: gitpush
+   Finish now checks, and refuses with "Close the <code> VS Code window first,
+   then run this again. Nothing was changed." while anything still has the
+   worktree folder open.
+2. **MAIN** terminal: the `gitpush` Finish command. Every push builds the app
+   first, as Vercel does, when it carries app files (src/, public/,
+   package.json); a failed build pushes nothing and says how to rerun.
+   `--skip-build` skips it, for emergencies only.
 3. This chat: rename it — the same name with "Not done" removed.
 4. Switchboard: check it is clear — the project's tile is gone, and for main,
    the bar reads `main: free`, with no claims left under the project code.
 5. Alfred app: close the project's Project group as **Completed**. That close
    writes the project's `shipped` row in Overwatch's activity log by itself, so do
    not also call `log_activity` for it. Name the group exactly as it appears in the
-   app.
+   app (plain words, no project code: "Starting a new project", 1a).
 
 For a worktree it looks like this:
 
@@ -285,7 +314,7 @@ Expected: no tile and no claims under rem-j7p.
 
 ---
 
-**5.** Alfred app: open the group "rem-j7p Reminders" and close it as Completed.
+**5.** Alfred app: open the group "Reminders" and close it as Completed.
 Expected: the group shows as closed; Overwatch logs it as shipped.
 ````
 
@@ -298,11 +327,21 @@ If the last report raised anything, deal with it first. Closeout waits.
 
 Skills live in the repo at `.claude/skills/<name>/SKILL.md`. To change one,
 have the CLI edit that file. Never hand him a zip. The CLI adds or bumps the
-version line under the skill's title ("Skill version: 2026-10-26a").
+version line under the skill's title ("Skill version: 2026-10-28a").
 
-Once the change has landed in main (a checkpoint), Claude offers the complete
-file from main, with its version line, as a skill update card. Never from a
-worktree and never as a fragment ("Nothing travels by hand", above).
+Once the change has landed in main (a checkpoint), Claude offers it with the
+`propose_skills` tool: a skill update card, kind `improvement`, with the
+complete file from main and its version line. Never as a file to paste, never
+from a worktree and never as a fragment ("Nothing travels by hand", above).
+
+### Changing a scheduled task's prompt
+
+A scheduled task (the Overwatch nightly and weekly, the DJ and Drive Mix tasks)
+runs the text saved in the task, not the repo's file. When a task's prompt file
+changes in main, **Claude updates the task itself**: `update_trigger` with the
+text below the file's "THE PROMPT" line, then reads the task back and checks the
+saved prompt matches, PROMPT VERSION included. Alex only approves the update.
+Never ask him to paste a prompt into a task.
 
 ### Friction: log it, and don't fix it yet
 
@@ -396,12 +435,14 @@ else will want the repo before it is done.
 In this order:
 
 1. **Project code and chat name.** Claude picks the project code, and tells Alex
-   what to rename this claude.ai chat to. The name must contain the project
-   code, because that is how Switchboard finds the chat's Chrome window. Alex
-   renames it; Claude cannot.
+   what to rename this claude.ai chat to: **"Not done", then the project code and
+   a few words**, e.g. "Not done overwatch-q4n Overwatch". The name must contain
+   the project code, because that is how Switchboard finds the chat's Chrome
+   window. Closeout's rename removes "Not done". Alex renames it; Claude cannot.
 1a. **The Project group and its plan.** No tool creates groups, so this is a step for
-   Alex: in the Alfred app, create a group of type Project named after the project
-   (the code and a few words, e.g. "overwatch-q4n Overwatch"), then set it to
+   Alex: in the Alfred app, create a group of type Project named in plain words
+   (e.g. "Overwatch"; no code needed, since the code lives in the plan's
+   `project_code`), then set it to
    **Active**: a new group starts as Someday, and Overwatch counts only active
    Projects. Then Claude calls
    `update_project_plan` with that group's id (from `get_project_plans`,
@@ -419,6 +460,8 @@ In this order:
    name), `suggested_item_description` (what it is for and how it will be done, a few
    lines), `suggested_item_elements` (the phases or main parts), `suggested_context_id`
    (the project's context) and `source_app` when the app is known.
+   **Suggest only tags the app accepts:** lowercase, spaces between words, no
+   punctuation (`whole foods`, not `Whole_Foods`).
 2. **Main or a worktree.** For a job that is one prompt, Claude asks whether to
    do it in the main checkout instead of a worktree, with a recommendation, and
    only when main is free (`main: free` on Switchboard, or nothing bound in
@@ -473,7 +516,7 @@ The CLI never runs these. A prompt asks Alex to run one and then waits.
 | `gitnewtree <project-code>` | Starting work that needs its own worktree. Refuses until main is committed and pushed, so `gitpush` main → Push comes first. Say yes to `npm install` when the thread will run tests or a build; skip it for docs-only work. |
 | `gitcom` | A local commit, part-way through. Commits only what this thread has claimed and has changed; asks about anything unclaimed. Releases nothing. |
 | `gitsync` | Inside a worktree, to bring main in. **Always before a database step**, so the thread is looking at everything already live. |
-| `gitpush` | From the main checkout's terminal (it always acts on the main checkout; Finish on a worktree must not run from inside it, so close that worktree's VS Code window first). Modes by checkout are in the next section. For **main**: Push (commit and push, keep the claims) / Finish (and release them) / Skip. For a **worktree**: Checkpoint (merge only named files, release the `db:` claims, worktree carries on) / Finish (merge everything, release every claim, remove the worktree) / Skip. |
+| `gitpush` | From the main checkout's terminal (it always acts on the main checkout; Finish on a worktree must not run from inside it, so close that worktree's VS Code window first). Modes by checkout are in the next section. For **main**: Push (commit and push, keep the claims) / Finish (and release them) / Skip. For a **worktree**: Checkpoint (merge only named files, release the `db:` claims, worktree carries on) / Finish (merge everything, release every claim, remove the worktree) / Skip. Every mode builds the app before pushing when the push carries app files, and Finish refuses while the worktree folder is open (see "Closing out a project"). |
 
 ### Which gitpush mode belongs to which checkout
 
@@ -777,6 +820,17 @@ was inside.
 **1. TLDR.** What the CLI actually did, in plain sentences. What changed, what
 works now, what it decided along the way.
 
+**A status summary** (in a TLDR, or whenever he asks where things stand) names
+each agreed part of the work and says whether it is built, tested, or still to
+come. Never "mostly done".
+
+**Read back what a to-do changed.** When the previous reply's to-dos changed
+Alfred data (records filed, groups edited, inbox items approved), this turn
+first reads those records back with the MCP tools and confirms each change,
+before anything else. If one is wrong or missing, say so and stop. Flag only
+real errors (the wrong type, missing text, the wrong record); where he chose to
+put something is his call.
+
 **Blocking lines.** If the report has any line starting `Blocking:`, put each one
 in the TLDR in plain words: which thread is waiting on which file.
 - **Unchanged file the CLI yielded:** say it was released, and that the waiting
@@ -796,10 +850,13 @@ in the TLDR in plain words: which thread is waiting on which file.
 
 **2. Questions and recommendations.** Anything the CLI asked, or anything it
 left open that needs a decision. Each one gets: the question restated in full,
-what is actually being asked, the recommendation, and one line of why.
+what is actually being asked, the recommendation, and one line of why. **Each
+decision he must make is then its own numbered step, with each answer in its own
+copy box**, never folded into another step's Feedback line.
 
 **3. Your to-dos.** Everything the user must do by hand — run SQL, edit a file,
-set a variable, deploy, install. Steps in the step format, one action per step.
+set a variable, deploy, install. Steps in the step format, one action per step
+(approving an inbox item, then adding it to a group, are two steps).
 Full paths, always (Rule 4). **Every command, path, setting value, SQL statement
 and find-and-replace string is in its own fenced code block** (Rule 3b) — never
 inline in the sentence, never in backticks. If the to-dos include more than one
@@ -809,7 +866,8 @@ read-only SQL check, combine them into one query (see Rule 5).
 it with steps like "run the testing below" or "tell me the results".
 
 **4. Testing.** Steps in the step format, explicit, doable without reading the
-CLI output and without DevTools. Each step is one app action or one copy box
+CLI output and without DevTools. Each numbered step is one test, with its
+actions as a bulleted list under it, then one Expected and one Feedback
 (Rule 3). **Every command he runs, every file he opens, every value he sets, and
 every prompt he pastes into a CLI session or a new thread is in its own fenced
 code block** (Rule 3b). Expected results go on their own line after the block. A
@@ -827,14 +885,17 @@ with its own block. SQL checks here follow Rule 5 too.
   records. The steps that check something go under a "Testing" subheading.
   Numbering runs straight through both, and **restarts at 1 in each part**.
 - **Every step names exactly what to touch**: the screen, the heading, the
-  button label, the record. Never "any group" or "for example". Before writing
-  the steps, look up live data with the MCP tools so the step names a group or
-  record that really exists.
+  button label, the record. Never "any group" or "for example". Before passing
+  on steps that name a record, look it up with the MCP tools; **if it does not
+  exist, the Set up creates a named test record first.**
 - **When a test changes data, the Set up creates a named test record first**,
   with a name that says it is a test, such as: Create an intention called "P4
   Test Interval no end date" that repeats daily with no end date. Later steps
   and SQL checks refer to that record by name, and cleanup only touches test
   records.
+- **Test-data cleanup is never in the same part as the tests.** It is its own
+  reply, written only after he has sent the results and you have confirmed they
+  passed, so nothing is deleted before he reports.
 - **Ask for a screenshot whenever the result is visual.** Screenshots work well.
 - **Timed actions stay in one step** (see "The step format"): an action and the
   Undo it brings up are one step.
@@ -865,7 +926,10 @@ that repeats daily with no end date.
 
 #### Testing
 
-**3.** Chrome: open "P4 Test Interval no end date", tap "Stop repeating", then tap Undo before it disappears.
+**3.** Undoing "Stop repeating" brings the repeat back.
+- Chrome: open "P4 Test Interval no end date".
+- Tap "Stop repeating", then tap Undo before it disappears.
+
 Expected: the repeat line shows "Daily" again.
 Feedback: screenshot
 ````
@@ -881,6 +945,9 @@ deploy just so he can test.
   view, local dev server" or "on the phone, after checkpoint". The label is
   something he reads, not types, so it stays inline. It is the one exception to
   the copy-box rule.
+- **SAM testing:** desktop Chrome only for steps that need no keyboard. Anything
+  that needs real key presses is a step on the Surface after the deploy, or an
+  automated test.
 
 **5. Stop — or reply to the CLI, but only if there is no testing.** If part 4
 has any testing steps, end the message there. Do not write anything for Alex to
@@ -940,80 +1007,73 @@ nothing. The question comes first, in full, then the recommendation.
   Keep it. It's the only thing that will catch a silent behaviour change when
   this code is refactored later."
 
-### Rule 3: every test step is either one app action or one paste-ready block
+### Rule 3: one test is one numbered step
 
-A test step is one of two things, never both, never several:
+**Number tests, not clicks.** Each numbered testing step is one thing being
+tested. Its step line says what is being tested. Under it:
 
-- **An app action** he does himself: open this screen, tap this button, look
-  for this text. One action per step.
-- **A paste-ready block**: a fenced code block containing the exact text he
-  pastes into a new Claude thread. Never a description of what to ask
-  ("Ask Claude for a reminder 10 minutes out"), never a quoted sentence inside
-  a numbered list.
+- **its actions, as a bulleted list**, in order. Each bullet is one action, and
+  starts with its location when that changes (Chrome, START NEW CLAUDE AI
+  THREAD, IN THAT SAME CLAUDE AI THREAD);
+- **then one "Expected:" line** and **one "Feedback:" line**, for the test as a
+  whole.
 
-**One block per paste.** If he has to paste, wait for a reply, then paste
-again, each paste is its own numbered step with its own fenced block. Never
-put two prompts in one block and never put a prompt inside prose.
+(To-dos keep one action per step; this is for testing only.)
 
-**Expected results go after the block, as a separate short line.** Never
-mixed into the block, where he'd paste them into Claude.
+**A paste is a bullet with its own copy box**: the exact text he pastes into a
+Claude thread. Never a description of what to ask ("Ask Claude for a reminder
+10 minutes out"), never a quoted sentence inside a bullet. One box per paste;
+never two prompts in one box, and never a prompt inside prose.
 
-**Split sequences.** If a sentence in a test contains "then", "and ask",
-"press", or more than one verb aimed at different places (the app and
-Claude), it is several steps. Split it until each step is one action or one
-paste. **The one exception is a timed action**: an action and the Undo it
-brings up stay in one step ("remove the Elise tag, then tap Undo before it
-disappears"), because split in two the Undo is gone before he reaches the
-second step. An Undo that stays on screen, such as the one in the inbox's
-Recently archived list, is a step of its own.
+**Expected results go after the actions, as a separate short line.** Never
+mixed into a copy box, where he'd paste them into Claude.
 
-**Each block tells the fresh thread what to report back**, so he can paste
-the reply here without reading it.
+**A timed action stays in one bullet**: an action and the Undo it brings up
+("remove the Elise tag, then tap Undo before it disappears"), because split in
+two the Undo is gone before he reaches the next one.
+
+**Each pasted block tells the fresh thread what to report back**, so he can
+paste the reply here without reading it.
 
 The new thread is mandatory for newly deployed tools: a session loads its
 tool list once at startup, so only a thread started after the deploy can see
-a new tool. Never fold tool-call checks into the CLI prompt, and never try
-the call in the current thread.
+a new tool. **After an mcp deploy that adds or changes a tool, the Set up's
+first step is refreshing the Alfred connector's tools in claude.ai**, then
+starting the new thread. Never fold tool-call checks into the CLI prompt, and
+never try the call in the current thread.
 
 Example, from a bad instruction ("Make another reminder, discard its item,
 and ask Claude for get_reminders with state all: it should be cancelled.
 Press Undo: it's scheduled again."):
 
 ````
-**1.** **START NEW CLAUDE AI THREAD**: paste
-```
-Use create_reminder to remind me "Test R3: discard" 30 minutes from now.
-Report only the reminder id and the inbox item id.
-```
-Feedback: paste the reply here.
+**1.** Discarding a capture cancels its reminder.
+- **START NEW CLAUDE AI THREAD**: paste
+  ```
+  Use create_reminder to remind me "Test R3: discard" 30 minutes from now.
+  Report only the reminder id and the inbox item id.
+  ```
+- Chrome: in the inbox, open "Test R3: discard" and discard it.
+- **IN THAT SAME CLAUDE AI THREAD**: paste
+  ```
+  Call get_reminders with state "all". Report the state and cancel reason
+  of "Test R3: discard", verbatim.
+  ```
 
----
-
-**2.** Chrome: in the inbox, open "Test R3: discard" and discard it.
-
----
-
-**3.** **IN THAT SAME CLAUDE AI THREAD**: paste
-```
-Call get_reminders with state "all". Report the state and cancel reason
-of "Test R3: discard", verbatim.
-```
 Expected: state cancelled, reason inbox_discarded.
-Feedback: paste the reply here.
+Feedback: paste the last reply here.
 
 ---
 
-**4.** Chrome: in the inbox's Recently archived list, tap Undo on "Test R3: discard".
-Expected: the item is back in the inbox.
+**2.** Undo puts the reminder back.
+- Chrome: in the inbox's Recently archived list, tap Undo on "Test R3: discard".
+- **IN THAT SAME CLAUDE AI THREAD**: paste
+  ```
+  Call get_reminders with state "all" again. Report the state of
+  "Test R3: discard", verbatim.
+  ```
 
----
-
-**5.** **IN THAT SAME CLAUDE AI THREAD**: paste
-```
-Call get_reminders with state "all" again. Report the state of
-"Test R3: discard", verbatim.
-```
-Expected: state scheduled.
+Expected: the item is back in the inbox, and the reminder's state is scheduled.
 Feedback: paste the reply here.
 ````
 
@@ -1175,8 +1235,10 @@ select json_build_object(
   returns one row. Without `coalesce`, a query with no rows returns `null`,
   which is easy to misread as an error.
 - No semicolons inside the inner queries.
-- Tell him what to paste back: "Copy the single value in the result cell and
-  paste it here."
+- Tell him what to paste back, named by where it appears in the SQL editor:
+  "paste the result cell in the Results grid". For a script that ends in a
+  deliberate error, "paste the red error line in the Results panel"; for a
+  NOTICE, "paste the line in the Messages tab".
 
 **Only pure reads.** Migrations, inserts, updates, deletes, and any function
 call that changes state stay as separate statements, run on their own, so a
