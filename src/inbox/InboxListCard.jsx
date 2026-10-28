@@ -37,6 +37,8 @@ import { Calendar, Check, File, FolderOpen, Navigation2, Trash2 } from "lucide-r
 import { friendlyDate, sourceLabel, SourceIcon } from "./CaptureMeta";
 import { canProcessInOneTap, copyTextForTask, isEnriched, listTitleFor } from "../utils/inboxSuggestions";
 import CopyButton from "../shared/CopyButton";
+import { GroupTypeIcon } from "../shared/ObjectIcon";
+import { groupLabel } from "./SuggestedGroup";
 
 /** A YYYY-MM-DD date, written short ("Thu, Oct 1"). */
 function shortDate(value) {
@@ -99,7 +101,9 @@ function PreviewMark({ icon: Glyph, tone, children }) {
  *   reminder ("7:17 AM"), or, muted, the latest sent one ("Sent 7:36 AM"). Omitted
  *   when there is neither.
  */
-export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProcess, onDiscard, onSetStatus, reminder }) {
+export default function InboxListCard({ inboxItem, contexts = [], groups = [], onOpen, onProcess, onDiscard, onSetStatus, reminder }) {
+  // Overwatch 8c: "Project: Overwatch" on its own line. A group that is not open (or not loaded) is not named.
+  const group = inboxItem.suggestedGroupId ? groups.find((g) => g.id === inboxItem.suggestedGroupId) : null;
   const enriched = isEnriched(inboxItem);
   // What the filed item and intention will start as (088). One tap flips it.
   const status = inboxItem.suggestedStatus === "active" ? "active" : "someday";
@@ -194,6 +198,13 @@ export default function InboxListCard({ inboxItem, contexts = [], onOpen, onProc
               </Chip>
             ))}
           </div>
+        )}
+
+        {group && (
+          <p className="m-0 flex items-center gap-1.5 min-w-0 text-xs text-foreground">
+            <GroupTypeIcon icon={group.typeIcon} className="w-3.5 h-3.5 shrink-0 text-primary" />
+            <span className="truncate">{groupLabel(group)}</span>
+          </p>
         )}
       </div>
 

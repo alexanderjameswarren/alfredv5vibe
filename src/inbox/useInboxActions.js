@@ -261,7 +261,8 @@ export function useInboxActions({
   async function processInboxItemFromList(inboxItemId) {
     const inboxItem = inboxItems.find((i) => i.id === inboxItemId);
     if (!inboxItem) return;
-    return handleInboxSave(inboxItemId, triageDataForOneTap(inboxItem));
+    // The suggested group goes with it, as the detail page's untouched Process would send it.
+    return handleInboxSave(inboxItemId, triageDataForOneTap(inboxItem), { groupId: inboxItem.suggestedGroupId || null });
   }
 
   /**
@@ -448,12 +449,19 @@ export function processInboxPayload(triageData, options = {}) {
       payload.collection = { collection_id: c.collectionId, item_id: target, quantity: c.quantity || "1" };
     }
   }
+
+  // Overwatch 8c: the new intention (or, with none, the item) joins this group, in the same call.
+  if (options.groupId && (payload.item || payload.intent)) payload.group = { group_id: options.groupId };
   return payload;
 }
 
 /** The alert for a failed Process. Nothing was written, so it is safe to try again. */
 export function processFailedMessage(error) {
   if (error?.code === "55000") return "That capture has already been filed. Nothing was changed.";
+  if (/not one of your open groups/.test(error?.message || "")) {
+    return "That group is closed, archived or no longer yours, so nothing was filed and the capture is still in " +
+      "your inbox. Pick another group, or No group, and Process again.";
+  }
   return `Could not process that capture. Nothing was saved, and it is still in your inbox.\n\n${error?.message || ""}`.trim();
 }
 
@@ -488,5 +496,6 @@ const CLEARED_ENRICHMENT = {
   suggestedEventDate: null,
   suggestedTags: [],
   suggestedCollectionId: null,
+  suggestedGroupId: null,
   suggestedStatus: "someday",
 };

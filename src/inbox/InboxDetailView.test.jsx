@@ -1,6 +1,7 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import { MemoryRouter } from "react-router-dom";
 import InboxDetailView from "./InboxDetailView";
 import { intentionRowFromTriage } from "../utils/intentionRows";
 import { toSnakeCase } from "../utils/caseConvert";
@@ -944,13 +945,50 @@ describe("App picker (Restructure P3)", () => {
     const { onProcess } = setup({ suggestItem: true });
     fireEvent.change(screen.getByLabelText("App"), { target: { value: "jobs" } });
     fireEvent.click(processButton());
-    expect(onProcess.mock.calls[0][2]).toEqual({ sourceApp: "jobs" });
+    expect(onProcess.mock.calls[0][2]).toEqual({ sourceApp: "jobs", groupId: null });
   });
 
   it("sends null for No app", () => {
     const { onProcess } = setup({ suggestItem: true, sourceApp: "jobs" });
     fireEvent.change(screen.getByLabelText("App"), { target: { value: "" } });
     fireEvent.click(processButton());
-    expect(onProcess.mock.calls[0][2]).toEqual({ sourceApp: null });
+    expect(onProcess.mock.calls[0][2]).toEqual({ sourceApp: null, groupId: null });
+  });
+});
+
+describe("Group (Overwatch 8c)", () => {
+  const GROUPS = [
+    { id: "g-ow", name: "Overwatch", typeLabel: "Project", typeIcon: "SquareKanban", contextId: "ctx-alfred" },
+    { id: "g-menu", name: "Pinto Beans and Spanish Rice", typeLabel: "Menu", typeIcon: "UtensilsCrossed", contextId: "ctx-home" },
+  ];
+
+  // The group's "Open" link needs a router; the rest of this file renders without one.
+  const setupWithGroups = (overrides) => {
+    const onProcess = jest.fn();
+    const onDirtyChange = jest.fn();
+    render(
+      <MemoryRouter>
+        <InboxDetailView inboxItem={capture(overrides)} contexts={CONTEXTS} items={ITEMS} tagPool={[]} groups={GROUPS}
+          onProcess={onProcess} onDiscard={jest.fn()} onBack={jest.fn()} onDirtyChange={onDirtyChange}
+          renderRecurrence={() => null} />
+      </MemoryRouter>,
+    );
+    return { onProcess, onDirtyChange };
+  };
+
+  it("shows the suggestion as its type and name, and sends it to Process", () => {
+    const { onProcess } = setupWithGroups({ suggestIntent: true, suggestedContextId: "ctx-alfred", suggestedGroupId: "g-ow" });
+    expect(screen.getByLabelText("Group")).toHaveValue("g-ow");
+    expect(screen.getByRole("option", { name: "Project: Overwatch" })).toBeInTheDocument();
+    fireEvent.click(processButton());
+    expect(onProcess.mock.calls[0][2]).toEqual({ sourceApp: null, groupId: "g-ow" });
+  });
+
+  it("changing it marks the page dirty; No group sends null", () => {
+    const { onProcess, onDirtyChange } = setupWithGroups({ suggestIntent: true, suggestedGroupId: "g-ow" });
+    fireEvent.change(screen.getByLabelText("Group"), { target: { value: "" } });
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true, "this capture");
+    fireEvent.click(processButton());
+    expect(onProcess.mock.calls[0][2].groupId).toBeNull();
   });
 });
