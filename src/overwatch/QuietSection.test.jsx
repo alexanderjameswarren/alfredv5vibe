@@ -77,7 +77,7 @@ test("the copy: app id, link, last use, rhythm, the question", async () => {
 });
 
 test("every app's icon is bundled, the three new ones included", () => {
-  for (const name of ["Cable", "Sprout", "Trophy", "TowerControl", "Wallet", "Music"]) expect(APP_ICONS[name]).toBeTruthy();
+  for (const name of ["Cable", "Sprout", "Trophy", "TowerControl", "Wallet", "Music", "BookOpen", "Ticket", "Hammer"]) expect(APP_ICONS[name]).toBeTruthy();
 });
 
 test("empty", () => {
