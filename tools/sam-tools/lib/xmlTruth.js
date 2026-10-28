@@ -2,6 +2,44 @@
 // Deliberately independent of songParser.js — this is the oracle, not a rewrite.
 
 import { JSDOM } from "jsdom";
+import { ALL_TOKENS, tokenToBeats } from "./durations.js";
+
+// sam_xml_import rules, stated here independently of the parser:
+//   - cue notes and hidden (print-object="no") pitched notes are not played;
+//     the head keeps its time as a rest, its chord members go
+//   - a two-note tremolo is two notes of half the total each, no ratio
+//   - notes outside the piano (MIDI 21-108) are kept, marked unscored
+//   - a run of tuplet notes no token can express (a tuplet inside a tuplet,
+//     rounded by the exporter) is one event spanning the run, first chord kept
+export const PIANO_MIDI = { min: 21, max: 108 };
+const TYPE_BEATS = {
+  breve: 8, whole: 4, half: 2, quarter: 1, eighth: 0.5,
+  "16th": 0.25, "32nd": 0.125, "64th": 0.0625,
+};
+
+function expressible(dur, tuplet) {
+  const shown = tuplet ? (dur * tuplet.actual) / tuplet.normal : dur;
+  return ALL_TOKENS.some((t) => Math.abs(tokenToBeats(t) - shown) < 1e-6);
+}
+
+export function foldInexpressibleRuns(evs) {
+  let dropped = 0;
+  for (let i = 0; i < evs.length; i++) {
+    const head = evs[i];
+    if (!head.tuplet || expressible(head.dur, head.tuplet)) continue;
+    const same = (e) => e.tuplet && e.tuplet.actual === head.tuplet.actual && e.tuplet.normal === head.tuplet.normal;
+    let j = i;
+    while (j + 1 < evs.length && same(evs[j + 1]) && !expressible(evs[j + 1].dur, evs[j + 1].tuplet)) j++;
+    let end = evs[j].onset + evs[j].dur;
+    const next = evs[j + 1];
+    if (next && next.onset > end && next.onset - end < 0.0625) end = next.onset;
+    if (!expressible(end - head.onset, head.tuplet)) continue;
+    for (let k = i + 1; k <= j; k++) dropped += evs[k].notes.length;
+    head.dur = end - head.onset;
+    evs.splice(i + 1, j - i);
+  }
+  return dropped;
+}
 
 // Widened from 1e-9 during the M2 validator changes. The tighter value
 // worked for the fixtures at hand but was uncomfortably close to accumulated
@@ -70,11 +108,15 @@ function parseMeasure(measEl, state) {
     tupletRatios: new Set(),
     crossStaffVoices: new Set(),
     unpitched: 0,
+    notPlayed: 0,
+    unscored: 0,
+    folded: 0,
   };
 
   let cursor = 0;
   let lastKey = null;
   let lastOnset = 0;
+  let headDropped = false;
 
   for (const el of Array.from(measEl.children)) {
     if (el.tagName === "backup") {
@@ -107,8 +149,23 @@ function parseMeasure(measEl, state) {
     }
 
     const isChord = el.querySelector("chord") !== null;
-    const isRest = el.querySelector("rest") !== null;
-    const dur = (parseInt(text(el, "duration"), 10) || 0) / div;
+    let isRest = el.querySelector("rest") !== null;
+    let dur = (parseInt(text(el, "duration"), 10) || 0) / div;
+    const notPlayed = el.querySelector("cue") !== null ||
+      (!isRest && el.getAttribute("print-object") === "no");
+    if (isChord && (headDropped || notPlayed)) {
+      flags.notPlayed += 1;
+      continue;
+    }
+    if (!isChord) {
+      headDropped = notPlayed;
+      if (notPlayed) {
+        flags.notPlayed += 1;
+        isRest = true;
+      }
+    }
+    const tremType = isRest ? null : el.querySelector("notations tremolo")?.getAttribute("type");
+    const twoNoteTremolo = tremType === "start" || tremType === "stop";
     const staff = text(el, "staff") || "1";
     const voice = text(el, "voice") || "1";
     const key = `${staff}:${voice}`;
@@ -124,7 +181,16 @@ function parseMeasure(measEl, state) {
 
     const tm = el.querySelector("time-modification");
     let tuplet = null;
-    if (tm) {
+    if (twoNoteTremolo && !isChord) {
+      // Written at the full value (no ratio) → halve; MuseScore's halved
+      // duration + 2:1 ratio → keep the duration, drop the ratio.
+      const base = TYPE_BEATS[text(el, "type")];
+      const shown = base === undefined ? null : base * (2 - Math.pow(2, -el.querySelectorAll("dot").length));
+      if (!tm && shown !== null && near(dur, shown)) dur = shown / 2;
+    }
+    const tremoloRatio = twoNoteTremolo && tm &&
+      text(tm, "actual-notes") === "2" && text(tm, "normal-notes") === "1";
+    if (tm && !tremoloRatio) {
       const actual = parseInt(text(tm, "actual-notes"), 10) || 0;
       const normal = parseInt(text(tm, "normal-notes"), 10) || 0;
       if (actual && normal) {
@@ -150,6 +216,10 @@ function parseMeasure(measEl, state) {
         if (tieStart && tieStop) note.tie = "both";
         else if (tieStart) note.tie = "start";
         else if (tieStop) note.tie = "end";
+        if (note.midi < PIANO_MIDI.min || note.midi > PIANO_MIDI.max) {
+          note.unscored = true;
+          flags.unscored += 1;
+        }
       } else {
         flags.unpitched += 1;
       }
@@ -175,6 +245,8 @@ function parseMeasure(measEl, state) {
       lastKey = key;
     }
   }
+
+  for (const evs of voices.values()) flags.folded += foldInexpressibleRuns(evs);
 
   for (const [voice, staves] of flags.voicesByNumber ?? []) {
     if (staves.size > 1) flags.crossStaffVoices.add(`voice ${voice} on staves ${[...staves].join("+")}`);
@@ -482,11 +554,16 @@ export function resolvePlaybackOrder(measEls) {
  * above). If a future milestone touches a tier-A tag, verify what it
  * actually does to sounding pitch before implementing anything.
  */
+// sam_xml_import (2026-10-28): tremolo and cue left tier A for B — both are
+// resolved above and change timing/content, not pitch. glissando and slide
+// left A for C — the written start and end notes are the pitches; the line
+// between them is a marking.
 export const NOTATION_TIERS = {
   A: ["transpose", "trill-mark", "mordent", "inverted-mordent",
-      "turn", "inverted-turn", "tremolo", "glissando", "slide", "cue"],
-  B: ["fermata", "metronome", "measure-style", "arpeggiate", "non-arpeggiate"],
-  C: ["octave-shift",
+      "turn", "inverted-turn"],
+  B: ["fermata", "metronome", "measure-style", "arpeggiate", "non-arpeggiate",
+      "tremolo", "cue"],
+  C: ["octave-shift", "glissando", "slide",
       "pedal", "staccato", "staccatissimo", "accent", "strong-accent", "tenuto", "detached-legato",
       "dynamics", "wedge", "slur"],
   D: ["harmony", "rehearsal"],

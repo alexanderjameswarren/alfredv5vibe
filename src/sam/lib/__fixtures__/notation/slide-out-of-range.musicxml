@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Great Balls of Fire m35: D8 (MIDI 110) sliding down to E6, then a stop+start chain. -->
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves></attributes>
+      <note><pitch><step>D</step><octave>8</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><staff>1</staff>
+        <notations><slide line-type="solid" number="1" type="start">gliss.</slide></notations></note>
+      <note><pitch><step>E</step><octave>6</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><staff>1</staff>
+        <notations><slide line-type="solid" number="1" type="stop"/><slide line-type="solid" number="2" type="start"/></notations></note>
+      <note><pitch><step>C</step><octave>5</octave></pitch><duration>2</duration><voice>1</voice><type>half</type><staff>1</staff>
+        <notations><slide line-type="solid" number="2" type="stop"/></notations></note>
+      <backup><duration>4</duration></backup>
+      <note><pitch><step>G</step><octave>0</octave></pitch><duration>4</duration><voice>5</voice><type>whole</type><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>

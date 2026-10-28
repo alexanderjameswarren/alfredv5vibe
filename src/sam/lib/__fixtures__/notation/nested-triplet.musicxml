@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Green Onions (Terrence) m49 beat 1: three dotted-32nd triplets rounded to 53/480, a <forward>1, then F4 and a rest in the same triplet. -->
+<score-partwise version="4.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>480</divisions><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves></attributes>
+      <note><pitch><step>A</step><alter>-1</alter><octave>4</octave></pitch><duration>53</duration><voice>1</voice><type>32nd</type><dot/>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>1</staff></note>
+      <note><chord/><pitch><step>C</step><octave>5</octave></pitch><duration>53</duration><voice>1</voice><type>32nd</type><dot/>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>1</staff></note>
+      <note><pitch><step>A</step><octave>4</octave></pitch><duration>53</duration><voice>1</voice><type>32nd</type><dot/>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>1</staff></note>
+      <note><pitch><step>A</step><alter>-1</alter><octave>4</octave></pitch><duration>53</duration><voice>1</voice><type>32nd</type><dot/>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>1</staff></note>
+      <forward><duration>1</duration></forward>
+      <note><pitch><step>F</step><octave>4</octave></pitch><duration>160</duration><voice>1</voice><type>eighth</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>1</staff></note>
+      <note><rest/><duration>160</duration><voice>1</voice><type>eighth</type>
+        <time-modification><actual-notes>3</actual-notes><normal-notes>2</normal-notes></time-modification><staff>1</staff></note>
+      <note><rest/><duration>1440</duration><voice>1</voice><type>half</type><dot/><staff>1</staff></note>
+      <backup><duration>1920</duration></backup>
+      <note><rest/><duration>1920</duration><voice>5</voice><type>whole</type><staff>2</staff></note>
+    </measure>
+  </part>
+</score-partwise>

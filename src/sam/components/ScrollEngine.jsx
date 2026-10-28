@@ -1,7 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { colorBeatEls, getMeasureWidth } from "../lib/vexflowHelpers";
 import { getMeasDurationQ } from "../lib/measureUtils";
-import { renderCopy, playClick } from "../lib/scoreRender";
+import {
+  renderCopy, playClick, scorePadding, placeBarLabels, topRoomFor, growSvgTop,
+  PRACTICE_TREBLE_Y, PRACTICE_BASS_Y,
+} from "../lib/scoreRender";
 import { buildNoteTimeline } from "../lib/noteTimeline";
 import { playNote, midiToFreq, getMasterBus } from "../lib/synthVoice";
 import { drawFingeringOverlay } from "../lib/fingeringOverlay";
@@ -51,6 +54,17 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
   const runningRef = useRef(false);
   const [svgReady, setSvgReady] = useState(false);
 
+  // Extra room between and below the staves, sized once per song. Room above
+  // is measured from the drawn score (extraTop, set by the render effect).
+  const pad = useMemo(
+    () => scorePadding(measures, {
+      trebleY: PRACTICE_TREBLE_Y, bassY: PRACTICE_BASS_Y, height: SCROLL_GEOMETRY.staffHeight,
+    }),
+    [measures]
+  );
+  const [extraTop, setExtraTop] = useState(0);
+  const scoreHeight = SCROLL_GEOMETRY.staffHeight + pad.gap + pad.bottom;
+
   // Render copies of the score SVG into the scroll layer (1 copy for non-looping, 3 for looping)
   useEffect(() => {
     if (!measures || measures.length === 0) return;
@@ -84,7 +98,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     copyWidthRef.current = singleCopyWidth * SCORE_SCALE;
 
     const renderer = new VF.Renderer(scrollLayer, VF.Renderer.Backends.SVG);
-    renderer.resize(totalWidth * SCORE_SCALE, SCROLL_GEOMETRY.staffHeight * SCORE_SCALE);
+    renderer.resize(totalWidth * SCORE_SCALE, scoreHeight * SCORE_SCALE);
     const ctx = renderer.getContext();
     ctx.scale(SCORE_SCALE, SCORE_SCALE);
 
@@ -93,13 +107,25 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
     const copyBeatCounts = [];
     const allGeometry = [];
     const allLabelEls = [];
+    const allBarLabels = [];
     for (let c = 0; c < numCopies; c++) {
       const xStart = 10 + c * singleCopyWidth;
-      const { beatMeta, geometry, labelEls } = renderCopy(VF, ctx, measures, c, xStart, measureWidth, measDurations, measStartBeats);
+      const { beatMeta, geometry, labelEls, barLabels = [] } = renderCopy(VF, ctx, measures, c, xStart, measureWidth, measDurations, measStartBeats, pad);
       copyBeatCounts.push(beatMeta.length);
       allBeatMeta.push(...beatMeta);
       allGeometry.push(...geometry);
       allLabelEls.push(...labelEls);
+      allBarLabels.push(...barLabels);
+    }
+    // Bar numbers clear whatever was actually drawn under them; anything drawn
+    // above the top edge grows the score upward.
+    const skip = new Set([...allLabelEls, ...allBarLabels.flatMap((l) => l.followers)]);
+    const svg = scrollLayer.querySelector("svg");
+    if (svg) {
+      const { minY } = placeBarLabels(svg, allBarLabels, skip);
+      const top = topRoomFor(minY);
+      growSvgTop(svg, top, SCORE_SCALE);
+      setExtraTop(top);
     }
     // Store for the fingering-overlay effect (drawn per copy so badges/rings
     // ride along as each copy scrolls through the target line).
@@ -929,7 +955,7 @@ export default function ScrollEngine({ measures, bpm, playbackState, onBeatEvent
         ref={viewportRef}
         onClick={onTap}
         className="relative overflow-hidden bg-white rounded-lg border border-border cursor-pointer"
-        style={{ height: SCROLL_GEOMETRY.staffHeight * SCORE_SCALE + 4 }}
+        style={{ height: (scoreHeight + extraTop) * SCORE_SCALE + 4 }}
       >
         {/* Target zone (subtle blue tint) */}
         <div

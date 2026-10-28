@@ -25,6 +25,8 @@
 // splits don't produce orphan `end`s.
 
 import {
+  ALL_TOKENS,
+  tokenToBeats,
   beatsToTokens,
   fromTimeline,
   sumEvents,
@@ -66,11 +68,36 @@ const KEY_NAMES = {
 //
 // Kept in sync with tools/sam-tools/lib/xmlTruth.js NOTATION_TIERS.A
 // (post spec §5 amendment 2026-08-05: octave-shift and arpeggiate
-// removed from tier A after empirical verification).
+// removed from tier A after empirical verification; 2026-10-28: tremolo,
+// glissando, slide and cue removed — handled below).
 const UNHANDLED_PITCH_TAGS = [
   "transpose", "trill-mark", "mordent", "inverted-mordent",
-  "turn", "inverted-turn", "tremolo", "glissando", "slide", "cue",
+  "turn", "inverted-turn",
 ];
+
+// Notations the parser now resolves and records as a marking on the note
+// (`tremolo`, `gliss`). Still reported per tag so validate.js's Group B check
+// sees the literal `<tag>` and treats it as acknowledged.
+const MARKED_NOTATION_TAGS = ["tremolo", "glissando", "slide"];
+
+// Playable piano range, A0..C8. Notes outside it are kept but stored
+// `unscored: true` — nobody can press a key that isn't there.
+export const PIANO_MIN_MIDI = 21;
+export const PIANO_MAX_MIDI = 108;
+
+// <type> → quarter-note beats, for telling a two-note tremolo written at full
+// length from one already halved.
+const TYPE_BEATS = {
+  breve: 8, whole: 4, half: 2, quarter: 1, eighth: 0.5,
+  "16th": 0.25, "32nd": 0.125, "64th": 0.0625,
+};
+
+function displayedBeats(noteEl) {
+  const base = TYPE_BEATS[noteEl.querySelector("type")?.textContent];
+  if (base === undefined) return null;
+  const dots = noteEl.querySelectorAll("dot").length;
+  return base * (2 - Math.pow(2, -dots));
+}
 
 // M7 — CARRIED notations. Parser stores per-measure presence + position
 // (measure.notations list) and emits a parseWarning per tag naming
@@ -311,6 +338,44 @@ export function mergeStaff(voices, staff, measureLen, parseWarnings, context) {
   return out;
 }
 
+// A tuplet inside a tuplet (Green Onions (Terrence) m49: three notes in the
+// space of one triplet eighth) reaches us as rounded durations no SAM token can
+// express, and fromTimeline would turn each into a best-effort quarter. Fold
+// each such run into one event spanning the run, keeping its first chord.
+// A sub-64th gap before the next event (the exporter's rounding <forward>) is
+// absorbed. Mutates `evs`; returns how many notes were dropped.
+const FOLD_GAP_MAX = 0.0625;
+
+function representable(dur, tuplet) {
+  const shown = tuplet ? (dur * tuplet.actual) / tuplet.normal : dur;
+  return ALL_TOKENS.some((t) => Math.abs(tokenToBeats(t) - shown) < 1e-6);
+}
+
+function sameRatio(a, b) {
+  return (a?.actual ?? 0) === (b?.actual ?? 0) && (a?.normal ?? 0) === (b?.normal ?? 0);
+}
+
+export function foldUnrepresentableRuns(evs) {
+  let dropped = 0;
+  for (let i = 0; i < evs.length; i++) {
+    const first = evs[i];
+    if (!first.tuplet || representable(first.dur, first.tuplet)) continue;
+    let j = i;
+    while (j + 1 < evs.length && sameRatio(evs[j + 1].tuplet, first.tuplet) &&
+           !representable(evs[j + 1].dur, evs[j + 1].tuplet)) j++;
+    const last = evs[j];
+    let end = last.onset + last.dur;
+    const next = evs[j + 1];
+    if (next && next.onset > end && next.onset - end < FOLD_GAP_MAX) end = next.onset;
+    const span = end - first.onset;
+    if (!representable(span, first.tuplet)) continue;
+    for (let k = i + 1; k <= j; k++) dropped += evs[k].notes.length;
+    first.dur = span;
+    evs.splice(i + 1, j - i);
+  }
+  return dropped;
+}
+
 // ---------------------------------------------------------------------------
 // Phase A — parse one measure into intermediate voice-map form.
 // Mutates `state` (divisions, timeSig, key) so subsequent measures inherit.
@@ -354,6 +419,12 @@ function parseMeasureIntermediate(measEl, state, options) {
     // Group B gate reads parseWarnings for `<${tag}>` substrings, so
     // the warning tag must be emitted literally with the angle brackets.
     unhandledPitchTags: new Set(),
+    markedTags: new Set(),
+    cueCount: 0,
+    hiddenCount: 0,
+    outOfRangeCount: 0,
+    cutPastBarline: 0,
+    foldedCount: 0,
     // M7 — <harmony>, <rehearsal>, <sound tempo>, CARRIED notations.
     // Extracted with beat offsets (in quarter-note beats) so a future
     // renderer/playback engine has full positional context. Under
@@ -366,6 +437,9 @@ function parseMeasureIntermediate(measEl, state, options) {
   };
   for (const tag of UNHANDLED_PITCH_TAGS) {
     if (measEl.querySelector(tag)) flags.unhandledPitchTags.add(tag);
+  }
+  for (const tag of MARKED_NOTATION_TAGS) {
+    if (measEl.querySelector(`notations ${tag}`)) flags.markedTags.add(tag);
   }
   // M7 CARRIED tags — one presence scan for the whole measure subtree.
   // These attach to notes (<note><notations><fermata>, <slur>, articulations)
@@ -381,6 +455,8 @@ function parseMeasureIntermediate(measEl, state, options) {
   const seenChords = new Set();
   let cursor = 0;
   let lastKey = null;
+  let droppedHead = null; // flag name of a dropped chord head, so its members go too
+  let chordTremolo;
 
   for (const el of Array.from(measEl.children)) {
     if (el.tagName === "backup") {
@@ -442,10 +518,55 @@ function parseMeasureIntermediate(measEl, state, options) {
     }
 
     const isChord = el.querySelector("chord") !== null;
-    const isRest = el.querySelector("rest") !== null;
-    const dur = (parseInt(el.querySelector("duration")?.textContent, 10) || 0) / div;
+    let isRest = el.querySelector("rest") !== null;
+    let dur = (parseInt(el.querySelector("duration")?.textContent, 10) || 0) / div;
     const voice = el.querySelector("voice")?.textContent || "1";
     let staff = el.querySelector("staff")?.textContent || options.forceStaff || "1";
+
+    // Cue notes and hidden pitched notes are not played. They still take up
+    // time in their voice, so the head becomes a rest; its chord members go.
+    const isCue = el.querySelector("cue") !== null;
+    const isHidden = !isRest && el.getAttribute("print-object") === "no";
+    const dropKind = isCue ? "cueCount" : isHidden ? "hiddenCount" : null;
+    if (isChord) {
+      const kind = droppedHead || dropKind;
+      if (kind) {
+        flags[kind] += 1;
+        continue;
+      }
+    } else {
+      droppedHead = dropKind;
+      if (dropKind) {
+        flags[dropKind] += 1;
+        isRest = true;
+      }
+    }
+
+    // Tremolo. A two-note tremolo is written as two notes each at the full
+    // displayed value; MuseScore halves <duration> and adds a 2:1 ratio, other
+    // exporters do neither. Either way each note gets half the total, no ratio.
+    const tremoloEl = isRest ? null : el.querySelector("notations tremolo");
+    let tremolo;
+    let dropTuplet = false;
+    if (tremoloEl) {
+      tremolo = {
+        type: tremoloEl.getAttribute("type") || "single",
+        marks: parseInt(tremoloEl.textContent, 10) || 3,
+      };
+      if (tremolo.type === "start" || tremolo.type === "stop") {
+        const tm = el.querySelector("time-modification");
+        const shown = displayedBeats(el);
+        if (tm) {
+          const a = parseInt(tm.querySelector("actual-notes")?.textContent, 10);
+          const n = parseInt(tm.querySelector("normal-notes")?.textContent, 10);
+          dropTuplet = a === 2 && n === 1;
+        } else if (!isChord && shown !== null && Math.abs(dur - shown) < EPS) {
+          dur = shown / 2;
+        }
+      }
+    }
+    if (!isChord) chordTremolo = tremolo;
+    else if (!tremolo && chordTremolo) tremolo = { ...chordTremolo };
 
     let noteObj = null;
     if (!isRest) {
@@ -464,6 +585,22 @@ function parseMeasureIntermediate(measEl, state, options) {
         else if (tieStop) tie = "end";
         noteObj = { midi, name };
         if (tie) noteObj.tie = tie;
+        if (tremolo) noteObj.tremolo = tremolo;
+        const glissEl = el.querySelector("notations glissando, notations slide");
+        if (glissEl) {
+          const types = new Set(
+            Array.from(el.querySelectorAll("notations glissando, notations slide"))
+              .map((g) => g.getAttribute("type"))
+          );
+          noteObj.gliss = {
+            kind: glissEl.tagName,
+            type: types.has("start") && types.has("stop") ? "both" : types.has("stop") ? "stop" : "start",
+          };
+        }
+        if (midi < PIANO_MIN_MIDI || midi > PIANO_MAX_MIDI) {
+          noteObj.unscored = true;
+          flags.outOfRangeCount += 1;
+        }
         // M/spec §6 — RH fingering cue. Rides on the note object through
         // mergeStaff + fromTimeline; parseMusicXML lifts it into a parallel
         // fingerings[] array and strips it before emitting (never inline in
@@ -489,7 +626,7 @@ function parseMeasureIntermediate(measEl, state, options) {
       }
     }
 
-    const timeModEl = el.querySelector("time-modification");
+    const timeModEl = dropTuplet ? null : el.querySelector("time-modification");
     let tuplet;
     if (timeModEl) {
       const actual = parseInt(timeModEl.querySelector("actual-notes")?.textContent, 10) || 0;
@@ -543,6 +680,20 @@ function parseMeasureIntermediate(measEl, state, options) {
       list.push(evt);
       cursor += dur;
       lastKey = key;
+    }
+  }
+
+  for (const evs of voices.values()) {
+    flags.foldedCount += foldUnrepresentableRuns(evs);
+  }
+
+  // mergeStaff only segments [0, measureLen]; anything sounding past the
+  // barline is cut. Count it so the cut is reported rather than silent.
+  for (const evs of voices.values()) {
+    for (const e of evs) {
+      if (!e.rest && e.notes.length > 0 && e.onset + e.dur > measureLen + EPS) {
+        flags.cutPastBarline += 1;
+      }
     }
   }
 
@@ -837,6 +988,10 @@ export function parseMusicXML(xmlString) {
     // data extraction). Phase B emits one parseWarning per tag mentioning
     // the tag literally so validate.js's Group B check clears the finding.
     carriedTagMeasures: new Map(),
+    markedTagMeasures: new Map(),
+    // Per-measure counts of notes the parser dropped, marked unscored, or cut
+    // at the barline: [{ measure, count }] in source order.
+    dropped: { cue: [], hidden: [], range: [], cut: [], "nested-tuplet": [] },
   };
 
   measureEls.forEach((measEl, measIdx) => {
@@ -851,10 +1006,14 @@ export function parseMusicXML(xmlString) {
     // occasionally differs per part in generated scores).
     if (useTwoParts && secondPartMeasures && secondPartMeasures[measIdx]) {
       const part2State = { ...state };
-      const { voices: part2Voices } = parseMeasureIntermediate(
+      const { voices: part2Voices, flags: part2Flags } = parseMeasureIntermediate(
         secondPartMeasures[measIdx], part2State,
         { numStaves, useTwoParts, measureNumber, forceStaff: "2" }
       );
+      for (const k of ["cueCount", "hiddenCount", "outOfRangeCount", "cutPastBarline", "foldedCount"]) {
+        flags[k] += part2Flags[k];
+      }
+      for (const tag of part2Flags.markedTags) flags.markedTags.add(tag);
       for (const [key, evs] of part2Voices) {
         const [, voice] = key.split(":");
         const newKey = `2:${voice}`;
@@ -898,6 +1057,18 @@ export function parseMusicXML(xmlString) {
         songFlags.unhandledPitchTagMeasures.set(tag, []);
       }
       songFlags.unhandledPitchTagMeasures.get(tag).push(reportNum);
+    }
+    for (const tag of flags.markedTags) {
+      if (!songFlags.markedTagMeasures.has(tag)) songFlags.markedTagMeasures.set(tag, []);
+      songFlags.markedTagMeasures.get(tag).push(reportNum);
+    }
+    const counts = {
+      cue: flags.cueCount, hidden: flags.hiddenCount,
+      range: flags.outOfRangeCount, cut: flags.cutPastBarline,
+      "nested-tuplet": flags.foldedCount,
+    };
+    for (const [k, count] of Object.entries(counts)) {
+      if (count > 0) songFlags.dropped[k].push({ measure: reportNum, count });
     }
     for (const tag of flags.carriedTags) {
       if (!songFlags.carriedTagMeasures.has(tag)) {
@@ -1017,6 +1188,27 @@ export function parseMusicXML(xmlString) {
       `notes only. Sounding pitches may differ from performed audio.`
     );
   }
+  const previewOf = (list) =>
+    list.slice(0, 8).join(", ") + (list.length > 8 ? `, +${list.length - 8} more` : "");
+  for (const [tag, measureList] of songFlags.markedTagMeasures) {
+    parseWarnings.push(
+      `<${tag}>: ${measureList.length} occurrence(s) at printed m${previewOf(measureList)} — ` +
+      `stored as a marking on the written notes` +
+      (tag === "tremolo" ? "; two-note tremolos split into two notes of half the total each." : ".")
+    );
+  }
+  const DROPPED_TEXT = {
+    cue: "<cue> note(s) dropped (cue notes are not played)",
+    hidden: `hidden (print-object="no") note(s) dropped`,
+    range: `note(s) outside the piano range (MIDI ${PIANO_MIN_MIDI}-${PIANO_MAX_MIDI}) stored unscored`,
+    cut: "note(s) running past the barline cut at the barline",
+    "nested-tuplet": "note(s) in a tuplet-inside-a-tuplet dropped (run kept as its first chord)",
+  };
+  for (const [k, list] of Object.entries(songFlags.dropped)) {
+    if (list.length === 0) continue;
+    const total = list.reduce((s, x) => s + x.count, 0);
+    parseWarnings.push(`${total} ${DROPPED_TEXT[k]} at printed m${previewOf(list.map((x) => x.measure))}`);
+  }
   // M7 — one parseWarning per CARRIED tag seen. Distinct message from
   // M6's UNHANDLED warnings: these tags ARE preserved (as presence on
   // measure.carriedTags), just without full data extraction. The
@@ -1061,6 +1253,22 @@ export function parseMusicXML(xmlString) {
   for (const [tag, measureList] of songFlags.unhandledPitchTagMeasures) {
     parseWarningsStructured.push({
       tag, kind: "ornament", count: measureList.length, measures: [...measureList],
+    });
+  }
+  for (const [tag, measureList] of songFlags.markedTagMeasures) {
+    parseWarningsStructured.push({
+      tag, kind: "marking", count: measureList.length, measures: [...measureList],
+    });
+  }
+  const DROPPED_KIND = {
+    cue: "dropped", hidden: "dropped", range: "range", cut: "cut", "nested-tuplet": "dropped",
+  };
+  for (const [k, list] of Object.entries(songFlags.dropped)) {
+    if (list.length === 0) continue;
+    parseWarningsStructured.push({
+      tag: k, kind: DROPPED_KIND[k],
+      count: list.reduce((s, x) => s + x.count, 0),
+      measures: list.map((x) => x.measure),
     });
   }
   for (const [tag, measureList] of songFlags.carriedTagMeasures) {
