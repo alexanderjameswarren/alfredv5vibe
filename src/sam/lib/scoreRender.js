@@ -453,6 +453,7 @@ function pathBox(d) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   let cx = 0, cy = 0, sx = 0, sy = 0, cmd = null;
   const add = (x, y) => { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); };
+  const pt = (rel, px, py) => [rel ? cx + px : px, rel ? cy + py : py];
   for (let i = 0; i < tokens.length;) {
     if (/[a-zA-Z]/.test(tokens[i])) cmd = tokens[i++];
     if (!cmd) break;
@@ -463,19 +464,18 @@ function pathBox(d) {
     if (v.length < n || v.some(Number.isNaN)) break;
     i += n;
     const rel = cmd !== cmd.toUpperCase();
-    const pt = (px, py) => [rel ? cx + px : px, rel ? cy + py : py];
     if (lc === "h") { cx = rel ? cx + v[0] : v[0]; add(cx, cy); }
     else if (lc === "v") { cy = rel ? cy + v[0] : v[0]; add(cx, cy); }
     else if (lc === "a") {
       // An arc stays within its radius of its endpoints (VexFlow's dots are arcs).
       const r = Math.max(Math.abs(v[0]), Math.abs(v[1]));
       add(cx - r, cy - r); add(cx + r, cy + r);
-      [cx, cy] = pt(v[5], v[6]);
+      [cx, cy] = pt(rel, v[5], v[6]);
       add(cx - r, cy - r); add(cx + r, cy + r);
     }
     else {
-      for (let k = 0; k < n; k += 2) { const [px, py] = pt(v[k], v[k + 1]); add(px, py); }
-      [cx, cy] = pt(v[n - 2], v[n - 1]);
+      for (let k = 0; k < n; k += 2) { const [px, py] = pt(rel, v[k], v[k + 1]); add(px, py); }
+      [cx, cy] = pt(rel, v[n - 2], v[n - 1]);
     }
     if (lc === "m") { sx = cx; sy = cy; cmd = rel ? "l" : "L"; }
   }
