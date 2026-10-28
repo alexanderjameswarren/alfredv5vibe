@@ -6,6 +6,9 @@
 //   npm run inventory             summary, payload saved
 //   npm run inventory -- --json   the payload on stdout instead
 //   npm run inventory -- --send   also queue it as an `inventory` event in the Overwatch outbox and run the sender
+//   npm run inventory -- --send-summary <commit> --project <code>
+//                                 instead, queue a `finish_summary` for that commit against its first parent (a
+//                                 merge into main, as gitpush Finish sends it) and run the sender
 //
 // Only --send touches the network, through scripts/overwatch-post.mjs and overwatch-ingest. Git is read only.
 // gitpush queues the same payload after every merge into main (scripts/lib/finish-summary.mjs).
@@ -15,6 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildInventory } from "./lib/inventory.mjs";
+import { branchFromSubject, collectFinishSummary, parseSendSummaryArgs } from "./lib/finish-summary.mjs";
 import { resolveRepo, withLock } from "./lib/claims-core.mjs";
 import { SENDER_SCRIPT, queueEvents } from "./lib/overwatch-post.mjs";
 
@@ -41,23 +45,73 @@ function summary({ parts, open_work, problems }) {
   for (const p of problems) say(`  ${p}`);
 }
 
-/** Queue the payload as one `inventory` event, then run the sender here so its result is shown. */
-function send({ parts, open_work }) {
+/** Queue one event, then run the sender here so its result is shown. */
+function sendEvent(event, label) {
   const ctx = resolveRepo(ROOT);
   if (!ctx.outboxFile) {
     say("\nNot sent: this checkout has no Overwatch outbox (CLAIMS_BLOCKS_FILE is set, or the sender is missing).");
     process.exitCode = 1;
     return;
   }
-  const event = { _kind: "inventory", parts, open_work };
   withLock(ctx, () => {
     queueEvents(ctx.outboxFile, [event]);
     return null;
   });
-  say(`\nQueued the inventory (${(Buffer.byteLength(JSON.stringify(event)) / 1024).toFixed(0)} KB). Sending…`);
+  say(`\nQueued ${label} (${(Buffer.byteLength(JSON.stringify(event)) / 1024).toFixed(0)} KB). Sending…`);
   const r = spawnSync(process.execPath, [path.join(ROOT, SENDER_SCRIPT)], { cwd: ROOT, stdio: "inherit" });
   say(`Details in ${ctx.outboxFile}.log`);
   if (r.status !== 0) process.exitCode = 1;
+}
+
+const send = ({ parts, open_work }) => sendEvent({ _kind: "inventory", parts, open_work }, "the inventory");
+
+/** --send-summary: the finish summary of one commit against its first parent, read from git only. */
+function sendSummary({ commit, project }) {
+  const git = (args) => {
+    const r = spawnSync("git", args, { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    return { ok: r.status === 0, stdout: (r.stdout ?? "").trim() };
+  };
+  const subject = git(["show", "-s", "--format=%s", commit]);
+  if (!subject.ok) {
+    say(`No commit ${commit} here.`);
+    process.exitCode = 2;
+    return;
+  }
+  const s = collectFinishSummary({
+    git,
+    readFile: (p) => {
+      const r = git(["show", `${commit}:${p}`]);
+      return r.ok ? r.stdout : null;
+    },
+    projectCode: project,
+    branch: branchFromSubject(subject.stdout),
+    base: `${commit}^1`,
+    head: commit,
+  });
+  if (!s.row) {
+    say(`No finish summary for ${commit}: ${s.error}.`);
+    process.exitCode = 1;
+    return;
+  }
+  const r = s.row;
+  say(`Finish summary for ${r.merge_commit.slice(0, 7)} ("${subject.stdout}"), project ${r.project_code}, branch ${r.branch ?? "none"}`);
+  say(`  finished_at   ${r.finished_at}`);
+  say(`  diff_stat     ${r.diff_stat.files} files, +${r.diff_stat.insertions} -${r.diff_stat.deletions}`);
+  for (const k of ["migrations", "tools", "skills", "functions", "task_prompts"]) {
+    say(`  ${k.padEnd(13)} ${r[k].length ? r[k].join(", ") : "none"}`);
+  }
+  say(`  paths         ${r.paths.length}`);
+  sendEvent({ _kind: "finish_summary", summary: r }, `the finish summary for ${r.merge_commit.slice(0, 7)}`);
+}
+
+const summaryArgs = parseSendSummaryArgs(process.argv.slice(2));
+if (summaryArgs?.error) {
+  say(summaryArgs.error);
+  process.exit(2);
+}
+if (summaryArgs) {
+  sendSummary(summaryArgs);
+  process.exit();
 }
 
 const result = buildInventory(ROOT);

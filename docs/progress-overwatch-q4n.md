@@ -278,7 +278,12 @@ Estimate tracking first (spec 4.12, added 2026-10-25), because the nightly and w
   - [x] overwatch skill 2026-10-27a: tables a summary touched, what counts as a follow-up, when to rewrite current_state, names that are not missing tools (args, examples, SQL, Workshop connector tools), apps with no skill, tables no tool touches
   - [x] "Skill version: 2026-10-27a" on dj-concert-playlist, dj-jazz, dj-weekly-review, drive-mix, job-search, ken, sam-practice, wb-planning (claimed in one command); the inventory reads all 12 skills' versions
   - [x] Spec 4.6 (`inventory_stale_days`) and section 6; CLI suite 296 pass
+  - [x] Checkpointed (main f8e827d)
   - [ ] Alex adds `inventory_stale_days: 7` through the gate, pastes both prompts into their tasks and the nine skills into claude.ai
+- [ ] Step 49 (CLI): end-to-end check (run tag overwatch-q4n-s49-h3pk)
+  - [x] `npm run inventory -- --send-summary <commit> --project <code>`: a finish summary of one commit against its first parent, files read with `git show <commit>:<path>`, queued and sent like `--send` (parseSendSummaryArgs and branchFromSubject in finish-summary.mjs; tests 12; CLI suite 298 pass)
+  - [x] Sent for 1303ffd (Step 43's merge), project overwatch-q4n, branch worktree-overwatch-q4n: 5 files +916 -2, migrations 180_overwatch_platform_inventory.sql, no tools, skills, functions or task prompts; overwatch-ingest answered id f886a5f6-f288-453f-882a-1045c54735ba
+  - [ ] A manual nightly run from claude.ai reviews it (impact review, follow-ups, marked reviewed)
 - [ ] Step 48 (CLI, docs): nightly prompt (finish summaries against the inventory, follow-up items, current_state, mark reviewed); weekly drift audit Phase 7 checks; overwatch skill; Alex pastes prompts and skills
 - [ ] Step 49 (CLI): end-to-end check (a real inventory send, a finish summary, the next audit run)
 
