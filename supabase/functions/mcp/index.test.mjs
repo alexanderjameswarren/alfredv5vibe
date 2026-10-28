@@ -334,16 +334,18 @@ test("the tool count is 72 after the job-search tools", () => {
   // Overwatch Step 46, +4.
   const EXPECTED_ADDED_OVERWATCH_46 = ["get_platform_inventory", "get_open_work", "get_finish_summaries",
     "mark_finish_summaries_reviewed"];
+  const EXPECTED_ADDED_OVERWATCH_54 = ["get_portfolios", "upsert_portfolio", "get_portfolio_plan", "create_portfolio_plan",
+    "update_portfolio_slice"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
                       ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C, ...EXPECTED_ADDED_P5,
                       ...EXPECTED_ADDED_READ, ...EXPECTED_ADDED_OVERWATCH_13, ...EXPECTED_ADDED_OVERWATCH_14,
-                      ...EXPECTED_ADDED_OVERWATCH_22, ...EXPECTED_ADDED_OVERWATCH_46]) {
+                      ...EXPECTED_ADDED_OVERWATCH_22, ...EXPECTED_ADDED_OVERWATCH_46, ...EXPECTED_ADDED_OVERWATCH_54]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 167,
-    `expected 167 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 172,
+    `expected 172 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 

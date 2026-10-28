@@ -21,5 +21,5 @@ test("every defineTool declares real tables", () => {
     problems.push(...tableProblems(parsed, OBJECTS, f));
   }
   assert.deepEqual(problems, [], `${problems.length} tool(s) with bad tables:\n${problems.join("\n")}`);
-  assert.ok(tools >= 166, `only ${tools} defineTool calls found`);
+  assert.ok(tools >= 171, `only ${tools} defineTool calls found`);
 });
