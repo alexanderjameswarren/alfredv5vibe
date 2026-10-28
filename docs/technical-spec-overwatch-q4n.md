@@ -447,7 +447,9 @@ At most one `in_progress` slice per lane (partial unique index on (lane_id) wher
 
 ### 4.17 Suggested Project group on inbox items (Phase 8c, decided 2026-10-27)
 
-`inbox.suggested_group_id` (4.1) names an active or someday Project group of the same user that the capture belongs in. `create_inbox_item` and `update_inbox_item` accept it and refuse any other group. `process_inbox_item` gains a `group` payload key ({ group_id }): after it files the item or intention, it adds an item_group_members row (member_type `item` or `intention`, next position) in the same transaction, so filing and joining the project succeed or fail together. alfred-enrich suggests it from `get_project_plans` (`status: "all"`).
+`inbox.suggested_group_id` (4.1) names a group of the same user that the capture belongs in. (Decided 2026-10-28, Step 57b: **any group type**, a Project, a Menu, a Series or another, that is not closed and not archived; Background counts. This replaces "an active or someday Project group".) `create_inbox_item` and `update_inbox_item` accept it and refuse any other group. `process_inbox_item` gains a `group` payload key ({ group_id }): after it files the item or intention, it adds an item_group_members row (member_type `item` or `intention`, next position) in the same transaction, so filing and joining the group succeed or fail together. alfred-enrich suggests it from `get_groups` (any type, leaving out closed and archived ones), not from `get_project_plans`, which lists Projects only.
+
+**As built (Step 57, migration 184).** The database refuses a bad suggestion too, not only the tools: `inbox_check_suggested_group` (BEFORE INSERT OR UPDATE OF suggested_group_id) requires one of the same user's groups, of any type, that is not closed and not archived, whenever the value is set or changed; a group that closes later keeps its suggestion. `process_inbox_item` checks the group before writing anything (an unknown, someone else's, closed or archived group refuses the whole call), then adds **the intention when one was filed, else the item** at the end of the group's live members (highest live position + 1, as restoreMember does). A record that is already a live member is not an error. The group member comes back as `group_member` and is not added to `outcome`.
 
 ## 5. Getting activity and status in
 
@@ -618,7 +620,7 @@ Phase 8c changes two existing tools: `create_inbox_item` and `update_inbox_item`
 - **cli-workflow:** status-line and activity writes on every report (5.3); closeout adds the shipped row, closing the project group, and checking that finish sent its summary; new projects create their Project group and project_plans row with the project code. It also says when to call `log_friction` (4.11). Estimates (4.12): the read-only plan prompt asks the CLI for a step estimate broken down by phase, saved as the `initial` row; a report that adds or removes work records a scope row; closeout records the `final` row before the group is closed.
 - **mcp-platform (Phase 7):** the canonical defineTool shape gains `tables`, literal arrays, RPC tables declared (5.6).
 - **Alfred project instructions and Alex's claude.ai profile preferences (he added the latter 2026-10-25):** one line telling every other thread, in any app, to call `log_friction` when Alex misses or misreads an instruction, says a format or flow is not working, or has to correct how something was presented, and to mention it in one line.
-- **alfred-enrich:** the duplicate check also searches closed items and intentions with closed_reason `wont_do`, and shows why they were dropped. Phase 8c: suggest a Project group (`suggested_group_id`) when the capture clearly belongs to an active or someday project; leave it blank when unsure.
+- **alfred-enrich:** the duplicate check also searches closed items and intentions with closed_reason `wont_do`, and shows why they were dropped. Phase 8c: suggest a group (`suggested_group_id`, any type: a Project, a Menu, a Series…) when the capture clearly belongs to one that is not closed or archived; leave it blank when unsure.
 
 ## 9. The Overwatch tab (`/overwatch`)
 
@@ -659,7 +661,7 @@ Watch items and plan settings are viewable on the tab; editing them goes through
 6. **Every link is a real anchor with an href**, so middle-click and open-in-new-tab work, whole-row links included. This is a rule for every screen; it is in `docs/design-system/design-system.md`.
 7. **Inbox, wherever shown** (the note, and any inbox line on the tab): "<N> items. Nothing urgent." unless something is urgent: an unrouted item older than a day, an app's backlog whose oldest item is older than `stall_days`, or low-confidence routing. Then it lists only those.
 
-**Inbox detail (Phase 8c).** When an item has `suggested_group_id`, the detail shows "Add to project: <group name>" (Project icon, the name a real link to the group) with a toggle, on by default; filing with it on sends the `group` payload to `process_inbox_item`. The component is `src/inbox/SuggestedGroup.jsx`.
+**Inbox detail (Phase 8c).** When an item has `suggested_group_id`, the detail shows the suggestion labelled by **the group's own type label** (decided 2026-10-28, Step 57b), e.g. "Project: Overwatch" or "Menu: Thanksgiving dinner", with that type's icon and the name a real link to the group, and a toggle, on by default; filing with it on sends the `group` payload to `process_inbox_item`. The component is `src/inbox/SuggestedGroup.jsx`.
 
 ## 10. Phases
 
