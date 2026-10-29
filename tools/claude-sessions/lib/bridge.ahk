@@ -1,6 +1,6 @@
 ; The Switchboard bridge, panel side: reads tabs.json and asks the extension to
 ; focus a tab through command.json / result.json. Spec:
-; docs\technical-spec-switchboard_bridge.md, sections 2 and 5.
+; docs\history\technical-spec-switchboard_bridge.md, sections 2 and 5.
 
 tabsRaw := "", tabsList := [], tabsAt := ""
 chatsRaw := "", chatsList := [], chatsAt := ""

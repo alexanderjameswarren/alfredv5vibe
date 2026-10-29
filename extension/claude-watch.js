@@ -1,6 +1,7 @@
 // Switchboard bridge: watches one claude.ai chat and tells the service worker
 // (bridge.js) whether Claude is responding. Spec:
-// docs/technical-spec-switchboard_bridge.md, section 3, "claude.ai watcher".
+// docs/history/technical-spec-switchboard_bridge.md, section 3, "claude.ai watcher".
+// BRIDGE HALF: talks only to bridge.js, by "chat-state" messages.
 //
 // 🛑 NO CHAT TEXT LEAVES THIS PAGE. Each report carries the address, the title,
 // the state, when it last changed, the last run tag in Claude's latest message

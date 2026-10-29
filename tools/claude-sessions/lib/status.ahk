@@ -1,5 +1,6 @@
 ; Pure helpers for claude-sessions.ahk, kept apart from the GUI so
-; test-status.ahk can run them.
+; test-status.ahk can run them. Interface: values in, values out; no files,
+; no windows, no globals but the constants defined here.
 
 ; Timestamp of the latest interrupt line in `text` that is later than `since`
 ; (both ISO UTC), or "". Raw quotes only, so the words quoted inside a message
@@ -276,6 +277,41 @@ CountLines(text) {
 }
 
 FormatAge(minutes) => minutes < 60 ? minutes "m" : (minutes // 60) "h" Format("{:02}", Mod(minutes, 60)) "m"
+
+; The old panel's button text: name and marks, then state and time. `s` is a
+; session; `nowUtc` a UTC stamp; `offset` local minus UTC, in seconds.
+ButtonLabel(s, name, offset, nowUtc) {
+    if s.unread
+        name .= "   • new"
+    if s.changed != "" && s.changed > 0
+        name .= "   ±" s.changed
+    if s.ahead != "" && s.ahead > 0
+        name .= "   ↑" s.ahead
+    if s.free
+        return name "`nfree"
+    if s.kind = "none"
+        return name "`nno status"
+    processing := s.kind = "processing" && !s.closed
+    time := s.interruptAt != "" ? "interrupted " FormatEntered(s.interruptAt, offset)
+        : processing ? FormatElapsed(DateDiff(nowUtc, IsoToStamp(s.since), "Seconds"))
+        : FormatEntered(s.since, offset)
+    if s.closed || s.paused
+        return name "`n" (s.closed ? "closed · " : "") (s.paused ? "paused · " : "")
+            . (s.interruptAt != "" ? "" : s.state " ") time
+    ; "s9 -> s10 · Paste prompt · 10:45": the run-tag step, what to do, and when.
+    return name "`n" (s.step != "" ? s.step " · " : "") s.label " · " time
+}
+
+; A tile's git counts: "±3 ↑2", either alone, or "".
+GitText(changed, ahead) {
+    git := changed != "" && changed > 0 ? "±" changed : ""
+    return git (ahead != "" && ahead > 0 ? (git = "" ? "" : " ") "↑" ahead : "")
+}
+
+ChatRowTitle(title) {
+    title := RegExReplace(title, "\s+-\s+Claude$")
+    return StrLen(title) > 44 ? SubStr(title, 1, 43) "…" : title
+}
 
 ; claims: the claims file's `claims` array (Maps). Returns {text, red}: red when
 ; any db: claim is older than an hour. `nowUtc` is a YYYYMMDDHH24MISS UTC stamp.

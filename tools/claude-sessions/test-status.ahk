@@ -341,6 +341,30 @@ Check("status command", Cmd("status", ""), "status:")
 Check("status monitor: primary", StatusMonitor([{l: 0, t: 0, r: 1920, b: 1080}, {l: -1024, t: 0, r: 0, b: 600}], 1), 1)
 Check("status monitor: never touch", StatusMonitor([{l: -1024, t: 0, r: 0, b: 600}, {l: 0, t: 0, r: 1920, b: 1080}], 1), 2)
 
+; The button's two lines, moved out of the panel (0.7).
+bl := {unread: true, changed: 3, ahead: "", free: true, kind: "", closed: false, paused: false
+    , interruptAt: "", since: "", state: "", step: "", label: ""}
+Check("label free", ButtonLabel(bl, "main", 0, "20260930193115"), "main   • new   ±3`nfree")
+bl.free := false, bl.unread := false, bl.changed := "", bl.ahead := 2, bl.kind := "none"
+Check("label no status", ButtonLabel(bl, "x", 0, "20260930193115"), "x   ↑2`nno status")
+bl.ahead := "", bl.kind := "processing", bl.since := "2026-09-30T19:30:00.000Z", bl.step := "s9", bl.label := "Claude working"
+Check("label processing", ButtonLabel(bl, "x", 0, "20260930193115"), "x`ns9 · Claude working · 1:15")
+bl.kind := "waiting", bl.state := "waiting", bl.since := "2026-09-29T19:30:44.198Z", bl.closed := true, bl.paused := true
+Check("label closed paused", ButtonLabel(bl, "x", -25200, "20260930193115"), "x`nclosed · paused · waiting 29 Sep 12:30")
+bl.closed := false, bl.paused := false, bl.interruptAt := "2026-09-29T19:30:44.198Z", bl.step := "", bl.label := "Your turn"
+Check("label interrupted", ButtonLabel(bl, "x", -25200, "20260930193115"), "x`nYour turn · interrupted 29 Sep 12:30")
+Check("git text both", GitText(3, 2), "±3 ↑2")
+Check("git text ahead only", GitText("", 2), "↑2")
+Check("git text none", GitText(0, ""), "")
+Check("chat row title", ChatRowTitle("Plan the week - Claude"), "Plan the week")
+Check("chat row title long", ChatRowTitle(StrRepeat("a", 50)), StrRepeat("a", 43) "…")
+StrRepeat(s, n) {
+    out := ""
+    Loop n
+        out .= s
+    return out
+}
+
 ; #Warn only prints, so load this file again with /validate and fail on any warning.
 warnOut := A_Temp "\claude-sessions-test-warnings.txt"
 RunWait(A_ComSpec ' /c ""' A_AhkPath '" /ErrorStdOut /validate "' A_ScriptFullPath '" > "' warnOut '" 2>&1"', , "Hide")

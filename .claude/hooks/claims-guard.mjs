@@ -11,6 +11,12 @@
 // built from CLAUDE_PROJECT_DIR so it does not depend on the hook's working
 // directory; see the note by the settings entry.
 //
+// Owns: who may touch a file (claims) and db:deploy; the BLOCK/ALLOW lines in
+// .clip/claims-guard.log; recording claim blocks. What a step may do is
+// plan-guard.mjs's.
+// Uses: scripts/lib/claims-core.mjs (claims, paths, write checks) and
+// scripts/lib/shell-parse.mjs (command text, write indicators).
+//
 // ---------------------------------------------------------------------------
 // WHY THIS GUARDS THE SHELL TOO
 // ---------------------------------------------------------------------------

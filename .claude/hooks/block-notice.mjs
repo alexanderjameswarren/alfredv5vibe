@@ -6,6 +6,9 @@
 // decision. Reads the claims and blocks files only — no git, not even rev-parse:
 // the checkout's layout comes from its `.git` file or folder. Any failure says
 // nothing and exits 0.
+//
+// Owns: the turn-start "Blocking:" notice. Writes nothing.
+// Uses: scripts/lib/claims-core.mjs (reading claims and blocks).
 
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";

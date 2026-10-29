@@ -1,5 +1,6 @@
 // Pure logic for the Switchboard bridge (bridge.js): no Chrome APIs, so it runs
-// under node. Spec: docs/technical-spec-switchboard_bridge.md, section 3.
+// under node. Spec: docs/history/technical-spec-switchboard_bridge.md, section 3.
+// BRIDGE HALF: imported by bridge.js only.
 
 export const HOST_NAME = "com.alfred.switchboard";
 export const HEARTBEAT_MS = 15000;

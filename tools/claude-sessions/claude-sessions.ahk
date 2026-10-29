@@ -11,7 +11,12 @@ Persistent
 ; Switchboard: one button per Claude Code session on alfred-v5 (main plus each
 ; worktree), coloured from that checkout's .clip\session-status.json, which the
 ; repo's hooks write. The panel never writes to the repo. Spec:
-; docs\technical-spec-switchboard.md, section 2.
+; docs\history\technical-spec-switchboard.md, section 2.
+;
+; Boundaries: this file owns the windows, the timers and the reading of files
+; (status, claims, blocks, git). What a tile says and which colour it is are
+; decided in lib\status.ahk, pure and tested by test-status.ahk. lib\bridge.ahk
+; talks to the Chrome bridge through the host's files (tools\claude-sessions\bridge).
 
 ; ---------------------------------------------------------------------------
 ; Settings (kept outside the repo)
@@ -26,7 +31,7 @@ REPO := IniRead(SETTINGS_INI, "panel", "repo", "C:\Users\Alex\projects\alfred-v5
 CLAIMS_FILE := REPO "\.git\alfred-claims.json"
 BLOCKS_FILE := REPO "\.git\alfred-claim-blocks.json"   ; who waits on whom (claim_blocks spec)
 BINDING_FILE := REPO "\.git\alfred-project-code.json"
-; Where the Chrome bridge host writes tabs.json (docs\technical-spec-switchboard_bridge.md).
+; Where the Chrome bridge host writes tabs.json (docs\history\technical-spec-switchboard_bridge.md).
 BRIDGE_DIR := IniRead(SETTINGS_INI, "panel", "bridge", EnvGet("LOCALAPPDATA") "\claude-sessions\bridge")
 POINTER_FOLLOWS := IniRead(SETTINGS_INI, "panel", "pointer", "1") != "0"   ; mouse to the window that gets the keyboard
 mouseLockOn := IniRead(SETTINGS_INI, "panel", "mouselock", "1") != "0"     ; keep the pointer off the touch screen
@@ -661,28 +666,7 @@ Refresh() {
     TouchSend()
 }
 
-Label(s, offset) {
-    name := ButtonName(s.code, mainProject)
-    if s.unread
-        name .= "   • new"
-    if s.changed != "" && s.changed > 0
-        name .= "   ±" s.changed
-    if s.ahead != "" && s.ahead > 0
-        name .= "   ↑" s.ahead
-    if s.free
-        return name "`nfree"
-    if s.kind = "none"
-        return name "`nno status"
-    processing := s.kind = "processing" && !s.closed
-    time := s.interruptAt != "" ? "interrupted " FormatEntered(s.interruptAt, offset)
-        : processing ? FormatElapsed(DateDiff(A_NowUTC, IsoToStamp(s.since), "Seconds"))
-        : FormatEntered(s.since, offset)
-    if s.closed || s.paused
-        return name "`n" (s.closed ? "closed · " : "") (s.paused ? "paused · " : "")
-            . (s.interruptAt != "" ? "" : s.state " ") time
-    ; "s9 -> s10 · Paste prompt · 10:45": the run-tag step, what to do, and when.
-    return name "`n" (s.step != "" ? s.step " · " : "") s.label " · " time
-}
+Label(s, offset) => ButtonLabel(s, ButtonName(s.code, mainProject), offset, A_NowUTC)
 
 Paint(s, offset := "") {
     if offset = ""
@@ -772,11 +756,6 @@ RefreshChatRows(chats, paired, liveColors) {
         PaintRow(i, r)
     }
     return rowAlert
-}
-
-ChatRowTitle(title) {
-    title := RegExReplace(title, "\s+-\s+Claude$")
-    return StrLen(title) > 44 ? SubStr(title, 1, 43) "…" : title
 }
 
 PaintRow(i, r) {
@@ -1137,8 +1116,7 @@ TouchState() {
         action := CliAction({color: s.color, label: s.label, kind: s.kind, free: s.free, closed: s.closed
             , paused: s.paused, elapsed: DateDiff(nowUtc, stamp, "Seconds")
             , age: DateDiff(nowUtc, s.paused && s.pausedAt != "" ? s.pausedAt : stamp, "Minutes")})
-        git := (s.changed != "" && s.changed > 0 ? "±" s.changed : "")
-        git .= (s.ahead != "" && s.ahead > 0 ? (git = "" ? "" : " ") "↑" s.ahead : "")
+        git := GitText(s.changed, s.ahead)
         idle := 0
         if code != "main" {
             worktrees.Push(code)

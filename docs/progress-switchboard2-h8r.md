@@ -3,7 +3,7 @@
 Project code: `switchboard2-h8r`
 Spec: `docs/technical-spec-switchboard2-h8r.md`
 
-Status: Phase 0 in progress: 0.1 to 0.6 done.
+Status: Phase 0 complete (0.8, s12-w4tc). Phase 1 next.
 
 Rule: one step at a time. The CLI finishes a step, records it here, reports, and stops for Alex.
 
@@ -23,8 +23,8 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 0 | 0.4 | Main blocks live-worktree codes; duplicate run tag refused; README links | — | done (s8-v9qe) | 2026-10-29 |
 | 0 | 0.5 | Plan guard: parse the scope block, record it, enforce create, update, delete, deploy and SQL | — | done (s9-k7wf) | 2026-10-29 |
 | 0 | 0.6 | Scope vs changes in the report; cli-workflow skill scope summary; CLAUDE.md | — | done (s10-r2jd) | 2026-10-29 |
-| 0 | 0.7 | Module boundaries: bridge vs clipper in `extension/`, header interfaces | — | todo | |
-| 0 | 0.8 | `INTERFACES.md` draft; full test run | — | todo | |
+| 0 | 0.7 | Module boundaries: bridge vs clipper in `extension/`, header interfaces | — | done (s11-n6hb) | 2026-10-29 |
+| 0 | 0.8 | `INTERFACES.md` draft; full test run | — | done (s12-w4tc) | 2026-10-29 |
 | 1 | 1.1-1.7 | Send to CLI (2), tile states and running colours (2), estimates and strip (2), six-tile layout and panel items (1): spec §7 | — | todo | |
 | 2 | 2.1-2.10 | SQL queue, links, click pages, runner, read-only queries: spec §8 | see below | todo | |
 | 3 | 3.1-3.18 | The move, settings, `sb` commands, Salesforce guard, deploy wrapper, PII hold: spec §9 | — | todo | |
@@ -86,12 +86,23 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: nothing
 - SQL: none
 
-**0.8, interfaces draft and full test run**
+**0.8, interfaces draft and full test run** (estimated run: 12m)
 - create: tools/claude-sessions/INTERFACES.md
 - update: nothing
 - delete: nothing
 - deploy: nothing
 - SQL: none
+
+## Proposed scope per step (Phase 1)
+
+**1.1, send to CLI: extension and host** (estimated run: 20m). The claude.ai tab's prompt goes through the bridge to the native host, which writes it for the panel. Duplicate tags are refused.
+- create: nothing
+- update: extension/bridge.js, extension/claude-watch.js, extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, tools/claude-sessions/bridge/host.mjs, tools/claude-sessions/bridge/host.test.mjs, tools/claude-sessions/INTERFACES.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**1.2, send to CLI: panel delivers to the window** (block written after 1.1 reports): `lib/bridge.ahk`, `claude-sessions.ahk`, `ui/switchboard.html`, `lib/status.ahk` and their tests.
 
 **Database items by step (Phase 2):**
 - **2.1-2.4:** `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_issue_link`, `db:fn:switchboard_consume_link`, `db:deploy`.
@@ -212,7 +223,38 @@ Every report ends with the next step's block, copied from here. The progress fil
   - **Skill 2026-10-29b:** a new section, "Every prompt declares its scope and its estimated run". Every prompt carries the block and the estimate, starting from the last report's next-step block and saying where it differs. Every reply carrying a prompt opens with a plain scope summary, and sending it is Alex's approval. The return leg checks "Scope vs changes". The templates and both examples now carry a block.
   - **CLAUDE.md:** two new sections. "The plan guard" covers widening scope only by a tagged follow-up, never editing `scope.json` or setting `PLAN_GUARD=off`, test files declared, and the two report sections. "Salesforce sandboxes and client repos" covers the sandbox deploy lock and Apex failures summarised. The two report sections do not count toward the 25-line limit.
   - **Spec §7.2:** a new red "Outside scope" tile state, cleared by a tap. Phase 1 stays at 7 steps, because it goes into the tile-states steps (the plan guard writes `wrong` / `outside scope`, as prompt-check does for "Already pasted").
-  - **A slip, caught by the guard:** the first two CLAUDE.md edits used the main checkout's path, and the claims guard refused them. They were redone on this worktree's copy, which was identical. Main's file was not changed.
+  - **A slip, caught by the guard (0.6):** the first two CLAUDE.md edits used the main checkout's path, and the claims guard refused them. They were redone on this worktree's copy, which was identical. Main's file was not changed.
+
+- **0.7 (s11-n6hb):**
+  - **Boundaries were drawn in place; no file moved.** This step's scope allows no deletes and no new files outside `extension/lib/`. Phase 3 does the moves.
+  - **Extension: the split already held.** The bridge half (`bridge.js`, `claude-watch.js`, `lib/bridge-core.js`) and the clipper (the rest) import nothing from each other, except `service-worker.js`'s `import "./bridge.js"`. MV3 allows one service worker, so that import stays as the only seam.
+    - `extension/lib/boundaries.test.mjs` lists the two halves and fails on any crossing import, or on a `.js` file in neither half.
+    - Every file's header names its half, and the README says so.
+    - No module was needed under `extension/lib/`.
+  - **Switchboard: decisions out of the panel.** The status logic was already pure, in `lib/status.ahk`. Three pieces were still in `claude-sessions.ahk` and moved, with the same output:
+    - the button text, now `ButtonLabel(s, name, offset, nowUtc)`; `Label()` is a one-line wrapper;
+    - the tile's git counts, now `GitText`;
+    - `ChatRowTitle`.
+
+    The panel's header now states the split: windows, timers and file reading in the panel; decisions in `status.ahk`; the bridge in `bridge.ahk`. The file readers (ReadStatus, ReadClaims and the rest) stay in the panel, because a new file there was outside the scope.
+  - **Hooks:** each header gains "Owns:" and "Uses:" lines. All five already imported only from `scripts/lib/`. `scripts/lib/session-status.mjs` names its interface and its users.
+  - **Stale spec links** in the headers of the bridge files, `service-worker.js`, `bridge.ahk`, the panel and `bridge/host.mjs` now point to `docs/history/`.
+  - **`scripts/lib/session-status.test.mjs` was declared but not changed:** no new boundary needed a test there.
+
+- **0.8 (s12-w4tc):**
+  - **`tools/claude-sessions/INTERFACES.md`** lists 17 interfaces: 10 on the machine (`.clip/` and `.git/` files), 4 between Chrome, the host and the panel, and 3 to Alfred. Each row gives the direction, the file or endpoint, and its version check.
+  - **No version strings exist yet.** Only clip-capture has a check by behaviour: the plain-text fallback, and the flag when the stored run tag differs. Spec §4's version strings are left for Phase 3, before the move.
+  - **Full run, all green:**
+    - app 3165 passed, 7 skipped, 0 failed (216 suites, 1 skipped);
+    - scripts/lib 353/353;
+    - extension 18/18 (boundaries 2, bridge-core 15, plan 1);
+    - bridge host 11/11;
+    - Switchboard test-status and smoke both passed.
+  - **Phase 0 complete.** Still open from it:
+    - main's old duplicate migration numbers (122, 150, 153), left as they are;
+    - the panel's file readers are still in `claude-sessions.ahk` (0.7);
+    - the plan guard sees no shell writes in `--scope` (0.6).
+  - **The test checklist's Phase 0 line** is met, and is ticked below.
 
 ## Deferred and parked
 
@@ -221,7 +263,7 @@ Every report ends with the next step's block, copied from here. The progress fil
 
 ## Test checklist
 
-- [ ] Phase 0: each of the 9 fixes has a failing test first, then passes. The plan guard refuses an undeclared create, delete, deploy and SQL table. Both suites green.
+- [x] Phase 0: each of the 9 fixes has a failing test first, then passes. The plan guard refuses an undeclared create, delete, deploy and SQL table. Both suites green.
 - [ ] Phase 1: a duplicate send is refused; each of the five tile states shows; Report unread clears on archive.
 - [ ] Phase 2: a link fails after 30 minutes, on a second use, in the wrong tab, and with changed SQL; a dry run rolls back.
 - [ ] Phase 3: alfred-v5 works through the shims before the cutover. `sf data query` and a production deploy are blocked. A deploy holds the sandbox lock and sends only claimed files. A screen-made change is caught by the compare.
@@ -240,3 +282,5 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s8 (0.4) | 5m10s (estimate 10m) |
 | s9 (0.5) | 5m35s (estimate 15m) |
 | s10 (0.6) | 5m29s (estimate 15m) |
+| s11 (0.7) | 5m31s (estimate 15m) |
+| s12 (0.8) | 1m54s (estimate 5m) |
