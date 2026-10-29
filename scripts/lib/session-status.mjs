@@ -1,6 +1,10 @@
 // Per-checkout session state for the Switchboard panel: .clip/session-status.json.
 // Written by the Claude Code hooks, read by tools/claude-sessions. Reads files
 // only, never runs git, and never throws: a failed write must not touch a prompt.
+//
+// Interface: the file's format (the states, run_tag, prompt_at, event) and
+// writeAtomic. Used by .claude/hooks/prompt-check.mjs and session-status.mjs, and
+// by last-report.mjs. Read on the panel side by claude-sessions.ahk (ReadStatus).
 
 import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";

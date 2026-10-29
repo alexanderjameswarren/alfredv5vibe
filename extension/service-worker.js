@@ -9,7 +9,11 @@
 //   5. /start -> upload each slice -> /finish
 //   6. badge: green tick, or a red "!" whose error the popup shows
 //
-// Spec: docs/technical-spec-clipboard.md section 4.4.
+// Spec: docs/history/technical-spec-clipboard.md section 4.4.
+//
+// CLIPPER HALF, with popup.js, options.js and lib/ (all but bridge-core.js).
+// The bridge half shares this worker and is started by the one
+// `import "./bridge.js"` below; nothing else crosses (lib/boundaries.test.mjs).
 //
 // ---------------------------------------------------------------------------
 // NOTHING HERE DEPENDS ON THE EXTENSION'S ID
@@ -39,7 +43,7 @@ import {
   OVERLAP_MAX_DIFF,
 } from "./lib/plan.js";
 import { startClip, finishClip, uploadSlice } from "./lib/api.js";
-import "./bridge.js";
+import "./bridge.js"; // the only seam between the halves
 
 const LAST_RESULT_KEY = "lastResult";
 

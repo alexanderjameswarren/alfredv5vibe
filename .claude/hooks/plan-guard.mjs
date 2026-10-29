@@ -15,6 +15,11 @@
 //
 // Exit 0 allows; exit 2 blocks and shows stderr. Decisions go to the claims
 // guard's log, so the two read as one story.
+//
+// Owns: enforcing .clip/scope.json; its "plan <tag>" log lines, which
+// clip.mjs --scope reads. Writes no scope: prompt-check.mjs records it.
+// Uses: scripts/lib/plan-scope.mjs (the rules) and scripts/lib/claims-core.mjs
+// (checkout, repo paths, exempt folders, shell write checks).
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";

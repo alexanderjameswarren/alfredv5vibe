@@ -3,6 +3,9 @@
 // .clip/session-status.json for the Switchboard panel. Always exits 0 and prints
 // nothing, so it can never hold up or change a turn. The prompt-submit states
 // are written by prompt-check.mjs.
+//
+// Owns: the Stop, Notification and PostToolUse states in .clip/session-status.json.
+// Uses: scripts/lib/session-status.mjs (the file's format and writes).
 
 import { readFileSync } from "node:fs";
 import path from "node:path";

@@ -31,6 +31,13 @@
 //
 // Every decision goes to .clip/claims-guard.log alongside the tool guard's, so
 // the two read as one story.
+//
+// Owns: the wrong-window and already-pasted blocks, main's project binding, the
+// prompt-submit states in .clip/session-status.json, and recording each tagged
+// prompt's scope in .clip/scope.json.
+// Uses: scripts/lib/project-code.mjs (tags, bindings, live worktrees),
+// scripts/lib/claims-core.mjs (checkout), and, loaded so a failure cannot change
+// a decision, scripts/lib/session-status.mjs and scripts/lib/plan-scope.mjs.
 
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";

@@ -293,6 +293,12 @@ files, and their keyboard shortcuts clash.
 
 ### The files
 
+Two halves share the extension: the **bridge** (`bridge.js`, `claude-watch.js`,
+`lib/bridge-core.js`) and the **clipper** (everything else). Neither imports the
+other except `service-worker.js`'s one `import "./bridge.js"`, so the bridge can
+move out whole. `node --test extension/lib/boundaries.test.mjs` checks it, and a
+new `.js` file fails it until it is listed in one half.
+
 | | |
 |---|---|
 | `manifest.json` | permissions, the shortcut, the entry points, the claude.ai content script |

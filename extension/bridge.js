@@ -1,6 +1,10 @@
 // Switchboard bridge: sends this browser's tab list to the native host
 // (tools/claude-sessions/bridge), which writes it where the Switchboard panel
-// reads it. Spec: docs/technical-spec-switchboard_bridge.md, section 3.
+// reads it. Spec: docs/history/technical-spec-switchboard_bridge.md, section 3.
+//
+// BRIDGE HALF, with claude-watch.js and lib/bridge-core.js. It imports only
+// bridge files, and the clipper reaches it only through service-worker.js's
+// `import "./bridge.js"` (lib/boundaries.test.mjs).
 //
 // 🛑 NOTHING HERE MAY BREAK CLIPPING. service-worker.js imports this file, so a
 // throw at the top level would stop the worker loading. Every Chrome call is

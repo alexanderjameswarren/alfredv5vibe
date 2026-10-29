@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Switchboard bridge: Chrome native messaging host for the Alfred Clipboard
-// extension. Spec: docs/technical-spec-switchboard_bridge.md, section 1.
+// extension. Spec: docs/history/technical-spec-switchboard_bridge.md, section 1.
 //
 // It does two things only: writes the extension's tab and chat lists to the
 // bridge folder, and forwards focus / sendcli commands the panel leaves in
