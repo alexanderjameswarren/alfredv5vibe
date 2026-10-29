@@ -18,6 +18,7 @@ import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -1269,6 +1270,81 @@ export function withLock(ctx, fn, { onStale, timeoutMs = LOCK_TIMEOUT_MS } = {})
   } finally {
     releaseHeldLock();
   }
+}
+
+// ---------------------------------------------------------------------------
+// migration numbers (switchboard2-h8r 0.3)
+// ---------------------------------------------------------------------------
+//
+// Two threads each took "the next number" and both landed, because different
+// file names never conflict. `number-migration` hands numbers out under the
+// claims lock, reading main and every worktree, and records each one it issues,
+// so a number asked for but not yet written is not handed out again.
+
+export const MIGRATIONS_DIR = "supabase/migrations";
+export const NUMBERS_FILE = "alfred-migration-numbers.json";
+
+/** The highest number on disk or already issued, plus one. */
+export function nextMigrationNumber(names, issued = []) {
+  const nums = [
+    ...names.map((n) => /^(\d+)_/.exec(n)?.[1]).filter(Boolean).map(Number),
+    ...issued.map((i) => i.number),
+  ];
+  return (nums.length ? Math.max(...nums) : 0) + 1;
+}
+
+/** `_pending_<owner>_<purpose>.sql` as `<NNN>_<purpose>.sql`, or null if not this owner's. */
+export function numberedName(pendingName, owner, number) {
+  const prefix = `_pending_${owner}_`;
+  if (!pendingName.startsWith(prefix) || !pendingName.endsWith(".sql")) return null;
+  return `${String(number).padStart(3, "0")}_${pendingName.slice(prefix.length)}`;
+}
+
+/** The migrations folder of the main checkout and of every worktree. */
+export function migrationDirs(ctx) {
+  const out = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: ctx.root, encoding: "utf8" });
+  return out
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith("worktree "))
+    .map((l) => path.join(l.slice("worktree ".length), MIGRATIONS_DIR));
+}
+
+/**
+ * Issue the next migration number for this thread's `_pending_` file:
+ * `{ number, name }`. Nothing in the repo is written; the thread writes the
+ * numbered file itself.
+ */
+export function numberMigration(ctx, pendingName, { dirs = migrationDirs(ctx), now = new Date() } = {}) {
+  const base = path.basename(pendingName);
+  if (!numberedName(base, ctx.owner, 1)) {
+    throw new ClaimsError("bad-item", `${base} is not a _pending_ file of ${ctx.owner} (_pending_${ctx.owner}_<purpose>.sql).`);
+  }
+  const file = path.join(ctx.dir, NUMBERS_FILE);
+  let result = null;
+  withLock(ctx, () => {
+    const names = dirs.flatMap((d) => {
+      try {
+        return readdirSync(d);
+      } catch {
+        return [];
+      }
+    });
+    let issued = [];
+    try {
+      issued = JSON.parse(readFileSync(file, "utf8")).issued ?? [];
+    } catch {
+      /* none issued yet */
+    }
+    const number = nextMigrationNumber(names, issued);
+    const name = numberedName(base, ctx.owner, number);
+    issued.push({ number, name, owner: ctx.owner, at: now.toISOString() });
+    const tmp = `${file}.tmp-${process.pid}`;
+    writeFileSync(tmp, `${JSON.stringify({ issued }, null, 2)}\n`, "utf8");
+    renameSync(tmp, file);
+    result = { number, name };
+    return null;
+  });
+  return result;
 }
 
 function sleep(ms) {

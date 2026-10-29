@@ -71,9 +71,60 @@ export function tryGit(args, cwd) {
  * should watch happen — merge, push, commit. Returns true on success.
  */
 export function gitLive(args, cwd) {
-  say(`\n  $ git ${args.join(" ")}`);
+  say(`\n${commandEcho(args)}`);
   const r = spawnSync("git", args, { cwd, stdio: "inherit" });
   return r.status === 0;
+}
+
+/**
+ * The `$ git …` line. After `--` with more than two paths, one path per line: a
+ * long line wraps in the terminal and the space at the wrap can vanish, which made
+ * two gitcom paths read as one (switchboard2-h8r 0.3; the argument list was fine).
+ */
+export function commandEcho(args) {
+  const at = args.indexOf("--");
+  if (at === -1 || args.length - at - 1 <= 2) return `  $ git ${args.join(" ")}`;
+  return [`  $ git ${args.slice(0, at + 1).join(" ")}`, ...args.slice(at + 1).map((p) => `        ${p}`)].join("\n");
+}
+
+/** gitsync's merge: the default message, never an editor (switchboard2-h8r 0.3). */
+export const syncMergeArgs = (base) => ["merge", "--no-edit", base];
+
+/** `2026-10-29 09:05:07`, local, for gitpush's closing line. */
+export function doneAt(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${today(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+const MIGRATIONS = "supabase/migrations/";
+const migrationNo = (name) => /^(\d+)_/.exec(name)?.[1];
+
+/**
+ * Why a push must not carry these migrations, or null. `paths` are what the push
+ * brings into main; `mainNames` are the file names in main's migrations folder.
+ * Refused: a `_pending_` file still present, and a NEW file whose number main or
+ * another new file already uses. Edits to files main has are never refused, so
+ * main's old duplicates (122, 150, 153) do not block anything.
+ */
+export function migrationRefusal(paths, mainNames, exists = existsSync) {
+  const added = paths
+    .filter((p) => p.startsWith(MIGRATIONS) && !p.slice(MIGRATIONS.length).includes("/") && exists(p))
+    .map((p) => p.slice(MIGRATIONS.length));
+  const problems = [];
+  for (const name of added.filter((n) => n.startsWith("_pending_"))) {
+    problems.push(`${name} is still a _pending_ file. Number it first: node scripts/claims.mjs number-migration ${MIGRATIONS}${name}`);
+  }
+  const fresh = added.filter((n) => migrationNo(n) && !mainNames.includes(n));
+  for (const name of fresh) {
+    const n = migrationNo(name);
+    const others = [...mainNames, ...fresh].filter((o) => o !== name && migrationNo(o) === n);
+    if (others.length && !problems.some((p) => p.includes(` ${n} `))) {
+      problems.push(`migration number ${n} is used twice: ${[name, ...others].join(", ")}`);
+    }
+  }
+  return problems.length
+    ? `Not pushed: the migrations in this push need fixing first.\n${problems.map((p) => `  - ${p}`).join("\n")}`
+    : null;
 }
 
 // ---------------------------------------------------------------------------

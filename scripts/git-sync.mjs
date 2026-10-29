@@ -32,6 +32,7 @@ import {
   parseArgs,
   say,
   stop,
+  syncMergeArgs,
   tryGit,
   UsageError,
 } from "./lib/git-flow.mjs";
@@ -111,7 +112,7 @@ function main() {
     stop("Cancelled. Nothing merged.", 0);
   }
 
-  if (!gitLive(["merge", BASE], ctx.root)) {
+  if (!gitLive(syncMergeArgs(BASE), ctx.root)) {
     const conflicts = tryGit(
       ["diff", "--name-only", "--diff-filter=U"],
       ctx.root,

@@ -19,7 +19,7 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | — | s4 | Tier decisions; next step's scope at the end of every report | — | done | 2026-10-29 |
 | 0 | 0.1 | Split out the shell parser; fix `>` in quotes, `=>`, heredoc and script writes | — | done (s5-m3tx) | 2026-10-29 |
 | 0 | 0.2 | Guard and hooks on the new parser; hooks tests; diff `a/` and `b/` prefixes | — | done (s6-p5ua) | 2026-10-29 |
-| 0 | 0.3 | `number-migration`; gitpush refuses `_pending_` files and duplicate numbers; gitsync `--no-edit`; "Done at" | — | todo | |
+| 0 | 0.3 | `number-migration`; gitpush refuses `_pending_` files and duplicate numbers; gitsync `--no-edit`; "Done at"; gitcom echo | — | done (s7-c6hn) | 2026-10-29 |
 | 0 | 0.4 | Main blocks live-worktree codes; panel refuses a duplicate run tag; README link | — | todo | |
 | 0 | 0.5 | Plan guard: parse the scope block, record it, enforce create, update, delete, deploy and SQL | — | todo | |
 | 0 | 0.6 | Scope vs changes in the report; cli-workflow skill scope summary; CLAUDE.md | — | todo | |
@@ -57,7 +57,7 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: nothing
 - SQL: none
 
-**0.4, wrong-window on main, duplicate run tag, README**
+**0.4, wrong-window on main, duplicate run tag, README** (estimated run: 10m)
 - create: nothing
 - update: scripts/lib/project-code.mjs, scripts/lib/project-code.test.mjs, .claude/hooks/prompt-check.mjs, scripts/lib/hooks.test.mjs, tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/lib/status.ahk, tools/claude-sessions/test-status.ahk, tools/claude-sessions/README.md
 - delete: nothing
@@ -162,6 +162,18 @@ Every report ends with the next step's block, copied from here. The progress fil
     - Two end-to-end guard tests in hooks.test. One allows the 0.1 false positives: comparisons in `node -e`, and a heredoc to `$TEMP` that mentions rm. The other blocks script writes and the heredoc patch; its patch case failed before the fix.
   - **Spec additions.** §7.4 to §7.7: run estimate, running colours, progress strip, six-tile layout. Phase 1 goes from 5 to 7 steps, and the total from 60 to 62.
 
+- **0.3 (s7-c6hn):**
+  - **`claims.mjs number-migration <_pending_ file>`.** Under the claims lock it reads `supabase/migrations/` in main and in every worktree (`git worktree list`) and prints the next number and the numbered file name.
+    - **Issued numbers are recorded.** Each one goes into `<git common dir>/alfred-migration-numbers.json`, so a number that has been handed out but not yet written is never given to another thread. The spec said "writes nothing"; this file is in `.git`, not the repo, and without it the race stays open.
+    - **Only the thread's own files.** It refuses a file that is not `_pending_<this owner>_…sql`. Owners with underscores work.
+    - **Format.** Numbers are padded to 3 digits.
+  - **gitpush refuses** a `_pending_` migration that still exists, and a new migration whose number main (as committed or pushed) or another new file in the same push already uses.
+    - The check runs in Push and Finish on main, and in Checkpoint and Finish on a worktree, before the plan prints and before anything changes.
+    - Edits to files main already has are never refused, so main's old duplicates (122, 150, 153) block nothing.
+  - **gitsync** merges with `git merge --no-edit main` (`syncMergeArgs`).
+  - **gitpush** ends `Done at YYYY-MM-DD HH:MM:SS` (`doneAt`).
+  - **The gitcom echo:** only the echo looked wrong, and the argument list was fine. `gitLive` printed `args.join(" ")`, and commit b3a44fa received all 8 paths. On that 268-character line the missing space falls at column 181, which matches the terminal wrapping at 180 and losing the space at the wrap. `commandEcho` now prints more than two paths after `--` one per line. The fix is in git-flow.mjs, so `git-commit-claimed.mjs` did not need a change.
+
 ## Deferred and parked
 
 - Auto-posting "cli" into the chat: parked as a separate idea.
@@ -184,3 +196,4 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s4 | 0m38s |
 | s5 (0.1) | 10m24s |
 | s6 (0.2) | 2m20s |
+| s7 (0.3) | 7m22s (estimate 12m) |

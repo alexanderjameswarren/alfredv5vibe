@@ -103,10 +103,12 @@ import {
   commitsAhead,
   confirm,
   describeFile,
+  doneAt,
   git,
   gitLive,
   heading,
   listWorktrees,
+  migrationRefusal,
   say,
   selectByClaims,
   stageAndCommit,
@@ -436,6 +438,7 @@ function doMain(w, ctx, release) {
     return r.ok && r.stdout ? r.stdout.split(/\r?\n/) : [];
   };
   const planned = [...unpushedPaths(), ...staging.map((f) => f.path), ...docs.moves.flatMap((m) => [m.from, m.to])];
+  checkMigrations(planned, w.path, w.path, w.ahead.hasUpstream ? "@{u}" : "HEAD");
   say(buildPlanLine(planned, { skip: !!OPTS["skip-build"] }));
   if (dryRunStop()) return "cancelled";
   say(
@@ -620,6 +623,7 @@ function doFinish(w, ctx) {
   const kept = leftBehindRefusal(w.owner, leftBehind);
   if (kept) stop(kept, 1);
 
+  checkMigrations(mergedPaths(w, claimedChanges.map((f) => f.path)), w.path, ctx.root);
   say(`Commit  ${claimedChanges.length} claimed change(s):`);
   for (const f of claimedChanges) say(`          ${f.status.trim()} ${f.path}`);
   for (const m of docs.moves) say(`Move    ${m.from} → ${m.to}  (in the same commit)`);
@@ -747,6 +751,7 @@ function doCheckpoint(w, ctx) {
     say("\nNothing to commit.");
     return "cancelled";
   }
+  checkMigrations(mergedPaths(w, paths), w.path, ctx.root);
 
   // A database claim belongs to ONE step. Releasing them here is the default
   // rather than the exception because the alternative already happened: a thread
@@ -981,7 +986,19 @@ function main() {
     done.push(w.owner);
   }
 
-  say("\nDone.");
+  say(`\nDone at ${doneAt()}.`);
+}
+
+/**
+ * Stop before anything changes if the push would carry a `_pending_` migration
+ * or a new migration whose number main already uses (switchboard2-h8r 0.3).
+ */
+function checkMigrations(paths, checkoutPath, mainRoot, rev = BASE) {
+  // Main as committed (or as pushed), not its folder: there a new file is already on disk.
+  const r = tryGit(["ls-tree", "--name-only", rev, "supabase/migrations/"], mainRoot);
+  const mainNames = r.ok && r.stdout ? r.stdout.split(/\r?\n/).map((p) => path.posix.basename(p)) : [];
+  const refusal = migrationRefusal(paths, mainNames, (p) => fs.existsSync(path.join(checkoutPath, p)));
+  if (refusal) stop(refusal, 1);
 }
 
 try {

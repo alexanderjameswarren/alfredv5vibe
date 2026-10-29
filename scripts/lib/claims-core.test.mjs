@@ -31,8 +31,9 @@ import {
   writeIndicator,
   worktreeOf,
 } from "./claims-core.mjs";
+import * as core from "./claims-core.mjs";
 
-const run = (sub, rest = "") => `node scripts/claims.mjs ${sub} ${rest}`.trim();
+const run =(sub, rest = "") => `node scripts/claims.mjs ${sub} ${rest}`.trim();
 
 // ---------------------------------------------------------------------------
 // folder claims
@@ -510,6 +511,41 @@ test("a heredoc body that runs is judged for its own writes", () => {
   assert.deepEqual(writes("node - <<'EOF'\nrequire('fs').writeFileSync('src/App.js','x')\nEOF"), ["src/App.js"]);
   assert.deepEqual(writes("bash <<'EOF'\nrm src/App.js\nEOF"), ["src/App.js"]);
   assert.equal(writes("node - <<'EOF'\nconsole.log(1 > 0)\nEOF"), null);
+});
+
+// ---------------------------------------------------------------------------
+// migration numbers (switchboard2-h8r 0.3)
+// ---------------------------------------------------------------------------
+
+test("nextMigrationNumber: highest on disk or issued, plus one", () => {
+  const names = ["001_a.sql", "184_x.sql", "122_a.sql", "_pending_sb_y.sql", "README.md"];
+  assert.equal(core.nextMigrationNumber(names), 185);
+  assert.equal(core.nextMigrationNumber(names, [{ number: 190 }]), 191);
+  assert.equal(core.nextMigrationNumber([]), 1);
+});
+
+test("numberedName: this owner's _pending_ file only, padded to three digits", () => {
+  assert.equal(core.numberedName("_pending_switchboard2-h8r_add_x.sql", "switchboard2-h8r", 185), "185_add_x.sql");
+  assert.equal(core.numberedName("_pending_parallel_threads_fix.sql", "parallel_threads", 7), "007_fix.sql");
+  assert.equal(core.numberedName("_pending_other_add_x.sql", "switchboard2-h8r", 185), null);
+  assert.equal(core.numberedName("185_add_x.sql", "switchboard2-h8r", 186), null);
+});
+
+test("numberMigration: reads every checkout, and never hands out a number twice", () => {
+  const base = mkdtempSync(path.join(tmpdir(), "number-migration-"));
+  const mainDir = path.join(base, "main");
+  const wtDir = path.join(base, "wt");
+  mkdirSync(mainDir);
+  mkdirSync(wtDir);
+  writeFileSync(path.join(mainDir, "184_x.sql"), "");
+  writeFileSync(path.join(wtDir, "185_y.sql"), "");
+  const ctx = { dir: base, file: path.join(base, "claims.json"), owner: "sb" };
+  const first = core.numberMigration(ctx, "_pending_sb_a.sql", { dirs: [mainDir, wtDir] });
+  assert.deepEqual([first.number, first.name], [186, "186_a.sql"]);
+  // Not written yet, but issued: the next caller must not get it.
+  const second = core.numberMigration(ctx, "_pending_sb_b.sql", { dirs: [mainDir, wtDir] });
+  assert.equal(second.number, 187);
+  assert.throws(() => core.numberMigration(ctx, "_pending_other_c.sql", { dirs: [mainDir] }), /not a _pending_ file of sb/);
 });
 
 test("diff paths with a/ and b/ prefixes are checked", () => {
