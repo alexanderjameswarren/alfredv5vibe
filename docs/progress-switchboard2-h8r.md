@@ -385,8 +385,18 @@ Every report ends with the next step's block, copied from here. The progress fil
   - **Host and extension refusals** in `prompt-result.json` show as "Not sent: <error>". The file present at startup is not shown, nor is an id already shown. A tap clears any Send note.
   - **Found while testing:** the panel's `prompt-*.json` glob also matched `prompt-result.json`, which would have been taken and deleted. It is now skipped.
   - **Live check:** `FocusedElement()` ran on this machine and read Chrome's focused window (class `Chrome_WidgetWin_1`). So the COM calls work; what Claude Code's input reports is still to be seen at calibration.
+- **1.3 follow-up (s16c-d9wq), Send link not caught:**
+  - **The cause, certain.** AutoHotkey's `IniWrite` writes `settings.ini` as UTF-16 LE with a BOM, and the host read it as UTF-8. So `readLinkHosts()` returned `[]` on the real file, `hello` carried no hosts, and the click catch and the backup had nothing to match. The tests had written UTF-8 files.
+    - Fixed by decoding by the BOM. A new host test with a UTF-16 LE file failed before the fix and passes after. The real file now reads `["alfredv5vibe.vercel.app"]`.
+  - **Not ruled out:** claude.ai's link markup or click handling could still be a second problem. Only Chrome can show it, so there are now log lines at each stage:
+    - `host.log`: `link hosts: …` at start.
+    - The service worker console: `[Alfred bridge] link hosts from the host: …`, and `/send/ tab left open: … <why>`.
+    - The claude.ai tab's console: `[Alfred watch] link hosts: …`, `Send link not caught: … <why>`, and `Send <tag>: <outcome>`.
+  - **Duplicate `clip-full-page` menu:** the top-level call and `onInstalled` both ran `removeAll` before either `create`. Installs now run one after another, and the create callback reads `lastError`. The clipper's behaviour is unchanged.
+  - **Rule from now on: bump `extension/manifest.json`'s version whenever extension code changes.** It is now 1.1.0.
+  - **Settings in use:** `[send] focusKey=^+!c` (VS Code's "Claude Code: Focus input" bound to Ctrl+Shift+Alt+C, because Ctrl+Esc opens the Start menu). `[send] input=Message input`. Claude's input needs `editor.accessibilitySupport` set to "on"; without it, UI Automation sees only class "View".
   - **Risks:**
-    - On Windows, Ctrl+Esc may open the Start menu rather than reach VS Code. If it does, the panel refuses ("the focus key took focus out of VS Code"), and `focusKey` can be set to another binding.
+    - On Windows, Ctrl+Esc opens the Start menu rather than reaching VS Code (confirmed live, s16c). If it does, the panel refuses ("the focus key took focus out of VS Code"), and `focusKey` can be set to another binding.
     - Chromium builds its accessibility tree only when a UI Automation client asks, so the first read after a VS Code start may see only the window. The answer is to refuse and retry the link. Kept: the whole-prompt rule and the host's checks (tag shape, header and closing lines, 64 KB, duplicate, one waiting). The project now comes from the tag; the panel checks the window in 1.3.
 
 ## Deferred and parked
@@ -421,3 +431,4 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s14 (re-plan) | 2m27s (estimate 4m) |
 | s15 (1.2) | 5m19s (estimate 6m) |
 | s16 (1.3) | 7m37s (estimate 10m) |
+| s16c (1.3 fix) | 2m05s (estimate 10m) |

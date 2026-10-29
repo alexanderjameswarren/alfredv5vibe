@@ -302,27 +302,35 @@
   } catch { /* no Navigation API */ }
   // Send links: the host list arrives from bridge.js; with none, no link is caught.
   let linkHosts = [];
+  const say = (...a) => console.info("[Alfred watch]", ...a);
   const sendLink = (anchor, tag) => {
     const r = probe().state === "responding" ? { prompt: null, error: "Claude is still writing" } : promptForLink(anchor, tag);
+    say(`Send ${tag}:`, r.error ?? "prompt found, handed to the bridge");
     try {
       chrome.runtime.sendMessage({ type: "send-prompt", tag, prompt: r.prompt, error: r.error }).catch(() => {});
     } catch {
       stop();
     }
   };
-  const onClick = (e) => onLinkClick(e, linkHosts, sendLink);
+  // Says why a /send/ link was let through, since that only shows in Chrome.
+  const onClick = (e) => {
+    if (onLinkClick(e, linkHosts, sendLink)) return;
+    const a = e.target?.closest?.("a[href]");
+    if (a && /\/send\//.test(a.href)) say("Send link not caught:", a.href, linkHosts.length ? `host not in [${linkHosts}]` : "no link hosts from the bridge");
+  };
+  const setHosts = (hosts) => { linkHosts = hosts; say("link hosts:", hosts.join(", ") || "(none)"); };
   for (const type of ["click", "auxclick"]) {
     document.addEventListener(type, onClick, true);
     cleanups.push(() => document.removeEventListener(type, onClick, true));
   }
   try {
-    chrome.runtime.sendMessage({ type: "link-hosts?" }).then((r) => { linkHosts = Array.isArray(r?.hosts) ? r.hosts : linkHosts; }, () => {});
+    chrome.runtime.sendMessage({ type: "link-hosts?" }).then((r) => { if (Array.isArray(r?.hosts)) setHosts(r.hosts); }, () => {});
   } catch { /* old context */ }
 
   const onNudge = (msg, _sender, reply) => {
     if (msg?.type === "watch-recheck") onAddress(), schedule(0);
     if (msg?.type === "focus-composer") focusComposer(document);
-    if (msg?.type === "link-hosts" && Array.isArray(msg.hosts)) linkHosts = msg.hosts;
+    if (msg?.type === "link-hosts" && Array.isArray(msg.hosts)) setHosts(msg.hosts);
     if (msg?.type === "send-link" && typeof msg.tag === "string") {
       // The backup: a /send/ tab opened anyway. Act on the last link with that tag.
       const anchors = [...document.querySelectorAll("a[href]")].filter((a) => sendTagOf(a.href, linkHosts) === msg.tag);

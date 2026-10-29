@@ -142,6 +142,12 @@ export function cleanResult(r = {}) {
 const PROMPT_MAX = 64 * 1024;
 const HOST_SHAPE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d{1,5})?$/;
 
+/** A file's text by its BOM: AutoHotkey's IniWrite creates settings.ini as UTF-16 LE. */
+function decodeText(buf) {
+  if (buf[0] === 0xff && buf[1] === 0xfe) return buf.subarray(2).toString("utf16le");
+  return buf.toString("utf8").replace(/^﻿/, "");
+}
+
 /**
  * Alfred's hosts for Send links: `[links] hosts=` in the panel's settings.ini
  * (the same SWITCHBOARD_SETTINGS_DIR the panel honours). Never in code (spec §2, rule 8).
@@ -150,7 +156,7 @@ export function readLinkHosts(env = process.env) {
   const dir = env.SWITCHBOARD_SETTINGS_DIR || path.join(env.APPDATA || ".", "claude-sessions");
   let text;
   try {
-    text = readFileSync(path.join(dir, "settings.ini"), "utf8").replace(/^﻿/, "");
+    text = decodeText(readFileSync(path.join(dir, "settings.ini")));
   } catch {
     return [];
   }
@@ -311,7 +317,9 @@ function main() {
     log(`watch unavailable: ${e.message}`);
   }
   setInterval(check, POLL_MS);
-  send({ type: "hello", host: HOST_NAME, linkHosts: readLinkHosts() });
+  const linkHosts = readLinkHosts();
+  log(`link hosts: ${linkHosts.join(", ") || "(none: Send links will open Alfred's page)"}`);
+  send({ type: "hello", host: HOST_NAME, linkHosts });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main();

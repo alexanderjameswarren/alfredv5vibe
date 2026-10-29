@@ -432,14 +432,19 @@ chrome.commands.onCommand.addListener((command) => {
 // The right-click menu on the toolbar icon. Recreated on install and on every
 // service-worker start: MV3 workers are disposable and the menu is not, so
 // `removeAll` first keeps a restart from stacking duplicates.
+// One install at a time: the top-level call and onInstalled both ran removeAll
+// before either create, so the second create hit a duplicate id.
+let menuInstall = Promise.resolve();
 function installContextMenu() {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: "clip-full-page",
-      title: "Clip full page (shows Chrome's debugging bar)",
-      contexts: ["action"],
+  menuInstall = menuInstall.then(() => new Promise((done) => {
+    chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({
+        id: "clip-full-page",
+        title: "Clip full page (shows Chrome's debugging bar)",
+        contexts: ["action"],
+      }, () => { void chrome.runtime.lastError; done(); });
     });
-  });
+  }));
 }
 chrome.runtime.onInstalled.addListener(installContextMenu);
 chrome.runtime.onStartup.addListener(installContextMenu);

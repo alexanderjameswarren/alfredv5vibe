@@ -134,6 +134,9 @@ function onSendPrompt(msg, sender) {
 async function onSendTab(tab, url) {
   try {
     const tag = sendTagOf(url, linkHosts);
+    if (/\/send\//.test(String(url ?? "")) && (!tag || !Number.isInteger(tab?.openerTabId))) {
+      console.info("[Alfred bridge] /send/ tab left open:", url, !tag ? `host not in [${linkHosts}]` : "no opener tab");
+    }
     if (!tag || !Number.isInteger(tab?.openerTabId)) return;
     const opener = await chrome.tabs.get(tab.openerTabId);
     if (!String(opener?.url ?? "").startsWith("https://claude.ai/")) return;
@@ -178,6 +181,7 @@ function connect() {
       if (msg?.type === "hello") {
         retryMs = 0;
         linkHosts = cleanHosts(msg.linkHosts);
+        console.info("[Alfred bridge] link hosts from the host:", linkHosts.join(", ") || "(none)");
         sendTabs();
         injectWatchers();
         broadcastHosts();
