@@ -13,7 +13,7 @@
 
 import {
   HOST_NAME, HEARTBEAT_MS, DEBOUNCE_MS, buildTabsMessage, buildChatsMessage, nextDelay, isHostMissing, debounce,
-  pickTab, focusResult,
+  pickTab, focusResult, checkPrompt, cleanHosts, promptFrame, sendTagOf,
 } from "./lib/bridge-core.js";
 
 let port = null;
@@ -103,6 +103,47 @@ async function focusTab(cmd) {
   try { port?.postMessage(reply); } catch (e) { quiet(e); }
 }
 
+// Send links (spec 7.1): the hosts come only from the host's hello, never from code.
+let linkHosts = [];
+let promptSeq = 0;
+
+async function broadcastHosts() {
+  try {
+    for (const tab of await chrome.tabs.query({ url: "https://claude.ai/*" })) {
+      chrome.tabs.sendMessage(tab.id, { type: "link-hosts", hosts: linkHosts }).catch(() => {});
+    }
+  } catch (e) {
+    quiet(e);
+  }
+}
+
+// A watcher caught a Send link click: check again and hand the prompt to the host.
+function onSendPrompt(msg, sender) {
+  try {
+    if (sender?.id !== chrome.runtime.id || !String(sender?.url ?? "").startsWith("https://claude.ai/")) return;
+    if (typeof msg.tag !== "string") return;
+    const error = typeof msg.error === "string" ? msg.error : checkPrompt({ tag: msg.tag }, msg.prompt);
+    port?.postMessage(promptFrame(`ext-${Date.now().toString(36)}-${++promptSeq}`, msg.tag, msg.prompt, error));
+  } catch (e) {
+    quiet(e);
+  }
+}
+
+// The backup: a /send/ tab opened from claude.ai anyway (the click was not caught).
+// Close it and let the opener's watcher handle the link as if it had been.
+async function onSendTab(tab, url) {
+  try {
+    const tag = sendTagOf(url, linkHosts);
+    if (!tag || !Number.isInteger(tab?.openerTabId)) return;
+    const opener = await chrome.tabs.get(tab.openerTabId);
+    if (!String(opener?.url ?? "").startsWith("https://claude.ai/")) return;
+    await chrome.tabs.remove(tab.id);
+    chrome.tabs.sendMessage(opener.id, { type: "send-link", tag }).catch(() => {});
+  } catch (e) {
+    quiet(e);
+  }
+}
+
 function onCommand(cmd) {
   if (cmd.action === "focus" || cmd.action === "sendcli") return focusTab(cmd);
   try {
@@ -116,6 +157,8 @@ function onDisconnect() {
   // Reading lastError is what keeps Chrome from logging it as unchecked.
   const message = chrome.runtime.lastError?.message ?? "";
   port = null;
+  // No host, no Send: links open Alfred's page instead of being caught and dropped.
+  if (linkHosts.length) linkHosts = [], broadcastHosts();
   if (isHostMissing(message)) {
     gaveUp = true;
     quiet(`host unavailable, bridge off until the worker restarts: ${message}`);
@@ -134,8 +177,10 @@ function connect() {
     port.onMessage.addListener((msg) => {
       if (msg?.type === "hello") {
         retryMs = 0;
+        linkHosts = cleanHosts(msg.linkHosts);
         sendTabs();
         injectWatchers();
+        broadcastHosts();
       }
       if (msg?.type === "command" && typeof msg.id === "string") onCommand(msg);
     });
@@ -156,14 +201,18 @@ try {
   ]) ev?.addListener(onChange);
   chrome.tabs.onRemoved?.addListener((tabId) => { reports.delete(tabId); viewedAt.delete(tabId); });
   // An in-place move from /new to /chat/<id>: nudge the watcher to report at once.
-  chrome.tabs.onUpdated?.addListener((tabId, change) => {
+  chrome.tabs.onUpdated?.addListener((tabId, change, tab) => {
     if (port && change.url?.startsWith("https://claude.ai/")) {
       chrome.tabs.sendMessage(tabId, { type: "watch-recheck" }).catch(() => {});
     }
+    if (port && change.url) onSendTab(tab, change.url);
   });
-  // Returns false: no reply, so Chrome holds no channel open (as service-worker.js does).
-  chrome.runtime.onMessage?.addListener((msg, sender) => {
+  chrome.tabs.onCreated?.addListener((tab) => { if (port) onSendTab(tab, tab.pendingUrl ?? tab.url); });
+  // Returns false: any reply is sent at once, so Chrome holds no channel open (as service-worker.js does).
+  chrome.runtime.onMessage?.addListener((msg, sender, reply) => {
     if (msg?.type === "chat-state") onWatchReport(msg, sender);
+    if (msg?.type === "send-prompt") onSendPrompt(msg, sender);
+    if (msg?.type === "link-hosts?") reply({ hosts: linkHosts });
     return false;
   });
   // An open native port keeps the worker alive, so this keeps running while connected.

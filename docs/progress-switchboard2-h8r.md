@@ -3,7 +3,7 @@
 Project code: `switchboard2-h8r`
 Spec: `docs/technical-spec-switchboard2-h8r.md`
 
-Status: Phase 0 complete (0.8, s12-w4tc). Phase 1 next.
+Status: Phase 0 complete (0.8, s12-w4tc). Phase 1: 1.1 to 1.3 done.
 
 Rule: one step at a time. The CLI finishes a step, records it here, reports, and stops for Alex.
 
@@ -25,7 +25,17 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 0 | 0.6 | Scope vs changes in the report; cli-workflow skill scope summary; CLAUDE.md | — | done (s10-r2jd) | 2026-10-29 |
 | 0 | 0.7 | Module boundaries: bridge vs clipper in `extension/`, header interfaces | — | done (s11-n6hb) | 2026-10-29 |
 | 0 | 0.8 | `INTERFACES.md` draft; full test run | — | done (s12-w4tc) | 2026-10-29 |
-| 1 | 1.1-1.7 | Send to CLI (2), tile states and running colours (2), estimates and strip (2), six-tile layout and panel items (1): spec §7 | — | todo | |
+| 1 | 1.1 | Send to CLI: extension and host | — | done (s13-q2vx) | 2026-10-29 |
+| — | s14 | Re-plan Phase 1: Send by a link in the reply; Alfred's address is a setting | — | done (s14-h5rc) | 2026-10-29 |
+| 1 | 1.2 | Send link: host list, click catch, prompt frame | — | done (s15-b3nk) | 2026-10-29 |
+| 1 | 1.3 | Send link: panel pastes into the project's window | — | done (s16-f7pz) | 2026-10-29 |
+| 1 | 1.4 | Alfred `/send/:runTag` fallback page | — | todo | |
+| 1 | 1.5 | Skill: a Send link under every prompt | — | todo | |
+| 1 | 1.6 | Tile states, including Outside scope and Not sent | — | todo | |
+| 1 | 1.7 | Running colours by time left | — | todo | |
+| 1 | 1.8 | Estimate on the tile; Estimate vs actual | — | todo | |
+| 1 | 1.9 | Progress strip | — | todo | |
+| 1 | 1.10 | Six-tile layout and lane order | — | todo | |
 | 2 | 2.1-2.10 | SQL queue, links, click pages, runner, read-only queries: spec §8 | see below | todo | |
 | 3 | 3.1-3.18 | The move, settings, `sb` commands, Salesforce guard, deploy wrapper, PII hold: spec §9 | — | todo | |
 | 4 | 4.1-4.5 | Salesforce reads: spec §10 | the Phase 2 tables, re-claimed | todo | |
@@ -102,7 +112,70 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: nothing
 - SQL: none
 
-**1.2, send to CLI: panel delivers to the window** (block written after 1.1 reports): `lib/bridge.ahk`, `claude-sessions.ahk`, `ui/switchboard.html`, `lib/status.ahk` and their tests.
+*Re-planned in s14: Send is a link in the reply (spec §7.1), not a tile tap. The old 1.2 block is replaced by the blocks below.*
+
+**1.2, Send link: host list, click catch, prompt frame** (estimated run: 12m). The host reads `[links] hosts=` from the panel's settings.ini and sends it in `hello`. `claude-watch.js` catches clicks and middle-clicks on `/send/<tag>` links to listed hosts, reads the prompt from the same reply, and sends it on. `bridge.js` closes a `/send/` tab that opens anyway. The host takes an extension-sent `prompt` frame in place of the 1.1 `sendprompt` command path, which is removed.
+- create: nothing
+- update: extension/claude-watch.js, extension/bridge.js, extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, tools/claude-sessions/bridge/host.mjs, tools/claude-sessions/bridge/host.test.mjs, tools/claude-sessions/INTERFACES.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**1.3, Send link: panel pastes into the project's window** (estimated run: 15m). The panel sees `prompt-<project>.json` and finds that project's VS Code window; none found means nothing is sent, and it never uses the active window. It refuses while the tile is Running. Otherwise it focuses Claude Code's input, pastes, submits, restores the clipboard and deletes the file. A refusal turns the tile red "Not sent" until tapped. That covers the panel's own refusals, and the host's or extension's in `prompt-result.json` (`ok: false`, with `project` and `error`). It starts by confirming how to focus Claude Code's input reliably, and stops to ask if there is no reliable way.
+- create: nothing
+- update: tools/claude-sessions/lib/bridge.ahk, tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/lib/status.ahk, tools/claude-sessions/test-status.ahk, tools/claude-sessions/smoke-test.ahk, tools/claude-sessions/INTERFACES.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**1.4, Alfred fallback page** (estimated run: 6m). The app route `/send/:runTag`: the tag, its project, and "Send this from your desktop". It reads no data and needs no sign-in.
+- create: src/switchboard/SendFromDesktop.jsx, src/switchboard/SendFromDesktop.test.jsx
+- update: src/App.js
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**1.5, skill: a Send link under every prompt** (estimated run: 4m). It adds one base-address line (`Alfred base: https://alfredv5vibe.vercel.app`). Every reply with a prompt ends with `[Send to CLI](<base>/send/<run tag>)` directly under the prompt block. The tile no longer sends. Bump the version.
+- create: nothing
+- update: .claude/skills/cli-workflow/SKILL.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**1.6, tile states** (estimated run: 12m). This covers the five states and their precedence, dark variants, and two reds cleared by a tap. "Outside scope" is written by the plan guard as `wrong` / `outside scope`. "Not sent" comes from 1.3's refusal. "Report unread" needs interface 3; if that needs a Supabase function, the step stops and plans the database items first.
+- create: nothing
+- update: tools/claude-sessions/lib/status.ahk, tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/ui/switchboard.html, tools/claude-sessions/test-status.ahk, tools/claude-sessions/smoke-test.ahk, .claude/hooks/plan-guard.mjs, scripts/lib/session-status.mjs, scripts/lib/session-status.test.mjs, scripts/lib/hooks.test.mjs
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**1.7, running colours by time left** (estimated run: 6m). Spec §7.5.
+- create: nothing
+- update: tools/claude-sessions/lib/status.ahk, tools/claude-sessions/ui/switchboard.html, tools/claude-sessions/test-status.ahk
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**1.8, estimate on the tile; Estimate vs actual** (estimated run: 10m). The panel reads `estimate` from `.clip/scope.json` and shows `0:30 / 2:30`. `clip.mjs` prints the Estimate vs actual line for the report and appends to `.clip/estimates.jsonl`.
+- create: nothing
+- update: scripts/clip.mjs, scripts/lib/last-report.mjs, scripts/lib/clip.test.mjs, tools/claude-sessions/lib/status.ahk, tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/ui/switchboard.html, tools/claude-sessions/test-status.ahk
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**1.9, progress strip** (estimated run: 6m). Spec §7.6, with the `progressStrip` setting on the status menu.
+- create: nothing
+- update: tools/claude-sessions/ui/switchboard.html, tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/lib/status.ahk, tools/claude-sessions/test-status.ahk
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**1.10, six-tile layout and lane order** (estimated run: 10m). Spec §7.7 and §7.3: the 3 × 2 grid, the type scale, the "7+" hint, re-measured fit tables, and tiles ordered by lane.
+- create: nothing
+- update: tools/claude-sessions/ui/switchboard.html, tools/claude-sessions/lib/status.ahk, tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/test-status.ahk, tools/claude-sessions/smoke-test.ahk
+- delete: nothing
+- deploy: nothing
+- SQL: none
 
 **Database items by step (Phase 2):**
 - **2.1-2.4:** `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_issue_link`, `db:fn:switchboard_consume_link`, `db:deploy`.
@@ -113,7 +186,7 @@ Every report ends with the next step's block, copied from here. The progress fil
 | # | phase | steps |
 |---|---|---|
 | 0 | Fixes, boundaries, plan guard | 8 |
-| 1 | Send to CLI, tile states, estimates, layout | 7 |
+| 1 | Send link, fallback page, skill rule, tile states, estimates, layout | 10 |
 | 2 | SQL queue, read-only queries | 10 |
 | 3 | Multi-repo and clients | 18 |
 | 4 | Salesforce reads | 5 |
@@ -121,7 +194,7 @@ Every report ends with the next step's block, copied from here. The progress fil
 | 6 | Spec files, archiving | 2 |
 | 7 | npm start per tile | 2 |
 | 8 | Remote devices | 4 |
-| | **total** | **62** |
+| | **total** | **65** |
 
 ## Decisions
 
@@ -256,6 +329,66 @@ Every report ends with the next step's block, copied from here. The progress fil
     - the plan guard sees no shell writes in `--scope` (0.6).
   - **The test checklist's Phase 0 line** is met, and is ticked below.
 
+- **1.1 (s13-q2vx):**
+  - **The path.** The panel's `command.json` carries `sendprompt` (tab, `project`, optional `tag`). The host forwards it, adding `sentTag`, the last tag sent for that project, from `sent.json`. `bridge.js` asks the tab's watcher for `read-prompt`, without focusing the tab. The watcher returns the last whole prompt in Claude's latest finished message, code blocks first.
+    - `checkPrompt` refuses: no prompt; a project code different from the window's; a tag other than the one the panel named; or the tag already sent. Only a passing prompt leaves the extension.
+    - The host checks again. The project matches the pending command; the text starts and ends with its `Run tag:` line; it is 64 KB at most; it is not a duplicate; and no `prompt-<project>.json` is still waiting. Then it writes that file and records the tag in `sent.json`.
+    - `result.json` carries `did: "prompt"` and the tag, never the text.
+  - **"The latest prompt whose tag has not been sent"** is read as the last whole prompt in Claude's latest message. When that one was already sent, nothing is sent; the watcher does not fall back to an older prompt. The skill puts at most one prompt in a reply, so an older one is always stale.
+  - **A whole prompt** runs from the `Run tag:` + `Window:` header to the closing `Run tag:` line with the same tag. With no closing line nothing is sent, so a cut-off prompt never goes. It is read only when the chat is finished, as for the issued tag.
+  - **Privacy rule changed.** `claude-watch.js` no longer says "no chat text ever leaves the page". The exception is the prompt block, and only on `read-prompt`, which a panel command triggers; its header says so.
+  - **One at a time per project** is enforced by the waiting `prompt-<project>.json`. In 1.2 the panel also refuses while the tile is Running.
+  - **Duplicate tags are checked three times:** in the extension, in the host, and, as before, by the prompt hook when it is pasted.
+
+- **s14 (re-plan, s14-h5rc):**
+  - **Send is a link** at the end of the reply, under the prompt, to `<Alfred base>/send/<run tag>`. The tile still shows "Prompt to paste" but sends nothing. Spec §7.1 is rewritten.
+  - **Alfred's address is a setting:** spec §2, rule 8. The host list lives in the panel's settings.ini until Phase 3. Phase 2's approval links use a server-side base address and the same host list.
+  - **Kept from 1.1:** the whole-prompt rule, the checks, `prompt-<project>.json`, `sent.json`, and `result.json` without text.
+  - **Changes in 1.2:**
+    - the extension, not the panel, starts the send (a `prompt` frame); the `sendprompt` command is removed;
+    - the prompt is read from the clicked reply;
+    - the project comes from the tag, and the panel checks it against a live window.
+  - **"The latest prompt" kept:** a link in an older reply is refused unless that reply is the latest one carrying a prompt. Otherwise an old link, never sent, could send a stale prompt.
+  - **Phase 1: 7 → 10 steps**, adding the click catch, the fallback page and the skill rule, and splitting the panel paste out on its own. The total goes from 62 to 65.
+  - **Spec §7.4 calibration:** `clip.mjs` now prints the Estimate vs actual line for the CLI to paste rather than adding it to the report, matching `--scope`.
+
+- **1.2 (s15-b3nk):**
+  - **The host list.** The host reads `[links] hosts=` from the panel's settings.ini, or from `SWITCHBOARD_SETTINGS_DIR`. It is comma-separated, lower-cased, and invalid entries are dropped. The host sends it in `hello`. `bridge.js` keeps the list and sends it to every claude.ai tab; a watcher also asks for it on start. When the host disconnects the list is cleared, so a link is never caught and then dropped. With no list, a link simply opens Alfred's page.
+    - **Alex must add the line once:** `[links]` then `hosts=alfredv5vibe.vercel.app` in `%APPDATA%\claude-sessions\settings.ini`. The code holds no default, per rule 8.
+  - **The link.** It must be https, its host exactly listed (no subdomains), and its path `/send/<tag>`.
+    - `sendTagOf` lives in bridge-core, and claude-watch has a copy because content scripts cannot import. One test checks both against the same cases.
+  - **The catch.** Capture-phase `click` and `auxclick` listeners on the document call `preventDefault` and `stopImmediatePropagation` for a listed link only; the middle button is included, other buttons are not.
+    - The backup: when a listed `/send/` tab is created or navigated with a claude.ai opener, `bridge.js` closes it and asks the opener's watcher to act on the last link with that tag.
+  - **The reply.** `promptForLink` finds the reply that holds the link. It refuses:
+    - when the link is outside any reply;
+    - when the reply is older than the latest one carrying a prompt;
+    - when the reply has no whole prompt;
+    - when the prompt's tag differs from the link's;
+    - and, in the click handler, while Claude is still writing.
+  - **Refusals still reach the host,** as a `prompt` frame with `error` and no text, so the panel can show "Not sent" in 1.3.
+  - **New file `prompt-result.json`** replaces 1.1's use of `result.json`. The panel's focus wait reads `result.json` by id, and a Send outcome landing there could have overwritten the reply it was waiting for.
+  - **Removed:** the panel-started `sendprompt` command, `read-prompt`, `promptResult`, and the host's pending-command map.
+
+- **1.3 (s16-f7pz), the three layers.** For spec §7.1 step 5; the spec file was outside this step's scope.
+  1. **Window.** `PickSendWindow` takes the one VS Code window whose title names the checkout's folder. That is the worktree folder, or main's `alfred-v5`, as a whole ` - `-separated segment (`CodeTitleMatches`). None, or more than one, is refused, and the active window is never a fallback. The checkout is `SessionForProject`: a worktree by its code, or main by its binding.
+  2. **Focus.**
+     - The panel activates the window and checks that it is in front.
+     - It reads the focus through UI Automation (`lib\focus-check.ahk`: `IUIAutomation::GetFocusedElement`, then the element's name, help text, class and automation id).
+     - `FocusVerdict` passes only when the name or help text exactly matches, ignoring case, a name saved in `[send] input`. Chromium gives a placeholder as the help text.
+     - It refuses at once when the class or name looks like Monaco or xterm (an editor or terminal).
+     - If focus is elsewhere, it presses `[send] focusKey` (default `^{Esc}`) once, checks VS Code is still in front, and reads the focus again. Any failure means nothing is pasted, and the tile shows "Not sent: <reason>".
+     - **There is no built-in input name.** Until Alex runs `lib\focus-check.ahk` once, which shows what UI Automation sees and saves it on Yes, every Send is refused with "Claude's input is not set up".
+  3. **Delivery.** After the paste (clipboard, Ctrl+V, Enter, clipboard restored), the tile waits up to `[send] deliverySeconds` (default 8) for `.clip/session-status.json` `run_tag` to equal the tag. If it doesn't, the tile shows "Not delivered".
+  - **The tab-title check was not built.** It was optional, and the three layers do not need it.
+  - **Refused while** the CLI is processing, or waiting on an approval.
+  - **Every prompt file is taken and deleted,** whether it is delivered or refused, so a refused prompt never goes later by surprise. A refused tag is removed from `sent.json`, so the same link can be clicked again.
+  - **Host and extension refusals** in `prompt-result.json` show as "Not sent: <error>". The file present at startup is not shown, nor is an id already shown. A tap clears any Send note.
+  - **Found while testing:** the panel's `prompt-*.json` glob also matched `prompt-result.json`, which would have been taken and deleted. It is now skipped.
+  - **Live check:** `FocusedElement()` ran on this machine and read Chrome's focused window (class `Chrome_WidgetWin_1`). So the COM calls work; what Claude Code's input reports is still to be seen at calibration.
+  - **Risks:**
+    - On Windows, Ctrl+Esc may open the Start menu rather than reach VS Code. If it does, the panel refuses ("the focus key took focus out of VS Code"), and `focusKey` can be set to another binding.
+    - Chromium builds its accessibility tree only when a UI Automation client asks, so the first read after a VS Code start may see only the window. The answer is to refuse and retry the link. Kept: the whole-prompt rule and the host's checks (tag shape, header and closing lines, 64 KB, duplicate, one waiting). The project now comes from the tag; the panel checks the window in 1.3.
+
 ## Deferred and parked
 
 - Auto-posting "cli" into the chat: parked as a separate idea.
@@ -264,7 +397,7 @@ Every report ends with the next step's block, copied from here. The progress fil
 ## Test checklist
 
 - [x] Phase 0: each of the 9 fixes has a failing test first, then passes. The plan guard refuses an undeclared create, delete, deploy and SQL table. Both suites green.
-- [ ] Phase 1: a duplicate send is refused; each of the five tile states shows; Report unread clears on archive.
+- [ ] Phase 1: a Send link sends only to its project's window and never to the active one. A duplicate, a stale reply's link, and a send while Running are each refused. On a phone the link opens the Alfred page. Each of the five tile states shows; Report unread clears on archive.
 - [ ] Phase 2: a link fails after 30 minutes, on a second use, in the wrong tab, and with changed SQL; a dry run rolls back.
 - [ ] Phase 3: alfred-v5 works through the shims before the cutover. `sf data query` and a production deploy are blocked. A deploy holds the sandbox lock and sends only claimed files. A screen-made change is caught by the compare.
 
@@ -284,3 +417,7 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s10 (0.6) | 5m29s (estimate 15m) |
 | s11 (0.7) | 5m31s (estimate 15m) |
 | s12 (0.8) | 1m54s (estimate 5m) |
+| s13 (1.1) | 3m45s (estimate 8m) |
+| s14 (re-plan) | 2m27s (estimate 4m) |
+| s15 (1.2) | 5m19s (estimate 6m) |
+| s16 (1.3) | 7m37s (estimate 10m) |

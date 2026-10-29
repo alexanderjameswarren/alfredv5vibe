@@ -8,6 +8,11 @@
 // (only lines that begin "Run tag:", only the tag) and whether the message box
 // is empty. Never the box's text, and never any message text.
 //
+// The one exception is Send to CLI (switchboard2-h8r 1.2): when Alex clicks a
+// Send link (/send/<tag> on a host bridge.js lists), and only then, it hands
+// bridge.js the CLI prompt in that link's own reply: the lines from its
+// "Run tag:"/"Window:" header to its closing "Run tag:" line, nothing around them.
+//
 // A classic script, not a module: content scripts cannot be modules. Node loads
 // it for the tests, where `chrome` is missing and only the pure core registers.
 
@@ -75,6 +80,87 @@
     return issuedTag;
   }
 
+  /**
+   * The last whole CLI prompt in `text`: { tag, text } from its header line to the
+   * closing "Run tag:" line with the same tag, or null. No closing line, no prompt.
+   */
+  function extractPrompt(text) {
+    const lines = String(text ?? "").split(/\r?\n/);
+    const blank = (l) => !l.replace(new RegExp(SPACE, "g"), "");
+    let found = null;
+    lines.forEach((line, i) => {
+      const m = TAG_LINE.exec(line);
+      if (!m) return;
+      const next = lines.slice(i + 1).find((l) => !blank(l));
+      if (!WINDOW_LINE.test(next ?? "")) return;
+      const end = lines.findIndex((l, j) => j > i && TAG_LINE.exec(l)?.[1] === m[1]);
+      if (end !== -1) found = { tag: m[1], text: lines.slice(i, end + 1).map((l) => l.replace(/\s+$/, "")).join("\n") };
+    });
+    return found;
+  }
+
+  /** The last whole prompt in one message element, code blocks first, or null. */
+  function readPromptIn(el) {
+    let prompt = null;
+    for (const block of el.querySelectorAll("pre")) prompt = extractPrompt(block.textContent ?? "") ?? prompt;
+    return prompt ?? extractPrompt(el.innerText ?? el.textContent ?? "");
+  }
+
+  /** The last whole prompt in Claude's latest message, or null. */
+  function readPrompt(root) {
+    const { el } = latestMessage(root);
+    return el ? readPromptIn(el) : null;
+  }
+
+  const TAG_SHAPE = /^[a-z0-9_]+-[a-z0-9]+-s\d+[a-z]?-[a-z0-9]{4}$/;
+
+  /** A Send link's run tag, or null. Same rule as lib/bridge-core.js sendTagOf; the tests hold them equal. */
+  function sendTagOf(href, hosts) {
+    let u;
+    try {
+      u = new URL(String(href));
+    } catch {
+      return null;
+    }
+    if (u.protocol !== "https:" || !hosts.includes(u.host.toLowerCase())) return null;
+    const m = /^\/send\/([^/]+)\/?$/.exec(u.pathname);
+    return m && TAG_SHAPE.test(m[1]) ? m[1] : null;
+  }
+
+  /**
+   * The prompt a Send link sends: the whole prompt in the link's own reply, which
+   * must be the latest reply carrying one, with the link's tag. { prompt, error }.
+   */
+  function promptForLink(anchor, tag) {
+    const root = anchor.ownerDocument;
+    let replies = [], reply = null;
+    for (const [, selector] of MESSAGE_SELECTORS) {
+      replies = [...root.querySelectorAll(selector)].filter((el) => !el.parentElement?.closest(selector));
+      reply = replies.find((el) => el.contains(anchor)) ?? null;
+      if (reply) break;
+    }
+    const refuse = (error) => ({ prompt: null, error });
+    if (!reply) return refuse("the link is not in a Claude reply");
+    const latest = [...replies].reverse().find((el) => readPromptIn(el));
+    const prompt = readPromptIn(reply);
+    if (latest && latest !== reply && replies.indexOf(reply) < replies.indexOf(latest)) return refuse("the link is in an older reply");
+    if (!prompt) return refuse("no whole CLI prompt in the link's reply");
+    if (prompt.tag !== tag) return refuse(`the link is for ${tag}, the prompt is ${prompt.tag}`);
+    return { prompt, error: null };
+  }
+
+  /** Capture-phase click: stop a listed Send link before navigation and hand it on. True if it was one. */
+  function onLinkClick(event, hosts, handle) {
+    if (event.button > 1) return false;
+    const anchor = event.target?.closest?.("a[href]");
+    const tag = anchor ? sendTagOf(anchor.href, hosts) : null;
+    if (!tag) return false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    handle(anchor, tag);
+    return true;
+  }
+
   /** Put the cursor at the end of the message box. Types nothing, reads nothing. True if found. */
   function focusComposer(root) {
     const el = root.querySelector(SELECTORS.composer);
@@ -127,7 +213,8 @@
   const normalise = (url) => String(url).split(/[?#]/)[0];
 
   globalThis.__alfredWatchCore = {
-    decideState, extractTag, isChatPath, latestMessage, readTag, focusComposer, cliPlan, sendCli, SELECTORS,
+    decideState, extractTag, extractPrompt, isChatPath, latestMessage, readTag, readPrompt, readPromptIn, sendTagOf,
+    promptForLink, onLinkClick, focusComposer, cliPlan, sendCli, SELECTORS,
   };
   if (typeof chrome === "undefined" || !chrome.runtime?.id || typeof document === "undefined") return;
 
@@ -213,9 +300,34 @@
     globalThis.navigation?.addEventListener("currententrychange", onAddress);
     cleanups.push(() => globalThis.navigation?.removeEventListener("currententrychange", onAddress));
   } catch { /* no Navigation API */ }
+  // Send links: the host list arrives from bridge.js; with none, no link is caught.
+  let linkHosts = [];
+  const sendLink = (anchor, tag) => {
+    const r = probe().state === "responding" ? { prompt: null, error: "Claude is still writing" } : promptForLink(anchor, tag);
+    try {
+      chrome.runtime.sendMessage({ type: "send-prompt", tag, prompt: r.prompt, error: r.error }).catch(() => {});
+    } catch {
+      stop();
+    }
+  };
+  const onClick = (e) => onLinkClick(e, linkHosts, sendLink);
+  for (const type of ["click", "auxclick"]) {
+    document.addEventListener(type, onClick, true);
+    cleanups.push(() => document.removeEventListener(type, onClick, true));
+  }
+  try {
+    chrome.runtime.sendMessage({ type: "link-hosts?" }).then((r) => { linkHosts = Array.isArray(r?.hosts) ? r.hosts : linkHosts; }, () => {});
+  } catch { /* old context */ }
+
   const onNudge = (msg, _sender, reply) => {
     if (msg?.type === "watch-recheck") onAddress(), schedule(0);
     if (msg?.type === "focus-composer") focusComposer(document);
+    if (msg?.type === "link-hosts" && Array.isArray(msg.hosts)) linkHosts = msg.hosts;
+    if (msg?.type === "send-link" && typeof msg.tag === "string") {
+      // The backup: a /send/ tab opened anyway. Act on the last link with that tag.
+      const anchors = [...document.querySelectorAll("a[href]")].filter((a) => sendTagOf(a.href, linkHosts) === msg.tag);
+      if (anchors.length) sendLink(anchors[anchors.length - 1], msg.tag);
+    }
     if (msg?.type === "send-cli") {
       sendCli(document).then((did) => reply({ did }), () => reply({ did: "focused" }));
       return true;    // answers asynchronously

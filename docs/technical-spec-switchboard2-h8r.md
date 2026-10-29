@@ -24,6 +24,7 @@ Plan: run tag `switchboard2-h8r-s1-q7m3`; decisions: `-s2-n4vd` and `-s3-w8ke`.
 5. **Every run is logged.** Each SQL write, read query, Salesforce read, git action and deploy gets a `switchboard_runs` row.
 6. **Every prompt declares its scope.** Each prompt carries a scope block, and the plan guard enforces it (§6.2).
 7. **Clicks.** An action runs without a click only if it touches nothing but its own thread's worktree and claimed files (§11.1). Anything that touches main always needs a click and is never automatic. Every click page leads with one plain line in capitals saying what happens (§8.1).
+8. **Alfred's address is a setting.** The extension and the panel recognise an Alfred link by its path (`/send/<run tag>`, and Phase 2's approval paths) on any host in a list kept in Switchboard's settings, never in code. Today the list is `alfredv5vibe.vercel.app`. A move to another domain adds a host, and old hosts stay listed so old links keep working. The cli-workflow skill writes links from one base-address line.
 
 ## 3. Phase order and dependencies
 
@@ -208,9 +209,30 @@ Scope of this step:
 
 ## 7. Phase 1 — send to CLI and tile states (in place, in alfred-v5)
 
-### 7.1 Send to CLI
+### 7.1 Send to CLI, by a link in the reply
 
-The extension sends a prompt from the claude.ai tab to the right VS Code window, through the native host and the panel. The window is chosen from the run tag's project code. The prompt check and plan guard still run on arrival, and a duplicate tag is refused.
+**The trigger is a link, not a tile.** Every reply that carries a CLI prompt ends with one "Send to CLI" link, directly under the prompt block. Alex reads the reply, does any steps above the prompt, then clicks the link. The tile still shows "Prompt to paste" but sends nothing.
+
+**The link** is `<Alfred base>/send/<run tag>`, for example `https://alfredv5vibe.vercel.app/send/switchboard2-h8r-s15-k2mz`. Its host must be in the settings list (§2, rule 8).
+
+**On the desktop, with the extension:**
+1. **Catch.** `claude-watch.js` catches the click (and middle or Ctrl-click) on claude.ai before navigation: a capture-phase listener on the document, for any link whose host is listed and whose path is `/send/<tag>`. Backup: if a `/send/` tab opens anyway, `bridge.js` closes it and handles the send the same way.
+2. **Read.** The prompt is read from the code block in the same reply as the link, not from the latest message. Its tag must equal the link's tag, and the reply must be the latest one in the chat that carries a prompt.
+3. **Check** (from 1.1): a whole prompt, header to closing tag; not already sent; no other prompt waiting for that project.
+4. **Hand over.** `bridge.js` sends a `prompt` frame to the host. The host checks again and writes `prompt-<project>.json`.
+5. **Paste.** The panel finds the VS Code window for the tag's project code, with no window found meaning nothing is sent. It never falls back to the active window. It refuses while that tile is Running. Otherwise it focuses Claude Code's input in that window, pastes, submits, restores the clipboard, and deletes the file. A refusal turns the tile red "Not sent" with the reason, until tapped.
+6. **On arrival** the prompt hook and plan guard run as for a typed prompt, so a wrong-window or duplicate tag is still refused there.
+
+**Without the extension** (phone, another browser), the link opens a small Alfred page, the app route `/send/:runTag`. It shows the tag and says to send it from the desktop. It reads no data and needs no sign-in. Phase 8 may queue it instead.
+
+**What changes from 1.1.** The checks and the host's prompt file stay. Three things change:
+- The trigger moves from the panel's `sendprompt` command to the extension: a `prompt` frame instead of a `result` to a pending command.
+- The prompt comes from the clicked reply, not the latest message.
+- The project is taken from the tag and checked by the panel against a live window, instead of being named by the panel's command.
+
+The `sendprompt` command path is removed in 1.2.
+
+**The host list** lives in the panel's settings (`%APPDATA%\claude-sessions\settings.ini`, `[links] hosts=`, comma-separated) until Phase 3 moves it to `config\`. The host reads it and sends it in its `hello` frame, because the extension cannot read local files. With no host connected the link simply opens the Alfred page.
 
 ### 7.2 Tile states
 
@@ -220,7 +242,7 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 |---|---|---|---|
 | Running | The CLI is working. It warms toward orange as the estimate runs out (§7.5). | green `#2E7D32` (today's "CLI working") | white |
 | Report unread | The CLI finished and the report's Alfred inbox item is not archived. It clears on archive, however the report was fetched (a tap, or Alex typing "cli"). | orange `#F57C00` (today's "Send cli") | `#1A1200` |
-| Prompt to paste | A chat reply carries a run tag the CLI has not received. | purple `#7E57C2` (today's "Paste prompt") | white |
+| Prompt to paste | A chat reply carries a run tag the CLI has not received. Display only: sending is the reply's link (§7.1). | purple `#7E57C2` (today's "Paste prompt") | white |
 | Talking | The CLI is idle, its last report is handled, and Alex and Claude are working in the chat. | slate blue `#4A6FA5` | white |
 | Waiting on SQL | A queued SQL item for this project awaits a click (Phase 2). | Alfred light tan `#E4D2C3` (`--secondary`) | `#2A2520` |
 
@@ -232,7 +254,7 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 
 ### 7.3 Panel items
 
-- Instant colour feedback when CLI is tapped: green at once, red if the paste is blocked.
+- Instant colour feedback when a Send link is clicked: green at once, red if the send is refused.
 - Tiles ordered by lane: Fast track, Main, Side road, Country road.
 - A finished run needs no new signal: Alex's existing sound hook (`Notification`) already plays one.
 
@@ -244,7 +266,7 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 
 **On the tile.** The Running state shows elapsed time against the estimate, as text: `0:30 / 2:30`. With no estimate it shows elapsed time only: `0:30`.
 
-**Calibration.** `clip.mjs` reads the Total row of the report's timing table, which every report already carries. It adds one line to the report, `Estimate vs actual: 2m30s vs 3m10s (+27%)`, and appends `{ project, run_tag, estimate, actual }` to `.clip/estimates.jsonl`. Claude can then see how far off its estimates run, per project, from the reports alone.
+**Calibration.** `clip.mjs` reads the Total row of the report's timing table, which every report already carries. It prints one line for the CLI to paste into the report (as `--scope` does, so the pushed and printed reports stay identical), `Estimate vs actual: 2m30s vs 3m10s (+27%)`, and appends `{ project, run_tag, estimate, actual }` to `.clip/estimates.jsonl`. Claude can then see how far off its estimates run, per project, from the reports alone.
 
 ### 7.5 Running colours by time left
 
@@ -291,7 +313,7 @@ Both tables have row-level security: Alex's user only. Neither gets any anon gra
 **Flow.**
 1. **Queue.** The CLI queues SQL with its own key, which can only insert `kind = 'sql'` rows.
 2. **Review.** Claude reviews the SQL in the chat.
-3. **Issue.** Claude calls `issue_switchboard_link(action_id)`. It returns a URL with a random token, stores only the token's hash, binds the link to the fingerprint, and expires it in 30 minutes.
+3. **Issue.** Claude calls `issue_switchboard_link(action_id)`. It returns a URL with a random token, stores only the token's hash, binds the link to the fingerprint, and expires it in 30 minutes. The URL's base address is a server setting, never code. The extension and the panel recognise it by path on the hosts in the same list as the Send links (§2, rule 8).
 4. **Click.** Alex clicks in the same chat tab, and the extension checks two things:
    - the tab's address equals `chat_url`. Switchboard records that address when it maps the run tag to the chat.
    - as a second check, the tab's title contains the project code.

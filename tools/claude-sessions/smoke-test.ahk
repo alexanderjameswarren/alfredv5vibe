@@ -379,6 +379,87 @@ Refresh()
 Expect("no chat file: grey", ms.color " / " ms.label, "grey / chat unknown")
 Expect("no chat: terminal icon only", TileField("cli:main", "icon"), "cli")
 
+; --- Send link: paste only into the project's window, only into Claude's input ------
+; Main is bound to rem-j7p here, so its prompts are rem-j7p's.
+SP := "Run tag: rem-j7p-s7-abcd`nWindow: the main checkout`n`nSay hi.`n`nRun tag: rem-j7p-s7-abcd"
+WritePrompt(tag := "rem-j7p-s7-abcd") {
+    FileOpen(BRIDGE_DIR "\prompt-rem-j7p.json", "w", "UTF-8-RAW").Write(ToJson({at: IsoAgo(0), id: "p1", project: "rem-j7p", tag: tag, text: SP}))
+    FileOpen(BRIDGE_DIR "\sent.json", "w", "UTF-8-RAW").Write('{"rem-j7p":"' tag '"}')
+}
+savedWindows := fakeWindows
+fakeWindows := [{hwnd: 801, title: "notes.md - " ms.folder " - Visual Studio Code"}, {hwnd: 802, title: "other - Visual Studio Code"}]
+IniWrite("Message Claude", SETTINGS_INI, "send", "input")
+IniWrite("2", SETTINGS_INI, "send", "deliverySeconds")
+focusNow := {name: "Message Claude", helpText: "", className: ""}
+pasted := [], keys := [], activated := []
+focusReader := () => focusNow
+keySender := (k) => keys.Push(k)
+pasteSender := (text) => (pasted.Push(text), true)
+windowIsActive := (h) => h = 801
+Step("waiting", IsoAgo(5), false, "rem-j7p-s6-zzzz")
+WritePrompt()
+Refresh()
+Expect("send: pasted the prompt once", pasted.Length = 1 && pasted[1] == SP, true)
+Expect("send: into the project's window", JoinCodes(activated), "801|")
+Expect("send: no focus key needed", keys.Length, 0)
+Expect("send: prompt file taken", FileExist(BRIDGE_DIR "\prompt-rem-j7p.json"), "")
+Step("waiting", IsoAgo(1), false, "rem-j7p-s7-abcd")
+Expect("send: delivered, nothing pending", ms.label != "Not delivered" && ms.sendTag = "", true)
+
+; Focus in an editor: the focus key is tried once, then nothing is pasted.
+focusNow := {name: "Editor content", helpText: "", className: "inputarea monaco-mouse-cursor-text"}
+pasted := [], keys := []
+WritePrompt("rem-j7p-s8-efgh")
+Refresh()
+Expect("editor: nothing pasted", pasted.Length, 0)
+Expect("editor: focus key tried once", JoinCodes(keys), "^{Esc}|")
+Expect("editor: red Not sent", ms.color " / " ms.label, "red / Not sent: focus is in an editor or terminal")
+Expect("editor: tag freed for a retry", FileRead(BRIDGE_DIR "\sent.json", "UTF-8") ~= "rem-j7p-s8-efgh", 0)
+ButtonClick("main")
+Refresh()
+Expect("a tap clears Not sent", ms.label != "Not sent: focus is in an editor or terminal", true)
+
+; Two windows for the project: refuse, never guess.
+focusNow := {name: "Message Claude", helpText: "", className: ""}
+fakeWindows.Push({hwnd: 803, title: ms.folder " - Visual Studio Code"})
+pasted := []
+WritePrompt("rem-j7p-s9-ijkl")
+Refresh()
+Expect("two windows: nothing pasted", pasted.Length, 0)
+Expect("two windows: red", ms.label, "Not sent: 2 VS Code windows are titled " ms.folder)
+fakeWindows.Pop()
+ButtonClick("main")
+
+; Running: refused.
+Step("processing", IsoAgo(5), false, "rem-j7p-s6-zzzz")
+WritePrompt("rem-j7p-s10-mnop")
+Refresh()
+Expect("running: nothing pasted", pasted.Length, 0)
+Expect("running: red", ms.label, "Not sent: the CLI is running")
+ButtonClick("main")
+
+; Pasted, but the prompt hook never records it: Not delivered.
+Step("waiting", IsoAgo(5), false, "rem-j7p-s6-zzzz")
+WritePrompt("rem-j7p-s11-qrst")
+Refresh()
+Expect("missing: pasted", pasted.Length, 1)
+ms.sendAt -= 3000
+Refresh()
+Expect("missing: Not delivered", ms.color " / " ms.label, "red / Not delivered")
+ButtonClick("main")
+
+; The host or extension refused: shown from prompt-result.json.
+FileOpen(BRIDGE_DIR "\prompt-result.json", "w", "UTF-8-RAW").Write('{"id":"ext-9","ok":false,"tag":"rem-j7p-s12-uvwx","project":"rem-j7p","error":"the link is in an older reply"}')
+Refresh()
+Expect("host refusal shown", ms.label, "Not sent: the link is in an older reply")
+Refresh()
+ButtonClick("main")
+Refresh()
+Expect("an old refusal is not shown again", ms.label != "Not sent: the link is in an older reply", true)
+FileDelete(BRIDGE_DIR "\prompt-result.json")
+FileDelete(BRIDGE_DIR "\sent.json")
+fakeWindows := savedWindows
+
 ; --- unpaired chats get their own rows --------------------------------------------
 WriteChats("https://claude.ai/chat/abc-1|finished|4|" T9 "|1|1|abc", "https://claude.ai/chat/loose|responding|2||1|900|Loose chat - Claude")
 Refresh()

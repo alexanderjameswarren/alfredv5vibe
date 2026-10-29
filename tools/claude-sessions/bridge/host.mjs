@@ -2,9 +2,10 @@
 // Switchboard bridge: Chrome native messaging host for the Alfred Clipboard
 // extension. Spec: docs/history/technical-spec-switchboard_bridge.md, section 1.
 //
-// It does two things only: writes the extension's tab and chat lists to the
-// bridge folder, and forwards focus / sendcli commands the panel leaves in
-// command.json. It never runs a program. stdout carries protocol frames and
+// It does three things only: writes the extension's tab and chat lists to the
+// bridge folder, forwards focus / sendcli commands the panel leaves in
+// command.json, and writes a Send link's checked prompt to prompt-<project>.json.
+// Its hello carries Alfred's link hosts, read from the panel's settings.ini. It never runs a program. stdout carries protocol frames and
 // nothing else, so every diagnostic goes to host.log.
 
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
@@ -134,11 +135,85 @@ export function cleanResult(r = {}) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Send to CLI (switchboard2-h8r 1.1-1.2): prompt-<project>.json for the panel
+// ---------------------------------------------------------------------------
+
+const PROMPT_MAX = 64 * 1024;
+const HOST_SHAPE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d{1,5})?$/;
+
+/**
+ * Alfred's hosts for Send links: `[links] hosts=` in the panel's settings.ini
+ * (the same SWITCHBOARD_SETTINGS_DIR the panel honours). Never in code (spec §2, rule 8).
+ */
+export function readLinkHosts(env = process.env) {
+  const dir = env.SWITCHBOARD_SETTINGS_DIR || path.join(env.APPDATA || ".", "claude-sessions");
+  let text;
+  try {
+    text = readFileSync(path.join(dir, "settings.ini"), "utf8").replace(/^﻿/, "");
+  } catch {
+    return [];
+  }
+  let section = "", value = "";
+  for (const line of text.split(/\r?\n/)) {
+    const head = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+    if (head) section = head[1].trim().toLowerCase();
+    else if (section === "links") value = /^\s*hosts\s*=(.*)$/i.exec(line)?.[1] ?? value;
+  }
+  return value.split(",").map((h) => h.trim().toLowerCase()).filter((h) => HOST_SHAPE.test(h));
+}
+const projectOfTag = (tag) => (TAG_SHAPE.test(tag) ? tag.replace(/-s\d+[a-z]?-[a-z0-9]{4}$/, "") : null);
+export const promptFile = (dir, project) => path.join(dir, `prompt-${project}.json`);
+
+function readSent(dir) {
+  try {
+    return JSON.parse(readFileSync(path.join(dir, "sent.json"), "utf8")) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/** Why this prompt may not be written, or null. Its project is its tag's. */
+function promptProblem(dir, tag, text) {
+  const project = projectOfTag(tag);
+  if (!project) return "the prompt has no valid run tag";
+  if (text.length > PROMPT_MAX) return "the prompt is over 64 KB";
+  const lines = text.split("\n");
+  if (lines[0] !== `Run tag: ${tag}` || lines.at(-1) !== `Run tag: ${tag}`) return "the prompt does not start with its Run tag line and end with it";
+  if (readSent(dir)[project] === tag) return `${tag} was already sent`;
+  try {
+    statSync(promptFile(dir, project));
+    return `a prompt for ${project} is waiting to be delivered`;
+  } catch { /* none waiting */ }
+  return null;
+}
+
+/**
+ * A `prompt` frame from a Send link: write the prompt for the panel and record its
+ * tag, or refuse. Returns the outcome for prompt-result.json, which never holds the text.
+ */
+function acceptPrompt(msg, { dir, now }) {
+  const id = str(msg.id, 64);
+  const tag = typeof msg.tag === "string" && TAG_SHAPE.test(msg.tag) ? msg.tag : null;
+  const project = tag ? projectOfTag(tag) : null;
+  const text = typeof msg.text === "string" ? msg.text : "";
+  const problem = typeof msg.error === "string" ? msg.error.slice(0, 500) : promptProblem(dir, tag ?? "", text);
+  const outcome = { id, ok: !problem, tag, project, error: problem ?? null };
+  if (problem) return outcome;
+  writeAtomic(promptFile(dir, project), `${JSON.stringify({ at: now.toISOString(), id, project, tag, text }, null, 2)}\n`);
+  writeAtomic(path.join(dir, "sent.json"), `${JSON.stringify({ ...readSent(dir), [project]: tag }, null, 2)}\n`);
+  return outcome;
+}
+
 /** Write the file a message from the extension calls for. Returns the file name, or null. */
 export function handleMessage(msg, { dir, origin, now = new Date(), log = () => {} }) {
   const stamp = { at: now.toISOString(), origin: origin ?? null, extension_id: extensionIdOf(origin) };
   let name = null, body = null;
-  if (msg?.type === "tabs" && Array.isArray(msg.tabs)) {
+  if (msg?.type === "prompt") {
+    // Its own file: a prompt outcome must never overwrite a focus reply the panel is waiting on.
+    name = "prompt-result.json"; body = { ...stamp, ...acceptPrompt(msg, { dir, now }) };
+    log(`prompt ${body.ok ? `written for ${body.tag}` : `refused: ${body.error}`}`);
+  } else if (msg?.type === "tabs" && Array.isArray(msg.tabs)) {
     name = "tabs.json"; body = { ...stamp, tabs: msg.tabs.map(cleanTab) };
   } else if (msg?.type === "chats" && Array.isArray(msg.chats)) {
     name = "chats.json"; body = { ...stamp, chats: msg.chats.map(cleanChat) };
@@ -236,7 +311,7 @@ function main() {
     log(`watch unavailable: ${e.message}`);
   }
   setInterval(check, POLL_MS);
-  send({ type: "hello", host: HOST_NAME });
+  send({ type: "hello", host: HOST_NAME, linkHosts: readLinkHosts() });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main();

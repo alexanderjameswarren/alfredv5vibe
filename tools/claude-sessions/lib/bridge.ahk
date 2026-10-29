@@ -93,3 +93,136 @@ FocusAndPlace(tabId, composer := false, action := "focus") {
     placeWindow(hwnd, CHROME_MONITOR)
     return hwnd
 }
+
+; ---------------------------------------------------------------------------
+; Send link (switchboard2-h8r 1.3, spec 7.1): deliver prompt-<project>.json
+; ---------------------------------------------------------------------------
+;
+; Three layers, each a refusal: the one window titled with the checkout's folder
+; (never the active window); Claude Code's input as UI Automation reports the
+; focus (lib\focus-check.ahk), after at most one press of its focus key; and the
+; prompt hook's record of the tag within [send] deliverySeconds.
+
+promptResultRaw := "", promptResultId := "", promptResultSeen := false
+
+; A refusal by the host or extension, from prompt-result.json, shown on the
+; project's tile. The file already there at startup is old news.
+ReadPromptResult() {
+    global promptResultRaw, promptResultId, promptResultSeen
+    text := ""
+    try text := FileRead(BRIDGE_DIR "\prompt-result.json", "UTF-8")
+    first := !promptResultSeen, promptResultSeen := true
+    if text == promptResultRaw || text = ""
+        return
+    promptResultRaw := text
+    try data := JSON.parse(text)
+    catch
+        return
+    id := data.Get("id", "")
+    if first || id == promptResultId
+        return promptResultId := id
+    promptResultId := id
+    if data.Get("ok", false)
+        return
+    code := SessionForProject(order, mainProject, data.Get("project", ""))
+    if code != ""
+        sessions[code].sendNote := "Not sent: " (data.Get("error", "") || "refused")
+}
+
+; Take every waiting prompt file: deliver it or refuse it, and delete it either way,
+; so a refused prompt never goes later by surprise.
+TakePrompts() {
+    Loop Files BRIDGE_DIR "\prompt-*.json" {
+        if A_LoopFileName = "prompt-result.json"
+            continue
+        promptPath := A_LoopFileFullPath
+        try data := JSON.parse(FileRead(promptPath, "UTF-8"))
+        catch
+            continue       ; mid-write: next poll
+        try FileDelete(promptPath)
+        DeliverPrompt(data.Get("project", ""), data.Get("tag", ""), data.Get("text", ""))
+    }
+}
+
+DeliverPrompt(project, tag, text) {
+    code := SessionForProject(order, mainProject, project)
+    reason := SendRefusal(code, code != "" ? sessions[code].kind : "", project)
+    if reason = "" {
+        s := sessions[code]
+        pick := PickSendWindow(listCodeWindows(), s.folder)
+        reason := pick.error != "" ? pick.error : PasteIntoClaude(pick.hwnd, text)
+    }
+    if reason != "" {
+        UnmarkSent(project, tag)
+        if code != ""
+            sessions[code].sendNote := "Not sent: " reason
+        return false
+    }
+    s.sendNote := "", s.sendTag := tag, s.sendAt := A_TickCount
+    return true
+}
+
+; Activate the window, make sure Claude's input has the focus, then paste and
+; submit. Returns "" when pasted, or why nothing was.
+PasteIntoClaude(hwnd, text) {
+    names := InputNames(IniRead(SETTINGS_INI, "send", "input", ""))
+    activateWindow(hwnd)
+    Sleep(150)
+    if !windowIsActive(hwnd)
+        return "its VS Code window would not come to the front"
+    if FocusVerdict(focusReader(), names) != "" {
+        ; One press of Claude Code's focus key, which toggles: only when focus is elsewhere.
+        keySender(IniRead(SETTINGS_INI, "send", "focusKey", "^{Esc}"))
+        Sleep(300)
+        if !windowIsActive(hwnd)
+            return "the focus key took focus out of VS Code"
+        if (verdict := FocusVerdict(focusReader(), names)) != ""
+            return verdict
+    }
+    if !windowIsActive(hwnd)
+        return "its VS Code window lost the front"
+    return pasteSender(text) ? "" : "the clipboard could not be set"
+}
+
+; Clipboard in, Ctrl+V, Enter, clipboard back.
+PastePrompt(text) {
+    saved := ClipboardAll()
+    A_Clipboard := ""
+    A_Clipboard := text
+    if !ClipWait(1) {
+        A_Clipboard := saved
+        return false
+    }
+    Send("^v")
+    Sleep(300)
+    Send("{Enter}")
+    Sleep(200)
+    A_Clipboard := saved
+    return true
+}
+
+; A refused prompt's tag leaves sent.json, so its link can be clicked again.
+UnmarkSent(project, tag) {
+    sentPath := BRIDGE_DIR "\sent.json"
+    try sent := JSON.parse(FileRead(sentPath, "UTF-8"))
+    catch
+        return
+    if !(sent is Map) || sent.Get(project, "") != tag
+        return
+    sent.Delete(project)
+    try {
+        FileOpen(sentPath ".tmp-panel", "w", "UTF-8-RAW").Write(ToJson(sent))
+        FileMove(sentPath ".tmp-panel", sentPath, 1)
+    }
+}
+
+; Pasted and waiting: delivered once the prompt hook records the tag, else Not delivered.
+CheckDelivery(s) {
+    if s.sendTag = ""
+        return
+    state := DeliveryState(s.sendTag, s.runTag, s.sendAt, A_TickCount, 1000 * IniRead(SETTINGS_INI, "send", "deliverySeconds", 8))
+    if state = "delivered"
+        s.sendTag := ""
+    else if state = "missing"
+        s.sendTag := "", s.sendNote := "Not delivered"
+}

@@ -308,6 +308,74 @@ GitText(changed, ahead) {
     return git (ahead != "" && ahead > 0 ? (git = "" ? "" : " ") "↑" ahead : "")
 }
 
+; ---------------------------------------------------------------------------
+; Send link, panel side (switchboard2-h8r 1.3, spec 7.1): where a prompt may go
+; ---------------------------------------------------------------------------
+
+; The one VS Code window whose title names `folder`: {hwnd, error}. None or more
+; than one is refused; the active window is never a fallback.
+PickSendWindow(windows, folder) {
+    found := []
+    for w in windows
+        if CodeTitleMatches(folder, "", w.title)
+            found.Push(w.hwnd)
+    if found.Length = 1
+        return {hwnd: found[1], error: ""}
+    return {hwnd: 0, error: found.Length ? found.Length " VS Code windows are titled " folder : "no VS Code window titled " folder}
+}
+
+; settings.ini [send] input: Claude's input names, separated by "|".
+InputNames(value) {
+    out := []
+    for n in StrSplit(value, "|")
+        if Trim(n) != ""
+            out.Push(Trim(n))
+    return out
+}
+
+; Why the focused element is not Claude Code's message input, or "". `el` is
+; {name, helpText, className} from UI Automation. Only an exact, case-blind match
+; of its name or help text (Chromium's placeholder) against `inputNames` passes.
+FocusVerdict(el, inputNames) {
+    if !IsObject(el)
+        return "the focused element could not be read"
+    if !inputNames.Length
+        return "Claude's input is not set up: run lib\focus-check.ahk"
+    if el.className ~= "i)monaco|inputarea|xterm" || el.name ~= "i)^(editor content|terminal\b)"
+        return "focus is in an editor or terminal"
+    for n in inputNames
+        if n = Trim(el.name) || n = Trim(el.helpText)
+            return ""
+    return "focus is not in Claude's input (" el.name ")"
+}
+
+; After a paste: "delivered" once the prompt hook records `sentTag`, "missing"
+; after `timeoutMs`, else "waiting". Ticks are A_TickCount values.
+DeliveryState(sentTag, runTag, sentAt, now, timeoutMs) => runTag = sentTag ? "delivered"
+    : now - sentAt > timeoutMs ? "missing" : "waiting"
+
+; The checkout whose project is `project`: a worktree by its code, or main by its binding.
+SessionForProject(codes, mainProject, project) {
+    for code in codes
+        if ChatCode(code, mainProject) = project
+            return code
+    return ""
+}
+
+; Why a prompt may not go to this checkout now, or "". `kind` is KindOf's.
+SendRefusal(code, kind, project) {
+    if code = ""
+        return "no checkout for " project
+    if kind = "processing"
+        return "the CLI is running"
+    if kind = "red"
+        return "the CLI is waiting for an approval"
+    return ""
+}
+
+; A Send note ("Not sent: …", "Not delivered") is red until tapped, over any state.
+SendView(v, note) => note != "" ? {color: "red", label: note} : v
+
 ChatRowTitle(title) {
     title := RegExReplace(title, "\s+-\s+Claude$")
     return StrLen(title) > 44 ? SubStr(title, 1, 43) "…" : title
