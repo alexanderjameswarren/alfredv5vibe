@@ -73,12 +73,11 @@ import {
   readState,
   recordBlocks,
   resolveCheckout,
-  runText,
   toRepoRelative,
   writeCheck,
-  writeIndicator,
   worktreeOf,
 } from "../../scripts/lib/claims-core.mjs";
+import { runText, writeIndicator } from "../../scripts/lib/shell-parse.mjs";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 

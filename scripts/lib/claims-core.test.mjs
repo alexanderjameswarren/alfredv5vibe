@@ -488,13 +488,59 @@ test("unreadable writing parts fall back to the whole command", () => {
     "git log scripts/clip.mjs; rm $(cat /tmp/list)", // a substitution
     "git log scripts/clip.mjs; rm `cat /tmp/list`", // backticks
     "echo scripts/clip.mjs > /tmp/list; xargs rm < /tmp/list", // arguments from stdin
-    "cat <<EOF > /tmp/x\nscripts/clip.mjs\nEOF\nrm /tmp/y", // a heredoc
+    "xargs rm <<EOF\nscripts/clip.mjs\nEOF", // arguments from a heredoc
   ]) {
     assert.ok(writes(command)?.includes("scripts/clip.mjs"), command);
   }
   assert.deepEqual(psWrites("Get-Content scripts\\clip.mjs; Set-Location src; Remove-Item App.js"), [
     "scripts/clip.mjs",
   ]);
+});
+
+test("heredoc body text is never a file name", () => {
+  assert.equal(writes("cat <<EOF > /tmp/x\nscripts/clip.mjs\nEOF\nrm /tmp/y"), null);
+  assert.equal(writes(`cat > "$TEMP/n.md" <<'EOT'\nsee src/App.js and rm it\nEOT`), null);
+  assert.equal(writes("git log -1 <<'EOF'\nx > scripts/lib/claims-core.mjs\nEOF"), null);
+  // The variable from the earlier part is expanded now (claim_blocks-h3n follow-up).
+  assert.equal(writes('S=/tmp; cat > "$S/x" <<EOF\nhello\nEOF'), null);
+  assert.deepEqual(writes("cat > src/App.js <<EOF\nhello\nEOF"), ["src/App.js"]);
+});
+
+test("a heredoc body that runs is judged for its own writes", () => {
+  assert.deepEqual(writes("node - <<'EOF'\nrequire('fs').writeFileSync('src/App.js','x')\nEOF"), ["src/App.js"]);
+  assert.deepEqual(writes("bash <<'EOF'\nrm src/App.js\nEOF"), ["src/App.js"]);
+  assert.equal(writes("node - <<'EOF'\nconsole.log(1 > 0)\nEOF"), null);
+});
+
+test("diff paths with a/ and b/ prefixes are checked", () => {
+  const patch = "--- a/scripts/clip.mjs\n+++ b/scripts/clip.mjs\n@@ -1 +1 @@\n-x\n+y";
+  assert.ok(writes(`git apply <<'EOF'\n${patch}\nEOF`)?.includes("scripts/clip.mjs"));
+  assert.ok(writes(`patch -p1 <<'EOF'\n${patch}\nEOF`)?.includes("scripts/clip.mjs"));
+  assert.ok(writes("rm a/scripts/clip.mjs")?.includes("scripts/clip.mjs"));
+});
+
+test("comparisons and arrows in read-only inline code write nothing", () => {
+  for (const command of [
+    `node -e "[1,2].filter((x) => x > 1)"`,
+    `node -e 'if (a > b) console.log(1)'`,
+    `node -e "const ok = n >= 1"`,
+    `python -c "print(1 > 0)"`,
+  ]) {
+    assert.equal(writes(command), null, command);
+  }
+});
+
+test("script writes name their repo paths", () => {
+  for (const command of [
+    `node -e "require('fs').appendFileSync('src/App.js','x')"`,
+    `node -e "require('fs').renameSync('/tmp/x','src/App.js')"`,
+    `node -e "require('fs').unlinkSync('src/App.js')"`,
+    `node -e "require('child_process').execSync('echo x > src/App.js')"`,
+    `python -c "import shutil; shutil.copy('/tmp/x','src/App.js')"`,
+    `python -c "import os; os.remove('src/App.js')"`,
+  ]) {
+    assert.deepEqual(writes(command), ["src/App.js"], command);
+  }
 });
 
 test("tar -x, unzip and find -delete are writes", () => {

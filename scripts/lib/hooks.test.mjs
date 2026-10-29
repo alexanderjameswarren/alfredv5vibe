@@ -392,6 +392,27 @@ test("step 5: real writes and claims through a wrapper are still blocked", () =>
   assert.match(claim.stderr, /chains a claim/);
 });
 
+test("the guard allows the switchboard2-h8r 0.1 false positives", () => {
+  for (const command of [
+    `node -e "[1,2].filter((x) => x > 1)"`,
+    `node -e "const ok = 2 >= 1"`,
+    `cat > "${tmpdir().replaceAll("\\", "/")}/n.md" <<'EOT'\nsee scripts/clip.mjs and rm it\nEOT`,
+  ]) {
+    const run = runGuard("Bash", { command });
+    assert.equal(run.code, 0, `${command}\n${run.stderr}`);
+  }
+});
+
+test("the guard blocks script writes and heredoc patches", () => {
+  for (const command of [
+    `node -e "require('fs').appendFileSync('docs/guard-probe-x.md','x')"`,
+    `python -c "import os; os.remove('scripts/fixtures/guard-probe-never-claimed.json')"`,
+    "git apply <<'EOF'\n--- a/scripts/fixtures/guard-probe-never-claimed.json\n+++ b/scripts/fixtures/guard-probe-never-claimed.json\nEOF",
+  ]) {
+    assert.equal(runGuard("Bash", { command }).code, 2, command);
+  }
+});
+
 test("the guard allows the three switchboard_fixes false positives", () => {
   const claim = runGuard("Bash", {
     command: "node scripts/claims.mjs claim tools/claude-sessions/install-shortcuts.ps1 docs/x.md",
