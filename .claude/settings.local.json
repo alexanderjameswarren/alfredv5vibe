@@ -58,6 +58,9 @@
         "hooks": [{
           "type": "command",
           "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/claims-guard.mjs\""
+        }, {
+          "type": "command",
+          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/plan-guard.mjs\""
         }]
       }
     ],

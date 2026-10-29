@@ -67,12 +67,14 @@ function scratchMain() {
  * prompt guard WRITES it on the first tagged prompt of a project, so a test
  * that drives that path would otherwise rebind his window.
  */
-function drive(hook, payload, { binding, statusFile, env = {} } = {}) {
+function drive(hook, payload, { binding, statusFile, scopeFile, env = {} } = {}) {
   const before = { binding: snapshot(REAL_BINDING), blocks: snapshot(REAL_BLOCKS) };
   const dir = scratchDir();
   const log = path.join(dir, "guard.log");
   const bindingFile = binding ?? path.join(dir, "project-code.json");
   const status = statusFile ?? path.join(dir, "session-status.json");
+  // The prompt hook writes the scope on every tagged prompt: never this checkout's real one.
+  const scope = scopeFile ?? path.join(dir, "scope.json");
   const blocksFile = path.join(dir, "blocks.json");
   payload = { session_id: MARKER, transcript_path: path.join(dir, `${MARKER}.jsonl`), ...payload };
 
@@ -83,6 +85,7 @@ function drive(hook, payload, { binding, statusFile, env = {} } = {}) {
       CLAIMS_GUARD_LOG: log,
       CLAIMS_PROJECT_FILE: bindingFile,
       SESSION_STATUS_FILE: status,
+      PLAN_SCOPE_FILE: scope,
       CLAIMS_BLOCKS_FILE: blocksFile,
       // The hooks prefer the project dir to the cwd, and a suite run from a
       // Claude session inherits that session's, so pin it to the payload's.
@@ -119,12 +122,20 @@ function drive(hook, payload, { binding, statusFile, env = {} } = {}) {
     binding: snapshot(bindingFile),
     bindingFile,
     status: parsed,
+    scope: snapshot(scope),
   };
 }
 
 /** Run the prompt guard on one prompt. */
 function runHook(prompt, opts = {}) {
   return drive(HOOK, { hook_event_name: "UserPromptSubmit", cwd: opts.cwd ?? ROOT, prompt }, opts);
+}
+
+const PLAN = path.join(ROOT, ".claude", "hooks", "plan-guard.mjs");
+
+/** Run the plan guard on one tool call, against a scratch scope file. */
+function runPlan(scopeFile, tool_name, tool_input) {
+  return drive(PLAN, { hook_event_name: "PreToolUse", cwd: ROOT, tool_name, tool_input }, { scopeFile });
 }
 
 /** Run the tool guard on one tool call. */
@@ -270,6 +281,50 @@ test("a run tag already pasted here is blocked as a duplicate; override still pa
   assert.equal(runHook(`override: ${prompt}`, { binding, statusFile, cwd }).code, 0);
   const next = runHook("Run tag: scratch-proj-s4-cd34\nWindow: main\n\nNext.", { binding, statusFile, cwd });
   assert.equal(next.code, 0, next.stderr);
+});
+
+// ---------------------------------------------------------------------------
+// the plan guard (switchboard2-h8r 0.5)
+// ---------------------------------------------------------------------------
+
+test("an allowed tagged prompt records its scope block", () => {
+  const dir = scratchDir();
+  const binding = path.join(dir, "project-code.json");
+  writeFileSync(binding, JSON.stringify({ code: "scratch-proj" }), "utf8");
+  const run = runHook(
+    "Run tag: scratch-proj-s2-ab12\nWindow: main\nEstimated run: 4m\n\nScope of this step:\n" +
+      "- create: nothing\n- update: docs/x.md\n- delete: nothing\n- deploy: nothing\n- SQL: none\n\nDo it.",
+    { binding, cwd: scratchMain() },
+  );
+  assert.equal(run.code, 0, run.stderr);
+  const scope = JSON.parse(run.scope ?? "null");
+  assert.equal(scope?.run_tag, "scratch-proj-s2-ab12");
+  assert.equal(scope?.found, true);
+  assert.deepEqual(scope?.scope.update, ["docs/x.md"]);
+  assert.equal(scope?.estimate, "4m");
+});
+
+test("the plan guard refuses an undeclared edit, delete and deploy", () => {
+  const scopeFile = path.join(scratchDir(), "scope.json");
+  writeFileSync(scopeFile, JSON.stringify({
+    run_tag: "switchboard2-h8r-s9-zz99", found: true,
+    scope: { create: [], update: ["docs/guard-probe-x.md"], delete: [], deploy: [], sql: [] },
+  }), "utf8");
+  const edit = runPlan(scopeFile, "Edit", { file_path: path.join(ROOT, "scripts", "claims.mjs"), old_string: "a", new_string: "b" });
+  assert.equal(edit.code, 2);
+  assert.match(edit.stderr, /PLAN GUARD/);
+  assert.match(edit.stderr, /undeclared update: scripts\/claims\.mjs/);
+  assert.match(edit.line, /BLOCK/);
+  assert.equal(runPlan(scopeFile, "Edit", { file_path: path.join(ROOT, "docs", "progress-switchboard2-h8r.md") }).code, 0);
+  assert.equal(runPlan(scopeFile, "Bash", { command: "rm scripts/fixtures/guard-probe-never-claimed.json" }).code, 2);
+  assert.equal(runPlan(scopeFile, "Bash", { command: "npx supabase functions deploy mcp" }).code, 2);
+  assert.equal(runPlan(scopeFile, "Bash", { command: "git status && node --test x.mjs" }).code, 0);
+  assert.equal(runPlan(scopeFile, "Write", { file_path: path.join(ROOT, ".clip", "last-report.md"), content: "x" }).code, 0);
+});
+
+test("the plan guard allows everything when no scope is recorded", () => {
+  const scopeFile = path.join(scratchDir(), "none.json");
+  assert.equal(runPlan(scopeFile, "Edit", { file_path: path.join(ROOT, "scripts", "claims.mjs") }).code, 0);
 });
 
 test("an underscore tag reaches the window it belongs to", () => {

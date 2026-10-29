@@ -3,7 +3,7 @@
 Project code: `switchboard2-h8r`
 Spec: `docs/technical-spec-switchboard2-h8r.md`
 
-Status: Phase 0 not started. Phase 0 files claimed in s2; spec updated in s3.
+Status: Phase 0 in progress: 0.1 to 0.6 done.
 
 Rule: one step at a time. The CLI finishes a step, records it here, reports, and stops for Alex.
 
@@ -21,8 +21,8 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 0 | 0.2 | Guard and hooks on the new parser; hooks tests; diff `a/` and `b/` prefixes | — | done (s6-p5ua) | 2026-10-29 |
 | 0 | 0.3 | `number-migration`; gitpush refuses `_pending_` files and duplicate numbers; gitsync `--no-edit`; "Done at"; gitcom echo | — | done (s7-c6hn) | 2026-10-29 |
 | 0 | 0.4 | Main blocks live-worktree codes; duplicate run tag refused; README links | — | done (s8-v9qe) | 2026-10-29 |
-| 0 | 0.5 | Plan guard: parse the scope block, record it, enforce create, update, delete, deploy and SQL | — | todo | |
-| 0 | 0.6 | Scope vs changes in the report; cli-workflow skill scope summary; CLAUDE.md | — | todo | |
+| 0 | 0.5 | Plan guard: parse the scope block, record it, enforce create, update, delete, deploy and SQL | — | done (s9-k7wf) | 2026-10-29 |
+| 0 | 0.6 | Scope vs changes in the report; cli-workflow skill scope summary; CLAUDE.md | — | done (s10-r2jd) | 2026-10-29 |
 | 0 | 0.7 | Module boundaries: bridge vs clipper in `extension/`, header interfaces | — | todo | |
 | 0 | 0.8 | `INTERFACES.md` draft; full test run | — | todo | |
 | 1 | 1.1-1.7 | Send to CLI (2), tile states and running colours (2), estimates and strip (2), six-tile layout and panel items (1): spec §7 | — | todo | |
@@ -72,16 +72,16 @@ Every report ends with the next step's block, copied from here. The progress fil
 - SQL: none
 - **Not yet claimed:** `.claude/settings.local.json`, `scripts/lib/plan-scope.mjs` and `scripts/lib/plan-scope.test.mjs`. They need Alex's OK at that step.
 
-**0.6, report sections, skill, CLAUDE.md**
+**0.6, report sections, skill, CLAUDE.md** (estimated run: 15m)
 - create: nothing
 - update: scripts/clip.mjs, scripts/lib/last-report.mjs, scripts/lib/clip.test.mjs, .claude/skills/cli-workflow/SKILL.md, .claude/CLAUDE.md
 - delete: nothing
 - deploy: nothing
 - SQL: none
 
-**0.7, module boundaries**
-- create: nothing
-- update: extension/ (bridge and clipper files), tools/claude-sessions/ (headers), scripts/lib/session-status.mjs, scripts/lib/session-status.test.mjs
+**0.7, module boundaries** (estimated run: 15m)
+- create: extension/lib/ (only if the bridge split needs a new module)
+- update: extension/, tools/claude-sessions/, scripts/lib/session-status.mjs, scripts/lib/session-status.test.mjs, .claude/hooks/ (headers)
 - delete: nothing
 - deploy: nothing
 - SQL: none
@@ -184,6 +184,36 @@ Every report ends with the next step's block, copied from here. The progress fil
   - **README.** The spec link and the bridge-spec link both point to `docs/history/`, and the table gains the Wrong window / Already pasted row.
   - **Not fixed, out of scope:** `extension/README.md` line 181 still links `docs/technical-spec-switchboard_bridge.md`, which also lives in `docs/history/` now.
 
+- **0.5 (s9-k7wf):**
+  - **`scripts/claims.mjs` yielded** to gmail_capture-h3w, now that it matches main (f6a2512).
+  - **Recording.** The prompt hook records each allowed tagged prompt Alex typed in `.clip/scope.json`: the run tag, `found`, the five lists, and `Estimated run`. The library is loaded so that a failure can never change a prompt decision. Untagged replies and machine traffic leave the scope alone. `PLAN_SCOPE_FILE` redirects it; `drive()` in hooks.test always does, so no test can write the real file.
+  - **Enforcement.** `.claude/hooks/plan-guard.mjs` is registered beside the claims guard, with the same matcher, and logs to the same `.clip/claims-guard.log` with a `plan` marker.
+    - **Edit tools:** a new file must be under create; an existing one under create or update. Folder entries cover everything under them, and the run tag's `docs/progress-<code>.md` is implied.
+    - **`.sql` files:** the new text's tables (create, alter, drop, truncate, insert, update…set, delete from, create index on, grant on) must be named under SQL. Comments are ignored, and schema prefixes and quotes are stripped.
+    - **Shell:** rm, del, Remove-Item and git rm targets must be under delete. Other shell writes are judged like the Edit tools. Supabase function names, `db push` and `sf project deploy` metadata or source dirs must be under deploy; a bare `supabase functions deploy` counts as "(all functions)".
+    - **Outside the guard:** paths outside the repo, and the claims-exempt folders (`.clip/`, `.git/` and so on).
+  - **Decision: no scope file at all → allow.** That covers sessions and threads from before this hook, and the window before the first tagged prompt.
+  - **No scope block → nothing may change.** As the spec says, a tagged prompt without a block records `found: false`, and every edit, delete and deploy is then refused, except outside the repo and in `.clip/`.
+  - **Rollout risk.** If this reaches main before step 0.6 puts scope blocks into every cli-workflow prompt, every thread's next tagged prompt without a block stops all its edits. Either checkpoint it together with 0.6, or set `PLAN_GUARD=off` (the hook honours it and says so).
+  - **Widening the scope** means sending a tagged follow-up prompt (for example s9b) with a new block. An untagged reply cannot widen it.
+  - **`extension/README.md`:** the bridge-spec link now points to `docs/history/`.
+  - **Found live:** Claude Code reloaded the settings mid-session, so this session's tool calls already run through the plan guard. With no scope recorded yet, it allows them.
+  - **Live tests (s9b, s9c):** an undeclared README update was refused by the plan guard alone (the claims guard would have allowed it); a declared one was allowed.
+
+- **0.6 (s10-r2jd):**
+  - **`clip.mjs --scope` prints the "Scope vs changes" section; clip.mjs does not add it to the report.** CLAUDE.md requires the pushed and printed report to be identical, so the CLI runs `--scope` and pastes the output in. It needs no clipboard settings and pushes nothing.
+  - **What it compares.** The scope comes from `.clip/scope.json`. "This run's edits" are the plan guard's `ALLOW … plan <tag>  in scope: <path>` log lines, and git status (`--porcelain -z`, untracked files listed) is added to them.
+    - **Changed, not declared:** edited this run, and not covered by create, update or delete.
+    - **Declared, not touched:** a create, update or delete entry that no changed path matches.
+    - **Uncommitted from earlier steps:** in git status, but neither declared nor edited this run. A worktree carries these until it checkpoints, and listing them as undeclared would be noise.
+    - **Gaps:** shell writes are not in the log, so a shell write shows only as "uncommitted from earlier steps". `.clip/` is left out. The log stops growing at 256 KB, after which the edits are missed.
+  - **The missing-section warning is a warning, never a refusal.** It applies to file pushes only, not to piped output, so a test log pushed with `|` is not nagged. A next-step heading counts only when `- create:`-style lines follow it.
+  - **The logic lives in `last-report.mjs`** (`missingSections`, `scopeVsChanges`, `formatScopeVsChanges`, `touchedFromLog`, `changedFromStatus`). It imports `covers` from plan-scope, so 0.6 depends on 0.5 and the two must reach main together.
+  - **Skill 2026-10-29b:** a new section, "Every prompt declares its scope and its estimated run". Every prompt carries the block and the estimate, starting from the last report's next-step block and saying where it differs. Every reply carrying a prompt opens with a plain scope summary, and sending it is Alex's approval. The return leg checks "Scope vs changes". The templates and both examples now carry a block.
+  - **CLAUDE.md:** two new sections. "The plan guard" covers widening scope only by a tagged follow-up, never editing `scope.json` or setting `PLAN_GUARD=off`, test files declared, and the two report sections. "Salesforce sandboxes and client repos" covers the sandbox deploy lock and Apex failures summarised. The two report sections do not count toward the 25-line limit.
+  - **Spec §7.2:** a new red "Outside scope" tile state, cleared by a tap. Phase 1 stays at 7 steps, because it goes into the tile-states steps (the plan guard writes `wrong` / `outside scope`, as prompt-check does for "Already pasted").
+  - **A slip, caught by the guard:** the first two CLAUDE.md edits used the main checkout's path, and the claims guard refused them. They were redone on this worktree's copy, which was identical. Main's file was not changed.
+
 ## Deferred and parked
 
 - Auto-posting "cli" into the chat: parked as a separate idea.
@@ -208,3 +238,5 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s6 (0.2) | 2m20s |
 | s7 (0.3) | 7m22s (estimate 12m) |
 | s8 (0.4) | 5m10s (estimate 10m) |
+| s9 (0.5) | 5m35s (estimate 15m) |
+| s10 (0.6) | 5m29s (estimate 15m) |

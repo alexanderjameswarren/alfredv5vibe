@@ -58,6 +58,20 @@ try {
   /* no status file this time */
 }
 
+// The plan guard's scope recorder, loaded the same way (switchboard2-h8r 0.5).
+let recordScope = () => null;
+try {
+  const ps = await import("../../scripts/lib/plan-scope.mjs");
+  recordScope = (root, tag, text) => {
+    const { found, scope, estimate } = ps.parseScope(text);
+    ps.writeScope(ps.scopeFile(root), { run_tag: tag, at: new Date().toISOString(), found, scope, estimate });
+  };
+} catch {
+  /* no scope this time */
+}
+// Set once a tagged prompt Alex typed is read; written only if it is allowed.
+let pendingScope = null;
+
 const LOG_RELATIVE = ".clip/claims-guard.log";
 const LOG_MAX_BYTES = 256 * 1024;
 
@@ -123,6 +137,13 @@ function status(state, event = "UserPromptSubmit") {
 function allow(detail, note) {
   log("allow", detail);
   status("processing");
+  if (pendingScope && !entry.machine) {
+    try {
+      recordScope(entry.root ?? process.env.CLAUDE_PROJECT_DIR ?? entry.cwd ?? process.cwd(), pendingScope.tag, pendingScope.text);
+    } catch {
+      // Never the reason a prompt fails.
+    }
+  }
   if (note) process.stderr.write(`${note}\n`);
   process.exit(ALLOW);
 }
@@ -166,6 +187,8 @@ function main() {
   prompt.machine = machineEnvelope(raw);
   const wrapped = prompt.wrapped ? " unwrapped" : "";
   if (!prompt.text.trim()) allow(`empty prompt${wrapped}`);
+  // A tagged prompt sets this step's scope, block or no block; a short reply keeps the last.
+  if (prompt.tag && !prompt.machine) pendingScope = { tag: prompt.tag, text: prompt.text };
 
   // Machinery too, but it arrives looking exactly like typing: `source` is
   // absent, and the session_id is this session's, because a subagent's report

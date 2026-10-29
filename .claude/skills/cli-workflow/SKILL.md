@@ -5,7 +5,7 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
-Skill version: 2026-10-29a
+Skill version: 2026-10-29b
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -232,7 +232,7 @@ and it can only do that if there is a tag.
 - **A changed skill is offered from main**, after its checkpoint, with the
   `propose_skills` tool: a skill update card, kind `improvement`, carrying the
   complete file from main with its version line at the top ("Skill version:
-  2026-10-29a"). Never as a file to paste, and never copied out of a worktree.
+  2026-10-29b"). Never as a file to paste, and never copied out of a worktree.
 - **A changed scheduled-task prompt is updated by Claude**, not pasted by Alex
   (see "Changing a scheduled task's prompt").
 
@@ -262,6 +262,50 @@ steps. Anything Alex needs to know or do before pasting goes above the prompt.
 Why: the CLI's report might flag a problem, and instructions written before
 the report would have him push or finish over it. It also leaves the report
 sitting unread in the Alfred inbox, because the thread never asked for it.
+
+### Every prompt declares its scope and its estimated run
+
+**Every CLI prompt carries a scope block right after the `Window:` line, then an
+`Estimated run:` line.** Short follow-ups (`s3b`) too.
+
+```
+Run tag: claims-wq7-s8-k6tr
+Window: the claims-wq7 worktree
+
+Scope of this step:
+- create: <paths or folders> | nothing
+- update: <paths or folders> | nothing
+- delete: <paths> | nothing
+- deploy: <function names, Salesforce components> | nothing
+- SQL: <tables> | none
+Estimated run: 12m
+```
+
+- **A machine reads this.** In alfred-v5 the prompt hook records the block and the
+  plan guard refuses anything outside it: an undeclared create, update or delete, a
+  deploy not listed, SQL naming a table not listed. A tagged prompt with **no**
+  block lets nothing change at all. Keep the labels and the `- key:` lines exactly
+  as shown; a folder entry ends in `/` and covers everything under it.
+- **List everything the step will touch**, including test files and any spec doc
+  it updates. The project's progress file is implied.
+- **Widening the scope** is a new tagged follow-up prompt (`s8b`) with the wider
+  block. An untagged reply cannot widen it. When the CLI reports "PLAN GUARD",
+  say what it wanted and write that follow-up only if Alex agrees.
+- **The estimate** comes from the project's past steps: the progress file's timing
+  log and the last reports' "Estimate vs actual". Write it as `12m` or `2m30s`.
+
+**Start from the last report's "Next step's scope".** Every report ends with the
+next step's proposed block. The prompt's block starts from it, and the reply says
+where the prompt's block differs and why. With no such report (the first prompt of
+a project), build it from the plan.
+
+**Every reply that carries a prompt starts with a plain summary of its scope**,
+in words, before anything else: what it will create, change, delete and deploy,
+which tables its SQL touches, and the estimate. For example: "This step changes
+the clip script, its tests and the skill; creates nothing; deletes nothing; no
+deploy or SQL; about 15 minutes. It matches the last report's proposal." **Alex
+sending the prompt is his approval of that scope**, so the summary is what he is
+agreeing to and must not leave anything out.
 
 ### Closing out a project
 
@@ -348,7 +392,7 @@ If the last report raised anything, deal with it first. Closeout waits.
 
 Skills live in the repo at `.claude/skills/<name>/SKILL.md`. To change one,
 have the CLI edit that file. Never hand him a zip. The CLI adds or bumps the
-version line under the skill's title ("Skill version: 2026-10-29a").
+version line under the skill's title ("Skill version: 2026-10-29b").
 
 Once the change has landed in main (a checkpoint), Claude offers it with the
 `propose_skills` tool: a skill update card, kind `improvement`, with the
@@ -891,6 +935,14 @@ first reads those records back with the MCP tools and confirms each change,
 before anything else. If one is wrong or missing, say so and stop. Flag only
 real errors (the wrong type, missing text, the wrong record); where he chose to
 put something is his call.
+
+**Scope vs changes.** Every report carries a "Scope vs changes" section and,
+after it, a "Next step's scope" block. Check the first one against the prompt's
+block. In the TLDR, raise anything changed but not declared, and anything
+declared but not touched, in plain words. Lines under "Uncommitted from earlier
+steps" are expected in a worktree and need no comment unless one is new. If either
+section is missing, say so in one line. Keep the next-step block for the next
+prompt.
 
 **Blocking lines.** If the report has any line starting `Blocking:`, put each one
 in the TLDR in plain words: which thread is waiting on which file.
@@ -1448,6 +1500,14 @@ Provide a clean, copy-paste ready prompt:
 Run tag: <project-code>-s<step>-<4 chars>
 Window: [the main checkout | the <project code> worktree]
 
+Scope of this step:
+- create: [paths | nothing]
+- update: [paths | nothing]
+- delete: [paths | nothing]
+- deploy: [names | nothing]
+- SQL: [tables | none]
+Estimated run: [duration]
+
 I need you to [clear description of the change].
 
 [Any relevant context about the codebase, file locations, or constraints]
@@ -1503,6 +1563,14 @@ follows it, once Alex has confirmed the plan and the thread has claimed.
 Run tag: <project-code>-s<step>-<4 chars>
 Window: [the main checkout | the <project code> worktree]
 
+Scope of this step:
+- create: [paths | nothing]
+- update: [paths | nothing]
+- delete: [paths | nothing]
+- deploy: [names | nothing]
+- SQL: [tables | none]
+Estimated run: [duration]
+
 # Project Context
 [Brief description of what we're building]
 
@@ -1529,6 +1597,8 @@ Only proceed to the next step after I confirm verification is successful.
 # Important
 - Mark steps complete in the progress file as you finish them
 - Add notes about any decisions or issues encountered
+- End the report with "Scope vs changes" (node scripts/clip.mjs --scope), then
+  "Next step's scope" with the next step's block, then the timing table
 - Never commit, push, merge, or run any git command that changes state
 - If you need clarification, stop and ask
 - If you need me to run more than one read-only SELECT in the Supabase SQL
@@ -1568,6 +1638,14 @@ name the window, because he has several open.
 ```
 Run tag: dark_mode-q2z-s1-p3w9
 Window: the main checkout
+
+Scope of this step:
+- create: nothing
+- update: src/components/Navbar.jsx, src/components/Navbar.test.jsx
+- delete: nothing
+- deploy: nothing
+- SQL: none
+Estimated run: 5m
 
 Add a dark mode toggle to the navbar component. The toggle should:
 - Use a sun/moon icon (react-icons preferred)
@@ -1627,6 +1705,14 @@ Add ability to record MIDI performances and save them for playback
 ```
 Run tag: midi_recording-m8t-s3-h7k2
 Window: the midi_recording-m8t worktree
+
+Scope of this step:
+- create: src/services/MIDIRecorder.js, src/services/MIDIRecorder.test.js
+- update: src/components/Recorder.jsx
+- delete: nothing
+- deploy: nothing
+- SQL: none
+Estimated run: 20m
 
 # Project Context
 We're adding MIDI recording capability to the piano learning app. Users need to record their practice sessions and play them back.

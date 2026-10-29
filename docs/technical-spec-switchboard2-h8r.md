@@ -189,7 +189,7 @@ Scope of this step:
 `.clip/last-report.md` is always allowed. The progress file of the prompt's own project is implied by any non-empty scope.
 
 **Reporting.** Every CLI report ends with two sections, in this order, followed by the timing table:
-1. **Scope vs changes.** `clip.mjs` compares the block with `git status` (and, from Phase 3, the deploy and SQL logs). It lists anything changed that was not declared, and anything declared that was not touched.
+1. **Scope vs changes.** `node scripts/clip.mjs --scope` compares the block with this run's edits (the plan guard's `in scope:` log lines for the run tag) and `git status` (and, from Phase 3, the deploy and SQL logs). It prints the section; the CLI pastes it into the report, so the pushed and printed reports stay identical. It lists anything changed that was not declared, and anything declared that was not touched. Uncommitted files from earlier steps that this scope does not name go on a separate line, since a worktree carries them until it checkpoints.
 2. **Next step's scope.** The proposed scope block for the next step, copied from that step's entry in the progress file. Every step in the progress file carries one. If the step just finished changed the plan, the CLI updates the next step's block in the progress file first, and says so. `clip.mjs` warns if a report has no "Next step's scope" block.
 
 **claude.ai side.** These changes to `.claude/skills/cli-workflow/SKILL.md` are made in Phase 0 (step 0.6) and uploaded to claude.ai by Alex:
@@ -226,6 +226,7 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 
 - **Precedence:** Waiting on SQL, then Prompt to paste, then Report unread, then Running, then Talking.
 - **Unchanged:** red (Approve, Wrong window, Check CLI) keeps priority over all five, and the free, closed and paused states stay as they are.
+- **Outside scope (red, new).** When the plan guard refuses an action, the tile turns red "Outside scope" and stays red until tapped, like "Already pasted". Without it the refusal shows only inside the CLI's reply, which Alex does not read. The plan guard writes the session status as `wrong` with event `outside scope` and the refused path or deploy target, the same way the prompt hook writes "Already pasted"; a tap clears it. It ranks with the other reds.
 - **Dark mode:** each colour gets a dark-theme variant in `switchboard.html`.
 - **"Report unread"** needs interface 3 (§4). The clip push already returns the inbox id, and `.clip/last-report.json` stores it.
 
