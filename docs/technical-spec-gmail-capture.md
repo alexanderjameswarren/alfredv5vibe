@@ -57,7 +57,11 @@ later (one entry in USER_MAPPINGS). alex.warren+elise+alfred@ is still in USER_M
   Authentication-Results. It is the only copy, so it is captured. Never filter on
   INBOX. Dedupe by Gmail id, and by RFC Message-ID within a run.
 - Raw headers are unfolded (continuation lines joined) before posting.
-- Script Properties: `CAPTURE_URL`, `CAPTURE_SECRET`, `START_DATE`. Never in code.
+- Script Properties: `CAPTURE_URL`, `CAPTURE_SECRET`, `START_DATE`, `DRY_RUN` (`true`:
+  send dry_run, change no labels), `TEST_QUERY` (optional, `dryRun()` only). Never in code.
+- Reads each message with `Messages.get(format: full)`: headers come unfolded from the
+  API; body is the first text/plain part, else text/html stripped; at most 40 per run;
+  a script lock stops overlapping runs. Scopes: gmail.modify, external_request, scriptapp.
 - Trigger: time-based, every 5 minutes.
 - Per verdict: `captured` / `duplicate` → add `forwarded`. `rejected` → add
   `forwarded/rejected`, add UNREAD and INBOX (filter a marks read). 5xx or network error → nothing,

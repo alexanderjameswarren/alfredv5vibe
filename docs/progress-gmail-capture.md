@@ -9,7 +9,7 @@ Spec: docs/technical-spec-gmail-capture.md.
 | 3 | Gmail recon: self-forward fires filter a; alfred+jobs@ delivered; save 4–6 "Show original" headers to .scratch/ | — | done 2026-10-29; 5 raw messages in .scratch/gmail_capture-h3w/ (job-board skipped) |
 | 4 | Migration `email_capture_senders` + seed; conformance | db:table:email_capture_senders | 185 written 2026-10-29; drift check: gitsync brought nothing (main = origin/main 010453b); awaiting Alex's run |
 | 5 | Function Gmail branch (gmail.ts), tests, deploy, dry run | db:deploy | part 1 (code, tests) done 2026-10-29: gmail 22/22, parse 57/57, deno check clean; migration 185 checkpointed (ef98e9d). Part 2 done 2026-10-29: drift check clean (sync brought only the 185 snapshot); GMAIL_CAPTURE_SECRET set; v27 deployed 18:39 UTC; live dry runs: Life Time captured via forward, alfred+jobs captured (jobs), stranger rejected, wrong secret 401, Postmark no-token 401; nothing inserted |
-| 6 | Apps Script, tests, clasp setup and push, dry run on real forwards | — | |
+| 6 | Apps Script, tests, clasp setup and push, dry run on real forwards | — | part 1 (code, tests) done 2026-10-29: lib 11/11. Part 2: script id 1CSNQj81…; clasp push 2026-10-29 12:18 PT (appsscript.json, Code.js, lib.js; dry-run log made one content-free line per message, lib 12/12). First dryRun: 5 found, all "Could not decode string": the Apps Script Gmail service returns body.data as bytes, already decoded, and the script base64-decoded it again. Fixed (bytes or base64url both handled, part charset read; lib 15/15), pushed 12:26 PT; awaiting dryRun results |
 | 7 | Cutover: rename labels, filters, START_DATE, trigger | — | |
 | 8 | Postmark removal: forwarding address, Postmark branch, redeploy | db:deploy | |
 | 9 | Finish (gitpush Finish) | — | |
@@ -25,6 +25,10 @@ Spec: docs/technical-spec-gmail-capture.md.
 - D7 Interval 5 minutes. Trust decided in the function, not the script.
 
 ## Findings
+
+- **Main is behind the live function.** email-capture v27 (Gmail branch) is deployed, but
+  its commits are only on this branch: the step 5 Checkpoint was refused because gitcom had
+  already committed everything. They reach main with the step 6 Checkpoint.
 
 - alex.warren+elise+alfred@ is still in USER_MAPPINGS (→ Elise's user) but no filter catches it.
 - Step 3 recon (headers only):
