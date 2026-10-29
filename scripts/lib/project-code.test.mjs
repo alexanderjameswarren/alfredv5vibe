@@ -16,6 +16,25 @@ import {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+test("liveWorktreeCodes: worktrees whose folder still exists", async () => {
+  const pc = await import("./project-code.mjs");
+  const { mkdirSync, mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const base = mkdtempSync(path.join(tmpdir(), "live-wt-"));
+  const common = path.join(base, ".git");
+  for (const [name, live] of [["alpha-k2m", true], ["gone-x9z", false]]) {
+    mkdirSync(path.join(common, "worktrees", name), { recursive: true });
+    const wt = path.join(base, ".claude", "worktrees", name);
+    if (live) {
+      mkdirSync(wt, { recursive: true });
+      writeFileSync(path.join(wt, ".git"), "gitdir: x\n");
+    }
+    writeFileSync(path.join(common, "worktrees", name, "gitdir"), `${path.join(wt, ".git")}\n`);
+  }
+  assert.deepEqual(pc.liveWorktreeCodes(common), [{ code: "alpha-k2m", path: path.join(base, ".claude", "worktrees", "alpha-k2m") }]);
+  assert.deepEqual(pc.liveWorktreeCodes(path.join(base, "none")), []);
+});
+
 // The wrapper the VS Code Claude panel really emits: attributes on both tags.
 const wrap = (body, id = "c70a") =>
   `<pasted_content id="${id}">${body}</pasted_content id="${id}">`;

@@ -38,6 +38,7 @@ import { ClaimsError, resolveCheckout } from "../../scripts/lib/claims-core.mjs"
 import {
   classifyPrompt,
   codeOfCheckout,
+  liveWorktreeCodes,
   machineEnvelope,
   projectOfTag,
   TAG_EXAMPLE,
@@ -47,8 +48,12 @@ import {
 
 // The Switchboard status writer, loaded so that a broken one cannot change a decision.
 let writeSessionStatus = () => null;
+let lastRunTag = () => null;
 try {
-  ({ writeSessionStatus } = await import("../../scripts/lib/session-status.mjs"));
+  const s = await import("../../scripts/lib/session-status.mjs");
+  writeSessionStatus = s.writeSessionStatus;
+  // The run tag this checkout last accepted: the same tag again is a duplicate paste.
+  lastRunTag = (root) => s.readStatus(s.statusFile(root))?.run_tag ?? null;
 } catch {
   /* no status file this time */
 }
@@ -98,7 +103,7 @@ function log(decision, detail) {
   }
 }
 
-function status(state) {
+function status(state, event = "UserPromptSubmit") {
   try {
     const root = entry.root ?? process.env.CLAUDE_PROJECT_DIR ?? entry.cwd ?? process.cwd();
     writeSessionStatus(root, state, {
@@ -108,7 +113,7 @@ function status(state) {
       runTag: state === "processing" ? entry.tag : undefined,
       // Only a prompt Alex typed is something a report answers; a hand-back is not.
       promptAt: state === "processing" && !entry.machine ? new Date().toISOString() : undefined,
-      event: "UserPromptSubmit",
+      event,
     });
   } catch {
     // Never the reason a prompt fails, or passes.
@@ -122,10 +127,11 @@ function allow(detail, note) {
   process.exit(ALLOW);
 }
 
-function block(detail, message) {
+function block(detail, message, event) {
   log("block", detail);
-  // Its own state: Switchboard shows "Wrong window" and a tap clears it.
-  status("wrong");
+  // Its own state: Switchboard shows "Wrong window" ("Already pasted" for a
+  // duplicate, from the event) and a tap clears it.
+  status("wrong", event);
   process.stderr.write(`${message}\n`);
   process.exit(BLOCK);
 }
@@ -215,6 +221,34 @@ function main() {
           `This window is ${where}${code ? `, working on "${code}"` : ", with no project set"}.\n` +
           `Nothing has been sent to Claude. Fix the tag and resend, or resend with\n` +
           `"override:" on the front if you meant it to go here as it is.`,
+      );
+    }
+    // A worktree's prompt pasted into main would otherwise bind main to that
+    // worktree's project (switchboard2-h8r 0.4).
+    const owner = ctx.isWorktree ? null : liveWorktreeCodes(ctx.dir).find((w) => w.code === wanted);
+    if (owner) {
+      block(
+        `tag=${tag}${wrapped} wants=${wanted} is a live worktree, here=main`,
+        `\n🛑  WRONG WINDOW — this prompt belongs to the ${wanted} worktree.\n\n` +
+          `  This window is   the main checkout${code ? `, working on "${code}"` : ""}.\n` +
+          `  The run tag      ${tag}\n` +
+          `  belongs to       the ${wanted} worktree, in\n` +
+          `                   ${owner.path}\n\n` +
+          `Nothing has been sent to Claude, and main's project is unchanged. Paste it\n` +
+          `into the VS Code window open on that folder.\n\n` +
+          `If it really does belong here, resend it with "override:" on the front.\n`,
+      );
+    }
+    if (tag === lastRunTag(ctx.root)) {
+      block(
+        `tag=${tag}${wrapped} duplicate`,
+        `\n🛑  ALREADY PASTED — this run tag was sent to this window before.\n\n` +
+          `  The run tag      ${tag}\n` +
+          `  This window is   ${where}${code ? `, working on "${code}"` : ""}.\n\n` +
+          `Nothing has been sent to Claude. Each step's prompt has its own run tag, so\n` +
+          `the same tag again is usually the same prompt pasted twice.\n\n` +
+          `If you meant to send it again, resend it with "override:" on the front.\n`,
+        "duplicate run tag",
       );
     }
     if (!code) {

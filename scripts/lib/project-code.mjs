@@ -17,7 +17,7 @@
 // lives next to the claims file, in the shared git dir, for the same reason:
 // every checkout sees the same one and git never tracks it.
 
-import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export const PROJECT_FILE = "alfred-project-code.json";
@@ -251,6 +251,30 @@ export function clearMainCode(ctx) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Every worktree whose folder still exists, as `{ code, path }`, read from
+ * `<common dir>/worktrees/*\/gitdir` with no git call, because the prompt hook
+ * runs on every prompt. A worktree's code is its folder name.
+ */
+export function liveWorktreeCodes(commonDir) {
+  let names = [];
+  try {
+    names = readdirSync(path.join(commonDir, "worktrees"));
+  } catch {
+    return [];
+  }
+  const live = [];
+  for (const name of names) {
+    try {
+      const dotGit = readFileSync(path.join(commonDir, "worktrees", name, "gitdir"), "utf8").trim();
+      if (existsSync(dotGit)) live.push({ code: path.basename(path.dirname(dotGit)), path: path.dirname(dotGit) });
+    } catch {
+      /* half-made or pruned: not live */
+    }
+  }
+  return live;
 }
 
 /**

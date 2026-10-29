@@ -20,7 +20,7 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 0 | 0.1 | Split out the shell parser; fix `>` in quotes, `=>`, heredoc and script writes | — | done (s5-m3tx) | 2026-10-29 |
 | 0 | 0.2 | Guard and hooks on the new parser; hooks tests; diff `a/` and `b/` prefixes | — | done (s6-p5ua) | 2026-10-29 |
 | 0 | 0.3 | `number-migration`; gitpush refuses `_pending_` files and duplicate numbers; gitsync `--no-edit`; "Done at"; gitcom echo | — | done (s7-c6hn) | 2026-10-29 |
-| 0 | 0.4 | Main blocks live-worktree codes; panel refuses a duplicate run tag; README link | — | todo | |
+| 0 | 0.4 | Main blocks live-worktree codes; duplicate run tag refused; README links | — | done (s8-v9qe) | 2026-10-29 |
 | 0 | 0.5 | Plan guard: parse the scope block, record it, enforce create, update, delete, deploy and SQL | — | todo | |
 | 0 | 0.6 | Scope vs changes in the report; cli-workflow skill scope summary; CLAUDE.md | — | todo | |
 | 0 | 0.7 | Module boundaries: bridge vs clipper in `extension/`, header interfaces | — | todo | |
@@ -64,7 +64,7 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: nothing
 - SQL: none
 
-**0.5, plan guard**
+**0.5, plan guard** (estimated run: 15m)
 - create: .claude/hooks/plan-guard.mjs, scripts/lib/plan-scope.mjs, scripts/lib/plan-scope.test.mjs
 - update: .claude/hooks/prompt-check.mjs, .claude/settings.local.json, scripts/lib/hooks.test.mjs
 - delete: nothing
@@ -174,6 +174,16 @@ Every report ends with the next step's block, copied from here. The progress fil
   - **gitpush** ends `Done at YYYY-MM-DD HH:MM:SS` (`doneAt`).
   - **The gitcom echo:** only the echo looked wrong, and the argument list was fine. `gitLive` printed `args.join(" ")`, and commit b3a44fa received all 8 paths. On that 268-character line the missing space falls at column 181, which matches the terminal wrapping at 180 and losing the space at the wrap. `commandEcho` now prints more than two paths after `--` one per line. The fix is in git-flow.mjs, so `git-commit-claimed.mjs` did not need a change.
 
+- **0.4 (s8-v9qe):**
+  - **Main and live worktrees.** On main, the prompt hook blocks any tag whose project code is a live worktree, bound or unbound, and binds nothing. "Live" is read from `.git/worktrees/*/gitdir`, with no git call: the worktree's `.git` file must still exist. The message names the worktree and its folder.
+  - **Duplicate paste: the hook refuses it, not the panel.** Spec §6.1 said the panel would refuse, but Switchboard never types prompts: Alex pastes them into Claude Code himself.
+    - The rule: a tag equal to the run tag this checkout last accepted (`run_tag` in `.clip/session-status.json`) is blocked as "ALREADY PASTED".
+    - The status is written as `wrong` with event `duplicate run tag`, and the tile shows red "Already pasted"; a tap clears it, as for Wrong window.
+    - `override:` resends on purpose.
+    - Only the last tag is compared. Tags from before that one are not remembered.
+  - **README.** The spec link and the bridge-spec link both point to `docs/history/`, and the table gains the Wrong window / Already pasted row.
+  - **Not fixed, out of scope:** `extension/README.md` line 181 still links `docs/technical-spec-switchboard_bridge.md`, which also lives in `docs/history/` now.
+
 ## Deferred and parked
 
 - Auto-posting "cli" into the chat: parked as a separate idea.
@@ -197,3 +207,4 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s5 (0.1) | 10m24s |
 | s6 (0.2) | 2m20s |
 | s7 (0.3) | 7m22s (estimate 12m) |
+| s8 (0.4) | 5m10s (estimate 10m) |

@@ -230,7 +230,7 @@ NewSession(code, root) {
         reportFile: root "\.clip\last-report.md",
         reportMetaFile: root "\.clip\last-report.json",
         raw: "", hasStatus: false,
-        state: "", since: "", red: false, project: "", transcript: "", sessionId: "", runTag: "", promptAt: "",
+        state: "", since: "", red: false, project: "", transcript: "", sessionId: "", runTag: "", promptAt: "", event: "",
         metaRaw: "", reportTag: "", reportAt: "",
         tKey: "", interruptAt: "",
         kind: "", color: "", label: "", step: "",
@@ -266,6 +266,7 @@ ReadStatus(s) {
     s.red := !!data.Get("red", 0), s.project := data.Get("project", "")
     s.transcript := data.Get("transcript_path", ""), s.sessionId := data.Get("session_id", "")
     s.runTag := data.Get("run_tag", ""), s.promptAt := data.Get("prompt_at", "")
+    s.event := data.Get("event", "") || ""
     return true
 }
 
@@ -626,7 +627,7 @@ Refresh() {
         issued := chat ? chat.Get("issuedTag", "") : ""
         v := ViewOf({free: s.free, closed: s.closed, paused: s.paused, kind: kind, runTag: s.runTag
             , promptAt: s.promptAt, reportTag: s.reportTag, reportAt: s.reportAt, chatState: chat ? chat.Get("state", "") : ""
-            , chatSince: chat ? chat.Get("since", "") : "", issuedTag: issued, project: project})
+            , chatSince: chat ? chat.Get("since", "") : "", issuedTag: issued, project: project, event: s.event})
         if v.color != s.color {
             s.unseen := false
             if ShouldAlert(s.color, v.color)
