@@ -117,6 +117,16 @@ test("link hosts come from the panel's settings.ini, cleaned", () => {
   assert.deepEqual(readLinkHosts({ SWITCHBOARD_SETTINGS_DIR: dir }), ["alfredv5vibe.vercel.app", "example.com"]);
 });
 
+test("link hosts read from a UTF-16 settings.ini, as AutoHotkey's IniWrite writes it", () => {
+  const ini = "[paused]\r\nmain=0\r\n[links]\r\nhosts=alfredv5vibe.vercel.app\r\n";
+  const utf16 = scratch();
+  writeFileSync(path.join(utf16, "settings.ini"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(ini, "utf16le")]));
+  assert.deepEqual(readLinkHosts({ SWITCHBOARD_SETTINGS_DIR: utf16 }), ["alfredv5vibe.vercel.app"]);
+  const utf8bom = scratch();
+  writeFileSync(path.join(utf8bom, "settings.ini"), "﻿" + ini, "utf8");
+  assert.deepEqual(readLinkHosts({ SWITCHBOARD_SETTINGS_DIR: utf8bom }), ["alfredv5vibe.vercel.app"]);
+});
+
 test("a prompt frame is written for its tag's project; the outcome carries no text", () => {
   const dir = scratch();
   assert.equal(handleMessage({ type: "prompt", id: "p1", tag: "sb-h8r-s13-q2vx", text: PROMPT }, { dir, origin: ORIGIN }), "prompt-result.json");

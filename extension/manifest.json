@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Alfred's Clipboard",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Save this page's text, links and a full-page screenshot into Alfred.",
   "permissions": [
     "activeTab",
