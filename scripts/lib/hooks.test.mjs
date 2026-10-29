@@ -223,6 +223,55 @@ test("the binding write lands on the scratch copy, not the real one", () => {
   assert.match(run.binding ?? "", /"code": "scratch-proj"/);
 });
 
+/** A worktree entry in a scratch main's .git, with its folder (live) or without. */
+function scratchWorktree(main, name, { live = true } = {}) {
+  const wt = path.join(main, ".claude", "worktrees", name);
+  mkdirSync(path.join(main, ".git", "worktrees", name), { recursive: true });
+  if (live) {
+    mkdirSync(wt, { recursive: true });
+    writeFileSync(path.join(wt, ".git"), `gitdir: ${path.join(main, ".git", "worktrees", name)}\n`);
+  }
+  writeFileSync(path.join(main, ".git", "worktrees", name, "gitdir"), `${path.join(wt, ".git")}\n`);
+  return wt;
+}
+
+test("main blocks a prompt that belongs to a live worktree, and binds nothing", () => {
+  const cwd = scratchMain();
+  const wt = scratchWorktree(cwd, "scratch-wt");
+  const run = runHook("Run tag: scratch-wt-s1-ab12\nWindow: the scratch-wt worktree\n\nDo the thing.", { cwd });
+  assert.equal(run.code, 2);
+  assert.match(run.stderr, /belongs to the scratch-wt worktree/);
+  assert.ok(run.stderr.includes(wt), "names the worktree's folder");
+  assert.equal(run.binding, null);
+});
+
+test("a worktree entry whose folder is gone does not block main", () => {
+  const cwd = scratchMain();
+  scratchWorktree(cwd, "scratch-old", { live: false });
+  const run = runHook("Run tag: scratch-old-s1-ab12\nWindow: main\n\nDo the thing.", { cwd });
+  assert.equal(run.code, 0, run.stderr);
+});
+
+test("a run tag already pasted here is blocked as a duplicate; override still passes", () => {
+  const dir = scratchDir();
+  const binding = path.join(dir, "project-code.json");
+  const statusFile = path.join(dir, "session-status.json");
+  writeFileSync(binding, JSON.stringify({ code: "scratch-proj" }), "utf8");
+  writeFileSync(statusFile, JSON.stringify({ state: "waiting", run_tag: "scratch-proj-s3-ab12" }), "utf8");
+  const cwd = scratchMain();
+  const prompt = "Run tag: scratch-proj-s3-ab12\nWindow: main\n\nDo the thing.";
+
+  const dup = runHook(prompt, { binding, statusFile, cwd });
+  assert.equal(dup.code, 2);
+  assert.match(dup.stderr, /ALREADY PASTED/);
+  assert.equal(dup.status?.state, "wrong");
+  assert.equal(dup.status?.event, "duplicate run tag");
+
+  assert.equal(runHook(`override: ${prompt}`, { binding, statusFile, cwd }).code, 0);
+  const next = runHook("Run tag: scratch-proj-s4-cd34\nWindow: main\n\nNext.", { binding, statusFile, cwd });
+  assert.equal(next.code, 0, next.stderr);
+});
+
 test("an underscore tag reaches the window it belongs to", () => {
   const dir = scratchDir();
   const binding = path.join(dir, "project-code.json");
@@ -390,6 +439,27 @@ test("step 5: real writes and claims through a wrapper are still blocked", () =>
   const claim = runGuard("Bash", { command: 'bash -c "node scripts/claims.mjs claim docs/x.md" && echo hi' });
   assert.equal(claim.code, 2);
   assert.match(claim.stderr, /chains a claim/);
+});
+
+test("the guard allows the switchboard2-h8r 0.1 false positives", () => {
+  for (const command of [
+    `node -e "[1,2].filter((x) => x > 1)"`,
+    `node -e "const ok = 2 >= 1"`,
+    `cat > "${tmpdir().replaceAll("\\", "/")}/n.md" <<'EOT'\nsee scripts/clip.mjs and rm it\nEOT`,
+  ]) {
+    const run = runGuard("Bash", { command });
+    assert.equal(run.code, 0, `${command}\n${run.stderr}`);
+  }
+});
+
+test("the guard blocks script writes and heredoc patches", () => {
+  for (const command of [
+    `node -e "require('fs').appendFileSync('docs/guard-probe-x.md','x')"`,
+    `python -c "import os; os.remove('scripts/fixtures/guard-probe-never-claimed.json')"`,
+    "git apply <<'EOF'\n--- a/scripts/fixtures/guard-probe-never-claimed.json\n+++ b/scripts/fixtures/guard-probe-never-claimed.json\nEOF",
+  ]) {
+    assert.equal(runGuard("Bash", { command }).code, 2, command);
+  }
 });
 
 test("the guard allows the three switchboard_fixes false positives", () => {

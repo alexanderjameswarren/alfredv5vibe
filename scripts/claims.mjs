@@ -36,6 +36,8 @@
 // It follows that claims coordinate threads on ONE COMPUTER. The desktop and
 // the Surface do not see each other's claims. Known limit, not solved here.
 
+import { existsSync } from "node:fs";
+import path from "node:path";
 import {
   addBlocks,
   blockLoops,
@@ -51,7 +53,9 @@ import {
   isExempt,
   isFolderItem,
   liveBlocks,
+  MIGRATIONS_DIR,
   normaliseItem,
+  numberMigration,
   overlaps,
   pruneBlocksLocked,
   queueBlockEvents,
@@ -527,6 +531,23 @@ function cmdYield(ctx, items) {
   return exit;
 }
 
+/**
+ * The next migration number for this thread's `_pending_` file, taken under the
+ * lock from main and every worktree. Writes no repo file; the thread does that.
+ */
+function cmdNumberMigration(ctx, items) {
+  if (items.length !== 1) fail("number-migration takes exactly one _pending_ file", 2);
+  const base = path.basename(items[0]);
+  const rel = `${MIGRATIONS_DIR}/${base}`;
+  if (!existsSync(path.join(ctx.root, rel))) fail(`${rel} does not exist in this checkout.`, 1);
+  const { number, name } = numberMigration(ctx, base);
+  console.log(`number    ${number}`);
+  console.log(`file      ${MIGRATIONS_DIR}/${name}`);
+  console.log(`\nWrite ${MIGRATIONS_DIR}/${name} with the Write tool, then delete ${rel}.`);
+  console.log("The number is recorded as issued, so no other thread will be given it.");
+  return 0;
+}
+
 function releaseFor(ctx, target, items, flags) {
   if (!flags.all && !items.length) fail("release needs items, or --all", 2);
   if (flags.all && items.length) fail("release takes items or --all, not both", 2);
@@ -596,6 +617,12 @@ const USAGE = `Usage:
   node scripts/claims.mjs yield <file>
   node scripts/claims.mjs bind <project-code>
   node scripts/claims.mjs unbind
+  node scripts/claims.mjs number-migration <supabase/migrations/_pending_<owner>_<purpose>.sql>
+
+number-migration gives the next free migration number, read under the lock from
+main and every worktree, and records it as issued so no other thread gets it.
+It writes no repo file. gitpush refuses a _pending_ file, and a new migration
+whose number main already uses.
 
 bind and unbind set and clear the MAIN checkout's project code, which is what
 decides whose prompts the guard lets into that window. They touch no claim, and
@@ -685,6 +712,7 @@ function main() {
     yield: cmdYield,
     bind: cmdBind,
     unbind: cmdUnbind,
+    "number-migration": cmdNumberMigration,
   };
   const handler = commands[command];
   if (!handler) fail(`unknown command: ${command}\n\n${USAGE}`, 2);
@@ -694,7 +722,7 @@ function main() {
     if (flags.owner) ctx.owner = flags.owner;
     // cleanup takes an owner name and bind a project code — neither is a path,
     // so neither is normalised as one.
-    const items = ["cleanup", "bind", "unbind"].includes(command)
+    const items = ["cleanup", "bind", "unbind", "number-migration"].includes(command)
       ? rawItems
       : rawItems.map((raw) => normaliseItem(raw, ctx.root));
     process.exit(handler(ctx, items, flags));

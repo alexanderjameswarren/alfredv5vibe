@@ -1,7 +1,7 @@
 # Switchboard (claude-sessions)
 
 A desktop panel with one coloured button per Claude Code session on alfred-v5: the
-main checkout plus each worktree. Spec: `docs/technical-spec-switchboard.md`.
+main checkout plus each worktree. Spec: `docs/history/technical-spec-switchboard.md`.
 
 ## Start it from main
 
@@ -56,6 +56,7 @@ CLI's run-tag step (`s9`, or `s9 -> s10` when Claude has issued a newer prompt).
 | Colour | Label | Where the keyboard and pointer go |
 |---|---|---|
 | Red | `Approve`, or `Check CLI` (idle, with no report for its run) | VS Code |
+| Red | `Wrong window`, or `Already pasted` (that run tag was already sent here): the prompt was refused. A tap clears it. | VS Code |
 | Green | `CLI working` / `Both working` | VS Code |
 | Green | `Claude writing` | the chat's message box |
 | Orange | `Send cli`: there's a report Claude hasn't read. A click types and sends `cli` if the box is empty and Claude is idle. | the chat |
@@ -68,7 +69,7 @@ CLI's run-tag step (`s9`, or `s9 -> s10` when Claude has issued a newer prompt).
 - Below the buttons, one row for each claude.ai chat with no session: green while
   writing, yellow when it finishes unseen, grey once seen. A click brings it forward.
 
-Full rules: `docs/technical-spec-switchboard_bridge.md`, section 5.
+Full rules: `docs/history/technical-spec-switchboard_bridge.md`, section 5.
 
 ## What it reads and writes
 

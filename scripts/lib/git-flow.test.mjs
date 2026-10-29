@@ -10,8 +10,9 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
+import * as gf from "./git-flow.mjs";
 import {
   applyDocsMove,
   docsClashRefusal,
@@ -574,6 +575,77 @@ test("gitpush: --help is plain and exits 0", () => {
   assert.equal(r.code, 0);
   assert.equal(r.err, "");
   assert.match(r.out, /gitpush — bring work into main/);
+});
+
+// ---------------------------------------------------------------------------
+// switchboard2-h8r 0.3
+// ---------------------------------------------------------------------------
+
+const SCRIPTS = path.join(HERE, "..");
+const source = (name) => readFileSync(path.join(SCRIPTS, name), "utf8");
+
+test("gitsync merges without opening an editor", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "gitsync-noedit-"));
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t",
+    // Forces the editor even without a terminal, and an editor that fails.
+    GIT_MERGE_AUTOEDIT: "yes", GIT_EDITOR: "false",
+  };
+  const g = (...args) => spawnSync("git", args, { cwd: dir, env, encoding: "utf8" });
+  try {
+    g("init", "-q", "-b", "main");
+    writeFileSync(path.join(dir, "a.txt"), "a");
+    g("add", "a.txt");
+    g("commit", "-q", "-m", "a");
+    g("checkout", "-q", "-b", "wt");
+    writeFileSync(path.join(dir, "b.txt"), "b");
+    g("add", "b.txt");
+    g("commit", "-q", "-m", "b");
+    g("checkout", "-q", "main");
+    writeFileSync(path.join(dir, "c.txt"), "c");
+    g("add", "c.txt");
+    g("commit", "-q", "-m", "c");
+    g("checkout", "-q", "wt");
+    // The control: a plain merge opens the editor here, and the editor fails.
+    assert.notEqual(g("merge", "main").status, 0);
+    g("merge", "--abort");
+    const r = g(...gf.syncMergeArgs("main"));
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(g("rev-list", "--count", "--merges", "HEAD").stdout.trim(), "1");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  assert.match(source("git-sync.mjs"), /gitLive\(syncMergeArgs\(BASE\)/);
+});
+
+test("doneAt: local date and time", () => {
+  assert.equal(gf.doneAt(new Date(2026, 9, 29, 9, 5, 7)), "2026-10-29 09:05:07");
+  assert.match(source("git-push-worktrees.mjs"), /say\(`\\nDone at \$\{doneAt\(\)\}\.`\)/);
+});
+
+test("migrationRefusal: _pending_ files and duplicate numbers", () => {
+  const main = ["122_a.sql", "122_b.sql", "184_x.sql"];
+  const all = () => true;
+  const refuse = (paths, exists = all) => gf.migrationRefusal(paths, main, exists);
+  assert.match(refuse(["supabase/migrations/_pending_sb_add_x.sql"]), /_pending_sb_add_x\.sql/);
+  assert.match(refuse(["supabase/migrations/184_y.sql"]), /184_y\.sql.*184_x\.sql/s);
+  assert.match(refuse(["supabase/migrations/185_a.sql", "supabase/migrations/185_b.sql"]), /185_a\.sql.*185_b\.sql/s);
+  // An edit to a file main has, even one of its old duplicates, is not a clash.
+  assert.equal(refuse(["supabase/migrations/122_a.sql"]), null);
+  // A deleted _pending_ file is fine; so is a new number and anything outside migrations.
+  assert.equal(refuse(["supabase/migrations/_pending_sb_x.sql"], () => false), null);
+  assert.equal(refuse(["supabase/migrations/185_new.sql", "docs/x.md"]), null);
+  assert.equal(refuse(["supabase/tests/x/_pending_note.sql"]), null);
+});
+
+test("commandEcho: a long path list goes one path per line", () => {
+  assert.equal(gf.commandEcho(["merge", "--no-edit", "main"]), "  $ git merge --no-edit main");
+  const paths = ["scripts/lib/claims-core.test.mjs", "scripts/lib/hooks.test.mjs", "scripts/lib/shell-parse.mjs",
+    "docs/progress-switchboard2-h8r.md", "docs/technical-spec-switchboard2-h8r.md"];
+  const lines = gf.commandEcho(["add", "--", ...paths]).split("\n");
+  assert.equal(lines[0], "  $ git add --");
+  assert.deepEqual(lines.slice(1).map((l) => l.trim()), paths);
 });
 
 test("removeEmptyDir deletes only an empty folder", () => {

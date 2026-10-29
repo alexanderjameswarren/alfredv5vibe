@@ -121,8 +121,8 @@ ViewOf(p) {
         return {color: "none", label: "no status"}
     if p.kind = "red"
         return {color: "red", label: "Approve"}
-    if p.kind = "wrong"
-        return {color: "red", label: "Wrong window"}
+    if p.kind = "wrong"   ; prompt-check refused it; a repeated run tag says so
+        return {color: "red", label: p.HasOwnProp("event") && p.event = "duplicate run tag" ? "Already pasted" : "Wrong window"}
     cliIdle := p.kind = "waiting"
     ; Reported: something was pushed after the last prompt Alex typed. A status file
     ; from before prompt_at existed falls back to matching the run tag.

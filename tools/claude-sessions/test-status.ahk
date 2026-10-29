@@ -72,6 +72,8 @@ Check("view unpaired", V(P("waiting", "")), "grey / chat unknown")
 Check("view paused", V(P("processing", , {paused: true})), "paused / paused")
 Check("view no status", V(P("none")), "none / no status")
 Check("view wrong window", V(P("wrong")), "red / Wrong window")
+Check("view already pasted", V(P("wrong", , {event: "duplicate run tag"})), "red / Already pasted")
+Check("view wrong, other event", V(P("wrong", , {event: "UserPromptSubmit"})), "red / Wrong window")
 Check("kind wrong beats red", KindOf(true, "wrong", true, false), "wrong")
 ; Reported means pushed after the last typed prompt, tagged or not.
 Check("view prompt, no report since", V(P("waiting", , {promptAt: "2026-10-03T10:01:00.000Z"})), "red / Check CLI")
