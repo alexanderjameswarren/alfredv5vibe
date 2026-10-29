@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-28 12:01, through migration 184 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-29 11:16, through migration 185 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -10328,6 +10328,65 @@ COMMENT ON COLUMN "public"."drive_mix_servings"."recorded_at" IS 'When the servi
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."email_capture_senders" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "email" "text" NOT NULL,
+    "safe_sender" boolean DEFAULT false NOT NULL,
+    "approved_forwarder" boolean DEFAULT false NOT NULL,
+    "label" "text" NOT NULL,
+    "notes" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "email_capture_senders_email_lower" CHECK ((("email" = "lower"("btrim"("email"))) AND ("email" ~~ '%_@_%'::"text"))),
+    CONSTRAINT "email_capture_senders_has_role" CHECK (("safe_sender" OR "approved_forwarder")),
+    CONSTRAINT "email_capture_senders_label_present" CHECK (("length"("btrim"("label")) > 0))
+);
+
+
+ALTER TABLE "public"."email_capture_senders" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."email_capture_senders" IS 'EMAIL CAPTURE. Who may get mail into Alfred through a capture address (alfred@, recipes@, alex.warren+alfred@, alfred+<tag>@secorus.com). One row per address. safe_sender: mail FROM this address to a capture address is accepted when Google''s Authentication-Results pass (DMARC, or aligned DKIM). approved_forwarder: mail auto-forwarded BY this account into a capture address is accepted, whoever the original sender. To add one: insert a row with the lower-case address, at least one role, and a label saying whose it is. Mail labelled alfred that was not sent to a capture address does not need a row. Read by the email-capture Edge Function (service role). Not allowed_emails, which grants sign-in. Spec: docs/technical-spec-gmail-capture.md.';
+
+
+
+COMMENT ON COLUMN "public"."email_capture_senders"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."email_capture_senders"."user_id" IS 'Owner (the Alfred user who maintains the list). Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."email_capture_senders"."email" IS 'The address, lower-case and trimmed. Unique.';
+
+
+
+COMMENT ON COLUMN "public"."email_capture_senders"."safe_sender" IS 'True: mail From this address to a capture address is accepted if Google''s sender checks pass.';
+
+
+
+COMMENT ON COLUMN "public"."email_capture_senders"."approved_forwarder" IS 'True: mail this account auto-forwards into a capture address is accepted (Gmail +caf_ envelope or X-Forwarded-For).';
+
+
+
+COMMENT ON COLUMN "public"."email_capture_senders"."label" IS 'Whose address this is, e.g. "Alex (secorus)", "Elise".';
+
+
+
+COMMENT ON COLUMN "public"."email_capture_senders"."notes" IS 'Free text: why the row exists, when it was added.';
+
+
+
+COMMENT ON COLUMN "public"."email_capture_senders"."created_at" IS 'Row creation.';
+
+
+
+COMMENT ON COLUMN "public"."email_capture_senders"."updated_at" IS 'Last change. Stamped by the set_updated_at trigger.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."events" (
     "id" "text" NOT NULL,
     "intent_id" "text" NOT NULL,
@@ -15360,6 +15419,16 @@ ALTER TABLE ONLY "public"."drive_mix_songs"
 
 
 
+ALTER TABLE ONLY "public"."email_capture_senders"
+    ADD CONSTRAINT "email_capture_senders_email_key" UNIQUE ("email");
+
+
+
+ALTER TABLE ONLY "public"."email_capture_senders"
+    ADD CONSTRAINT "email_capture_senders_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."events"
     ADD CONSTRAINT "events_pkey" PRIMARY KEY ("id");
 
@@ -16643,6 +16712,10 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."email_capture_senders" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."events" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -17067,6 +17140,10 @@ CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."contexts" 
 
 
 
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."email_capture_senders" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
 CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."events" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
 
 
@@ -17418,6 +17495,11 @@ ALTER TABLE ONLY "public"."drive_mix_servings"
 
 ALTER TABLE ONLY "public"."drive_mix_songs"
     ADD CONSTRAINT "drive_mix_songs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."email_capture_senders"
+    ADD CONSTRAINT "email_capture_senders_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
 
 
@@ -18493,6 +18575,13 @@ ALTER TABLE "public"."drive_mix_songs" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "drive_mix_songs_owner_access" ON "public"."drive_mix_songs" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."email_capture_senders" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "email_capture_senders_owner_access" ON "public"."email_capture_senders" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
 
 
 
@@ -20016,6 +20105,11 @@ GRANT ALL ON TABLE "public"."dj_venues" TO "service_role";
 
 GRANT ALL ON TABLE "public"."drive_mix_servings" TO "authenticated";
 GRANT ALL ON TABLE "public"."drive_mix_servings" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."email_capture_senders" TO "authenticated";
+GRANT ALL ON TABLE "public"."email_capture_senders" TO "service_role";
 
 
 
