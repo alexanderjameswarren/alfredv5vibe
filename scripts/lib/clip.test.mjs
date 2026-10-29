@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeFailure } from "../clip.mjs";
+import { changedFromStatus, formatScopeVsChanges, missingSections, scopeVsChanges, touchedFromLog } from "./last-report.mjs";
 
 const CLIP = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "clip.mjs");
 const REPORT = "Run exactly: bash -c \"echo x > docs/a.md\" && node -e \"require('fs')\"\n";
@@ -97,6 +98,82 @@ test("an older clip-capture: says to deploy, then sends it plain once", async ()
   assert.match(r.err, /npx supabase functions deploy clip-capture/);
   assert.equal(s.seen.length, 2);
   assert.equal(s.seen[1].page_text, REPORT);
+});
+
+const RECORD = {
+  run_tag: "proj-s3-ab12",
+  found: true,
+  scope: { create: ["src/new.js"], update: ["src/a.js", "lib/"], delete: [], deploy: [], sql: [] },
+};
+
+test("scopeVsChanges: undeclared, untouched and carried", () => {
+  const r = scopeVsChanges({
+    record: RECORD,
+    changed: ["src/a.js", "lib/x.js", "old/carried.js", "src/sneaky.js"],
+    touched: ["src/a.js", "src/sneaky.js", "docs/progress-proj.md"],
+  });
+  assert.deepEqual(r.undeclared, ["src/sneaky.js"]);
+  assert.deepEqual(r.untouched, ["src/new.js"]);
+  assert.deepEqual(r.carried, ["old/carried.js"]);
+});
+
+test("scopeVsChanges: no block declares nothing", () => {
+  const r = scopeVsChanges({ record: { ...RECORD, found: false }, changed: [], touched: ["src/a.js"] });
+  assert.deepEqual(r.undeclared, ["src/a.js"]);
+  assert.deepEqual(r.untouched, []);
+});
+
+test("formatScopeVsChanges: headed section, clean when nothing differs", () => {
+  const clean = formatScopeVsChanges({ undeclared: [], untouched: [], carried: [] }, RECORD);
+  assert.match(clean, /^## Scope vs changes\n/);
+  assert.match(clean, /Matches the scope declared for proj-s3-ab12/);
+  const dirty = formatScopeVsChanges({ undeclared: ["x.js"], untouched: ["y.js"], carried: ["z.js"] }, RECORD);
+  assert.match(dirty, /Changed, not declared: x\.js/);
+  assert.match(dirty, /Declared, not touched: y\.js/);
+  assert.match(dirty, /z\.js/);
+  assert.match(formatScopeVsChanges(null, null), /No scope recorded/);
+});
+
+test("touchedFromLog: this run's in-scope edits only", () => {
+  const log = [
+    "2026-10-29T19:00:00.000Z  ALLOW  Edit  plan proj-s3-ab12  in scope: src/a.js",
+    "2026-10-29T19:00:01.000Z  ALLOW  Bash  plan proj-s3-ab12  command in scope",
+    "2026-10-29T19:00:02.000Z  ALLOW  Write  plan proj-s2-zz99  in scope: src/old.js",
+    "2026-10-29T19:00:03.000Z  ALLOW  Edit  src/a.js  claimed",
+    "2026-10-29T19:00:04.000Z  ALLOW  Write  plan proj-s3-ab12  in scope: src/a.js",
+  ].join("\n");
+  assert.deepEqual(touchedFromLog(log, "proj-s3-ab12"), ["src/a.js"]);
+});
+
+test("changedFromStatus: porcelain -z, renames give both paths", () => {
+  const z = " M src/a.js\0?? new.js\0R  b.js\0a-old.js\0 D gone.js\0";
+  assert.deepEqual(changedFromStatus(z), ["src/a.js", "new.js", "b.js", "a-old.js", "gone.js"]);
+});
+
+test("missingSections: both headings, and a next-step block with lines", () => {
+  const full = "Done.\n\n## Scope vs changes\nMatches.\n\n## Next step's scope\n- create: nothing\n- update: a.js\n";
+  assert.deepEqual(missingSections(full), []);
+  assert.deepEqual(missingSections("Done."), ["Scope vs changes", "Next step's scope"]);
+  assert.deepEqual(missingSections("**Scope vs changes**\nok\n**Next step's scope**\nnone yet\n"), ["Next step's scope"]);
+});
+
+test("a report without a next-step block still pushes, with a warning", async () => {
+  const s = await stub([OK]);
+  const r = await push(s.url);
+  s.close();
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.err, /no "Scope vs changes" or "Next step's scope" block/);
+});
+
+test("--scope prints the section without pushing", async () => {
+  const r = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLIP, "--scope"], { cwd: mkdtempSync(path.join(tmpdir(), "clip-scope-")), env: { ...process.env, CLIPBOARD_URL: "", CLIPBOARD_SECRET: "" } });
+    let out = "";
+    child.stdout.on("data", (c) => (out += c));
+    child.on("close", (code) => resolve({ code, out }));
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.out, /## Scope vs changes/);
 });
 
 test("describeFailure: JSON error, HTML title, or the start of the text", () => {

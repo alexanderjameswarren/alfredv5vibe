@@ -268,6 +268,48 @@ round the guard, not a way through it: a `/tmp` file moved into place on
 2026-09-30. If you can see a route around a block, **that is a finding to report,
 not a path to take.**
 
+## The plan guard: each step does only what its prompt declared
+
+**Every tagged prompt carries a "Scope of this step" block** (create, update,
+delete, deploy, SQL) and an `Estimated run:` line. The prompt hook records it in
+`.clip/scope.json`, and `.claude/hooks/plan-guard.mjs` refuses, beside the claims
+guard, an Edit or Write to a file not under create or update, a delete not under
+delete, a deploy not under deploy, and SQL naming a table not under SQL. The
+project's own progress file is implied. A tagged prompt with no block lets
+nothing change. Claims say which thread may touch a file; the scope says what
+this step may do with it.
+
+**A PLAN GUARD block is answered like any other block:** stop, say what you
+needed and why, and wait. **Only Alex widens the scope**, by sending a tagged
+follow-up prompt (`s9b`) whose block includes it. An untagged reply cannot widen
+it, and neither can you: never edit `.clip/scope.json`, never set
+`PLAN_GUARD=off`.
+
+**Test files are part of the scope.** A step that adds or changes a test names
+the test file in its block. In a Salesforce repo that includes every `*Test.cls`
+it will create or change, since the deploy wrapper runs only declared tests.
+
+**Every report ends with two sections, then the timing table:**
+1. **Scope vs changes.** Run `node scripts/clip.mjs --scope` and paste its
+   output: anything changed but not declared, and anything declared but not
+   touched. Uncommitted work from earlier steps is listed on its own line.
+2. **Next step's scope.** The next step's block, copied from the progress file.
+   If this step changed the plan, update that block in the progress file first
+   and say so.
+
+`clip.mjs` warns when a pushed report has neither.
+
+## Salesforce sandboxes and client repos
+
+- **One thread deploys or tests a sandbox at a time.** The deploy wrapper holds a
+  short lock, `sf:deploy:<alias>`, for the length of the deploy or test run and
+  releases it itself. If it is held, wait and report; never break or release
+  another thread's lock, and never deploy or run tests around the wrapper.
+- **Apex test failures in a client repo are summarised, never pasted.** Give the
+  test class and method, a one-line cause in your own words, and the file and
+  line. No stack traces, no record ids, no field values, no data from the org:
+  reports go into Alfred, and client data stays out of it.
+
 ## Change files with the Edit and Write tools, never the shell
 
 Every change to a file in this repo goes through the `Edit`, `Write`,
@@ -450,7 +492,9 @@ suite finds no tests at all. The reason is in `jestNote` beside it.
 
 **Reports to Alfred.** 25 lines at most: what changed — naming every file you
 edited, since they are sitting uncommitted — what Alex must do, and what to
-test. No background and no reasoning unless something went wrong.
+test. No background and no reasoning unless something went wrong. The "Scope vs
+changes" and "Next step's scope" sections (see the plan guard) do not count
+toward the 25.
 
 **Every report ends with a timing table** — how long each phase took (reading,
 writing, tests, build, deploy), plus the total. **Measured, never estimated:**

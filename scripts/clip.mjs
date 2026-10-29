@@ -26,7 +26,16 @@ import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isCheckoutReport, writeLastReport } from "./lib/last-report.mjs";
+import {
+  changedFromStatus,
+  formatScopeVsChanges,
+  isCheckoutReport,
+  missingSections,
+  scopeVsChanges,
+  touchedFromLog,
+  writeLastReport,
+} from "./lib/last-report.mjs";
+import { readScope, scopeFile } from "./lib/plan-scope.mjs";
 
 const MIN_SECRET_LENGTH = 32;
 
@@ -163,14 +172,20 @@ Push a report into Alfred as a CLI clip.
                 underscore only inside the project code. Prefixes the title as
                 "[tag] " and is stored so a thread can find its own report.
                 Omit it and the push still happens, untagged.
+  --scope       Print the report's "Scope vs changes" section and push nothing:
+                the step's declared scope (.clip/scope.json) against this run's
+                edits and git status. Paste it into the report before pushing.
   --help, -h    This.
+
+Every report ends with "Scope vs changes", then "Next step's scope" (its block),
+then the timing table. A pushed file without them is still sent, with a warning.
 
 Reads CLIPBOARD_URL and CLIPBOARD_SECRET from the environment, falling back to
 the Windows user registry when a shell predates setx.
 `;
 
 function parseArgs(argv) {
-  const out = { title: null, file: null, tag: null };
+  const out = { title: null, file: null, tag: null, scope: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--title" || a === "-t") {
@@ -194,6 +209,8 @@ function parseArgs(argv) {
         );
       }
       out.tag = tag;
+    } else if (a === "--scope") {
+      out.scope = true;
     } else if (a === "--help" || a === "-h") {
       console.log(USAGE);
       process.exit(0);
@@ -255,12 +272,35 @@ function deriveTitle(explicit, text, file) {
   return "CLI report";
 }
 
+/** The "Scope vs changes" section for this checkout. Any failure reads as no scope. */
+function scopeSection() {
+  const root = gitContext().top ?? process.cwd();
+  const record = readScope(scopeFile(root));
+  if (!record) return formatScopeVsChanges(null, null);
+  let status = "";
+  let log = "";
+  try {
+    status = execFileSync("git", ["status", "--porcelain", "-z", "--untracked-files=all"], {
+      cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000,
+    });
+  } catch { /* not a repo: nothing changed */ }
+  try {
+    log = readFileSync(path.join(root, ".clip", "claims-guard.log"), "utf8");
+  } catch { /* no log yet */ }
+  const changed = changedFromStatus(status).filter((p) => !p.startsWith(".clip/"));
+  return formatScopeVsChanges(scopeVsChanges({ record, changed, touched: touchedFromLog(log, record.run_tag) }), record);
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.scope) {
+    process.stdout.write(scopeSection());
+    return;
+  }
   const cfg = loadSettings();
 
   const text = args.file ? readFileOrDie(args.file) : readStdin();
@@ -365,6 +405,16 @@ async function main() {
   if (isCheckoutReport(root, args.file)) {
     const local = writeLastReport(root, { runTag: args.tag, title: baseTitle });
     console.log(`  local:    ${local ? ".clip/last-report.json written" : "could not write .clip/last-report.json"}`);
+  }
+
+  // A warning, not a refusal: a report that arrives incomplete beats one that never arrives.
+  const missing = args.file ? missingSections(text) : [];
+  if (missing.length) {
+    console.error(
+      `\n⚠️  This report has no ${missing.map((m) => `"${m}"`).join(" or ")} block.\n` +
+        `    Every report ends with "Scope vs changes" (node scripts/clip.mjs --scope),\n` +
+        `    then "Next step's scope" with its create/update/delete/deploy/SQL lines.\n`,
+    );
   }
 
   if (mismatch) {

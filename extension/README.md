@@ -178,7 +178,7 @@ Windows desktop). Everywhere else (the Surface Go, the Chromebook, a new
 machine), the extension tries the host once, finds none, and stops trying until
 Chrome restarts it. **Clipping is unaffected either way.**
 
-Full design: `docs/technical-spec-switchboard_bridge.md`.
+Full design: `docs/history/technical-spec-switchboard_bridge.md`.
 
 ### Setting it up on a PC
 
