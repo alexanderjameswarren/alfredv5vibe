@@ -6,6 +6,7 @@ Persistent
 #Include lib\status.ahk
 #Include lib\chrome-address.ahk
 #Include lib\bridge.ahk
+#Include lib\focus-check.ahk
 #Include lib\webview2\WebView2\WebView2.ahk
 
 ; Switchboard: one button per Claude Code session on alfred-v5 (main plus each
@@ -85,6 +86,11 @@ focusRequester := SendFocus
 activateWindow := (hwnd) => (WinExist("ahk_id " hwnd) && WinActivate(hwnd))
 pointerMover := MovePointerTo
 arrangeAction := Arrange
+; Send link delivery (lib\bridge.ahk), swappable the same way.
+focusReader := FocusedElement
+keySender := (keys) => Send(keys)
+pasteSender := PastePrompt
+windowIsActive := (hwnd) => WinActive("ahk_id " hwnd) != 0
 listMonitors := PhysicalMonitors
 appMonitorsFor := ""       ; the layout VS_MONITOR and CHROME_MONITOR were chosen for
 lockPid := 0               ; the running lib\mouse-lock.ahk, or 0
@@ -242,6 +248,7 @@ NewSession(code, root) {
         unseen: false, flashes: 0, free: false, painted: "", hasChat: false, pausedAt: "",
         misses: CLOSED_AFTER - 1, closed: false,   ; the first poll decides at once
         lastClick: lastClick, unread: false,
+        sendNote: "", sendTag: "", sendAt: 0,       ; Send link: red note until tapped; tag awaiting delivery
         gitDirty: true, changed: "", ahead: "",     ; git runs on the first poll
         gitWatch: GitWatchFiles(code), gitKey: "",
         paused: IniRead(SETTINGS_INI, "paused", code, 0) = 1,
@@ -597,6 +604,8 @@ Refresh() {
     offset := DateDiff(A_Now, A_NowUTC, "Minutes") * 60
     codeWindows := listCodeWindows()
     ReadTabs(), ReadChats()
+    ; Send links: refusals first, then deliveries, judged on last poll's states.
+    ReadPromptResult(), TakePrompts()
     chatsOk := ChatsFresh()    ; not `chatsFresh` or `colors`: names are case-insensitive
     liveColors := [], tip := "", anyAlert := false, paired := Map()
 
@@ -612,6 +621,7 @@ Refresh() {
         if s.gitDirty
             GitCounts(s)
         CheckInterrupt(s)
+        CheckDelivery(s)
         s.unread := IsUnread(NewestStamp([s.reportFile]), s.lastClick)
         s.misses := FindCodeWindow(s, codeWindows) ? 0 : s.misses + 1
         s.closed := s.misses >= CLOSED_AFTER
@@ -638,6 +648,7 @@ Refresh() {
             if ShouldAlert(s.color, v.color)
                 s.unseen := true, s.flashes := 0, anyAlert := true
         }
+        v := SendView(v, s.sendNote)
         s.color := v.color, s.label := v.label, s.step := StepText(s.runTag, issued, project)
         Paint(s, offset)
         if !s.paused && !s.closed && !s.free
@@ -848,6 +859,7 @@ ButtonClick(code, *) {
     IniWrite(s.lastClick, SETTINGS_INI, "lastclick", code)
     if s.state = "wrong"
         ClearWrong(s)
+    s.sendNote := ""
     if s.closed {
         Paint(s)
         if MsgBox("No VS Code window is open for " s.folder ".`n`nReopen it and resume its last conversation?"

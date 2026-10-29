@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  bridgeDir, cleanChat, commandToForward, createDecoder, encode, extensionIdOf, handleMessage, takeCommand,
+  bridgeDir, cleanChat, commandToForward, createDecoder, encode, extensionIdOf, handleMessage, readLinkHosts, takeCommand,
 } from "./host.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -103,9 +103,54 @@ test("a command file is forwarded once and deleted", () => {
   assert.deepEqual(sent.map((m) => m.id), ["a1"]);
 });
 
+const PROMPT = "Run tag: sb-h8r-s13-q2vx\nWindow: the sb-h8r worktree\n\nDo it.\n\nRun tag: sb-h8r-s13-q2vx";
+
+test("the 1.1 sendprompt command is gone", () => {
+  assert.equal(commandToForward({ id: "p1", action: "sendprompt", tabId: 4, project: "sb-h8r" }), null);
+});
+
+test("link hosts come from the panel's settings.ini, cleaned", () => {
+  const dir = scratch();
+  assert.deepEqual(readLinkHosts({ SWITCHBOARD_SETTINGS_DIR: dir }), []);
+  writeFileSync(path.join(dir, "settings.ini"),
+    "[panel]\nrepo=C:\\x\n[links]\nhosts=alfredv5vibe.vercel.app, Example.COM ,bad host,https://x.y\n[other]\nhosts=no.example\n");
+  assert.deepEqual(readLinkHosts({ SWITCHBOARD_SETTINGS_DIR: dir }), ["alfredv5vibe.vercel.app", "example.com"]);
+});
+
+test("a prompt frame is written for its tag's project; the outcome carries no text", () => {
+  const dir = scratch();
+  assert.equal(handleMessage({ type: "prompt", id: "p1", tag: "sb-h8r-s13-q2vx", text: PROMPT }, { dir, origin: ORIGIN }), "prompt-result.json");
+  const p = read(dir, "prompt-sb-h8r.json");
+  assert.deepEqual([p.id, p.project, p.tag, p.text], ["p1", "sb-h8r", "sb-h8r-s13-q2vx", PROMPT]);
+  assert.deepEqual(read(dir, "sent.json"), { "sb-h8r": "sb-h8r-s13-q2vx" });
+  const r = read(dir, "prompt-result.json");
+  assert.deepEqual([r.id, r.ok, r.tag, r.project, r.error, "text" in r], ["p1", true, "sb-h8r-s13-q2vx", "sb-h8r", null, false]);
+  assert.equal(existsSync(path.join(dir, "result.json")), false);
+});
+
+test("a prompt frame is refused: duplicate, one waiting, bad text, the extension's own refusal", () => {
+  const refuse = (setup, frame) => {
+    const dir = scratch();
+    setup(dir);
+    handleMessage({ type: "prompt", id: "p9", tag: "sb-h8r-s13-q2vx", ...frame }, { dir, origin: ORIGIN });
+    if (!setup.waiting) assert.equal(existsSync(path.join(dir, "prompt-sb-h8r.json")), false);
+    return read(dir, "prompt-result.json");
+  };
+  const none = () => {};
+  let r = refuse((d) => writeFileSync(path.join(d, "sent.json"), JSON.stringify({ "sb-h8r": "sb-h8r-s13-q2vx" })), { text: PROMPT });
+  assert.deepEqual([r.ok, r.tag], [false, "sb-h8r-s13-q2vx"]);
+  assert.match(r.error, /already sent/);
+  const waiting = (d) => writeFileSync(path.join(d, "prompt-sb-h8r.json"), "{}");
+  waiting.waiting = true;
+  assert.match(refuse(waiting, { text: PROMPT }).error, /waiting to be delivered/);
+  assert.match(refuse(none, { text: "rm -rf /\n" + PROMPT }).error, /does not start with its Run tag line/);
+  assert.match(refuse(none, { error: "the link is in an older reply" }).error, /older reply/);
+  assert.match(refuse(none, { tag: "nope", text: PROMPT }).error, /no valid run tag/);
+});
+
 // The real process: through host.bat on Windows, so the launcher is proved silent too.
 function startHost(dir) {
-  const env = { ...process.env, SWITCHBOARD_BRIDGE_DIR: dir };
+  const env = { ...process.env, SWITCHBOARD_BRIDGE_DIR: dir, SWITCHBOARD_SETTINGS_DIR: dir };
   return process.platform === "win32"
     ? spawn("cmd.exe", ["/d", "/s", "/c", `"${path.join(HERE, "host.bat")}" ${ORIGIN} --parent-window=0`], { env, windowsVerbatimArguments: true })
     : spawn(process.execPath, [path.join(HERE, "host.mjs"), ORIGIN], { env });
@@ -113,6 +158,7 @@ function startHost(dir) {
 
 test("the host process speaks only frames, forwards a command, and exits on EOF", async () => {
   const dir = scratch();
+  writeFileSync(path.join(dir, "settings.ini"), "[links]\nhosts=alfredv5vibe.vercel.app\n");
   const host = startHost(dir);
   const out = [];
   host.stdout.on("data", (c) => out.push(c));
@@ -132,7 +178,7 @@ test("the host process speaks only frames, forwards a command, and exits on EOF"
   let used = 0;
   for (const f of frames) used += 4 + Buffer.byteLength(JSON.stringify(f));
   assert.equal(used, raw.length, "stdout held something other than frames");
-  assert.equal(frames[0].type, "hello");
+  assert.deepEqual(frames[0], { type: "hello", host: "com.alfred.switchboard", linkHosts: ["alfredv5vibe.vercel.app"] });
   assert.deepEqual(frames.find((f) => f.type === "command"), { type: "command", id: "e2e", action: "focus", tabId: 5 });
   assert.equal(read(dir, "tabs.json").extension_id, ID);
 });

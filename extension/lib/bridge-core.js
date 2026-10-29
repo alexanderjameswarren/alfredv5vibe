@@ -79,6 +79,60 @@ export function buildChatsMessage(tabs = [], windows = [], reports = new Map(), 
   return { type: "chats", chats };
 }
 
+// ---------------------------------------------------------------------------
+// Send to CLI by a link in the reply (switchboard2-h8r 1.1-1.2, spec 7.1)
+// ---------------------------------------------------------------------------
+
+const TAG_SHAPE = /^[a-z0-9_]+-[a-z0-9]+-s\d+[a-z]?-[a-z0-9]{4}$/;
+const HOST_SHAPE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d{1,5})?$/;
+
+/** A run tag's project code: everything before the step segment. Null for a non-tag. */
+export function projectOfTag(tag) {
+  return /^([a-z0-9_]+-[a-z0-9]+)-s\d+[a-z]?-[a-z0-9]{4}$/.exec(String(tag ?? ""))?.[1] ?? null;
+}
+
+/** The host list from the host's hello: lower-case host names only, anything else dropped. */
+export function cleanHosts(list) {
+  return (Array.isArray(list) ? list : [])
+    .filter((h) => typeof h === "string")
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => HOST_SHAPE.test(h));
+}
+
+/**
+ * The run tag of a Send link: https, a host exactly in `hosts`, path /send/<tag>.
+ * Null otherwise. claude-watch.js has a copy (it cannot import); the tests hold them equal.
+ */
+export function sendTagOf(href, hosts) {
+  let u;
+  try {
+    u = new URL(String(href));
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:" || !hosts.includes(u.host.toLowerCase())) return null;
+  const m = /^\/send\/([^/]+)\/?$/.exec(u.pathname);
+  return m && TAG_SHAPE.test(m[1]) ? m[1] : null;
+}
+
+/**
+ * Why the reply's prompt may not go, or null. `cmd.tag`: the link's tag.
+ * `cmd.project` and `cmd.sentTag` are checked only when given.
+ */
+export function checkPrompt(cmd, prompt) {
+  if (!prompt?.tag) return "no whole CLI prompt in the link's reply";
+  const project = projectOfTag(prompt.tag);
+  if (cmd.project && project !== cmd.project) return `the prompt is for ${project}, not ${cmd.project}`;
+  if (cmd.tag !== prompt.tag) return `the link is for ${cmd.tag}, the prompt is ${prompt.tag}`;
+  if (cmd.sentTag && cmd.sentTag === prompt.tag) return `${prompt.tag} was already sent`;
+  return null;
+}
+
+/** The frame for the host. The text travels only when the prompt passed. */
+export function promptFrame(id, tag, prompt, error) {
+  return error ? { type: "prompt", id, tag, error } : { type: "prompt", id, tag, text: prompt.text };
+}
+
 /** Next reconnect delay: 1 s, doubling, capped at 60 s. */
 export const nextDelay = (prev) => (prev ? Math.min(prev * 2, MAX_RETRY_MS) : FIRST_RETRY_MS);
 
