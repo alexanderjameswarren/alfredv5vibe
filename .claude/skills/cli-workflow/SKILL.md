@@ -5,7 +5,7 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
-Skill version: 2026-10-28a
+Skill version: 2026-10-29a
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -232,7 +232,7 @@ and it can only do that if there is a tag.
 - **A changed skill is offered from main**, after its checkpoint, with the
   `propose_skills` tool: a skill update card, kind `improvement`, carrying the
   complete file from main with its version line at the top ("Skill version:
-  2026-10-28a"). Never as a file to paste, and never copied out of a worktree.
+  2026-10-29a"). Never as a file to paste, and never copied out of a worktree.
 - **A changed scheduled-task prompt is updated by Claude**, not pasted by Alex
   (see "Changing a scheduled task's prompt").
 
@@ -269,6 +269,23 @@ Closeout comes only **after the final CLI report has been fetched, read and
 its inbox item archived**, in its own reply with no prompt in it. Before
 writing it, call `record_project_estimate` `kind: "final"` with a one-line
 `reason` (leave `estimate` out to use `steps_used`); the group must still be open.
+
+At the same time, if the project has a portfolio slice (1c in "Starting a new
+project"), call `update_portfolio_slice` with `status: "done"` for it, and say so
+in one line.
+
+**A phase closeout, where the group stays open** (step 5 below): do not call
+`record_project_estimate` `kind: "final"`. A Project has one final, recorded only
+when its last slice finishes and the group closes. Instead, since no group close
+writes it, log the phase as shipped yourself: `log_activity` with
+`kind: "shipped"`, `source: "cli"`, the group's `group_id`, and a `title` and
+`source_ref` that name the project code and the phase, for example
+"overwatch-q4n phase 8". That label keeps the final group close, later, from
+looking like a duplicate in the weekly review. The slice is still marked done. Suggest a portfolio plan review, in one line, only when what comes
+next may have changed: the work ended up different from the slice's phases text,
+the plan's `notes_for_next_review` mention this work, or the next planned slice in
+that lane depends on it. Otherwise say nothing about a review.
+
 That reply is a list of steps in the step format, in this order:
 
 1. Worktree only: close the worktree's VS Code window. Keep this step: gitpush
@@ -286,6 +303,10 @@ That reply is a list of steps in the step format, in this order:
    writes the project's `shipped` row in Overwatch's activity log by itself, so do
    not also call `log_activity` for it. Name the group exactly as it appears in the
    app (plain words, no project code: "Starting a new project", 1a).
+   **If the group still has other slices that are planned or paused**, this step
+   instead tells Alex to leave the group open, not close it as Completed, because
+   the later phases still belong to it. That is a phase closeout (above): no
+   final estimate, and Claude logs the phase's shipped row.
 
 For a worktree it looks like this:
 
@@ -327,7 +348,7 @@ If the last report raised anything, deal with it first. Closeout waits.
 
 Skills live in the repo at `.claude/skills/<name>/SKILL.md`. To change one,
 have the CLI edit that file. Never hand him a zip. The CLI adds or bumps the
-version line under the skill's title ("Skill version: 2026-10-28a").
+version line under the skill's title ("Skill version: 2026-10-29a").
 
 Once the change has landed in main (a checkpoint), Claude offers it with the
 `propose_skills` tool: a skill update card, kind `improvement`, with the
@@ -432,14 +453,32 @@ else will want the repo before it is done.
 
 ### Starting a new project
 
+**One Project group per piece of work.** One group means one project code, one
+estimate, one closeout and one shipped row. A portfolio lane holds many slices; a
+Project group is not a lane. A batch Project is only for small fixes done together
+in one CLI session under one code. So Claude suggests a separate Project group for
+each new piece of work, rather than adding items to a standing catch-all Project
+such as one named "Fast track".
+
+**A later phase of a multi-phase project** (Switchboard 2.0 Phase 2 after Phase 1)
+reuses the existing Project group and keeps its original project code, just as a
+project picked up in a new thread does ("The project code", above). A group holds
+one `project_code`, so a new code would overwrite it and split the step counts and
+the estimate history. Step 1a creates no new group for it, and the new phase's
+scope is recorded with `record_project_estimate` `kind: "scope_increase"`, with
+`steps_added` and a one-line `reason`, not as a new initial estimate.
+
 In this order:
 
-1. **Project code and chat name.** Claude picks the project code, and tells Alex
+1. **Project code and chat name.** Claude picks the project code (a later phase
+   keeps the original one), and tells Alex
    what to rename this claude.ai chat to: **"Not done", then the project code and
    a few words**, e.g. "Not done overwatch-q4n Overwatch". The name must contain
    the project code, because that is how Switchboard finds the chat's Chrome
    window. Closeout's rename removes "Not done". Alex renames it; Claude cannot.
-1a. **The Project group and its plan.** No tool creates groups, so this is a step for
+1a. **The Project group and its plan.** A later phase skips this step: its group
+   and plan already exist, and Claude only updates `where_now` and `next_step`.
+   No tool creates groups, so this is a step for
    Alex: in the Alfred app, create a group of type Project named in plain words
    (e.g. "Overwatch"; no code needed, since the code lives in the plan's
    `project_code`), then set it to
@@ -462,6 +501,24 @@ In this order:
    (the project's context) and `source_app` when the app is known.
    **Suggest only tags the app accepts:** lowercase, spaces between words, no
    punctuation (`whole foods`, not `Whole_Foods`).
+1c. **The portfolio slice.** Claude calls `get_portfolios`, then `get_portfolio_plan`
+   for each portfolio with an active plan, and finds the slices whose `group_id` is
+   this project's Project group.
+   - **None:** do nothing and say nothing.
+   - **One:** call `update_portfolio_slice` with `status: "in_progress"` (skip it if
+     the slice already is), and say so in one line in the reply, naming the lane and
+     the slice's phases text.
+   - **Several** (Switchboard 2.0 has Phase 1, Phase 2 and Phase 3 slices, all on
+     its one group): pick the one whose phases text matches the work this thread is
+     starting, which for a later phase is that phase's slice. If unsure, ask,
+     as a decision step with each slice's phases text as an answer in its own copy
+     box.
+   - **Another slice in the lane is in progress.** The tool allows at most one per
+     lane and refuses the second. Say so in one line, name that slice, and ask, as a
+     decision step, whether to pause it (`update_portfolio_slice` with
+     `status: "paused"` and a one-line `paused_reason`) or leave this one planned.
+
+   Remember the slice id; closeout marks it done.
 2. **Main or a worktree.** For a job that is one prompt, Claude asks whether to
    do it in the main checkout instead of a worktree, with a recommendation, and
    only when main is free (`main: free` on Switchboard, or nothing bound in
@@ -490,7 +547,9 @@ Switchboard can find it.
 - report conflicts and warnings, change nothing, claim nothing, and stop.
 
 When the plan report comes back, record its total with `record_project_estimate`
-`kind: "initial"`, `cli_estimate` the CLI's figure, and a one-line `reason`.
+`kind: "initial"`, `cli_estimate` the CLI's figure, and a one-line `reason`. For
+a later phase of an existing project, record it as `kind: "scope_increase"` with
+`steps_added` instead: a Project has one initial estimate.
 
 **Prompt 2 confirms and claims**, after Alex has read the plan: claim every file
 and folder in one command, reserve each database item with its step, then start.
@@ -815,7 +874,9 @@ He has not read the report. He does not know what is in it. He cannot resolve
 any reference to it. Write as if he handed you a sealed envelope and asked what
 was inside.
 
-### Response format — always these five parts, always in this order
+### Response format — these five parts, always in this order
+
+Parts 3 and 4 are left out entirely, heading included, when they are empty.
 
 **1. TLDR.** What the CLI actually did, in plain sentences. What changed, what
 works now, what it decided along the way.
@@ -862,8 +923,9 @@ and find-and-replace string is in its own fenced code block** (Rule 3b) — neve
 inline in the sentence, never in backticks. If the to-dos include more than one
 read-only SQL check, combine them into one query (see Rule 5).
 
-**If he has nothing to do by hand, the section says only "None."** Never fill
-it with steps like "run the testing below" or "tell me the results".
+**If he has nothing to do by hand, leave this section out entirely, heading
+included.** Never fill it with steps like "run the testing below" or "tell me the
+results".
 
 **4. Testing.** Steps in the step format, explicit, doable without reading the
 CLI output and without DevTools. Each numbered step is one test, with its
@@ -872,7 +934,8 @@ actions as a bulleted list under it, then one Expected and one Feedback
 every prompt he pastes into a CLI session or a new thread is in its own fenced
 code block** (Rule 3b). Expected results go on their own line after the block. A
 recovery command ("if the file got deleted, run …") is its own numbered step
-with its own block. SQL checks here follow Rule 5 too.
+with its own block. SQL checks here follow Rule 5 too. **If there is nothing to
+test, leave this section out entirely, heading included.**
 
 - **Break testing into parts of about four to six steps**, each headed
   "Testing, Part N of M: <what this part tests>", followed by one line saying
@@ -949,11 +1012,11 @@ deploy just so he can test.
   that needs real key presses is a step on the Surface after the deploy, or an
   automated test.
 
-**5. Stop — or reply to the CLI, but only if there is no testing.** If part 4
-has any testing steps, end the message there. Do not write anything for Alex to
+**5. Stop — or reply to the CLI, but only if there is no testing.** If the reply
+has a Testing section, end the message there. Do not write anything for Alex to
 paste into the CLI — no answers to its questions, no "proceed", no fixes, no next
-prompt. Wait for his test results. If part 4 is empty (nothing to test), you may
-end with the reply to the CLI. See Rule 6.
+prompt. Wait for his test results. If there is nothing to test (so no Testing
+section), you may end with the reply to the CLI. See Rule 6.
 
 ### Before sending: the copy-box check
 

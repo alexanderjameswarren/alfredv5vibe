@@ -70,7 +70,7 @@ A "Blocks" section listing live records: waiter code, path, holder code and item
 
 ## 6. Later steps
 
-- Step 3: `.claude/hooks/block-notice.mjs` (UserPromptSubmit) gives the holder `additionalContext`.
+- Step 3: `.claude/hooks/block-notice.mjs` (UserPromptSubmit) gives the holder `additionalContext`. Done.
 - Step 4: Switchboard. The waiter's tile gets stripes and its bottom line reads "by <holder tile name>".
-  The holder's bottom line reads "<step> · Blocking N". The tile flashes once when the block clears.
-- Step 5: CLAUDE.md rules, plus a draft for `cli-workflow/SKILL.md`.
+  The holder's bottom line reads "<step> · Blocking N". The tile flashes once when the block clears. Done.
+- Step 5: CLAUDE.md rules, plus a draft for `cli-workflow/SKILL.md`. Done.
