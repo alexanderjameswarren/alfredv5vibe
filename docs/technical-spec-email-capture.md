@@ -2,6 +2,9 @@
 
 Alfred record: intention mv46b90ch3dxe50ylsg.
 
+> **Being replaced (gmail_capture-h3w):** Postmark is giving way to a Gmail Apps
+> Script posting to this function. See docs/technical-spec-gmail-capture.md.
+
 ## Flow
 
 Gmail filter → Postmark inbound (`22edead6…@inbound.postmarkapp.com`) → Edge
