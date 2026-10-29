@@ -74,7 +74,12 @@ ARC-Authentication-Results, X-Forwarded-For/To and renamed X-…-Forwarded-*),
 `text_body`, `attachments` (`[{name, type, size}]`, never content), `dry_run`.
 
 Answer: `{ status: "captured" | "duplicate" | "rejected", reason?, inbox_id? }`, 200
-for all three.
+for all three. Rejection reasons: `forwarded_by_unknown_account`, `sender_not_authenticated`
+(on the list, Google's checks failed), `sender_not_allowed`. Duplicate reasons: `gmail_id`,
+`original_message_id`. A dry run answers the same, plus `via`, `forwarder`, `source_app`
+and a text preview, and writes nothing (no row, no notice). 401 wrong secret; 500 secret
+unset, senders unreadable, user unmapped or insert failed (the script retries); 400 bad body.
+Code: `supabase/functions/email-capture/gmail.ts` (pure), `index.ts` `handleGmail`.
 
 ## Edge Function changes
 

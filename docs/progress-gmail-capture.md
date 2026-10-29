@@ -7,8 +7,8 @@ Spec: docs/technical-spec-gmail-capture.md.
 | 1 | Plan, claims check | — | done 2026-10-29 |
 | 2 | Claim; spec and progress docs | — | done 2026-10-29 |
 | 3 | Gmail recon: self-forward fires filter a; alfred+jobs@ delivered; save 4–6 "Show original" headers to .scratch/ | — | done 2026-10-29; 5 raw messages in .scratch/gmail_capture-h3w/ (job-board skipped) |
-| 4 | Migration `email_capture_senders` + seed; conformance | db:table:email_capture_senders | |
-| 5 | Function Gmail branch (gmail.ts), tests, deploy, dry run | db:deploy | |
+| 4 | Migration `email_capture_senders` + seed; conformance | db:table:email_capture_senders | 185 written 2026-10-29; drift check: gitsync brought nothing (main = origin/main 010453b); awaiting Alex's run |
+| 5 | Function Gmail branch (gmail.ts), tests, deploy, dry run | db:deploy | part 1 (code, tests) done 2026-10-29: gmail 22/22, parse 57/57, deno check clean; migration 185 checkpointed (ef98e9d). Part 2: sync, drift check, db:deploy, secret, deploy, dry run |
 | 6 | Apps Script, tests, clasp setup and push, dry run on real forwards | — | |
 | 7 | Cutover: rename labels, filters, START_DATE, trigger | — | |
 | 8 | Postmark removal: forwarding address, Postmark branch, redeploy | db:deploy | |

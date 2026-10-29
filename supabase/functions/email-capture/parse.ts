@@ -96,6 +96,12 @@ export const USER_MAPPINGS: UserMapping[] = [
     userEmail: "alexanderjameswarren@gmail.com",
     captureAddress: "recipes",
   },
+  // alfred+<tag>@ (gmail_capture-h3w): the tag sets the app, see gmail.ts.
+  {
+    pattern: /alfred\+[^@\s<>]+@secorus\.com/i,
+    label: "Alex",
+    userEmail: "alexanderjameswarren@gmail.com",
+  },
   // ⚠️ MUST STAY LAST. Every pattern here is an unanchored substring test,
   // and "alfred@secorus.com" is a substring of "alex.warren+alfred@secorus.com"
   // and of "alex.warren+elise+alfred@secorus.com". Move this entry up and it
@@ -339,6 +345,8 @@ export function plainReason(reason: string): string {
   if (reason === "capture_address_sender_not_allowed") return "the sender is not on the allowlist";
   if (reason === "forwarded_by_unknown_account") return "it was forwarded by an account that is not on the allowlist";
   if (reason === "no_mapping") return "no capture address or forwarding account matched a user";
+  if (reason === "sender_not_authenticated") return "the sender is on the list but Google's sender checks did not pass";
+  if (reason === "sender_not_allowed") return "the sender is not on the list and it is not an approved auto-forward";
   if (reason.startsWith("sender_not_allowed")) return "the sender is not on the allowlist and it is not a trusted auto-forward";
   return reason;
 }
@@ -353,6 +361,9 @@ export interface RejectionInfo {
   fromAddress: string;
   captureAddress?: string;
   postmarkMessageId: string;
+  /** Gmail branch: the notice links here instead of Postmark. */
+  gmailLink?: string;
+  gmailId?: string;
 }
 
 /**
@@ -362,16 +373,23 @@ export interface RejectionInfo {
  */
 export function buildNotice(r: RejectionInfo, now: Date): { capturedText: string; sourceMetadata: Record<string, unknown> } {
   const from = r.fromAddress || "(no sender)";
-  const capturedText =
-    `Email blocked from ${from}: ${plainReason(r.reason)}. ` +
-    `View it in Postmark: ${POSTMARK_INBOUND_URL}${r.postmarkMessageId} (also still in your secorus Gmail inbox).`;
+  const capturedText = r.gmailLink
+    ? `Email blocked from ${from}: ${plainReason(r.reason)}. ` +
+      `Open it in Gmail: ${r.gmailLink} (labelled forwarded/rejected; remove the label to check it again).`
+    : `Email blocked from ${from}: ${plainReason(r.reason)}. ` +
+      `View it in Postmark: ${POSTMARK_INBOUND_URL}${r.postmarkMessageId} (also still in your secorus Gmail inbox).`;
   const sourceMetadata: Record<string, unknown> = {
     rejected: true,
     reason: r.reason,
     from_address: from,
-    postmark_message_id: r.postmarkMessageId,
     notice_day: noticeDay(now),
   };
+  if (r.gmailLink) {
+    sourceMetadata.gmail_link = r.gmailLink;
+    if (r.gmailId) sourceMetadata.gmail_id = r.gmailId;
+  } else {
+    sourceMetadata.postmark_message_id = r.postmarkMessageId;
+  }
   if (r.captureAddress) sourceMetadata.capture_address = r.captureAddress;
   return { capturedText, sourceMetadata };
 }
