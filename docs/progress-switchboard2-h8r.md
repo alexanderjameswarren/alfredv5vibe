@@ -29,8 +29,8 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | — | s14 | Re-plan Phase 1: Send by a link in the reply; Alfred's address is a setting | — | done (s14-h5rc) | 2026-10-29 |
 | 1 | 1.2 | Send link: host list, click catch, prompt frame | — | done (s15-b3nk) | 2026-10-29 |
 | 1 | 1.3 | Send link: panel pastes into the project's window | — | done (s16-f7pz) | 2026-10-29 |
-| 1 | 1.4 | Alfred `/send/:runTag` fallback page | — | todo | |
-| 1 | 1.5 | Skill: a Send link under every prompt | — | todo | |
+| 1 | 1.4 | Alfred `/send/:runTag` fallback page | — | done (s17-c4mz) | 2026-10-30 |
+| 1 | 1.5 | Skill: a Send link under every prompt | — | done (s18-k8tn) | 2026-10-30 |
 | 1 | 1.6 | Tile states, including Outside scope and Not sent | — | todo | |
 | 1 | 1.7 | Running colours by time left | — | todo | |
 | 1 | 1.8 | Estimate on the tile; Estimate vs actual | — | todo | |
@@ -136,13 +136,15 @@ Every report ends with the next step's block, copied from here. The progress fil
 - SQL: none
 
 **1.5, skill: a Send link under every prompt** (estimated run: 4m). It adds one base-address line (`Alfred base: https://alfredv5vibe.vercel.app`). Every reply with a prompt ends with `[Send to CLI](<base>/send/<run tag>)` directly under the prompt block. The tile no longer sends. Bump the version.
+
+  Done in s18, version 2026-10-30. **Checkpoint for 1.4 and 1.5 together:** src/switchboard/SendFromDesktop.jsx, src/switchboard/SendFromDesktop.test.jsx, src/App.js, .claude/skills/cli-workflow/SKILL.md, docs/progress-switchboard2-h8r.md.
 - create: nothing
 - update: .claude/skills/cli-workflow/SKILL.md
 - delete: nothing
 - deploy: nothing
 - SQL: none
 
-**1.6, tile states** (estimated run: 12m). This covers the five states and their precedence, dark variants, and two reds cleared by a tap. "Outside scope" is written by the plan guard as `wrong` / `outside scope`. "Not sent" comes from 1.3's refusal. "Report unread" needs interface 3; if that needs a Supabase function, the step stops and plans the database items first.
+**1.6, tile states** (estimated run: 12m). This covers the five states and their precedence, dark variants, and two reds cleared by a tap. "Outside scope" is written by the plan guard as `wrong` / `outside scope`. "Not sent" comes from 1.3's refusal. "Report unread" needs interface 3; if that needs a Supabase function, the step stops and plans the database items first. Rename the orange tile label "Send cli" (a report is waiting) to "Report ready": it is easily confused with the Send link (s17).
 - create: nothing
 - update: tools/claude-sessions/lib/status.ahk, tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/ui/switchboard.html, tools/claude-sessions/test-status.ahk, tools/claude-sessions/smoke-test.ahk, .claude/hooks/plan-guard.mjs, scripts/lib/session-status.mjs, scripts/lib/session-status.test.mjs, scripts/lib/hooks.test.mjs
 - delete: nothing
@@ -432,3 +434,5 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s15 (1.2) | 5m19s (estimate 6m) |
 | s16 (1.3) | 7m37s (estimate 10m) |
 | s16c (1.3 fix) | 2m05s (estimate 10m) |
+| s17 (1.4) | 1m27s (estimate 4m) |
+| s18 (1.5) | 1m28s (estimate 3m) |
