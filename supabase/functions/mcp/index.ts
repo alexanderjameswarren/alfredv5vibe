@@ -75,6 +75,9 @@ import {
   getRemindersTool,
   updateReminderTool,
 } from "../_shared/tools/reminders.ts";
+import { createArnoldPlanTool, getArnoldPlanTool, getArnoldProgressTool } from "../_shared/tools/arnold.ts";
+import { getClaudeNotificationsTool, logClaudeNotificationTool } from "../_shared/tools/claude-notifications.ts";
+import { sendAlfredPushTool } from "../_shared/tools/alfred-push.ts";
 import { getAppsTool, checkSourceApp } from "../_shared/tools/apps.ts";
 import { checkSuggestedGroupId, suggestedGroupError, withSuggestedGroups } from "../_shared/tools/inbox-groups.ts";
 import { getGroupsTool } from "../_shared/tools/groups.ts";
@@ -3014,6 +3017,125 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(updateReminderTool, args, token),
+  );
+
+  // --- Arnold (docs/arnold_v1-technical-spec.md §5) ---
+  server.registerTool(
+    "get_arnold_plan",
+    {
+      title: "Get Arnold Plan",
+      description:
+        "Arnold's workout and wellbeing plan. Default: the ACTIVE plan and its goals in position order; with no active plan it returns { plan: null, goals: [] } (not an error). With plan_id, that plan (active or superseded). With history: true, plan headers newest first instead (the version chain: status, starts_on, ended_at, focus, change_summary, supersedes_plan_id). " +
+        "The plan holds every number, time, limit and instruction: focus; change_summary; internal_notes, nudge_instructions, review_instructions and voice_notes (Claude only); review_cadence_days; notification_settings {window_start, window_end (HH:MM Pacific), max_nudges_per_day, max_encouragements_per_day, inbox_waiting_delay_minutes}; prompt_templates (paste-ready prompts, each starting \"Arnold:\"). Each goal: goal_key, label, intent_id, measure (elements = completed step elements, executions = done executions), target, period (day | week, weeks Monday to Sunday), usual_days, pace_checkpoints [{time, count}], notes. Plans are never edited; a change is a new plan via create_arnold_plan. Tier 1.",
+      inputSchema: {
+        plan_id: z.string().optional().describe("UUID of a plan. Omit for the active plan."),
+        history: z.boolean().optional().describe("true for the version history (plan headers, newest first) instead of one plan."),
+        ...readOptions(),
+        limit: z.number().optional().describe("With history: max plans, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getArnoldPlanTool, args, token),
+  );
+
+  server.registerTool(
+    "create_arnold_plan",
+    {
+      title: "Create Arnold Plan",
+      description:
+        "Create a new Arnold plan and its goals in ONE call. Call ONLY after Alex has approved the change in chat. The new plan is active immediately and SUPERSEDES the current one, which stays readable in history. A travel or rehab week is a new plan too: there are no pauses. " +
+        "Tier 3: the first call (without confirmed) writes nothing and returns a readable `proposal` — a before-and-after against the active plan (goals NEW, CHANGED with what they were, REMOVED; notification settings with old values; which instructions changed) — show it to Alex, and call again with `confirmed: true` only after he says yes. A plan the database would refuse is refused at the proposal, with every reason listed. " +
+        "RULES: plan fields are exactly focus, change_summary (required when replacing a plan: what changed and why), internal_notes, review_instructions, nudge_instructions, voice_notes, review_cadence_days (1-90, default 7), notification_settings (all five keys: window_start, window_end as HH:MM with start before end, max_nudges_per_day and max_encouragements_per_day 0-24, inbox_waiting_delay_minutes 0-1440), prompt_templates ({name: text}, every text starting \"Arnold:\"), starts_on (YYYY-MM-DD, default today Pacific). Goal fields are exactly goal_key (snake_case, unique in the plan, kept across versions), label, intent_id (an existing, unarchived intention), measure (elements | executions), target (1-1000), period (day | week), usual_days ([\"tue\",\"thu\"]), pace_checkpoints ([{\"time\":\"10:00\",\"count\":1}], times increasing, counts never above the target), notes. Unknown fields are refused. At most 20 goals. Returns the new plan and goals as get_arnold_plan does.",
+      inputSchema: {
+        plan: z.record(z.string(), z.unknown()).describe("The plan fields listed above."),
+        goals: z.array(z.record(z.string(), z.unknown())).describe("The goals, in display order."),
+        confirmed: z.boolean().optional().describe("true only after Alex has approved the proposal."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createArnoldPlanTool, args, token),
+  );
+
+  server.registerTool(
+    "get_arnold_progress",
+    {
+      title: "Get Arnold Progress",
+      description:
+        "Progress on Arnold's goals, counted by the database (arnold_get_progress) so every caller gets the same numbers. Defaults: the active plan, today (Pacific). Returns { range, rows }: one row per goal per day (row_kind \"day\") and, for weekly goals, one per Monday-to-Sunday week (row_kind \"week\", counted over the whole week). " +
+        "Row: goal_key, label, measure, period, local_date or week_start, count, target and met (daily goals on day rows; every week row), on_track (past days and weeks: met; today: met, or no passed pace checkpoint asks for more than count; current week: true once met, else null — judge it from days_left and usual_days; future: null), days_left (week rows, including today), usual_day, before_plan, checkpoints [{time, count, passed, count_by_time, met}] (daily goals), last_activity_at (the newest counted tick or execution — use it for \"hours since the last microworkout\"), execution_ids (for links). " +
+        "Microworkout ticks are dated by each tick's own time, never by the execution's closed_at. At most 93 days; more than 400 rows are cut with a NOTE. With no active plan returns { plan: null, rows: [] }. Tier 1.",
+      inputSchema: {
+        date_from: z.string().optional().describe("Pacific date YYYY-MM-DD. Default: date_to."),
+        date_to: z.string().optional().describe("Pacific date YYYY-MM-DD. Default: today."),
+        plan_id: z.string().optional().describe("UUID of a plan. Omit for the active plan."),
+        goal_key: z.string().optional().describe("Only this goal's rows."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getArnoldProgressTool, args, token),
+  );
+
+  // --- Shared Claude notification log (docs/arnold_v1-technical-spec.md §3.5, §5) — any app, not Arnold only ---
+  server.registerTool(
+    "send_alfred_push",
+    {
+      title: "Send Alfred Push",
+      description:
+        "Send one Alfred push notification to every device Alex has subscribed, and log it in the shared notification log (claude_notifications) in the same call. Any app may use it. " +
+        "dedupe_key makes it at-most-once: a key already used is REFUSED and nothing is sent — build it from what the notification is about, e.g. arnold:2026-10-29:microworkout:behind_pace:14:00, so the same reason never notifies twice. The row is logged before sending, then marked sent, failed or no_subscription. sent means the push service accepted it, not that the phone showed it (Android can hold a push). Dead device subscriptions (404/410) are reported in dead_subscription_ids, not deleted. " +
+        "Check the daily limits first with get_claude_notifications (its `today` counts). Returns notification_id, delivery_status, devices, sent_to, dead_subscription_ids and per-device results. Tier 1.",
+      inputSchema: {
+        app: z.string().describe("App id from get_apps, e.g. arnold."),
+        job: z.string().describe("What is sending it, e.g. arnold_hourly."),
+        kind: z.enum(["nudge", "encouragement", "flag", "info"]).describe("Counts toward that kind's daily limit."),
+        title: z.string().describe("Notification title, at most 200 characters."),
+        body: z.string().optional().describe("Notification text."),
+        link: z.string().optional().describe("Alfred path opened on tap, starting with \"/\", e.g. /inbox/<id> or /intentions/<id>. Default: Alfred's home."),
+        dedupe_key: z.string().describe("Unique per notification; a repeat is refused."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(sendAlfredPushTool, args, token),
+  );
+
+  server.registerTool(
+    "log_claude_notification",
+    {
+      title: "Log Claude Notification",
+      description:
+        "Log a notification Claude sends Alex outside Alfred push — a Claude push notification (channel claude_push) or an Alfred inbox item raised for him (channel inbox_item) — in the shared log. Any app may use it. Alfred pushes are logged by send_alfred_push, so channel alfred_push is refused here. " +
+        "LOG IMMEDIATELY BEFORE SENDING: returns { created: true, id } for a new row, or { created: false, duplicate_of } when dedupe_key was already used — then it has already gone out, so do not send it. delivery_status defaults to sent. Tier 1.",
+      inputSchema: {
+        app: z.string().describe("App id from get_apps, e.g. arnold."),
+        job: z.string().describe("What is sending it, e.g. arnold_morning_review."),
+        kind: z.enum(["nudge", "encouragement", "flag", "info"]),
+        channel: z.enum(["claude_push", "inbox_item"]),
+        title: z.string().describe("What Alex sees as the title, at most 200 characters."),
+        body: z.string().optional().describe("What Alex sees as the text."),
+        link: z.string().optional().describe("Where it leads, e.g. /inbox/<id> for an inbox item."),
+        dedupe_key: z.string().describe("Unique per notification; a repeat is not logged twice."),
+        local_date: z.string().optional().describe("Pacific date YYYY-MM-DD. Default: today."),
+        delivery_status: z.enum(["pending", "sent", "failed", "no_subscription"]).optional().describe("Default sent."),
+        delivery_detail: z.record(z.string(), z.unknown()).optional().describe("e.g. {\"inbox_id\": \"...\"}."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(logClaudeNotificationTool, args, token),
+  );
+
+  server.registerTool(
+    "get_claude_notifications",
+    {
+      title: "Get Claude Notifications",
+      description:
+        "Read the shared Claude notification log, newest first, with filters for app, job, kind, channel and a Pacific date range (local_date). Returns { today, notifications }: `today` counts today's notifications (Pacific) by kind and by channel — for the app given, else all apps — counting only pending and sent ones, so a task checks its daily limits in this one call. Tier 1.",
+      inputSchema: {
+        app: z.string().optional().describe("App id, e.g. arnold. Also scopes today's counts."),
+        job: z.string().optional(),
+        kind: z.enum(["nudge", "encouragement", "flag", "info"]).optional(),
+        channel: z.enum(["alfred_push", "claude_push", "inbox_item"]).optional(),
+        date_from: z.string().optional().describe("Pacific date YYYY-MM-DD, inclusive."),
+        date_to: z.string().optional().describe("Pacific date YYYY-MM-DD, inclusive."),
+        ...readOptions(),
+        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getClaudeNotificationsTool, args, token),
   );
 
   // --- Overwatch, Phase 3 (docs/technical-spec-overwatch-q4n.md §7) ---

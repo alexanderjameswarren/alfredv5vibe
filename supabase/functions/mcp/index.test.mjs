@@ -336,16 +336,20 @@ test("the tool count is 72 after the job-search tools", () => {
     "mark_finish_summaries_reviewed"];
   const EXPECTED_ADDED_OVERWATCH_54 = ["get_portfolios", "upsert_portfolio", "get_portfolio_plan", "create_portfolio_plan",
     "update_portfolio_slice"];
+  // Arnold V1 Step 5, +6.
+  const EXPECTED_ADDED_ARNOLD_5 = ["get_arnold_plan", "create_arnold_plan", "get_arnold_progress", "send_alfred_push",
+    "log_claude_notification", "get_claude_notifications"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
                       ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C, ...EXPECTED_ADDED_P5,
                       ...EXPECTED_ADDED_READ, ...EXPECTED_ADDED_OVERWATCH_13, ...EXPECTED_ADDED_OVERWATCH_14,
-                      ...EXPECTED_ADDED_OVERWATCH_22, ...EXPECTED_ADDED_OVERWATCH_46, ...EXPECTED_ADDED_OVERWATCH_54]) {
+                      ...EXPECTED_ADDED_OVERWATCH_22, ...EXPECTED_ADDED_OVERWATCH_46, ...EXPECTED_ADDED_OVERWATCH_54,
+                      ...EXPECTED_ADDED_ARNOLD_5]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 172,
-    `expected 172 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 178,
+    `expected 178 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -733,7 +737,7 @@ test("the platform tools take any app id, not a fixed list", () => {
   // Overwatch Step 5: apps(id) is the list, enforced by a foreign key.
   const src = readFileSync(join(HERE, "index.ts"), "utf-8");
   assert.equal(src.match(/^\s+app: z\.enum\(/gm), null);
-  assert.equal(src.match(/^\s+app: z\.string\(\)(\.optional\(\))?\.describe\("[^"]*get_apps/gm).length, 4);
+  assert.equal(src.match(/^\s+app: z\.string\(\)(\.optional\(\))?\.describe\("[^"]*get_apps/gm).length, 6);
 });
 
 test("create_job_application stays UNGATED", () => {
