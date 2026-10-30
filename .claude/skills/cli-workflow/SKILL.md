@@ -5,7 +5,7 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
-Skill version: 2026-10-29b
+Skill version: 2026-10-30
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -137,7 +137,8 @@ else's. That is the run tag.
 
 **Every CLI prompt this skill generates starts with a run tag line, as its
 very first line, and ends with the same line repeated as its last line, inside
-the prompt block.** Nothing follows the block that repeats the tag. Switchboard
+the prompt block.** Nothing follows the block but its Send link (see "The Send
+link"). Switchboard
 reads the tag from the bottom of Claude's reply, and the prompt guard reads the
 first `Run tag:` line, so the two must be identical. **The shape is exact:**
 
@@ -232,7 +233,7 @@ and it can only do that if there is a tag.
 - **A changed skill is offered from main**, after its checkpoint, with the
   `propose_skills` tool: a skill update card, kind `improvement`, carrying the
   complete file from main with its version line at the top ("Skill version:
-  2026-10-29b"). Never as a file to paste, and never copied out of a worktree.
+  2026-10-30"). Never as a file to paste, and never copied out of a worktree.
 - **A changed scheduled-task prompt is updated by Claude**, not pasted by Alex
   (see "Changing a scheduled task's prompt").
 
@@ -242,7 +243,7 @@ and it can only do that if there is a tag.
 report you have not yet read and processed.** Design changes discussed in the
 meantime wait, and go into the prompt written after that report. Two prompts in
 flight means the second is written against a state the first is still changing,
-and Switchboard can only show one tag per project as "to paste".
+and Switchboard can only show one tag per project as waiting.
 
 **Never write a CLI prompt in a reply that is waiting on something from Alex** —
 SQL results, a test outcome, a git command's result, an answer to a question.
@@ -253,15 +254,45 @@ paste it whatever the answer turns out to be.
 **Never put more than one CLI prompt in a reply.** One reply, at most one
 prompt, and it is the last thing in the reply (next section).
 
-### A prompt is always the last thing in the reply
+### A prompt and its Send link are always the last thing in the reply
 
-**A reply that contains a CLI prompt ends with that prompt.** Nothing comes
-after it: no git commands, no "once it reports back, run...", no closeout
-steps. Anything Alex needs to know or do before pasting goes above the prompt.
+**A reply that contains a CLI prompt ends with the prompt block and, directly
+under it, its Send link.** Nothing comes after the link: no git commands, no
+"once it reports back, run...", no closeout steps. Anything Alex needs to know
+or do before sending goes above the prompt.
 
 Why: the CLI's report might flag a problem, and instructions written before
 the report would have him push or finish over it. It also leaves the report
 sitting unread in the Alfred inbox, because the thread never asked for it.
+
+### The Send link
+
+Alfred base: https://alfredv5vibe.vercel.app
+
+This line is the only place the address appears in this rule; `<base>` below
+means it. If Alfred moves, change this line.
+
+- **Every reply carrying a CLI prompt ends with this markdown link**, on its own
+  line directly under the prompt block, nothing after it:
+
+  ```
+  [Send to CLI](<base>/send/<run tag>)
+  ```
+
+  For example `[Send to CLI](<base>/send/claims-wq7-s8-k6tr)`, with the prompt's
+  exact run tag.
+- **The step that hands him the prompt** says to click the link and to paste
+  only on a refusal: "**N.** Worktree CLI: click Send to CLI under the prompt
+  below. Paste the prompt into the claims-wq7 window only if its Switchboard
+  tile shows a refusal." The step names the window as usual.
+- **Only the link in the latest reply carrying a prompt sends.** A link in an
+  older reply is refused, and so is a second click on the same one. On the phone,
+  or in a browser without the Alfred extension, the link opens an Alfred page that
+  says to send it from the desktop; nothing is sent.
+- **The Switchboard tile does not send.** It only shows that a prompt is waiting,
+  and shows a refusal when a send fails.
+- A prompt Alex should not send gets no Send link, just as it gets no `Run tag:`
+  line.
 
 ### Every prompt declares its scope and its estimated run
 
@@ -392,7 +423,7 @@ If the last report raised anything, deal with it first. Closeout waits.
 
 Skills live in the repo at `.claude/skills/<name>/SKILL.md`. To change one,
 have the CLI edit that file. Never hand him a zip. The CLI adds or bumps the
-version line under the skill's title ("Skill version: 2026-10-29b").
+version line under the skill's title ("Skill version: 2026-10-30").
 
 Once the change has landed in main (a checkpoint), Claude offers it with the
 `propose_skills` tool: a skill update card, kind `improvement`, with the
@@ -910,7 +941,7 @@ the whole point of the pattern is that he does not have to read CLI output.
 Every rule below follows from that one fact.
 
 Switchboard reads the `Run tag:` lines in Claude's replies, so a prompt Claude
-writes but Alex should not paste must not carry a `Run tag:` line.
+writes but Alex should not paste must not carry a `Run tag:` line or a Send link.
 
 ### The governing assumption
 
@@ -1518,6 +1549,7 @@ I need you to [clear description of the change].
 
 Run tag: <project-code>-s<step>-<4 chars>
 ```
+[Send to CLI](<base>/send/<project-code>-s<step>-<4 chars>)
 
 Naming the files in the prompt is what lets the thread claim them without
 stopping to ask — so name them.
@@ -1610,17 +1642,18 @@ Only proceed to the next step after I confirm verification is successful.
 
 Run tag: <project-code>-s<step>-<4 chars>
 ```
+[Send to CLI](<base>/send/<project-code>-s<step>-<4 chars>)
 
 ### Step 4: Present to User
 
 **For simple changes:**
-"Here's your CLI prompt:" [paste prompt]
+"Here's your CLI prompt:" [paste prompt], then its Send link under it.
 
 **For complex changes:**
 1. Show the technical spec (or amendment to existing spec)
 2. Show the progress file
-3. Show the initial prompt
-4. Say: "I've created the spec and progress tracking file. Copy these into your docs folder, then feed the initial prompt to Claude CLI."
+3. Show the initial prompt, with its Send link under it
+4. Say: "I've created the spec and progress tracking file. Copy these into your docs folder, then click Send to CLI under the initial prompt."
 
 **In alfred-v5, say where it goes and what has to happen first.** If the project
 needs its own worktree, that is a `gitpush` (main → Push) then
@@ -1657,6 +1690,7 @@ The navbar is located at src/components/Navbar.jsx
 
 Run tag: dark_mode-q2z-s1-p3w9
 ```
+[Send to CLI](<base>/send/dark_mode-q2z-s1-p3w9)
 
 ### Example 2: Complex Change
 
@@ -1744,6 +1778,7 @@ Wait for my verification before proceeding to the next step.
 
 Run tag: midi_recording-m8t-s3-h7k2
 ```
+[Send to CLI](<base>/send/midi_recording-m8t-s3-h7k2)
 
 ## Integration with Existing Work
 
