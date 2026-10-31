@@ -493,7 +493,7 @@ Arrange(s) {
     codeHwnd := FindCodeWindow(s)
     if codeHwnd
         placeWindow(codeHwnd, VS_MONITOR)
-    ; Only orange types "cli", and the extension decides from the live page (Report ready).
+    ; Only orange types "cli", and the extension decides from the live page (Send cli).
     chromeHwnd := ArrangeChrome(s, !toCode, s.color = "orange" ? "sendcli" : "focus")
     if toCode && codeHwnd
         activateWindow(codeHwnd)

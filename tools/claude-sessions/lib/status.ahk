@@ -27,6 +27,16 @@ FormatElapsed(seconds) {
     return h ? Format("{}:{:02}:{:02}", h, m, s) : Format("{}:{:02}", m, s)
 }
 
+; "0:33 / 20:00" with non-breaking spaces, so it never wraps inside; over 8 digits it
+; breaks at the slash instead ("`n/ 1:00:00"). No estimate: elapsed alone.
+TimerText(elapsed, estimate) {
+    e := FormatElapsed(elapsed)
+    if estimate <= 0
+        return e
+    t := FormatElapsed(estimate)
+    return e (StrLen(RegExReplace(e t, "\D")) > 8 ? "`n/" : Chr(0xA0) "/") Chr(0xA0) t
+}
+
 ; "2m30s", "90s", "1h5m" -> seconds; 0 for anything else.
 ParseDuration(text) {
     if !RegExMatch(text, "i)^\s*(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?\s*$", &m) || text ~= "^\s*$"
@@ -37,7 +47,7 @@ ParseDuration(text) {
 ; Spec 7.5: three greens by time left (over 5 minutes, 5 to 2, under 2), overrun past it.
 TimeLeftTint(elapsed, estimate) {
     if estimate <= 0
-        return "green"
+        return "greenshort"
     remaining := estimate - elapsed
     return remaining > 300 ? "greenlong" : remaining > 120 ? "greenmid" : remaining >= 0 ? "greenshort" : "overrun"
 }
@@ -52,7 +62,7 @@ RunTint(p) {
         return "greenshort"
     if !(p.label = "CLI working" || p.label = "Both working")
         return p.color
-    return p.runTag != "" && p.estimateTag = p.runTag ? TimeLeftTint(p.elapsed, p.estimate) : "green"
+    return p.runTag != "" && p.estimateTag = p.runTag ? TimeLeftTint(p.elapsed, p.estimate) : "greenshort"
 }
 
 ; Spec 7.6: how full a running tile's progress strip is, 0-100, or -1 for none.
@@ -169,7 +179,7 @@ ViewOf(p) {
         : p.runTag = "" || p.reportTag = p.runTag
     if cliIdle && !reported
         return {color: "red", label: "Check CLI"}
-    ; Spec 7.2 precedence: Waiting on SQL, Prompt to paste, Report ready, Running, Your turn.
+    ; Spec 7.2 precedence: Waiting on SQL, Prompt to paste, Send cli, Running, Your turn.
     if p.HasOwnProp("sqlWaiting") && p.sqlWaiting
         return {color: "tan", label: "Waiting on SQL"}
     finished := p.chatState = "finished"
@@ -179,7 +189,7 @@ ViewOf(p) {
     if cliIdle && promptAt != "" && p.reportTag = ""
         return {color: "orange", label: "Reply (untagged)"}
     if cliIdle && finished && p.reportAt != "" && StrCompare(p.chatSince, p.reportAt) <= 0
-        return {color: "orange", label: "Report ready"}
+        return {color: "orange", label: "Send cli"}
     writing := p.chatState = "responding"
     if !cliIdle
         return {color: "green", label: writing ? "Both working" : "CLI working"}
@@ -655,10 +665,10 @@ CliAction(p) {
     if p.kind = "none"
         return "No status"
     ; "0:30 / 7:00" when the run has an estimate (spec 7.4), else elapsed alone.
-    est := p.HasOwnProp("estimate") && p.estimate > 0 ? " / " FormatElapsed(p.estimate) : ""
+    timer := TimerText(p.elapsed, p.HasOwnProp("estimate") ? p.estimate : 0)
     switch p.label {
-        case "CLI working": return "Working " FormatElapsed(p.elapsed) est
-        case "Both working": return "Both working " FormatElapsed(p.elapsed) est
+        case "CLI working": return "Working " timer
+        case "Both working": return "Both working " timer
         case "Claude writing": return "Chat writing"
         case "chat unknown": return "Chat unknown"
     }
@@ -776,10 +786,11 @@ TileTextWidth(s) {
     return total
 }
 
-; Room for the bottom line on a 1024-wide page: a 260px tile interior, less the icon
-; (33px terminal, 68px terminal+bubble, 21px padlock, 85px "Claims") and an 8px gap. "none": no icon.
-TileInfoWidth(icon) => icon = "none" ? 260
-    : 260 - 8 - (icon = "both" ? 68 : icon = "lock" ? 21 : icon = "" ? 85 : 33)
+; Room for the bottom line on a 1024-wide page, in 26px units: a 260px tile interior, less the
+; icon (33px terminal, 68px terminal+bubble, 21px padlock, 85px "Claims") and an 8px gap.
+; The meta line is drawn at 30px (spec 7.7), so the room shrinks by 26/30. "none": no icon.
+TileInfoWidth(icon) => icon = "none" ? Round(260 * 26 / 30)
+    : Round(252 * 26 / 30) - (icon = "both" ? 68 : icon = "lock" ? 21 : icon = "" ? 85 : 33)
 
 ; The bottom line of a tile under a block, joined by the page with en spaces (14px).
 ; p: owner, view (BlockView), names (owner -> name for block labels), step, git.

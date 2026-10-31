@@ -21,7 +21,8 @@
   --paused:#3F4652; --onPaused:#FFFFFF;   /* darker than chat grey; white text about 10:1 */
   --idle:.3;   /* an arrow with nothing to scroll to, and the status button behind its icon */
   --gap:10px; --railW:120px; --barH:90px;
-  --nameSize:30px; --actSize:26px; --metaSize:26px;
+  /* spec 7.7: 3 x 2 tiles; name and action x1.3, meta 30px so block lines still fit (status.ahk TileInfoWidth) */
+  --nameSize:39px; --actSize:34px; --metaSize:30px;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){--bg:#1C222C;--rail:#262E3A;--railBtn:#34404F;--railText:#EEF1F5;--line:#3D4858;--grey:#4E5868;--onGrey:#DDE2EA;--dbRed:#FF8A80;--paused:#2B323D;--onPaused:#E6EAF0;
@@ -71,7 +72,7 @@ body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verd
 .t-greenshort{background:var(--gShort);color:var(--onRun)}
 .t-overrun{background:var(--gShort);color:var(--onRun);box-shadow:inset 0 0 0 6px var(--edge)}   /* past the estimate */
 /* progress strip (spec 7.6): elapsed over the estimate, red once past it */
-.tile>.strip{position:absolute;left:0;bottom:0;height:8px;width:0;background:var(--strip);pointer-events:none}
+.tile>.strip{position:absolute;left:0;bottom:0;height:10px;width:0;background:var(--strip);pointer-events:none}
 .t-overrun>.strip{background:var(--edge)}
 .tile>.strip[hidden]{display:none}
 .t-yellow{background:var(--yellow);color:var(--onYellow)} .t-green{background:var(--green);color:var(--onGreen)}
@@ -92,7 +93,8 @@ body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verd
 .tile.holding>.fill{transform:scaleX(1);transition:transform var(--hold) linear}
 .name{font-weight:700;line-height:1.05;font-size:var(--nameSize);overflow-wrap:anywhere;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.action{font-weight:700;line-height:1.1;font-size:var(--actSize)}
+/* tabular digits so a ticking timer never rewraps; pre-line keeps the timer's own break at the slash */
+.action{font-weight:700;line-height:1.1;font-size:var(--actSize);white-space:pre-line;font-variant-numeric:tabular-nums}
 .meta{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:var(--metaSize);font-weight:700;opacity:.9}
 .meta .info{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .kind{flex:none;display:flex;align-items:center;gap:4px;height:var(--metaSize)}
@@ -158,7 +160,7 @@ body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verd
   </div>
 </div>
 <script>
-const ROWS = 3, GAP = 10, HOLD = 600, SLOP = 12;
+const ROWS = 2, GAP = 10, HOLD = 600, SLOP = 12;
 document.documentElement.style.setProperty("--hold", HOLD + "ms");
 const $ = id => document.getElementById(id);
 const grid = $("grid"), tiles = $("tiles");
@@ -321,13 +323,13 @@ function sizeRows() {
   grid.style.gridAutoRows = rowH + "px";
 }
 function counts() {
-  const r0 = tiles.getBoundingClientRect(); let above = 0, below = 0;
-  grid.querySelectorAll(".tile").forEach(t => {
+  const r0 = tiles.getBoundingClientRect(); let above = 0, below = 0, next = 0;
+  grid.querySelectorAll(".tile").forEach((t, i) => {
     const r = t.getBoundingClientRect();
-    if (r.bottom <= r0.top + 2) above++; else if (r.top >= r0.bottom - 2) below++;
+    if (r.bottom <= r0.top + 2) above++; else if (r.top >= r0.bottom - 2) { below++; next = next || i + 1; }
   });
   setText($("upCount"), above ? above + " more" : "");
-  setText($("downCount"), below ? below + " more" : "");
+  setText($("downCount"), below ? next + "+" : "");   // "7+": the next page starts at tile 7 (spec 7.7)
   $("up").classList.toggle("off", !above);
   $("down").classList.toggle("off", !below);
   $("down").classList.toggle("more", !!below);
