@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-29 15:36, through migration 187 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-31 09:39, through migration 188 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -1753,6 +1753,108 @@ $$;
 
 
 ALTER FUNCTION "public"."bump_song_edited_at"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."claude_notification_settings_guard"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_problem text;
+  v_app     text;
+begin
+  v_problem := claude_notification_settings_problem(new.window_start, new.window_end, new.max_per_hour,
+                                                    new.max_per_day, new.apps);
+  if v_problem is not null then
+    raise exception '%', v_problem using errcode = '23514';
+  end if;
+  select e->>'app' into v_app
+    from jsonb_array_elements(new.apps) e
+   where not exists (select 1 from apps a where a.id = e->>'app')
+   limit 1;
+  if v_app is not null then
+    raise exception 'unknown app "%". Use an id from get_apps.', v_app using errcode = '23503';
+  end if;
+  if tg_op = 'UPDATE' then
+    new.user_id    := old.user_id;
+    new.created_at := old.created_at;
+    new.updated_at := now();
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."claude_notification_settings_guard"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."claude_notification_settings_guard"() IS 'Shared: before insert or update on claude_notification_settings. Raises the validator''s message, refuses an app id not in apps, keeps user_id and created_at fixed and stamps updated_at.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."claude_notification_settings_problem"("p_window_start" "text", "p_window_end" "text", "p_max_per_hour" integer, "p_max_per_day" integer, "p_apps" "jsonb") RETURNS "text"
+    LANGUAGE "plpgsql" IMMUTABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $_$
+declare
+  v_entry jsonb;
+  v_seen  text[] := array[]::text[];
+  v_key   text;
+begin
+  if p_window_start is null or p_window_end is null
+     or p_window_start !~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' or p_window_end !~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' then
+    return 'window_start and window_end must be HH:MM times, e.g. "05:00".';
+  end if;
+  if p_window_start >= p_window_end then
+    return 'window_start must be before window_end.';
+  end if;
+  if p_max_per_hour is null or p_max_per_hour not between 0 and 24 then
+    return 'max_per_hour must be a whole number from 0 to 24.';
+  end if;
+  if p_max_per_day is not null and p_max_per_day not between 0 and 200 then
+    return 'max_per_day must be empty (no daily cap) or a whole number from 0 to 200.';
+  end if;
+  if p_apps is null or jsonb_typeof(p_apps) <> 'array' then
+    return 'apps must be an array (empty for none).';
+  end if;
+  if jsonb_array_length(p_apps) > 50 then
+    return 'apps may list at most 50 apps.';
+  end if;
+  for v_entry in select value from jsonb_array_elements(p_apps) loop
+    -- Separate ifs: SQL does not promise to short-circuit, and the later tests fail on the wrong type.
+    if jsonb_typeof(v_entry) <> 'object' then
+      return 'each apps entry must be exactly {"app", "enabled", "plan_tool", "progress_tool"}.';
+    end if;
+    if (select count(*) from jsonb_object_keys(v_entry)) <> 4
+       or not (v_entry ? 'app' and v_entry ? 'enabled' and v_entry ? 'plan_tool' and v_entry ? 'progress_tool') then
+      return 'each apps entry must be exactly {"app", "enabled", "plan_tool", "progress_tool"}.';
+    end if;
+    if jsonb_typeof(v_entry->'app') <> 'string' or (v_entry->>'app') !~ '^[a-z][a-z0-9_]*$' then
+      return format('apps entry app "%s" must be an app id: lower-case letters, digits and underscores.', v_entry->>'app');
+    end if;
+    if (v_entry->>'app') = any (v_seen) then
+      return format('apps lists "%s" twice.', v_entry->>'app');
+    end if;
+    v_seen := v_seen || (v_entry->>'app');
+    if jsonb_typeof(v_entry->'enabled') <> 'boolean' then
+      return format('apps entry %s: enabled must be true or false.', v_entry->>'app');
+    end if;
+    foreach v_key in array array['plan_tool', 'progress_tool'] loop
+      if jsonb_typeof(v_entry->v_key) <> 'string' or (v_entry->>v_key) !~ '^[a-z][a-z0-9_]*$' then
+        return format('apps entry %s: %s must be a tool name in snake_case, e.g. get_arnold_plan.', v_entry->>'app', v_key);
+      end if;
+    end loop;
+  end loop;
+  return null;
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."claude_notification_settings_problem"("p_window_start" "text", "p_window_end" "text", "p_max_per_hour" integer, "p_max_per_day" integer, "p_apps" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."claude_notification_settings_problem"("p_window_start" "text", "p_window_end" "text", "p_max_per_hour" integer, "p_max_per_day" integer, "p_apps" "jsonb") IS 'Shared: null when a claude_notification_settings row is valid, else a plain message. Window HH:MM with start before end; max_per_hour 0-24; max_per_day null or 0-200; apps an array of at most 50 {app, enabled, plan_tool, progress_tool}, each app once, tool names snake_case.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."claude_notifications_guard_update"() RETURNS "trigger"
@@ -10455,6 +10557,63 @@ COMMENT ON COLUMN "public"."claim_blocks"."created_at" IS 'When overwatch-ingest
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."claude_notification_settings" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "window_start" "text" DEFAULT '05:00'::"text" NOT NULL,
+    "window_end" "text" DEFAULT '20:00'::"text" NOT NULL,
+    "max_per_hour" integer DEFAULT 3 NOT NULL,
+    "max_per_day" integer,
+    "apps" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "claude_notification_settings_valid" CHECK (("public"."claude_notification_settings_problem"("window_start", "window_end", "max_per_hour", "max_per_day", "apps") IS NULL))
+);
+
+
+ALTER TABLE "public"."claude_notification_settings" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."claude_notification_settings" IS 'SHARED. The window and caps the Claude hourly notifications task applies across every app, on top of each app''s own limits, and which apps take part. One row per user. Caps count push notifications (alfred_push, claude_push) with status pending or sent in claude_notifications. Notifications are sent separately, never combined. Read and written by get_ and update_claude_notification_settings. Spec: docs/arnold_v1-technical-spec.md 3.6.';
+
+
+
+COMMENT ON COLUMN "public"."claude_notification_settings"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."claude_notification_settings"."user_id" IS 'Owner. Owner RLS; one row per user.';
+
+
+
+COMMENT ON COLUMN "public"."claude_notification_settings"."window_start" IS 'HH:MM Pacific. No push is sent before this time, whatever an app''s own window says.';
+
+
+
+COMMENT ON COLUMN "public"."claude_notification_settings"."window_end" IS 'HH:MM Pacific, after window_start. No push is sent after this time.';
+
+
+
+COMMENT ON COLUMN "public"."claude_notification_settings"."max_per_hour" IS 'Most pushes in one clock hour across all apps, 0 to 24. 0 stops them all.';
+
+
+
+COMMENT ON COLUMN "public"."claude_notification_settings"."max_per_day" IS 'Most pushes in one Pacific day across all apps, 0 to 200. Empty: no shared daily cap (each app''s own limits apply).';
+
+
+
+COMMENT ON COLUMN "public"."claude_notification_settings"."apps" IS 'Apps the hourly task serves: [{app, enabled, plan_tool, progress_tool}]. app is an apps.id; plan_tool and progress_tool are the MCP tools it reads for that app, e.g. get_arnold_plan and get_arnold_progress.';
+
+
+
+COMMENT ON COLUMN "public"."claude_notification_settings"."created_at" IS 'Row creation.';
+
+
+
+COMMENT ON COLUMN "public"."claude_notification_settings"."updated_at" IS 'Last change. Stamped by the guard trigger.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."claude_notifications" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -16213,6 +16372,16 @@ ALTER TABLE ONLY "public"."claim_blocks"
 
 
 
+ALTER TABLE ONLY "public"."claude_notification_settings"
+    ADD CONSTRAINT "claude_notification_settings_one_per_user" UNIQUE ("user_id");
+
+
+
+ALTER TABLE ONLY "public"."claude_notification_settings"
+    ADD CONSTRAINT "claude_notification_settings_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."claude_notifications"
     ADD CONSTRAINT "claude_notifications_pkey" PRIMARY KEY ("id");
 
@@ -17641,6 +17810,10 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."claude_notification_settings" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."claude_notifications" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -17950,6 +18123,10 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 CREATE OR REPLACE TRIGGER "bump_parent_edited_at" AFTER UPDATE ON "public"."sam_song_measures" FOR EACH ROW EXECUTE FUNCTION "public"."bump_song_edited_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "claude_notification_settings_guard" BEFORE INSERT OR UPDATE ON "public"."claude_notification_settings" FOR EACH ROW EXECUTE FUNCTION "public"."claude_notification_settings_guard"();
 
 
 
@@ -18381,6 +18558,11 @@ ALTER TABLE ONLY "public"."arnold_plans"
 
 ALTER TABLE ONLY "public"."claim_blocks"
     ADD CONSTRAINT "claim_blocks_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."claude_notification_settings"
+    ADD CONSTRAINT "claude_notification_settings_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
 
 
@@ -19487,6 +19669,13 @@ CREATE POLICY "claim_blocks_owner_access" ON "public"."claim_blocks" TO "authent
 
 
 
+ALTER TABLE "public"."claude_notification_settings" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "claude_notification_settings_owner_access" ON "public"."claude_notification_settings" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
 ALTER TABLE "public"."claude_notifications" ENABLE ROW LEVEL SECURITY;
 
 
@@ -20337,6 +20526,18 @@ GRANT ALL ON FUNCTION "public"."bump_song_edited_at"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."claude_notification_settings_guard"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."claude_notification_settings_guard"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."claude_notification_settings_guard"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."claude_notification_settings_problem"("p_window_start" "text", "p_window_end" "text", "p_max_per_hour" integer, "p_max_per_day" integer, "p_apps" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."claude_notification_settings_problem"("p_window_start" "text", "p_window_end" "text", "p_max_per_hour" integer, "p_max_per_day" integer, "p_apps" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."claude_notification_settings_problem"("p_window_start" "text", "p_window_end" "text", "p_max_per_hour" integer, "p_max_per_day" integer, "p_apps" "jsonb") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."claude_notifications_guard_update"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."claude_notifications_guard_update"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."claude_notifications_guard_update"() TO "service_role";
@@ -21142,6 +21343,11 @@ GRANT ALL ON TABLE "public"."arnold_plans" TO "service_role";
 
 GRANT ALL ON TABLE "public"."claim_blocks" TO "authenticated";
 GRANT ALL ON TABLE "public"."claim_blocks" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."claude_notification_settings" TO "authenticated";
+GRANT ALL ON TABLE "public"."claude_notification_settings" TO "service_role";
 
 
 

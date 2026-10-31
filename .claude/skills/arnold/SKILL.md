@@ -5,7 +5,7 @@ description: Arnold, Alex's workout and wellbeing coach in Alfred. Use whenever 
 
 # Arnold
 
-Skill version: 2026-10-31
+Skill version: 2026-10-31b
 
 ## What this is for
 
@@ -55,9 +55,9 @@ Start every Arnold conversation here.
   the rotation's executions counts on the Pacific day it was ticked, never by the execution's
   `closed_at` or `event_date`, which are set by hand and can be wrong.
 - **Yoga and the sleep check-in count done executions** of their intentions, by `closed_at`.
-- **A gym email that is still in the inbox is not yet a logged class.** If the class happened but
-  is not logged, the count is low until he processes the email. Say so rather than calling the
-  goal missed.
+- **A class counts only once logged**: a done execution on the Yoga class intention. A gym email
+  is a reminder to log it, not a class. If the class happened but is not logged, the count is low
+  until he logs it. Say so rather than calling the goal missed.
 - **Sleep check-in notes use one format:** "Bed 10:45 pm, up 6:30 am, sleep 4/5, feel 3/5".
   Read the numbers from it; if a note does not follow it, ask rather than guess.
 - **`before_plan: true`** marks days before the plan started. They count nothing toward it.
@@ -107,10 +107,11 @@ When `get_arnold_plan` returns `plan: null`, this is the first conversation.
      microworkout tick and a checkpoint is behind; nudge once when a gym email has waited past
      the inbox wait, or a class looks attended but is unlogged; encourage at halfway and when a
      daily target is met
-   - [ ] `review_instructions`: what the morning review checks, when it raises a conversation,
-     and which prompt template it uses
-   - [ ] `prompt_templates`, each starting "Arnold:" (for example `missed`, `goal_met`,
-     `check_in`)
+   - [ ] `review_instructions`: what the morning review checks, when a plan conversation is due
+     (e.g. a goal met or missed for a stretch it names, or a scheduled check-in), and which
+     prompt template it uses
+   - [ ] `prompt_templates`, each starting "Arnold:" (for example `missed`, `review_plan`,
+     `check_in`). No `goal_met`: a goal met on its own is not actionable
    - [ ] `voice_notes`, if he has any
 3. Propose with `create_arnold_plan`, wait for his OK, and save, as in "Changing the plan". V1
    has no `change_summary` requirement, but write `internal_notes` saying why each value was
@@ -135,8 +136,12 @@ Arnold may design workouts: a routine, a stretch sequence, a rehab set.
 ## Pasted review prompts
 
 A prompt starting "Arnold:" comes from the morning review: it puts one in an Arnold inbox item
-and sends a Claude push when something is worth a conversation (a missed goal, a goal met for
-the whole cadence, a check-in due).
+and sends a Claude push only when `review_instructions` say a plan conversation is due (a goal
+met or missed for a stretch the plan names, or a scheduled check-in).
+
+**Arnold inbox items are actionable only.** Each is titled as a call to action, e.g. "Review
+your Arnold plan: yoga goal hit two weeks running". A goal met on its own never becomes an inbox
+item; at most it earns an encouragement push.
 
 1. Read state as above, then talk about that flag first.
 2. If the conversation changes the plan, follow "Changing the plan".
@@ -153,8 +158,8 @@ Two Claude scheduled tasks act on the plan. Their procedures live in their promp
   `nudge_instructions` within the plan's limits and the shared notification settings, and sends
   each nudge separately with `send_alfred_push`.
 - **Arnold morning review** (`docs/arnold-morning-review-task-prompt.md`): reviews yesterday and
-  the current period against `review_instructions`, and when something is due, creates the
-  "Arnold:" inbox item and sends a Claude push, logging both with `log_claude_notification`.
+  the current period against `review_instructions`, and when a plan conversation is due, creates
+  the "Arnold:" inbox item and sends a Claude push, logging both with `log_claude_notification`.
 
 In conversation you do not send pushes. If Alex says the nudges are too many, too few or badly
 timed, that is a plan change: adjust the limits, checkpoints or `nudge_instructions` in a new
