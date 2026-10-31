@@ -27,6 +27,29 @@ FormatElapsed(seconds) {
     return h ? Format("{}:{:02}:{:02}", h, m, s) : Format("{}:{:02}", m, s)
 }
 
+; "2m30s", "90s", "1h5m" -> seconds; 0 for anything else.
+ParseDuration(text) {
+    if !RegExMatch(text, "i)^\s*(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?\s*$", &m) || text ~= "^\s*$"
+        return 0
+    return (m[1] || 0) * 3600 + (m[2] || 0) * 60 + (m[3] || 0)
+}
+
+; Spec 7.5: green over 5 minutes left, olive 5 to 2, ochre under 2, overrun past it.
+TimeLeftTint(elapsed, estimate) {
+    if estimate <= 0
+        return "green"
+    remaining := estimate - elapsed
+    return remaining > 300 ? "green" : remaining > 120 ? "olive" : remaining >= 0 ? "ochre" : "overrun"
+}
+
+; The colour a running tile is drawn in. p: color, label, runTag, estimateTag, estimate, elapsed.
+; Only the CLI's own run is tinted, and only by the estimate recorded for that run tag.
+RunTint(p) {
+    if p.color != "green" || !(p.label = "CLI working" || p.label = "Both working")
+        return p.color
+    return p.runTag != "" && p.estimateTag = p.runTag ? TimeLeftTint(p.elapsed, p.estimate) : "green"
+}
+
 ; Local "HH:mm" today, otherwise "d MMM HH:mm". `offset` is local minus UTC, in seconds.
 FormatEntered(iso, offset, today := "") {
     if !iso
@@ -496,7 +519,7 @@ FenceBox(monitors) {
 ; --- Touch page state (docs\history\technical-spec-switchboard_touch-t4n.md, "Layout") ---
 
 ; Colours the page draws; everything else is grey.
-TileColor(c) => c ~= "^(red|orange|purple|yellow|green|tan)$" ? c : "grey"
+TileColor(c) => c ~= "^(red|orange|purple|yellow|green|olive|ochre|overrun|tan)$" ? c : "grey"
 
 ; Sorted by group (0 CLI, paused ones included, 1 chats, 3 orphans), then by the
 ; previous order (`prev`: id -> position), so a colour or status change never moves
