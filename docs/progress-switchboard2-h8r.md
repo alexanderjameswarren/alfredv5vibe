@@ -34,7 +34,7 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 1 | 1.6 | Tile states, including Outside scope and Not sent | — | done (s19-v6pd, s19c-y2rt); Report unread moved to Phase 2 | 2026-10-30 |
 | 1 | 1.7 | Running colours by time left | — | done (s20-m7qc) | 2026-10-31 |
 | 1 | 1.8 | Estimate on the tile; Estimate vs actual | — | done (s21-p4hw) | 2026-10-31 |
-| 1 | 1.9 | Progress strip | — | todo | |
+| 1 | 1.9 | Progress strip | — | done (s22-g3lm) | 2026-10-31 |
 | 1 | 1.10 | Six-tile layout and lane order | — | todo | |
 | 2 | 2.1-2.10 | SQL queue, links, click pages, runner, read-only queries: spec §8 | see below | todo | |
 | 3 | 3.1-3.18 | The move, settings, `sb` commands, Salesforce guard, deploy wrapper, PII hold: spec §9 | — | todo | |
@@ -413,12 +413,16 @@ Every report ends with the next step's block, copied from here. The progress fil
   - The estimate comes from `.clip/scope.json` (`estimate`, matched on `run_tag`), which the prompt hook already writes; no test seam needed. Elapsed counts from `prompt_at`, or `since` for an older status file.
   - `RunTint` colours only the drawing (button and tile); `s.color` stays green, so focus, taskbar and alerts are unchanged and the tints never flash.
   - Colours (light / dark): olive `#9E9D24` / `#8A8A1E`, text `#1A1600`; ochre `#B7791F` / `#8C5A12`, text `#1A1600` (5.0:1) / white (5.9:1), about ΔE 30 from yellow and from orange; overrun is ochre plus a 6px inset edge `#C62828` / `#FF8A80`. The old panel uses pastel `B8B850` and `C8924A`, with no edge.
+  - **Replaced in s22-g3lm:** ochre was too dark to read and a warm colour said "stop" while Claude worked. Now three greens with `#111111` text: `#43A047` / `#8BC34A` / `#C5E1A5` (dark `#388E3C` / `#7CB342` / `#AED581`); overrun is the short shade plus edge `#C62828` in both themes. No estimate keeps `#2E7D32` with white text. Claude writing (project and chat tiles, and the old panel) is drawn in the short shade. Tint names: `greenlong`, `greenmid`, `greenshort`, `overrun`. Spec §7.5 updated.
 - **1.8 (s21-p4hw), estimate on the tile; Estimate vs actual, done:**
   - The running tile's action line reads `Working 0:30 / 7:00` (or `Both working …`) when the run has an estimate; elapsed is then the whole run's, from `prompt_at`, the clock the tint uses. No estimate: elapsed only, as before. The old panel's button label is unchanged.
   - `node scripts/clip.mjs --estimate .clip/last-report.md` prints `Estimate vs actual: 7m00s vs 5m15s (-25%)` from scope.json's estimate and the report's Total row, and writes `{ project, run_tag, estimate, actual }` (seconds) to `.clip/estimates.jsonl`, one line per run tag (a rerun replaces it). It pushes nothing. Run it after the timing table, paste the line in, then push.
   - switchboard.html needed no change: the estimate is part of the action text.
   - Diagnosis (no change): gitpush's console flashes are the detached Overwatch sender's un-hidden children: `resolveRepo`'s git (`scripts/lib/claims-core.mjs:96`) and two PowerShell registry reads (`scripts/lib/overwatch-post.mjs:229`). Fix: `windowsHide: true` on both.
   - Follow-up (s21b-w9hd), done: `windowsHide: true` on all 11 child-process calls in claims-core.mjs (3), overwatch-post.mjs (1; `kickSender` already had it), git-flow.mjs (5) and scripts/inventory.mjs (2). A test in overwatch-post.test.mjs fails on any call in those four files without it. Still unhidden, out of scope: clip.mjs (81, 262, 296), schema-snapshot.mjs (36, 49), git-push-worktrees.mjs (247), git-new-worktree.mjs (126, 336, 358, 373), scripts/lib/inventory.mjs (476). None in .claude/hooks.
+- **1.9 (s22-g3lm), progress strip, done:**
+  - An 8px strip along a running tile's bottom edge, `StripPercent` 0-100 from elapsed over the estimate, stopping at full; red `#C62828` past the estimate. Colour `rgba(17,17,17,.7)`, visible on all three greens (white was not). Only for CLI or Both working with the run's own estimate; not on writing or paused tiles. Touch page only.
+  - `progressstrip` in `[panel]` of settings.ini, default 1. "Progress strip" on the tray menu and the tile's right-click menu toggles it at once (`SetProgressStrip` refreshes). Spec §7.6 updated.
 
 ## Deferred and parked
 
@@ -460,3 +464,4 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s20 (1.7) | 5m15s (estimate 5m) |
 | s21 (1.8) | 3m40s (estimate 7m) |
 | s21b (1.8 follow-up) | 2m28s (estimate 4m) |
+| s22 (1.9 + greens) | 6m35s (estimate 7m) |

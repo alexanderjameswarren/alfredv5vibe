@@ -240,7 +240,7 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 
 | State | When | Colour (light) | Text |
 |---|---|---|---|
-| Running | The CLI is working. It warms toward orange as the estimate runs out (§7.5). | green `#2E7D32` (today's "CLI working") | white |
+| Running | The CLI is working. It pales through three greens as the estimate runs out (§7.5). | green `#2E7D32` with no estimate (today's "CLI working") | white |
 | Report ready | The CLI is idle and a report was pushed after the chat last changed. A tap types "cli". | orange `#F57C00` (was "Send cli") | `#1A1200` |
 | Prompt to paste | A chat reply carries a run tag the CLI has not received. Display only: sending is the reply's link (§7.1). | purple `#7E57C2` (was "Paste prompt") | white |
 | Your turn | The CLI is idle, its report is handled, and Claude has finished a reply: Alex's move. It flashes. While Claude writes, the tile is green "Claude writing". | yellow `#FBC02D` (unchanged) | `#1A1600` |
@@ -271,26 +271,28 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 
 ### 7.5 Running colours by time left
 
-While Running, the tile warms from green toward orange as the estimate runs out. When the report arrives it lands on the orange "Report ready".
+While Running, the tile stays green, because green means Claude is working, and pales as the estimate runs out. When the report arrives it lands on the orange "Report ready".
 
-| Time left | Light | Dark theme | Text |
+| Time left | Light | Dark theme | Text (light / dark) |
 |---|---|---|---|
-| More than 5 minutes | green `#2E7D32` | `#256B29` | white |
-| 5 to 2 minutes | olive `#9E9D24` | `#8A8A1E` | `#1A1600` |
-| Under 2 minutes | ochre `#B7791F` | `#8C5A12` | `#1A1600` (5.0:1); dark theme white (5.9:1) |
-| Past the estimate | ochre `#B7791F`, plus a 6px red inset edge `#C62828` | `#8C5A12`, with edge `#FF8A80` | as above |
+| More than 5 minutes | `#43A047` | `#388E3C` | `#111111`, 5.7:1 / 4.6:1 |
+| 5 to 2 minutes | `#8BC34A` | `#7CB342` | `#111111`, 9.0:1 / 7.5:1 |
+| Under 2 minutes | `#C5E1A5` | `#AED581` | `#111111`, 13.2:1 / 11.4:1 |
+| Past the estimate | `#C5E1A5`, plus a 6px red inset edge `#C62828` | `#AED581`, same edge | as above |
 | Report arrived | orange `#F57C00` (Report ready) | — | `#1A1600` |
 
-- **The overrun look is off the scale.** It is the colour itself that warns: the ochre stays, and the red edge is added. The text shows the overrun as well: `3:15 / 2:30`.
-- **With no estimate,** the tile stays green the whole run.
-- **Ochre, not amber (decided in 1.7).** Amber `#F9A825` was too close to "Your turn" yellow `#FBC02D` on a neighbouring tile. Ochre is a darker brownish orange, about ΔE 33 from yellow and 31 from orange "Report ready" `#F57C00`.
+- **The overrun look is off the scale.** The short shade stays and the red edge is added. The text shows the overrun as well: `3:15 / 2:30`. The edge is `#C62828` in both themes: the dark theme's old `#FF8A80` barely shows on a pale green.
+- **With no estimate,** the tile stays today's green `#2E7D32` with white text (5.1:1) the whole run.
+- **Claude writing** (on chat tiles and project tiles: "Claude writing", "Chat writing", "Writing") uses the short shade `#C5E1A5` / `#AED581` with black text, since chat replies are usually short. It never flashes or alerts.
+- **Greens, not olive and ochre (decided in s22, replacing 1.7).** Ochre was too dark to read, and a warm colour said "stop" while Claude was still working.
 
 ### 7.6 Progress strip (experimental)
 
 - **The strip.** A thin bar, 8px tall, along the bottom edge of a Running tile. It fills left to right as elapsed time divided by the estimate, and stops at full.
-- **Colour.** It is white at 60% opacity on the tile's colour, and turns red (`#C62828`) once the run passes its estimate.
-- **No estimate, no strip.**
-- **Setting.** `progressStrip` (on or off, default on) lives in the panel's settings file. It can be switched from the status menu without a restart.
+- **Colour.** Near-black `#111111` at 70% opacity, so it shows on all three greens: 3.7:1, 4.9:1 and 6.0:1 in light, 3.2:1 or more in dark. White would vanish on the pale greens. It turns red (`#C62828`, 3.9:1 / 3.4:1 on the short shade) once the run passes its estimate.
+- **No estimate, no strip.** Nor on Claude writing, a paused tile or another run's estimate.
+- **Setting.** `progressstrip` (1 or 0, default 1) in `[panel]` of the panel's settings.ini. "Progress strip" on the tray menu and on a tile's right-click menu (main screen mode, and the old panel) switches it at once, with no restart.
+- **Touch page only.** The old panel's buttons have no strip.
 
 ### 7.7 Layout for six projects
 

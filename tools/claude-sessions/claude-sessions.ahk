@@ -39,6 +39,8 @@ mouseLockOn := IniRead(SETTINGS_INI, "panel", "mouselock", "1") != "0"     ; kee
 LOCK_ITEM := "Mouse lock (hold Ctrl to cross)"
 TOUCH_UI := IniRead(SETTINGS_INI, "panel", "touchui", "1") != "0"           ; the touch page (default); touchui=0 brings back the old panel
 TOUCH_MODE := IniRead(SETTINGS_INI, "panel", "touchmode", "touch")          ; "touch" (docked) or "main", remembered
+progressStripOn := IniRead(SETTINGS_INI, "panel", "progressstrip", "1") != "0"   ; spec 7.6
+STRIP_ITEM := "Progress strip"
 TOUCH_DATA_DIR := SETTINGS_DIR "\webview2"                              ; WebView2's profile, never in the repo
 SplitPath(A_LineFile, , &PANEL_DIR)   ; this file's folder, even when a test script includes it
 
@@ -48,7 +50,7 @@ FREE_COLOR := "D4D4D4"     ; main with no project bound
 BLINK_COLOR := "FFFFFF"
 ; Colour says which window to go to; the label says what to do there (bridge spec, section 5).
 COLORS := Map("green", "70C070", "yellow", "E8C840", "red", "E06060", "orange", "F0A040", "purple", "B48CE6"
-    , "olive", "B8B850", "ochre", "C8924A", "overrun", "C8924A"   ; running by time left; the touch page adds overrun's red edge
+    , "greenlong", "43A047", "greenmid", "8BC34A", "greenshort", "C5E1A5", "overrun", "C5E1A5"   ; spec 7.5; the touch page adds overrun's red edge
     , "tan", "E4D2C3", "grey", "D8D8D8", "none", "F4F4F4", "paused", PAUSED_COLOR, "closed", CLOSED_COLOR, "free", FREE_COLOR)
 DIM_COLORS := "grey|none|paused|closed|free"   ; drawn with grey text
 CHAT_ROWS_MAX := 8, CHAT_ROW_H := 36
@@ -127,7 +129,10 @@ A_TrayMenu.Insert("1&", "Show panel", (*) => ShowSwitchboard())
 A_TrayMenu.Default := "Show panel"
 A_TrayMenu.ClickCount := 1
 A_TrayMenu.Insert("2&", LOCK_ITEM, (*) => SetMouseLock(!mouseLockOn))
-A_TrayMenu.Insert("3&")
+A_TrayMenu.Insert("3&", STRIP_ITEM, (*) => SetProgressStrip(!progressStripOn))
+if progressStripOn
+    A_TrayMenu.Check(STRIP_ITEM)
+A_TrayMenu.Insert("4&")
 ; Only when the panel is the script being run, so smoke-test.ahk never fences the real pointer.
 if A_LineFile = A_ScriptFullPath {
     OnExit((*) => StopLock())
@@ -802,7 +807,7 @@ RefreshChatRows(chats, paired, liveColors) {
 
 PaintRow(i, r) {
     row := chatRows[i]
-    color := r.unseen && blinkOn && StillFlashing(r.flashes) ? BLINK_COLOR : COLORS.Get(r.color, COLORS["grey"])
+    color := r.unseen && blinkOn && StillFlashing(r.flashes) ? BLINK_COLOR : COLORS.Get(RunTint({color: r.color, label: r.label}), COLORS["grey"])
     look := color (r.color = "grey" ? " c707070" : " c000000")
     if look != r.painted
         row.Opt("Background" look), r.painted := look, row.Redraw()
@@ -924,7 +929,18 @@ ButtonMenu(code, *) {
     m.Add(LOCK_ITEM, (*) => SetMouseLock(!mouseLockOn))
     if mouseLockOn
         m.Check(LOCK_ITEM)
+    m.Add(STRIP_ITEM, (*) => SetProgressStrip(!progressStripOn))
+    if progressStripOn
+        m.Check(STRIP_ITEM)
     m.Show()
+}
+
+; Spec 7.6: the running tiles' progress strip, on or off without a restart.
+SetProgressStrip(on) {
+    global progressStripOn := on
+    IniWrite(on ? 1 : 0, SETTINGS_INI, "panel", "progressstrip")
+    on ? A_TrayMenu.Check(STRIP_ITEM) : A_TrayMenu.Uncheck(STRIP_ITEM)
+    Refresh()
 }
 
 ; ---------------------------------------------------------------------------
@@ -1172,13 +1188,14 @@ TouchState() {
             action .= " · idle " idle "d"
         bl := BlockLine({owner: code, view: view, names: names, step: TileStep(s.step), git: git})
         ; A paused tile keeps its place (group 0), only dimmed.
+        strip := StripPercent(progressStripOn && !s.paused, s.label, est ? RunElapsed(s, nowUtc) : 0, est)
         tiles.Push({id: "cli:" code, kind: "cli", icon: bl.icon != "" ? bl.icon : TileIcon("cli", s.hasChat), group: 0
             , color: s.paused ? "paused" : TileColor(s.tint != "" ? s.tint : s.color), name: TileName(code, mainProject), action: action
-            , step: bl.step, git: bl.git, note: bl.note, blocked: bl.blocked})
+            , step: bl.step, git: bl.git, note: bl.note, blocked: bl.blocked, strip: strip})
     }
     for tabId in rowTabs {
         r := rowState[tabId]
-        tiles.Push({id: "chat:" tabId, kind: "chat", icon: TileIcon("chat", false), group: 1, color: TileColor(r.color), name: r.title
+        tiles.Push({id: "chat:" tabId, kind: "chat", icon: TileIcon("chat", false), group: 1, color: TileColor(RunTint({color: r.color, label: r.label})), name: r.title
             , action: ChatAction(r.label), step: "", git: "", note: ""})
     }
     for o in OrphanOwners(claimsState["claims"], claimsState["reservations"], worktrees) {

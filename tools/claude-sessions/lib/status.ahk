@@ -34,20 +34,32 @@ ParseDuration(text) {
     return (m[1] || 0) * 3600 + (m[2] || 0) * 60 + (m[3] || 0)
 }
 
-; Spec 7.5: green over 5 minutes left, olive 5 to 2, ochre under 2, overrun past it.
+; Spec 7.5: three greens by time left (over 5 minutes, 5 to 2, under 2), overrun past it.
 TimeLeftTint(elapsed, estimate) {
     if estimate <= 0
         return "green"
     remaining := estimate - elapsed
-    return remaining > 300 ? "green" : remaining > 120 ? "olive" : remaining >= 0 ? "ochre" : "overrun"
+    return remaining > 300 ? "greenlong" : remaining > 120 ? "greenmid" : remaining >= 0 ? "greenshort" : "overrun"
 }
 
 ; The colour a running tile is drawn in. p: color, label, runTag, estimateTag, estimate, elapsed.
 ; Only the CLI's own run is tinted, and only by the estimate recorded for that run tag.
+; Claude writing is drawn in the short shade: chat replies are short.
 RunTint(p) {
-    if p.color != "green" || !(p.label = "CLI working" || p.label = "Both working")
+    if p.color != "green"
+        return p.color
+    if p.label = "Claude writing"
+        return "greenshort"
+    if !(p.label = "CLI working" || p.label = "Both working")
         return p.color
     return p.runTag != "" && p.estimateTag = p.runTag ? TimeLeftTint(p.elapsed, p.estimate) : "green"
+}
+
+; Spec 7.6: how full a running tile's progress strip is, 0-100, or -1 for none.
+StripPercent(on, label, elapsed, estimate) {
+    if !on || estimate <= 0 || !(label = "CLI working" || label = "Both working")
+        return -1
+    return Min(100, Max(0, Round(100 * elapsed / estimate)))
 }
 
 ; Local "HH:mm" today, otherwise "d MMM HH:mm". `offset` is local minus UTC, in seconds.
@@ -519,7 +531,7 @@ FenceBox(monitors) {
 ; --- Touch page state (docs\history\technical-spec-switchboard_touch-t4n.md, "Layout") ---
 
 ; Colours the page draws; everything else is grey.
-TileColor(c) => c ~= "^(red|orange|purple|yellow|green|olive|ochre|overrun|tan)$" ? c : "grey"
+TileColor(c) => c ~= "^(red|orange|purple|yellow|green|greenlong|greenmid|greenshort|overrun|tan)$" ? c : "grey"
 
 ; Sorted by group (0 CLI, paused ones included, 1 chats, 3 orphans), then by the
 ; previous order (`prev`: id -> position), so a colour or status change never moves
