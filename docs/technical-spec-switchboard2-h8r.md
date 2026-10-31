@@ -241,16 +241,17 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 | State | When | Colour (light) | Text |
 |---|---|---|---|
 | Running | The CLI is working. It warms toward orange as the estimate runs out (§7.5). | green `#2E7D32` (today's "CLI working") | white |
-| Report unread | The CLI finished and the report's Alfred inbox item is not archived. It clears on archive, however the report was fetched (a tap, or Alex typing "cli"). | orange `#F57C00` (today's "Send cli") | `#1A1200` |
-| Prompt to paste | A chat reply carries a run tag the CLI has not received. Display only: sending is the reply's link (§7.1). | purple `#7E57C2` (today's "Paste prompt") | white |
-| Talking | The CLI is idle, its last report is handled, and Alex and Claude are working in the chat. | slate blue `#4A6FA5` | white |
+| Report ready | The CLI is idle and a report was pushed after the chat last changed. A tap types "cli". | orange `#F57C00` (was "Send cli") | `#1A1200` |
+| Prompt to paste | A chat reply carries a run tag the CLI has not received. Display only: sending is the reply's link (§7.1). | purple `#7E57C2` (was "Paste prompt") | white |
+| Your turn | The CLI is idle, its report is handled, and Claude has finished a reply: Alex's move. It flashes. While Claude writes, the tile is green "Claude writing". | yellow `#FBC02D` (unchanged) | `#1A1600` |
 | Waiting on SQL | A queued SQL item for this project awaits a click (Phase 2). | Alfred light tan `#E4D2C3` (`--secondary`) | `#2A2520` |
 
-- **Precedence:** Waiting on SQL, then Prompt to paste, then Report unread, then Running, then Talking.
+- **Precedence:** Waiting on SQL, then Prompt to paste, then Report ready, then Running, then Your turn.
 - **Unchanged:** red (Approve, Wrong window, Check CLI) keeps priority over all five, and the free, closed and paused states stay as they are.
-- **Outside scope (red, new).** When the plan guard refuses an action, the tile turns red "Outside scope" and stays red until tapped, like "Already pasted". Without it the refusal shows only inside the CLI's reply, which Alex does not read. The plan guard writes the session status as `wrong` with event `outside scope` and the refused path or deploy target, the same way the prompt hook writes "Already pasted"; a tap clears it. It ranks with the other reds.
+- **Outside scope (red, new).** When the plan guard refuses an action, the tile turns red "Outside scope" and stays red until tapped, like "Already pasted". Without it the refusal shows only inside the CLI's reply, which Alex does not read. The plan guard writes a latched `outside_scope` field (the refused path or deploy target) into the session status; it survives the Stop hook's rewrite to waiting, and a tap clears it. It ranks with the other reds.
 - **Dark mode:** each colour gets a dark-theme variant in `switchboard.html`.
-- **"Report unread"** needs interface 3 (§4). The clip push already returns the inbox id, and `.clip/last-report.json` stores it.
+- **Report unread (Phase 2).** Orange clearing only when the report's Alfred inbox item is archived, however it was fetched, needs interface 3 (§4): a Supabase function, its key and a deploy. Phase 2 builds those, so it moves there. The clip push already returns the inbox id, and `.clip/last-report.json` stores it. Until then orange is "Report ready" above.
+- **Talking (dropped).** Step 1.6 briefly replaced Your turn with a slate blue "Talking" that did not flash. It lost the "Claude is waiting on you" alert, so s19c restored Your turn.
 
 ### 7.3 Panel items
 
@@ -270,7 +271,7 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 
 ### 7.5 Running colours by time left
 
-While Running, the tile warms from green toward orange as the estimate runs out. When the report arrives it lands on the orange "Report unread".
+While Running, the tile warms from green toward orange as the estimate runs out. When the report arrives it lands on the orange "Report ready".
 
 | Time left | Light | Dark theme | Text |
 |---|---|---|---|
@@ -278,11 +279,11 @@ While Running, the tile warms from green toward orange as the estimate runs out.
 | 5 to 2 minutes | olive `#9E9D24` | `#8A8A1E` | `#1A1600` |
 | Under 2 minutes | amber `#F9A825` | `#E59A10` | `#1A1600` |
 | Past the estimate | amber `#F9A825`, plus a 6px red inset edge `#C62828` | `#E59A10`, with edge `#FF8A80` | `#1A1600` |
-| Report arrived | orange `#F57C00` (Report unread) | — | `#1A1600` |
+| Report arrived | orange `#F57C00` (Report ready) | — | `#1A1600` |
 
 - **The overrun look is off the scale.** It is the colour itself that warns: the amber stays, and the red edge is added. The text shows the overrun as well: `3:15 / 2:30`.
 - **With no estimate,** the tile stays green the whole run.
-- **No clash with yellow.** Amber `#F9A825` is close to today's "Your turn" yellow `#FBC02D`, but that state is replaced by Talking (slate blue) in this phase, so the two never appear together.
+- **Clash with yellow (open).** Amber `#F9A825` is close to "Your turn" yellow `#FBC02D`. They never show on the same tile at once (amber is Running, yellow is idle), but two tiles side by side can look alike. Step 1.7 must pick an amber that reads apart from yellow, or keep the red edge's cue.
 
 ### 7.6 Progress strip (experimental)
 

@@ -315,7 +315,11 @@ test("the plan guard refuses an undeclared edit, delete and deploy", () => {
   assert.match(edit.stderr, /PLAN GUARD/);
   assert.match(edit.stderr, /undeclared update: scripts\/claims\.mjs/);
   assert.match(edit.line, /BLOCK/);
-  assert.equal(runPlan(scopeFile, "Edit", { file_path: path.join(ROOT, "docs", "progress-switchboard2-h8r.md") }).code, 0);
+  assert.match(edit.status?.outside_scope ?? "", /undeclared update: scripts\/claims\.mjs/);
+  assert.equal(edit.status?.event, "outside scope");
+  const ok = runPlan(scopeFile, "Edit", { file_path: path.join(ROOT, "docs", "progress-switchboard2-h8r.md") });
+  assert.equal(ok.code, 0);
+  assert.equal(ok.status, null, "an allowed call writes no status");
   assert.equal(runPlan(scopeFile, "Bash", { command: "rm scripts/fixtures/guard-probe-never-claimed.json" }).code, 2);
   assert.equal(runPlan(scopeFile, "Bash", { command: "npx supabase functions deploy mcp" }).code, 2);
   assert.equal(runPlan(scopeFile, "Bash", { command: "git status && node --test x.mjs" }).code, 0);

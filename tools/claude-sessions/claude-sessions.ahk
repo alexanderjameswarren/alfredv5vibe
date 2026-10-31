@@ -48,7 +48,7 @@ FREE_COLOR := "D4D4D4"     ; main with no project bound
 BLINK_COLOR := "FFFFFF"
 ; Colour says which window to go to; the label says what to do there (bridge spec, section 5).
 COLORS := Map("green", "70C070", "yellow", "E8C840", "red", "E06060", "orange", "F0A040", "purple", "B48CE6"
-    , "grey", "D8D8D8", "none", "F4F4F4", "paused", PAUSED_COLOR, "closed", CLOSED_COLOR, "free", FREE_COLOR)
+    , "tan", "E4D2C3", "grey", "D8D8D8", "none", "F4F4F4", "paused", PAUSED_COLOR, "closed", CLOSED_COLOR, "free", FREE_COLOR)
 DIM_COLORS := "grey|none|paused|closed|free"   ; drawn with grey text
 CHAT_ROWS_MAX := 8, CHAT_ROW_H := 36
 TAIL_BYTES := 16384        ; how much of a transcript's end is searched for an interrupt
@@ -241,7 +241,7 @@ NewSession(code, root) {
         reportFile: root "\.clip\last-report.md",
         reportMetaFile: root "\.clip\last-report.json",
         raw: "", hasStatus: false,
-        state: "", since: "", red: false, project: "", transcript: "", sessionId: "", runTag: "", promptAt: "", event: "",
+        state: "", since: "", red: false, project: "", transcript: "", sessionId: "", runTag: "", promptAt: "", event: "", outsideScope: "",
         metaRaw: "", reportTag: "", reportAt: "",
         tKey: "", interruptAt: "",
         kind: "", color: "", label: "", step: "",
@@ -279,6 +279,7 @@ ReadStatus(s) {
     s.transcript := data.Get("transcript_path", ""), s.sessionId := data.Get("session_id", "")
     s.runTag := data.Get("run_tag", ""), s.promptAt := data.Get("prompt_at", "")
     s.event := data.Get("event", "") || ""
+    s.outsideScope := data.Get("outside_scope", "") || ""
     return true
 }
 
@@ -461,7 +462,7 @@ Arrange(s) {
     codeHwnd := FindCodeWindow(s)
     if codeHwnd
         placeWindow(codeHwnd, VS_MONITOR)
-    ; Only orange types, and the extension decides from the live page (Send cli).
+    ; Only orange types "cli", and the extension decides from the live page (Report ready).
     chromeHwnd := ArrangeChrome(s, !toCode, s.color = "orange" ? "sendcli" : "focus")
     if toCode && codeHwnd
         activateWindow(codeHwnd)
@@ -642,7 +643,8 @@ Refresh() {
         issued := chat ? chat.Get("issuedTag", "") : ""
         v := ViewOf({free: s.free, closed: s.closed, paused: s.paused, kind: kind, runTag: s.runTag
             , promptAt: s.promptAt, reportTag: s.reportTag, reportAt: s.reportAt, chatState: chat ? chat.Get("state", "") : ""
-            , chatSince: chat ? chat.Get("since", "") : "", issuedTag: issued, project: project, event: s.event})
+            , chatSince: chat ? chat.Get("since", "") : "", issuedTag: issued, project: project, event: s.event
+            , outsideScope: s.outsideScope})
         if v.color != s.color {
             s.unseen := false
             if ShouldAlert(s.color, v.color)
@@ -857,7 +859,7 @@ ButtonClick(code, *) {
     s := sessions[code]
     s.lastClick := A_Now, s.unread := false
     IniWrite(s.lastClick, SETTINGS_INI, "lastclick", code)
-    if s.state = "wrong"
+    if s.state = "wrong" || s.outsideScope != ""
         ClearWrong(s)
     s.sendNote := ""
     if s.closed {
@@ -1067,7 +1069,7 @@ ReleaseOrphan(owner) {
     ReadClaims()
 }
 
-; A "Wrong window" tile clears when tapped: back to waiting, by the session-status
+; A "Wrong window" or "Outside scope" tile clears when tapped, by the session-status
 ; script beside this one. Not waited for, so the jump to the window is not held up.
 ClearWrong(s) {
     script := A_ScriptDir "\..\..\scripts\lib\session-status.mjs"

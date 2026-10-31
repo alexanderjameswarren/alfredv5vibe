@@ -31,7 +31,7 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 1 | 1.3 | Send link: panel pastes into the project's window | — | done (s16-f7pz) | 2026-10-29 |
 | 1 | 1.4 | Alfred `/send/:runTag` fallback page | — | done (s17-c4mz) | 2026-10-30 |
 | 1 | 1.5 | Skill: a Send link under every prompt | — | done (s18-k8tn) | 2026-10-30 |
-| 1 | 1.6 | Tile states, including Outside scope and Not sent | — | todo | |
+| 1 | 1.6 | Tile states, including Outside scope and Not sent | — | done (s19-v6pd, s19c-y2rt); Report unread moved to Phase 2 | 2026-10-30 |
 | 1 | 1.7 | Running colours by time left | — | todo | |
 | 1 | 1.8 | Estimate on the tile; Estimate vs actual | — | todo | |
 | 1 | 1.9 | Progress strip | — | todo | |
@@ -182,6 +182,7 @@ Every report ends with the next step's block, copied from here. The progress fil
 **Database items by step (Phase 2):**
 - **2.1-2.4:** `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_issue_link`, `db:fn:switchboard_consume_link`, `db:deploy`.
 - **2.7-2.8:** `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read only), `db:deploy`.
+- **Report unread (moved from 1.6, s19c):** orange clears when the report's inbox item is archived. Interface 3: `db:fn:clip-capture` (or a new function) for a status read by inbox id, its own key, a read of `db:table:inbox`, `db:deploy`; then the panel polls it for the tile's last report. Fold into whichever 2.x step builds the function and key.
 
 ## Estimate
 
@@ -400,6 +401,14 @@ Every report ends with the next step's block, copied from here. The progress fil
   - **Risks:**
     - On Windows, Ctrl+Esc opens the Start menu rather than reaching VS Code (confirmed live, s16c). If it does, the panel refuses ("the focus key took focus out of VS Code"), and `focusKey` can be set to another binding.
     - Chromium builds its accessibility tree only when a UI Automation client asks, so the first read after a VS Code start may see only the window. The answer is to refuse and retry the link. Kept: the whole-prompt rule and the host's checks (tag shape, header and closing lines, 64 KB, duplicate, one waiting). The project now comes from the tag; the panel checks the window in 1.3.
+- **1.6 (s19-v6pd, s19c-y2rt), tile states, done:**
+  - Order after the reds: Waiting on SQL (tan), Prompt to paste (purple), Report ready (orange), Running (green), Your turn (yellow, flashes; green "Claude writing" while Claude writes).
+  - s19c: the slate blue "Talking" from s19 is removed; it lost Your turn's flash, the "Claude is waiting on you" alert. Live test passed for the labels and the Outside scope latch.
+  - **Outside scope is a latched field, not the `wrong` state** the spec proposed: the Stop hook rewrites the state to waiting at the end of every turn, so `wrong` would vanish. `session-status.json` `outside_scope` holds the refusal and carries over every write; `clear-wrong` (a tap) clears it and leaves the CLI's state alone.
+  - Report ready keeps today's test (the report was pushed after the chat last changed) and only shows while the CLI is idle. True "unread until archived" moved to Phase 2 (see "Database items by step").
+  - Waiting on SQL is wired (`sqlWaiting`) but nothing sets it until Phase 2.
+  - Not sent was already red until tapped (1.3).
+  - Three claims-guard tests fail while this thread holds src/App.js (from 1.4): they expect it unclaimed. They pass once 1.4's claim is released by Finish.
 
 ## Deferred and parked
 
@@ -409,8 +418,8 @@ Every report ends with the next step's block, copied from here. The progress fil
 ## Test checklist
 
 - [x] Phase 0: each of the 9 fixes has a failing test first, then passes. The plan guard refuses an undeclared create, delete, deploy and SQL table. Both suites green.
-- [ ] Phase 1: a Send link sends only to its project's window and never to the active one. A duplicate, a stale reply's link, and a send while Running are each refused. On a phone the link opens the Alfred page. Each of the five tile states shows; Report unread clears on archive.
-- [ ] Phase 2: a link fails after 30 minutes, on a second use, in the wrong tab, and with changed SQL; a dry run rolls back.
+- [ ] Phase 1: a Send link sends only to its project's window and never to the active one. A duplicate, a stale reply's link, and a send while Running are each refused. On a phone the link opens the Alfred page. Each tile state shows; Your turn flashes; Outside scope stays red until tapped.
+- [ ] Phase 2: Report unread clears on archive. A link fails after 30 minutes, on a second use, in the wrong tab, and with changed SQL; a dry run rolls back.
 - [ ] Phase 3: alfred-v5 works through the shims before the cutover. `sf data query` and a production deploy are blocked. A deploy holds the sandbox lock and sends only claimed files. A screen-made change is caught by the compare.
 
 ## Timing log
@@ -436,3 +445,5 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s16c (1.3 fix) | 2m05s (estimate 10m) |
 | s17 (1.4) | 1m27s (estimate 4m) |
 | s18 (1.5) | 1m28s (estimate 3m) |
+| s19 (1.6) | 7m05s (estimate 8m) |
+| s19c (1.6 follow-up) | 3m32s (estimate 4m) |

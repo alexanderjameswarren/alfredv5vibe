@@ -166,6 +166,19 @@ test("wrong is its own state: not red, cleared only while still wrong", () => {
   assert.equal(readStatus(file).state, "processing");
 });
 
+test("outside scope latches across writes until a tap clears it", () => {
+  const { root, file } = checkout({ worktree: true, name: "w3x" });
+  writeSessionStatus(root, "processing", { event: "outside scope", outsideScope: "undeclared update: a.js" });
+  writeSessionStatus(root, "waiting");
+  assert.equal(readStatus(file).outside_scope, "undeclared update: a.js");
+  assert.ok(clearWrong(root));
+  assert.equal(readStatus(file).outside_scope, null);
+  assert.equal(readStatus(file).state, "waiting");
+  writeSessionStatus(root, "processing", { outsideScope: "x" });
+  clearWrong(root);
+  assert.equal(readStatus(file).state, "processing", "a tap clears the red, not the CLI's state");
+});
+
 test("clear-wrong from the command line, as Switchboard runs it", () => {
   const { root, file } = checkout({ worktree: true, name: "w2x" });
   writeSessionStatus(root, "wrong");

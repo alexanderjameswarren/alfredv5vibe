@@ -53,13 +53,13 @@ KindOf(hasStatus, state, red, interrupted) {
 }
 
 ; Taskbar progress state for the colours of the active buttons and chat rows:
-; 4 red beats 8 (purple, orange and yellow: the bar has no other colours) beats 2 green.
+; 4 red beats 8 (purple, orange, yellow and tan: the bar has no other colours) beats 2 green.
 TaskbarFlag(colors) {
     flag := 0
     for c in colors {
         if c = "red"
             return 4
-        if c = "purple" || c = "orange" || c = "yellow"
+        if IsAttention(c)
             flag := 8
         else if c = "green" && !flag
             flag := 2
@@ -67,7 +67,7 @@ TaskbarFlag(colors) {
     return flag
 }
 
-IsAttention(color) => color = "red" || color = "purple" || color = "orange" || color = "yellow"
+IsAttention(color) => color ~= "^(red|purple|orange|yellow|tan)$"
 
 ; "s9b" from "proj-abc-s9b-x1y2", or "".
 StepOf(tag) {
@@ -124,6 +124,8 @@ ViewOf(p) {
         return {color: "red", label: "Approve"}
     if p.kind = "wrong"   ; prompt-check refused it; a repeated run tag says so
         return {color: "red", label: p.HasOwnProp("event") && p.event = "duplicate run tag" ? "Already pasted" : "Wrong window"}
+    if p.HasOwnProp("outsideScope") && p.outsideScope != ""   ; the plan guard refused something; a tap clears it
+        return {color: "red", label: "Outside scope"}
     cliIdle := p.kind = "waiting"
     ; Reported: something was pushed after the last prompt Alex typed. A status file
     ; from before prompt_at existed falls back to matching the run tag.
@@ -132,18 +134,24 @@ ViewOf(p) {
         : p.runTag = "" || p.reportTag = p.runTag
     if cliIdle && !reported
         return {color: "red", label: "Check CLI"}
-    writing := p.chatState = "responding"
-    if !cliIdle || writing
-        return {color: "green", label: !cliIdle && writing ? "Both working" : writing ? "Claude writing" : "CLI working"}
+    ; Spec 7.2 precedence: Waiting on SQL, Prompt to paste, Report ready, Running, Your turn.
+    if p.HasOwnProp("sqlWaiting") && p.sqlWaiting
+        return {color: "tan", label: "Waiting on SQL"}
+    finished := p.chatState = "finished"
+    if finished && NewerTag(p.runTag, p.issuedTag, p.project)
+        return {color: "purple", label: "Prompt to paste"}
     ; A reply pushed with no run tag: answered, but not a step report.
-    if promptAt != "" && p.reportTag = ""
+    if cliIdle && promptAt != "" && p.reportTag = ""
         return {color: "orange", label: "Reply (untagged)"}
-    if p.chatState != "finished"
+    if cliIdle && finished && p.reportAt != "" && StrCompare(p.chatSince, p.reportAt) <= 0
+        return {color: "orange", label: "Report ready"}
+    writing := p.chatState = "responding"
+    if !cliIdle
+        return {color: "green", label: writing ? "Both working" : "CLI working"}
+    if writing
+        return {color: "green", label: "Claude writing"}
+    if !finished
         return {color: "grey", label: "chat unknown"}
-    if p.reportAt != "" && StrCompare(p.chatSince, p.reportAt) <= 0
-        return {color: "orange", label: "Send cli"}
-    if NewerTag(p.runTag, p.issuedTag, p.project)
-        return {color: "purple", label: "Paste prompt"}
     return {color: "yellow", label: "Your turn"}
 }
 
@@ -488,7 +496,7 @@ FenceBox(monitors) {
 ; --- Touch page state (docs\history\technical-spec-switchboard_touch-t4n.md, "Layout") ---
 
 ; Colours the page draws; everything else is grey.
-TileColor(c) => c ~= "^(red|orange|purple|yellow|green)$" ? c : "grey"
+TileColor(c) => c ~= "^(red|orange|purple|yellow|green|tan)$" ? c : "grey"
 
 ; Sorted by group (0 CLI, paused ones included, 1 chats, 3 orphans), then by the
 ; previous order (`prev`: id -> position), so a colour or status change never moves
