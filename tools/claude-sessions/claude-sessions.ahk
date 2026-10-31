@@ -50,7 +50,7 @@ FREE_COLOR := "D4D4D4"     ; main with no project bound
 BLINK_COLOR := "FFFFFF"
 ; Colour says which window to go to; the label says what to do there (bridge spec, section 5).
 COLORS := Map("green", "70C070", "yellow", "E8C840", "red", "E06060", "orange", "F0A040", "purple", "B48CE6"
-    , "greenlong", "43A047", "greenmid", "8BC34A", "greenshort", "C5E1A5", "overrun", "C5E1A5"   ; spec 7.5; the touch page adds overrun's red edge
+    , "greenrun", "43A047", "greenshort", "C5E1A5", "overrun", "C5E1A5"   ; spec 7.5: greenrun blends into greenshort; the touch page adds overrun's red edge
     , "tan", "E4D2C3", "grey", "D8D8D8", "none", "F4F4F4", "paused", PAUSED_COLOR, "closed", CLOSED_COLOR, "free", FREE_COLOR)
 DIM_COLORS := "grey|none|paused|closed|free"   ; drawn with grey text
 CHAT_ROWS_MAX := 8, CHAT_ROW_H := 36
@@ -247,7 +247,7 @@ NewSession(code, root) {
         reportFile: root "\.clip\last-report.md",
         reportMetaFile: root "\.clip\last-report.json",
         scopeFile: root "\.clip\scope.json",
-        scopeRaw: "", estimateTag: "", estimate: 0, tint: "",   ; tint: s.color as drawn (running by time left)
+        scopeRaw: "", estimateTag: "", estimate: 0, tint: "", blend: 0,   ; tint: s.color as drawn (running by time left); blend: 0-100 for greenrun
         raw: "", hasStatus: false,
         state: "", since: "", red: false, project: "", transcript: "", sessionId: "", runTag: "", promptAt: "", event: "", outsideScope: "",
         metaRaw: "", reportTag: "", reportAt: "",
@@ -686,6 +686,7 @@ Refresh() {
         s.color := v.color, s.label := v.label, s.step := StepText(s.runTag, issued, project)
         s.tint := RunTint({color: s.color, label: s.label, runTag: s.runTag, estimateTag: s.estimateTag
             , estimate: s.estimate, elapsed: RunElapsed(s, A_NowUTC)})
+        s.blend := s.tint = "greenrun" ? RunBlend(RunElapsed(s, A_NowUTC), s.estimate) : 0
         Paint(s, offset)
         if !s.paused && !s.closed && !s.free
             liveColors.Push(s.color)
@@ -719,7 +720,9 @@ Paint(s, offset := "") {
     if offset = ""
         offset := DateDiff(A_Now, A_NowUTC, "Minutes") * 60
     ctrl := controls[s.code]
-    color := s.unseen && blinkOn && StillFlashing(s.flashes) ? BLINK_COLOR : COLORS.Get(s.tint != "" ? s.tint : s.color, COLORS["none"])
+    color := s.unseen && blinkOn && StillFlashing(s.flashes) ? BLINK_COLOR
+        : s.tint = "greenrun" ? BlendHex(COLORS["greenrun"], COLORS["greenshort"], s.blend)
+        : COLORS.Get(s.tint != "" ? s.tint : s.color, COLORS["none"])
     look := color (InStr("|" DIM_COLORS "|", "|" s.color "|") ? " c707070" : " c000000")
     if look != s.painted {
         ctrl.Opt("Background" look)
@@ -1191,7 +1194,8 @@ TouchState() {
         strip := StripPercent(progressStripOn && !s.paused, s.label, est ? RunElapsed(s, nowUtc) : 0, est)
         tiles.Push({id: "cli:" code, kind: "cli", icon: bl.icon != "" ? bl.icon : TileIcon("cli", s.hasChat), group: 0
             , color: s.paused ? "paused" : TileColor(s.tint != "" ? s.tint : s.color), name: TileName(code, mainProject), action: action
-            , step: bl.step, git: bl.git, note: bl.note, blocked: bl.blocked, strip: strip})
+            , step: bl.step, git: bl.git, note: bl.note, blocked: bl.blocked, strip: strip
+            , blend: s.tint = "greenrun" ? RunBlend(RunElapsed(s, nowUtc), est) : 100})
     }
     for tabId in rowTabs {
         r := rowState[tabId]

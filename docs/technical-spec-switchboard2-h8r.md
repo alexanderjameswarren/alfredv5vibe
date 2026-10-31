@@ -211,7 +211,7 @@ Scope of this step:
 
 ### 7.1 Send to CLI, by a link in the reply
 
-**The trigger is a link, not a tile.** Every reply that carries a CLI prompt ends with one "Send to CLI" link, directly under the prompt block. Alex reads the reply, does any steps above the prompt, then clicks the link. The tile still shows "Prompt to paste" but sends nothing.
+**The trigger is a link, not a tile.** Every reply that carries a CLI prompt ends with one "Send to CLI" link, directly under the prompt block. Alex reads the reply, does any steps above the prompt, then clicks the link. The tile shows "Prompt ready" but sends nothing.
 
 **The link** is `<Alfred base>/send/<run tag>`, for example `https://alfredv5vibe.vercel.app/send/switchboard2-h8r-s15-k2mz`. Its host must be in the settings list (§2, rule 8).
 
@@ -242,11 +242,11 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 |---|---|---|---|
 | Running | The CLI is working. It pales through three greens as the estimate runs out (§7.5). | greens `#43A047` / `#8BC34A` / `#C5E1A5`; `#C5E1A5` with no estimate | `#111111` |
 | Send cli | The CLI is idle and a report was pushed after the chat last changed. A tap types "cli". The label says what the tap does (briefly "Report ready" in 1.6; restored in s23). | orange `#F57C00` | `#1A1200` |
-| Prompt to paste | A chat reply carries a run tag the CLI has not received. Display only: sending is the reply's link (§7.1). | purple `#7E57C2` (was "Paste prompt") | white |
+| Prompt ready | A chat reply carries a run tag the CLI has not received. Display only: sending is the reply's link (§7.1), so nothing is pasted (was "Prompt to paste", and "Paste prompt" before that; renamed in s23c). | purple `#7E57C2` | white |
 | Your turn | The CLI is idle, its report is handled, and Claude has finished a reply: Alex's move. It flashes. While Claude writes, the tile is green "Claude writing". | yellow `#FBC02D` (unchanged) | `#1A1600` |
 | Waiting on SQL | A queued SQL item for this project awaits a click (Phase 2). | Alfred light tan `#E4D2C3` (`--secondary`) | `#2A2520` |
 
-- **Precedence:** Waiting on SQL, then Prompt to paste, then Send cli, then Running, then Your turn.
+- **Precedence:** Waiting on SQL, then Prompt ready, then Send cli, then Running, then Your turn.
 - **Unchanged:** red (Approve, Wrong window, Check CLI) keeps priority over all five, and the free, closed and paused states stay as they are.
 - **Outside scope (red, new).** When the plan guard refuses an action, the tile turns red "Outside scope" and stays red until tapped, like "Already pasted". Without it the refusal shows only inside the CLI's reply, which Alex does not read. The plan guard writes a latched `outside_scope` field (the refused path or deploy target) into the session status; it survives the Stop hook's rewrite to waiting, and a tap clears it. It ranks with the other reds.
 - **Dark mode:** each colour gets a dark-theme variant in `switchboard.html`.
@@ -271,25 +271,29 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 
 ### 7.5 Running colours by time left
 
-While Running, the tile stays green, because green means Claude is working, and pales as the estimate runs out. When the report arrives it lands on the orange "Send cli".
+While Running, the tile stays green, because green means Claude is working, and pales gradually as the estimate runs out. There are no jumps: sharp changes are kept for states that need Alex (Your turn, Send cli, the reds). When the report arrives it lands on the orange "Send cli".
 
-| Time left | Light | Dark theme | Text (light / dark) |
+| Point in the run | Light | Dark theme | Text (light / dark) |
 |---|---|---|---|
-| More than 5 minutes | `#43A047` | `#388E3C` | `#111111`, 5.7:1 / 4.6:1 |
-| 5 to 2 minutes | `#8BC34A` | `#7CB342` | `#111111`, 9.0:1 / 7.5:1 |
-| Under 2 minutes | `#C5E1A5` | `#AED581` | `#111111`, 13.2:1 / 11.4:1 |
+| Start | `#43A047` | `#388E3C` | `#111111`, 5.7:1 / 4.6:1 |
+| Start to a minute before the estimate | a straight sRGB blend, by elapsed ÷ (estimate − 1 minute) | the same blend | rises with the blend |
+| A minute before the estimate, to the estimate | `#C5E1A5` | `#AED581` | `#111111`, 13.2:1 / 11.4:1 |
 | Past the estimate | `#C5E1A5`, plus a 6px red inset edge `#C62828` | `#AED581`, same edge | as above |
 | Report arrived | orange `#F57C00` (Send cli) | — | `#1A1600` |
+
+- **How it is drawn.** AutoHotkey sends `blend` (0-100) with each tile, every tick. The touch page mixes `--gLong` into `--gShort` with `color-mix(in srgb, …)`, so each theme blends its own pair. The old panel computes the same blend (`BlendHex`) at its refresh rate. Every channel rises along both blends, so the text contrast only improves after the start; a test checks it at every 10%.
+- **Short estimates.** An estimate of one minute or less is `#C5E1A5` from the start, and still turns overrun once it is passed.
 
 - **The overrun look is off the scale.** The short shade stays and the red edge is added. The text shows the overrun as well: `3:15 / 2:30`. The edge is `#C62828` in both themes: the dark theme's old `#FF8A80` barely shows on a pale green.
 - **With no estimate,** the tile is the short shade `#C5E1A5` / `#AED581` with `#111111` text the whole run (s23; it was `#2E7D32` with white).
 - **Claude writing** (on chat tiles and project tiles: "Claude writing", "Chat writing", "Writing") uses the short shade `#C5E1A5` / `#AED581` with black text, since chat replies are usually short. It never flashes or alerts.
-- **Greens, not olive and ochre (decided in s22, replacing 1.7).** Ochre was too dark to read, and a warm colour said "stop" while Claude was still working.
+- **Greens, not olive and ochre (decided in s22, replacing 1.7).** Ochre was too dark to read, and a warm colour said "stop" while Claude was still working. **A blend, not three bands (s23b):** s22's bands at 5 and 2 minutes left (`#8BC34A` in between) jumped, and the jumps were distracting.
 
 ### 7.6 Progress strip (experimental)
 
-- **The strip.** A thin bar, 8px tall, along the bottom edge of a Running tile. It fills left to right as elapsed time divided by the estimate, and stops at full.
-- **Colour.** Near-black `#111111` at 70% opacity, so it shows on all three greens: 3.7:1, 4.9:1 and 6.0:1 in light, 3.2:1 or more in dark. White would vanish on the pale greens. It turns red (`#C62828`, 3.9:1 / 3.4:1 on the short shade) once the run passes its estimate.
+- **The strip.** A thin bar, 10px tall (7.7), along the bottom edge of a Running tile. It fills left to right as elapsed time divided by the estimate, and stops at full.
+- **Track.** Behind the fill, a faint full-width track, `#111111` at 18%, so it reads as a progress bar from the first second. The track shows only when the strip does.
+- **Colour.** Near-black `#111111` at 70% opacity, so it shows along the whole blend: 3.7:1 at the start rising to 6.0:1 in light, 3.2:1 or more in dark. White would vanish on the pale greens. It turns red (`#C62828`, 3.9:1 / 3.4:1 on the short shade) once the run passes its estimate.
 - **No estimate, no strip.** Nor on Claude writing, a paused tile or another run's estimate.
 - **Setting.** `progressstrip` (1 or 0, default 1) in `[panel]` of the panel's settings.ini. "Progress strip" on the tray menu and on a tile's right-click menu (main screen mode, and the old panel) switches it at once, with no restart.
 - **Touch page only.** The old panel's buttons have no strip.
