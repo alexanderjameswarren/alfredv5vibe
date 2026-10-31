@@ -30,7 +30,7 @@ nightly counts.
 > The task runs the text that was pasted, not the text in this repo. So the prompt carries a
 > version, and Step 11 echoes it.
 >
-> ### `PROMPT VERSION: 2026-10-27a`
+> ### `PROMPT VERSION: 2026-10-31a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -44,7 +44,7 @@ nightly counts.
    everything below "THE PROMPT" line as its instructions.
 3. **Run it once by hand** and say in the chat that this run is manual (Step 2 then runs it even
    on another day). Check: a `platform_runs` row for `overwatch` / `weekly` closed `ok`; the weekly
-   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-10-27a`.
+   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-10-31a`.
 
 ---
 
@@ -53,7 +53,7 @@ nightly counts.
 ---
 
 You are running Overwatch's weekly review for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-10-27a`. **First, load the `overwatch` skill.** It tells you how to read the
+`PROMPT VERSION: 2026-10-31a`. **First, load the `overwatch` skill.** It tells you how to read the
 week, what makes a friction pattern and its fix, when a parked project has become possible, and how
 to word the note. Follow these steps in order for everything else. **Where the skill and these
 steps disagree, these steps win.** Do not improvise.
@@ -93,7 +93,8 @@ A run with anything in `skipped` closes `partial`. A part skipped only for a mis
 ### Step 1 — Open the run
 
 Call `create_platform_run` with `app: "overwatch"`, `job: "weekly"`, `executor: "claude"`,
-`status: "running"`, `started_at` now. **Keep the run id.** If this call fails, skip Step 10,
+`status: "running"`, and no `started_at` (the server records it, and refuses one on a running
+run). **Keep the run id.** If this call fails, skip Step 10,
 create the failure item (Step 10, "On failed"), then Step 11.
 
 ### Step 2 — The dates, manual, and the weekly day
@@ -107,7 +108,8 @@ create the failure item (Step 10, "On failed"), then Step 11.
 4. **The weekly day.** If `settings.weekly_day` is missing, STOP with
    `failure_kind: "settings_missing"`. If it is not today's weekday and `manual` is false: create
    one inbox item (Step 9's format) with first line
-   `Overwatch: weekly schedule mismatch — <local_date>` and the body "The Overwatch weekly task ran
+   `Overwatch: weekly schedule mismatch — ran <weekday>, plan says <weekly_day>`, title
+   `Overwatch: weekly ran <weekday>, plan says <weekly_day>`, and the body "The Overwatch weekly task ran
    on <weekday>, but the plan's weekly_day is <weekly_day>. Change the claude.ai task's day and the
    overwatch/weekly schedule row's day_of_week to match, or change weekly_day through the plan
    gate.", then go to Step 10.3 and close `ok` with `details.not_weekly_day: true`. Do nothing else:
@@ -192,7 +194,9 @@ skip this step (rule 1).
 2. When due, check what Phase 5 can see, and keep each finding:
    - **Schedules with no recent run:** `get_platform_schedules` with `limit: 50`; for each enabled
      one, `get_platform_runs` with its `app`, `job`, `status: "ok"`, `limit: 1`: none in the last
-     14 days. Also disabled schedules, listed once.
+     14 days. Also disabled schedules, listed once. **`alfred` / `notify-dispatch` writes no runs**,
+     so for it use `get_reminders` with `limit: 1` (scheduled only, soonest first) instead: a finding
+     only when that reminder's `due_at` plus the schedule's `grace_hours` has passed.
    - **Scheduled tasks and schedule rows that do not match:** `list_triggers`. An enabled task with
      no `platform_schedules` row (by name, or by the app and job its prompt opens), and a schedule
      row with no enabled task. A task whose prompt carries a `PROMPT VERSION` older than the one in
@@ -228,13 +232,16 @@ skip this step (rule 1).
 ### Step 9 — Raise inbox items
 
 Every item: `create_inbox_item` with `source_type: "task"`, `source_app: "overwatch"`,
-`source_metadata: { "task_name": "Overwatch weekly", "run_date": "<local_date>", "kind": "<kind>" }`,
+`source_metadata: { "task_name": "<its title>", "run_date": "<local_date>", "kind": "<kind>" }`,
 `ai_reasoning: "Created by the overwatch/weekly scheduled task, run <run id>."`, and nothing else.
+The inbox card shows `task_name` then `run_date`, not the first line, so each item names its `Title:`
+to say what it is; the run stays on record in `ai_reasoning`.
 Skip any whose first line matches an open one (Step 3.4). Keep each returned id. A failed call is
 SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismatch`.
 
 1. **One per friction pattern** (Step 6.3), kind `friction_fix`. First line:
-   `Overwatch: friction fix for <process> — <count> entries`. Then "<count> open entries in <friction_window_days>
+   `Overwatch: friction fix for <process> — <count> entries`.
+   Title: `Overwatch: friction fix for <process>, <count> entries`. Then "<count> open entries in <friction_window_days>
    days:", one line per
    entry, then this paste-ready prompt, filled in from the skill's proposal:
    ```
@@ -242,23 +249,25 @@ SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismat
    Overwatch found a friction pattern in <process>: <count> open entries in <friction_window_days> days (pattern <pattern_id>). The entries: <one line each>. Proposed fix: <the fix, and the skill or file it changes>. If Alex agrees, make the change, then call update_friction with ids <the entry ids>, status "fixed" and resolved_by "<what changed>".
    ```
 2. **One for the feature watch, when Step 5.3 kept anything**, kind `feature_watch`. First line:
-   `Overwatch: new releases — <local_date>`. One line per entry: `<title> (<source>, <entry_key>):
+   `Overwatch: new releases — <N> entries`. Title: `Overwatch: <N> new releases`. One line per entry: `<title> (<source>, <entry_key>):
    <summary>. Touches: <project or platform>.`
 3. **One per newly possible parked project** (Step 4.2), kind `newly_possible`. First line:
-   `Overwatch: <group name> may be newly possible — <local_date>`. Then its `waiting_on`, what makes it possible, and:
+   `Overwatch: <group name> may be newly possible — <the activity or release>`.
+   Title: `Overwatch: <group name> may be newly possible`. Then its `waiting_on`, what makes it possible, and:
    ```
    FOR CLAUDE.AI, NOT THE CLI
    Overwatch thinks <group name> may no longer be blocked: it was waiting on "<waiting_on>", and <the activity or release>. Check with Alex whether to take it off the shelf; if so, clear hurdle_kind and waiting_on with update_project_plan.
    ```
 4. **One for the correction factor, when Step 7.5 says so**, kind `plan_change`. First line:
-   `Overwatch: plan change — estimate_correction_factor <current> to <suggested>`. Then each
+   `Overwatch: plan change — estimate_correction_factor <current> to <suggested>`.
+   Title: `Overwatch: estimate factor <current> to <suggested>`. Then each
    project's two ratios, and:
    ```
    FOR CLAUDE.AI, NOT THE CLI
    Overwatch proposes changing estimate_correction_factor from <current> to <suggested>, the median of actual over CLI estimate across <N> shipped projects: <one line each>. If Alex agrees, read the active plan with get_overwatch_plan and call create_overwatch_plan with the same instructions and settings, that one value changed, and the reason "Weekly estimate accuracy, <local_date>".
    ```
 5. **One for the drift audit, when Step 8 found anything**, kind `drift_audit`. First line:
-   `Overwatch: drift audit — <local_date>`. One line per finding.
+   `Overwatch: drift audit — <N> findings`. Title: `Overwatch: drift audit, <N> findings`. One line per finding.
 
 ### Step 10 — Write the note, nudge, and close the run
 
@@ -287,12 +296,14 @@ SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismat
    nudges. `get_platform_runs` with `app: "overwatch"`, `job: "nightly"`, `limit: 1`: if it ran
    today, `reminders_sent` in its `details` counts against `pushes_per_day`. Send at most what is
    left, most important first (plan change, friction fix, newly possible, feature watch, drift
-   audit): one `create_reminder` per item, `inbox_id` its id, `text` its first line without
-   "Overwatch: ", `due_at` `<local_date>T<push_time>:00<offset>`, or now plus 15 minutes if
+   audit): one `create_reminder` per item, `inbox_id` its id, `text` its title without
+   "Overwatch: " (for the feature watch and the drift audit, also the top entry or finding:
+   `<N> new releases: <top entry>`, `drift audit, <N> findings: <top finding>`), `due_at`
+   `<local_date>T<push_time>:00<offset>`, or now plus 15 minutes if
    `push_time` has passed. A failed call is SKIPPED.
 3. **Close the run:** `update_platform_run` with the run id, **once**.
    - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-   - **`details`**, always: `local_date`, `prompt_version: "2026-10-27a"`, `manual`, `plan_id`,
+   - **`details`**, always: `local_date`, `prompt_version: "2026-10-31a"`, `manual`, `plan_id`,
      `drift_audit` (true or false), `note_id`, `inbox_item_ids`, `reminders_sent`, `new_releases`,
      `friction_patterns`, `shipped_count`, `skipped`, `settings_missing`, and `not_weekly_day` when
      it applies.
@@ -301,7 +312,7 @@ SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismat
      downgrade a failure to `ok` to get past a rejected close.**
 
 **On `failed`, also** call `create_inbox_item` with `source_type: "task"`, `source_app: "overwatch"`,
-`source_metadata: { "task_name": "Overwatch weekly", "run_date": "<local_date>", "kind": "failure" }`,
+`source_metadata: { "task_name": "Overwatch weekly FAILED: <failure_kind>", "run_date": "<local_date>", "kind": "failure" }`,
 and this `captured_text`:
 
 ```
@@ -315,7 +326,7 @@ Run: <run id>
 ### Step 11 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-27a`;
+- `PROMPT VERSION: 2026-10-31a`;
 - the run id and its status, and `manual: true` or `manual: false`;
 - whether the drift audit ran; the note id, the inbox item ids and the reminders sent;
 - `skipped` and `settings_missing`, if any;

@@ -24,7 +24,8 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
   freshness read), and on a night with one summary about **8 to 12** more, **at most 19** (the
   table list, the skills, up to 5 table reads, up to 5 follow-up items, up to 2 profile rewrites and
   the mark), which is when rule 8's pause matters. The portfolio review check (count 12) adds
-  **1 call** every night.
+  **1 call** every night, the notify-dispatch check (count 4a) **1 call**, and the open-ended events
+  read (count 7) at most **1 page**.
 - **Settings it reads** from the active plan: `stall_days`, `waiting_on_alex_days`, `fading_days`,
   `overrun_factor`, `active_project_limit`, `inbox_backlog_threshold`, `routing_low_confidence`,
   `overdue_days`, `urgent_within_days` (to add through the gate), `pushes_per_day`, `push_time`, and
@@ -42,7 +43,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 > version, and Step 10 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-10-28a`
+> ### `PROMPT VERSION: 2026-10-31a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -56,7 +57,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
    "THE PROMPT" line as its instructions.
 4. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
    Check: a `platform_runs` row for `overwatch` / `nightly` closed `ok`; tonight's note in
-   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-28a`.
+   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-31a`.
 
 ## The record, the note and the nudges are SEPARATE
 
@@ -75,7 +76,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 ---
 
 You are running Overwatch's nightly check for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-10-28a`. **First, load the `overwatch` skill.** It tells you how to read each
+`PROMPT VERSION: 2026-10-31a`. **First, load the `overwatch` skill.** It tells you how to read each
 app, what counts as fading, what counts as a deadline mention, what counts as a follow-up from a
 finish summary, and how to word the note. Follow
 these steps in order for everything else. **Where the skill and these steps disagree, these steps
@@ -129,7 +130,8 @@ not `skipped`.
 ### Step 1 — Open the run
 
 Call `create_platform_run` with `app: "overwatch"`, `job: "nightly"`, `executor: "claude"`,
-`status: "running"`, `started_at` now. **Keep the run id.** If this call fails, skip Step 9,
+`status: "running"`, and no `started_at` (the server records it, and refuses one on a running
+run). **Keep the run id.** If this call fails, skip Step 9,
 create the failure item (Step 9, "On failed"), then Step 10.
 
 ### Step 2 — The date, manual, and a run already today
@@ -256,12 +258,18 @@ Each count names its setting. If a read errors, SKIP the count.
 4. **Schedules and tasks:**
    - a. **Stopped schedules:** `get_platform_schedules` with `enabled: true`, `limit: 50`, then
      `get_platform_runs` with `status: "ok"`, `limit: 50`, **one call each**. Group the runs by `app`
-     and `job`. For each schedule except `overwatch` / `nightly`, work out when it last should have
+     and `job`. For each schedule except `overwatch` / `nightly` and `alfred` / `notify-dispatch`,
+     work out when it last should have
      run: today's `expected_by` in Pacific if that has passed, else the previous due day's
      (`daily`: yesterday; `weekly`: the last `day_of_week`, where 0 is Sunday). Stopped when that
      time plus `grace_hours` has passed and its newest `ok` run in the list finished before it, or it
      has none in the list and the oldest run in the list is older than that time. Keep app, job and
-     the last `ok` run's date, or "not in the last 50 runs". Then `get_platform_runs` with
+     the last `ok` run's date, or "not in the last 50 runs".
+     **`alfred` / `notify-dispatch` writes no runs**, so its sign of life is the reminder queue:
+     `get_reminders` with `limit: 1` (scheduled only, soonest first, **one call**). Stopped only when
+     that reminder's `due_at` plus the schedule's `grace_hours` has passed. Keep app, job and
+     `last_ok: "reminder due <date> unsent"`. No scheduled reminder means not stopped.
+     Then `get_platform_runs` with
      `status: "running"`, `limit: 20`: any run started before today other than this one is an
      orphan.
    - b. **Scheduled tasks:** `list_triggers` (Claude_Code_Remote; it does not count against the
@@ -284,13 +292,15 @@ Each count names its setting. If a read errors, SKIP the count.
    really fading is the skill's call. Keep at most the 10 oldest that are: kind, id, text or name,
    days. **Keep the intentions list for count 7.**
 7. **Overdue intentions** (`overdue_days`), from two bulk reads:
-   - `get_events` with `date_from` = `local_date` minus `fading_days` days and `date_to` =
-     `local_date` minus `overdue_days` days minus 1, paging until done;
-   - `get_execution_history` with the same `date_from` and `date_to`, `limit: 50`, paging until done.
-   - a. **Scheduled and missed:** an event whose intention is active (from count 6) and whose `id`
+   - `get_events` with `date_from` = `local_date` minus `fading_days` days and **no `date_to`**, so
+     future events come back too, `limit: 50`, paging until done;
+   - `get_execution_history` with the same `date_from` and `date_to` = `local_date` minus
+     `overdue_days` days minus 1, `limit: 50`, paging until done.
+   - a. **Scheduled and missed:** an event dated on or before that `date_to`, whose intention is
+     active (from count 6) and whose `id`
      is no execution's `event_id`. Keep intention, id, the event's date and days overdue.
-   - b. **A deadline with no date:** from count 6's intentions, the active ones with no event in
-     the events read whose text or description mentions a deadline or a time period. What counts as
+   - b. **A deadline with no date:** from count 6's intentions, the active ones with no event
+     anywhere in the events read, past or future, whose text or description mentions a deadline or a time period. What counts as
      one is the skill's call. Keep intention, id and the words that make it a deadline, and, when
      the words name a date, that date. **Urgent** (`urgent_within_days`) when that date is within
      `urgent_within_days` days of `local_date`; while the setting is missing, none is urgent.
@@ -308,7 +318,7 @@ Each count names its setting. If a read errors, SKIP the count.
     - a. **The inventory, once for all of them:** `get_platform_inventory` with `kind: "table"`,
       `limit: 50`, paging until the NOTE says there is no more (at most 3 calls), and with
       `kind: "skill"`, `limit: 50` (one call). Keep the table names, and each skill's `name`,
-      `app_id`, `location` and `details.tools`.
+      `app_id`, `location`, `details.tools` and `details.version`.
     - b. **Tables each summary touched:** the tables the skill says a summary touched (a table
       named in a migration path, and the tables its changed tools read or write, from the summary's
       `tools` against 11a only when the skill says to look further). At most **5** tables across
@@ -344,8 +354,15 @@ read them with one `get_inbox` with `source_app: "overwatch"`, `limit: 50`.)
 
 `<link: id>` means `https://alfredv5vibe.vercel.app/<id>`.
 
+**Every item's title says what it is.** The inbox card shows `source_metadata.task_name` then
+`run_date`, not the first line. So each item below names its `Title:`, and every item sets
+`source_metadata: { "task_name": "<its title>", "run_date": "<local_date>", "kind": "<its kind>" }`,
+plus any other keys it lists. The run stays on record in `ai_reasoning`. Counts of zero are left out
+of a title and a first line.
+
 1. **One per stalled or overrun project** (counts 2a, 2c). First line:
    `Overwatch: status request for <project_code> — <stalled N days | overrun: N of M steps | past target <date>>`.
+   Title: `Overwatch: <project_code> <stalled N days | overrun N of M steps | past target <friendly date>>`.
    Then a paste-ready prompt. Find its window with `get_recent_clips` with `source: "cli"`,
    `run_tag_prefix: "<project_code>"`, `include_archived: true`, `limit: 1`: its `repo` ends
    `on worktree-<code>` or `on main`. The run tag is `<project_code>-s<the step number in that
@@ -363,52 +380,62 @@ read them with one `get_inbox` with `source_app: "overwatch"`, `limit: 50`.)
    FOR CLAUDE.AI, NOT THE CLI
    Overwatch status request for <group name>. Summarise where this project stands, what it is waiting on, and the next step, then write them to the project's plan with update_project_plan.
    ```
-   `source_metadata: { "task_name": "Overwatch nightly", "run_date": "<local_date>", "kind": "status_request", "group_id": "<group_id>" }`.
+   Kind `status_request`, plus `"group_id": "<group_id>"`.
 2. **One for fading items, when there are any** (count 6). First line:
-   `Overwatch: fading — <local_date>`. Then one line per item: `<text or name> (<link: id>), no
-   activity for <days> days. Keep, park or let go?` `source_metadata.kind: "fading"`.
+   `Overwatch: fading — <N> items`. Title: `Overwatch: <N> fading`. Then one line per item:
+   `<text or name> (<link: id>), no
+   activity for <days> days. Keep, park or let go?` Kind `fading`.
 3. **One for overdue intentions, when there are any** (count 7). First line:
-   `Overwatch: overdue — <local_date>`. Then, under "Missed", one line per 7a row: `<intention>
+   `Overwatch: overdue — <N> missed, <M> undated`. Title: `Overwatch: <N> missed, <M> undated`.
+   Then, under "Missed", one line per 7a row: `<intention>
    (<link: id>), scheduled <date>, <days> days ago, not done. Do it, move it, or let it go?` Then,
    under "Deadline with no date", one line per 7b row: `<intention> (<link: id>): "<the words>". Give
-   it a date?` `source_metadata.kind: "overdue"`.
+   it a date?` Kind `overdue`.
 4. **One per repeated claim-block pair** (count 5). First line:
-   `Overwatch: no_parallel proposal for <code A> and <code B> — <N> blocks`. Then "Blocked each
+   `Overwatch: no_parallel proposal for <code A> and <code B> — <N> blocks`.
+   Title: `Overwatch: no_parallel for <code A> and <code B>`. Then "Blocked each
    other <N> times in 30 days." and this paste-ready prompt:
    ```
    FOR CLAUDE.AI, NOT THE CLI
    Overwatch proposes a no_parallel link between <code A> and <code B>: they blocked each other <N> times in 30 days. If Alex agrees, call create_project_link with kind "no_parallel" between their Project groups.
    ```
-   `source_metadata.kind: "proposal"`.
+   Kind `proposal`.
 5. **One per scan gap:** a `part` in tonight's `skipped` that is also in the `skipped` of both runs
    Step 2.3 kept, so it has not been checked on 3 nights running. First line:
-   `Overwatch: scan gap in <part in plain words, e.g. Money> — 3 nights`. Then "<part> has not been
+   `Overwatch: scan gap in <part in plain words, e.g. Money> — 3 nights`.
+   Title: `Overwatch: scan gap in <part>, 3 nights`. Then "<part> has not been
    checked on <the three dates, friendly>. Last error: <tonight's verbatim error>." and this
    paste-ready prompt:
    ```
    FOR CLAUDE.AI, NOT THE CLI
    Overwatch's nightly run has skipped <part> three nights running (<dates>); the last error was "<error>". Help me find out why and fix it, or log a bug.
    ```
-   `source_metadata.kind: "scan_gap"`.
+   Kind `scan_gap`.
 
 6. **One for a stale inventory** (count 10). First line:
-   `Overwatch: inventory stale — <days> days`. Then "The platform inventory was last rebuilt
+   `Overwatch: inventory stale — <days> days`. Title: `Overwatch: inventory stale, <days> days`.
+   Then "The platform inventory was last rebuilt
    <friendly date, or never>. gitpush sends it after every merge into main; a long gap means the
    sends are failing or nothing has been merged." and this paste-ready prompt:
    ```
    FOR CLAUDE.AI, NOT THE CLI
    Overwatch says the platform inventory has not been rebuilt since <date>. Help me check the sender log (alfred-overwatch-outbox.jsonl.log in the repo's .git folder) and, if needed, run npm run inventory -- --send.
    ```
-   `source_metadata.kind: "inventory_stale"`.
+   Kind `inventory_stale`.
 7. **One per follow-up** (count 11f), **`source_app` the follow-up's app** (rule 5). Dedupe against
    count 3f, not 3d: never raise one when an open item starts with the same text up to its " — ".
-   First line, by kind:
-   - `table_users`: `Overwatch: follow-up: <part> after <table> changed — <merge_commit, 7 characters>`
-   - `tool_in_no_skill`: `Overwatch: follow-up: <tool> is in no skill — <merge_commit, 7 characters>`
-   - `skill_to_paste`: `Overwatch: follow-up: paste the <skill> skill into claude.ai — <merge_commit, 7 characters>`
+   First line and title, by kind:
+   - `table_users`: `Overwatch: follow-up: <part> after <table> changed — <merge_commit, 7 characters>`.
+     Title: `Overwatch: check <part> after <table> changed`.
+   - `tool_in_no_skill`: `Overwatch: follow-up: <tool> is in no skill — <merge_commit, 7 characters>`.
+     Title: `Overwatch: <tool> is in no skill`.
+   - `skill_to_paste`: `Overwatch: follow-up: paste the <skill> skill into claude.ai — <merge_commit, 7 characters>`.
+     Title: `Overwatch: paste <skill> skill`.
    Then the one line of what to check, "From <project_code>'s Finish on <friendly date>
-   (<merge_commit>)." and, for `table_users`, its `uses` of the table.
-   `source_metadata: { "task_name": "Overwatch nightly", "run_date": "<local_date>", "kind": "follow_up", "follow_up": "<kind>", "summary_id": "<id>" }`.
+   (<merge_commit>)." and, for `table_users`, its `uses` of the table; for `skill_to_paste`, the line
+   `Skill version: <the skill's details.version from 11a, or unknown>`, the repo's version, which a
+   chat compares with the installed copy.
+   Kind `follow_up`, plus `"follow_up": "<kind>"` and `"summary_id": "<id>"`.
 
 Every item also sets `ai_reasoning: "Created by the overwatch/nightly scheduled task, run <run id>."`
 and nothing else: no `suggested_*` fields. Keep each returned inbox id. If one call errors, SKIP
@@ -431,7 +458,8 @@ Call `create_overwatch_note` with `period: "nightly"`, `for_date: <local_date>`,
     `https://alfredv5vibe.vercel.app/groups/detail/<group_id>`).
   - **Order under Action Required:** time-sensitive first (overdue intentions; deadlines, the urgent
     ones first; failed or missing tasks, stopped schedules and orphan runs, each suggested as **a bug
-    to log**: "Log a bug: <schedule> has had no ok run since <date>."), then anything waiting on Alex,
+    to log**: "Log a bug: <schedule> has had no ok run since <date>."; for notify-dispatch, "Log a
+    bug: notify-dispatch has left a reminder unsent since <date>."), then anything waiting on Alex,
     then the projects, then the portfolio plans due a review (count 12, one bullet each:
     "Review the [<name> plan](https://alfredv5vibe.vercel.app/overwatch/plan/<portfolio id>): review
     by <friendly date> has passed."), then the finish-summary follow-ups (one bullet per summary: its project and
@@ -467,9 +495,15 @@ errors, STOP with `failure_kind: "note_write"`.
    fading, follow-ups. Send **at most
    `pushes_per_day`**, less any reminders an earlier run today already sent (`earlier_run_id`'s
    `details.reminders_sent`, from Step 2.3's read): one `create_reminder` per item, `inbox_id` its
-   id, `text` its first line without "Overwatch: ", and `due_at`
+   id, `text` its push text (below), and `due_at`
    `<local_date>T<push_time>:00<offset>`. If `push_time` has already passed, use now plus 15
    minutes instead. A night with no new items sends nothing.
+   **The push text names the top item and the count**, by kind:
+   - overdue: `<N> missed: <the most overdue intention> (+<M> undated)`, or with none missed
+     `<M> undated: <the soonest deadline's intention>`; add `+<K> more` inside the brackets when
+     more than one missed;
+   - fading: `<N> fading: <the oldest item>`;
+   - any other item: its title without "Overwatch: ".
 2. **Watch items that ended:** for each one in the note, `update_overwatch_watch` with its `id`
    and `expiry_noted: true`.
 3. **Checks for the next run:** `update_overwatch_checks` with the checks kept in Step 3.2, plus a
@@ -488,7 +522,7 @@ A failed call here is SKIPPED, never STOP.
 
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-- **`details`**, always: `local_date`, `prompt_version: "2026-10-28a"`, `manual`, `plan_id`, the
+- **`details`**, always: `local_date`, `prompt_version: "2026-10-31a"`, `manual`, `plan_id`, the
   count of each flag, `note_id`, `inbox_item_ids`, `reminders_sent`, `apps_pulled`,
   `summaries_reviewed` (the ids marked in Step 8.5), `profiles_rewritten` (app ids),
   `alfred_calls`, `paused`, `skipped` and `settings_missing`; also `earlier_run_id` when Step 2.3
@@ -498,7 +532,7 @@ Call `update_platform_run` with the run id, **once**.
   `ok` to get past a rejected close.**
 
 **On `failed`, also** call `create_inbox_item` with `source_type: "task"`, `source_app: "overwatch"`,
-`source_metadata: { "task_name": "Overwatch nightly", "run_date": "<local_date>", "kind": "failure" }`,
+`source_metadata: { "task_name": "Overwatch nightly FAILED: <failure_kind>", "run_date": "<local_date>", "kind": "failure" }`,
 and this `captured_text`:
 
 ```
@@ -512,7 +546,7 @@ Run: <run id>
 ### Step 10 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-28a`;
+- `PROMPT VERSION: 2026-10-31a`;
 - the finish summaries reviewed and the follow-ups raised, and whether the inventory is stale;
 - the run id and its status, and `manual: true` or `manual: false`; `duplicate_of` if it stopped;
 - the count of each flag, the note id, the inbox item ids and the reminders sent;

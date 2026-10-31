@@ -5,7 +5,7 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
-Skill version: 2026-10-28a
+Skill version: 2026-10-31a
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
@@ -46,6 +46,19 @@ Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
    rules (below): friendly dates, records as links, the inbox as "<N> items. Nothing
    urgent." unless something is urgent, and a stopped schedule or task offered as a bug to
    log.
+
+### Going through an Overwatch list
+
+- **Check each flagged record's current state before suggesting an action.** A note or item
+  was true when it was written. For an intention, read it and its events (`get_events` with
+  `intent_id`) first: it may already have a date or be done.
+- **When the last open line of an Overwatch inbox item is resolved, offer to archive it** in
+  the same reply.
+- **A `skill_to_paste` follow-up:** the item's `Skill version:` line is the repo's. Compare it
+  with the version line of the skill installed in claude.ai. If they differ, offer the update
+  with `propose_skills`, as the `cli-workflow` skill describes. If they match, say it is already
+  done and archive the item. An older item with no such line: read the version from
+  `get_platform_inventory` with `kind: "skill"` and `name`, `details.version`.
 
 ### Projects
 
@@ -174,8 +187,9 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
     work when the summary also changed that app's tools: the work most likely covered them.
   - `tool_in_no_skill`: a tool the work added or changed that no skill names, so no chat will
     think to call it. Not a follow-up for tools only scheduled prompts call; say so instead.
-  - `skill_to_paste`: always a follow-up, one per skill changed. A claude.ai skill runs the
-    pasted text, so a skill changed in the repo is stale until Alex pastes it.
+  - `skill_to_paste`: always a follow-up, one per skill changed. A claude.ai skill runs its
+    installed text, so a skill changed in the repo is stale until the update is accepted through
+    `propose_skills` in chat.
   When unsure, raise it; a follow-up is cheap to archive and an unnoticed break is not.
 - **When to rewrite `current_state`** (count 11g). Only when the work changes what the app
   **does** for Alex: a new screen or section, new tools he would use in chat, a new kind of
@@ -192,7 +206,9 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
     never a bare URL;
   - quiet apps as "Jobs (3 days)";
   - a schedule or task that stopped is **a bug to log**, said that way: "Log a bug:
-    notify-dispatch has had no ok run since Oct 20." The same in chat: offer to log it.
+    wb-sync has had no ok run since Oct 20." notify-dispatch writes no runs, so it is stopped only
+    when a reminder sits unsent past its grace: "Log a bug: notify-dispatch has left a reminder
+    unsent since Oct 20." The same in chat: offer to log it.
   - Yesterday's Activity is one bullet per app, the thing done, not the rows: "Sam: 3
     practice passes", "Money: 14 transactions reviewed".
   - A quiet night under Action Required is one bullet: "Nothing needs you tonight."
