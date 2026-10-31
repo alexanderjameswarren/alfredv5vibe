@@ -44,12 +44,25 @@ ParseDuration(text) {
     return (m[1] || 0) * 3600 + (m[2] || 0) * 60 + (m[3] || 0)
 }
 
-; Spec 7.5: three greens by time left (over 5 minutes, 5 to 2, under 2), overrun past it.
+; Spec 7.5: "greenrun" blends from the start to a minute before the estimate, then the
+; short shade, then overrun past it. An estimate of a minute or less is short until overrun.
 TimeLeftTint(elapsed, estimate) {
     if estimate <= 0
         return "greenshort"
-    remaining := estimate - elapsed
-    return remaining > 300 ? "greenlong" : remaining > 120 ? "greenmid" : remaining >= 0 ? "greenshort" : "overrun"
+    return elapsed > estimate ? "overrun" : elapsed < estimate - 60 ? "greenrun" : "greenshort"
+}
+
+; How far along the blend, 0-100: elapsed over (estimate minus a minute).
+RunBlend(elapsed, estimate) => estimate <= 60 ? 100 : Min(100, Max(0, Round(100 * elapsed / (estimate - 60))))
+
+; "RRGGBB" pct% of the way from `from` to `to`.
+BlendHex(from, to, pct) {
+    out := ""
+    Loop 3 {
+        a := Integer("0x" SubStr(from, 2 * A_Index - 1, 2)), z := Integer("0x" SubStr(to, 2 * A_Index - 1, 2))
+        out .= Format("{:02X}", Round(a + (z - a) * pct / 100))
+    }
+    return out
 }
 
 ; The colour a running tile is drawn in. p: color, label, runTag, estimateTag, estimate, elapsed.
@@ -179,12 +192,12 @@ ViewOf(p) {
         : p.runTag = "" || p.reportTag = p.runTag
     if cliIdle && !reported
         return {color: "red", label: "Check CLI"}
-    ; Spec 7.2 precedence: Waiting on SQL, Prompt to paste, Send cli, Running, Your turn.
+    ; Spec 7.2 precedence: Waiting on SQL, Prompt ready, Send cli, Running, Your turn.
     if p.HasOwnProp("sqlWaiting") && p.sqlWaiting
         return {color: "tan", label: "Waiting on SQL"}
     finished := p.chatState = "finished"
     if finished && NewerTag(p.runTag, p.issuedTag, p.project)
-        return {color: "purple", label: "Prompt to paste"}
+        return {color: "purple", label: "Prompt ready"}
     ; A reply pushed with no run tag: answered, but not a step report.
     if cliIdle && promptAt != "" && p.reportTag = ""
         return {color: "orange", label: "Reply (untagged)"}
@@ -351,7 +364,7 @@ ButtonLabel(s, name, offset, nowUtc) {
     if s.closed || s.paused
         return name "`n" (s.closed ? "closed · " : "") (s.paused ? "paused · " : "")
             . (s.interruptAt != "" ? "" : s.state " ") time
-    ; "s9 -> s10 · Paste prompt · 10:45": the run-tag step, what to do, and when.
+    ; "s9 -> s10 · Prompt ready · 10:45": the run-tag step, what to do, and when.
     return name "`n" (s.step != "" ? s.step " · " : "") s.label " · " time
 }
 
@@ -541,7 +554,7 @@ FenceBox(monitors) {
 ; --- Touch page state (docs\history\technical-spec-switchboard_touch-t4n.md, "Layout") ---
 
 ; Colours the page draws; everything else is grey.
-TileColor(c) => c ~= "^(red|orange|purple|yellow|green|greenlong|greenmid|greenshort|overrun|tan)$" ? c : "grey"
+TileColor(c) => c ~= "^(red|orange|purple|yellow|green|greenrun|greenshort|overrun|tan)$" ? c : "grey"
 
 ; Sorted by group (0 CLI, paused ones included, 1 chats, 3 orphans), then by the
 ; previous order (`prev`: id -> position), so a colour or status change never moves
@@ -587,7 +600,7 @@ TileName(code, mainProject) => code = "main"
     ? (mainProject != "" && mainProject != "main" ? "main · " ProjectName(mainProject) : "main")
     : ProjectName(code)
 
-; The tile's step: "s9", or only the new one, "→s10", during a handover ("Paste prompt" says the rest).
+; The tile's step: "s9", or only the new one, "→s10", during a handover ("Prompt ready" says the rest).
 TileStep(stepText) => InStr(stepText, " -> ") ? "→" SubStr(stepText, InStr(stepText, " -> ") + 4) : stepText
 
 ; What a tap or long-press on the touch page does: {do, key}. do is "click" (a CLI
