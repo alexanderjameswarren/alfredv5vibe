@@ -418,6 +418,7 @@ Every report ends with the next step's block, copied from here. The progress fil
   - `node scripts/clip.mjs --estimate .clip/last-report.md` prints `Estimate vs actual: 7m00s vs 5m15s (-25%)` from scope.json's estimate and the report's Total row, and writes `{ project, run_tag, estimate, actual }` (seconds) to `.clip/estimates.jsonl`, one line per run tag (a rerun replaces it). It pushes nothing. Run it after the timing table, paste the line in, then push.
   - switchboard.html needed no change: the estimate is part of the action text.
   - Diagnosis (no change): gitpush's console flashes are the detached Overwatch sender's un-hidden children: `resolveRepo`'s git (`scripts/lib/claims-core.mjs:96`) and two PowerShell registry reads (`scripts/lib/overwatch-post.mjs:229`). Fix: `windowsHide: true` on both.
+  - Follow-up (s21b-w9hd), done: `windowsHide: true` on all 11 child-process calls in claims-core.mjs (3), overwatch-post.mjs (1; `kickSender` already had it), git-flow.mjs (5) and scripts/inventory.mjs (2). A test in overwatch-post.test.mjs fails on any call in those four files without it. Still unhidden, out of scope: clip.mjs (81, 262, 296), schema-snapshot.mjs (36, 49), git-push-worktrees.mjs (247), git-new-worktree.mjs (126, 336, 358, 373), scripts/lib/inventory.mjs (476). None in .claude/hooks.
 
 ## Deferred and parked
 
@@ -458,3 +459,4 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s19c (1.6 follow-up) | 3m32s (estimate 4m) |
 | s20 (1.7) | 5m15s (estimate 5m) |
 | s21 (1.8) | 3m40s (estimate 7m) |
+| s21b (1.8 follow-up) | 2m28s (estimate 4m) |

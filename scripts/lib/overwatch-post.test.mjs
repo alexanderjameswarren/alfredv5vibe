@@ -207,3 +207,30 @@ test("readSettings: environment first, then the registry; a short secret counts 
   assert.equal(readSettings({ OVERWATCH_INGEST_URL: "https://env" }, (n) => reg[n]).url, "https://env");
   assert.equal(readSettings({ OVERWATCH_INGEST_SECRET: "short" }, () => null).secret, "");
 });
+
+// The detached sender has no console, so any child started without windowsHide flashes a window.
+const HIDDEN_FILES = ["scripts/lib/claims-core.mjs", "scripts/lib/overwatch-post.mjs", "scripts/lib/git-flow.mjs", "scripts/inventory.mjs"];
+function childCalls(src) {
+  const calls = [];
+  const re = /(?<![.\w])(spawnSync|spawn|execFileSync|execFile|execSync|exec)\s*\(/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    let depth = 0, i = m.index + m[0].length - 1;
+    for (; i < src.length; i++) {
+      if (src[i] === "(") depth++;
+      else if (src[i] === ")" && --depth === 0) break;
+    }
+    calls.push({ line: src.slice(0, m.index).split("\n").length, text: src.slice(m.index, i + 1) });
+  }
+  return calls;
+}
+
+test("every child process in the sender's path is started with windowsHide", () => {
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(\w:)/, "$1")), "..", "..");
+  const unhidden = HIDDEN_FILES.flatMap((f) => {
+    const calls = childCalls(readFileSync(path.join(root, f), "utf8"));
+    assert.ok(calls.length > 0, `no child-process calls found in ${f}`);
+    return calls.filter((c) => !/windowsHide:\s*true/.test(c.text)).map((c) => `${f}:${c.line}`);
+  });
+  assert.deepEqual(unhidden, []);
+});

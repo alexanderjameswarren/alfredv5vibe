@@ -102,7 +102,7 @@ export function resolveRepo(cwd = process.cwd()) {
         "--git-dir",
         "--git-common-dir",
       ],
-      { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
     );
   } catch {
     throw new ClaimsError("no-git", "Not in a git repository (or git is not on PATH).");
@@ -1119,7 +1119,7 @@ export function yieldDecision({ state, blocks, owner, item, changed }) {
  */
 export function fileChanges(ctx, rel) {
   const git = (args) =>
-    execFileSync("git", args, { cwd: ctx.root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    execFileSync("git", args, { cwd: ctx.root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
   let base = "main";
   if (!ctx.isWorktree) {
     try {
@@ -1302,7 +1302,7 @@ export function numberedName(pendingName, owner, number) {
 
 /** The migrations folder of the main checkout and of every worktree. */
 export function migrationDirs(ctx) {
-  const out = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: ctx.root, encoding: "utf8" });
+  const out = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: ctx.root, encoding: "utf8", windowsHide: true });
   return out
     .split(/\r?\n/)
     .filter((l) => l.startsWith("worktree "))

@@ -58,7 +58,7 @@ function sendEvent(event, label) {
     return null;
   });
   say(`\nQueued ${label} (${(Buffer.byteLength(JSON.stringify(event)) / 1024).toFixed(0)} KB). Sending…`);
-  const r = spawnSync(process.execPath, [path.join(ROOT, SENDER_SCRIPT)], { cwd: ROOT, stdio: "inherit" });
+  const r = spawnSync(process.execPath, [path.join(ROOT, SENDER_SCRIPT)], { cwd: ROOT, stdio: "inherit", windowsHide: true });
   say(`Details in ${ctx.outboxFile}.log`);
   if (r.status !== 0) process.exitCode = 1;
 }
@@ -68,7 +68,7 @@ const send = ({ parts, open_work }) => sendEvent({ _kind: "inventory", parts, op
 /** --send-summary: the finish summary of one commit against its first parent, read from git only. */
 function sendSummary({ commit, project }) {
   const git = (args) => {
-    const r = spawnSync("git", args, { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    const r = spawnSync("git", args, { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true });
     return { ok: r.status === 0, stdout: (r.stdout ?? "").trim() };
   };
   const subject = git(["show", "-s", "--format=%s", commit]);
