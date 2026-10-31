@@ -30,7 +30,7 @@ settings, not by editing this file.
 > The task runs the text that was pasted, not the text in this repo. So the prompt carries a
 > version, and the run record and the final report echo it.
 >
-> ### `PROMPT VERSION: 2026-10-31a`
+> ### `PROMPT VERSION: 2026-10-31b`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -43,18 +43,12 @@ settings, not by editing this file.
    connector and no others, named "Claude hourly notifications", with everything below "THE PROMPT"
    line as its instructions.
 4. **Run it once by hand** (the task's "run now"). Check: a `platform_runs` row for `alfred` /
-   `claude_hourly_notifications` closed `ok`, with `prompt_version: "2026-10-31a"` in its details.
+   `claude_hourly_notifications` closed `ok`, with `prompt_version: "2026-10-31b"` in its details.
 
-## Link paths
+## Links
 
-Every notification links into Alfred with a path. These open from a cold link (a push tap) today:
-
-| Record | Path |
-|---|---|
-| Inbox item | `/inbox/detail/<inbox id>` (an archived one opens what it became, else the inbox list) |
-| Intention | `/intentions/detail/<intent id>` |
-| Execution | `/schedule/execution/<execution id>` |
-| Any record by id | `/<id>` (the record link page resolves it) |
+Every Alfred link is `/` followed by the record's id: `/<id>`. A record type that does not open that
+way is a bug to file, never a reason to use a longer path.
 
 ---
 
@@ -62,7 +56,7 @@ Every notification links into Alfred with a path. These open from a cold link (a
 
 ---
 
-You are running the Claude hourly notifications task for Alex. `PROMPT VERSION: 2026-10-31a`.
+You are running the Claude hourly notifications task for Alex. `PROMPT VERSION: 2026-10-31b`.
 You decide, for each app that takes part, whether anything is worth a push notification right now,
 and send each one on its own. Follow these steps in order. Do not improvise.
 
@@ -130,10 +124,9 @@ For each entry in `settings.apps` with `enabled: true`, in the order listed, usi
    plan's own window and per-kind daily limits, counting what step 4 says was already sent today.
    Drop any reason that already has a notification today (same goal or item and reason).
 6. Write each one: a `kind` (`nudge`, `encouragement`, `flag` or `info`, as the plan's instructions
-   class it), a short `title`, a `body` in the plan's voice, and a `link` to the record it is about:
-   `/inbox/detail/<inbox id>` for an inbox item, `/intentions/detail/<intent id>` for an intention,
-   `/schedule/execution/<execution id>` for an execution, or `/<id>` for any other record. Leave
-   `link` out when there is no one record.
+   class it), a short `title`, a `body` in the plan's voice, and a `link` to the record it is about.
+   **A link is always `/<id>`**: `/` followed by the record's id, whatever kind of record it is.
+   Never a longer path. Leave `link` out when there is no one record.
 
 If a call for one app fails, skip that app (`details.skipped` gets `{app, reason: "<verbatim
 error>"}`) and go on to the next.
@@ -160,7 +153,7 @@ Call `update_platform_run` with the run id, **once**:
 - `status: "ok"`, or `"partial"` when `details.skipped` is not empty, or `"failed"` when a step
   said to fail (then `error_message` verbatim and `details.failure_kind`).
 - `finished_at` now, `covered_from` and `covered_to` as `local_date`.
-- `details`: `prompt_version: "2026-10-31a"`, `local_time`, `stopped` (when a step stopped early),
+- `details`: `prompt_version: "2026-10-31b"`, `local_time`, `stopped` (when a step stopped early),
   `apps_checked` (app ids), `sent` (count), `duplicate`, `not_delivered`, `held_by_cap`, `skipped`, and
   `notifications` (`[{app, kind, title, dedupe_key}]` for each one sent).
 
