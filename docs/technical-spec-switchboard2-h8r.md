@@ -267,7 +267,7 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 
 **On the tile.** The Running state shows elapsed time against the estimate, as text: `0:30 / 2:30`. With no estimate it shows elapsed time only: `0:30`.
 
-**Calibration.** `clip.mjs` reads the Total row of the report's timing table, which every report already carries. It prints one line for the CLI to paste into the report (as `--scope` does, so the pushed and printed reports stay identical), `Estimate vs actual: 2m30s vs 3m10s (+27%)`, and appends `{ project, run_tag, estimate, actual }` to `.clip/estimates.jsonl`. Claude can then see how far off its estimates run, per project, from the reports alone.
+**Calibration.** `node scripts/clip.mjs --estimate .clip/last-report.md`, run once the timing table is written, reads the Total row of the report's timing table, which every report already carries. It prints one line for the CLI to paste into the report (as `--scope` does, so the pushed and printed reports stay identical), `Estimate vs actual: 2m30s vs 3m10s (+27%)`, and appends `{ project, run_tag, estimate, actual }` to `.clip/estimates.jsonl`. Claude can then see how far off its estimates run, per project, from the reports alone.
 
 ### 7.5 Running colours by time left
 
@@ -277,13 +277,13 @@ While Running, the tile warms from green toward orange as the estimate runs out.
 |---|---|---|---|
 | More than 5 minutes | green `#2E7D32` | `#256B29` | white |
 | 5 to 2 minutes | olive `#9E9D24` | `#8A8A1E` | `#1A1600` |
-| Under 2 minutes | amber `#F9A825` | `#E59A10` | `#1A1600` |
-| Past the estimate | amber `#F9A825`, plus a 6px red inset edge `#C62828` | `#E59A10`, with edge `#FF8A80` | `#1A1600` |
+| Under 2 minutes | ochre `#B7791F` | `#8C5A12` | `#1A1600` (5.0:1); dark theme white (5.9:1) |
+| Past the estimate | ochre `#B7791F`, plus a 6px red inset edge `#C62828` | `#8C5A12`, with edge `#FF8A80` | as above |
 | Report arrived | orange `#F57C00` (Report ready) | — | `#1A1600` |
 
-- **The overrun look is off the scale.** It is the colour itself that warns: the amber stays, and the red edge is added. The text shows the overrun as well: `3:15 / 2:30`.
+- **The overrun look is off the scale.** It is the colour itself that warns: the ochre stays, and the red edge is added. The text shows the overrun as well: `3:15 / 2:30`.
 - **With no estimate,** the tile stays green the whole run.
-- **Clash with yellow (open).** Amber `#F9A825` is close to "Your turn" yellow `#FBC02D`. They never show on the same tile at once (amber is Running, yellow is idle), but two tiles side by side can look alike. Step 1.7 must pick an amber that reads apart from yellow, or keep the red edge's cue.
+- **Ochre, not amber (decided in 1.7).** Amber `#F9A825` was too close to "Your turn" yellow `#FBC02D` on a neighbouring tile. Ochre is a darker brownish orange, about ΔE 33 from yellow and 31 from orange "Report ready" `#F57C00`.
 
 ### 7.6 Progress strip (experimental)
 

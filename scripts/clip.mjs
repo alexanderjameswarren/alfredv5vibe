@@ -28,14 +28,20 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   changedFromStatus,
+  estimateLine,
   formatScopeVsChanges,
   isCheckoutReport,
   missingSections,
+  parseDuration,
   scopeVsChanges,
+  totalFromReport,
   touchedFromLog,
+  upsertEstimate,
   writeLastReport,
 } from "./lib/last-report.mjs";
 import { readScope, scopeFile } from "./lib/plan-scope.mjs";
+import { projectOfTag } from "./lib/project-code.mjs";
+import { writeAtomic } from "./lib/session-status.mjs";
 
 const MIN_SECRET_LENGTH = 32;
 
@@ -175,6 +181,10 @@ Push a report into Alfred as a CLI clip.
   --scope       Print the report's "Scope vs changes" section and push nothing:
                 the step's declared scope (.clip/scope.json) against this run's
                 edits and git status. Paste it into the report before pushing.
+  --estimate <file>
+                Print "Estimate vs actual" from the step's estimate and the
+                report's timing table Total row, record it in
+                .clip/estimates.jsonl, and push nothing. Paste the line in.
   --help, -h    This.
 
 Every report ends with "Scope vs changes", then "Next step's scope" (its block),
@@ -185,7 +195,7 @@ the Windows user registry when a shell predates setx.
 `;
 
 function parseArgs(argv) {
-  const out = { title: null, file: null, tag: null, scope: false };
+  const out = { title: null, file: null, tag: null, scope: false, estimate: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--title" || a === "-t") {
@@ -211,6 +221,9 @@ function parseArgs(argv) {
       out.tag = tag;
     } else if (a === "--scope") {
       out.scope = true;
+    } else if (a === "--estimate") {
+      out.estimate = argv[++i];
+      if (out.estimate === undefined) fail("--estimate needs the report file.");
     } else if (a === "--help" || a === "-h") {
       console.log(USAGE);
       process.exit(0);
@@ -291,6 +304,23 @@ function scopeSection() {
   return formatScopeVsChanges(scopeVsChanges({ record, changed, touched: touchedFromLog(log, record.run_tag) }), record);
 }
 
+/** The "Estimate vs actual" line for a report; records it in .clip/estimates.jsonl when both are known. */
+function estimateSection(file) {
+  const root = gitContext().top ?? process.cwd();
+  const record = readScope(scopeFile(root));
+  const estimate = parseDuration(record?.estimate);
+  const actual = totalFromReport(readFileOrDie(file));
+  if (estimate != null && actual != null && record?.run_tag) {
+    const jsonl = path.join(root, ".clip", "estimates.jsonl");
+    let old = "";
+    try { old = readFileSync(jsonl, "utf8"); } catch { /* first one */ }
+    try {
+      writeAtomic(jsonl, upsertEstimate(old, { project: projectOfTag(record.run_tag), run_tag: record.run_tag, estimate, actual }));
+    } catch { /* the line still prints */ }
+  }
+  return `${estimateLine(estimate, actual)}\n`;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -299,6 +329,10 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.scope) {
     process.stdout.write(scopeSection());
+    return;
+  }
+  if (args.estimate) {
+    process.stdout.write(estimateSection(args.estimate));
     return;
   }
   const cfg = loadSettings();

@@ -33,7 +33,7 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 1 | 1.5 | Skill: a Send link under every prompt | — | done (s18-k8tn) | 2026-10-30 |
 | 1 | 1.6 | Tile states, including Outside scope and Not sent | — | done (s19-v6pd, s19c-y2rt); Report unread moved to Phase 2 | 2026-10-30 |
 | 1 | 1.7 | Running colours by time left | — | done (s20-m7qc) | 2026-10-31 |
-| 1 | 1.8 | Estimate on the tile; Estimate vs actual | — | todo | |
+| 1 | 1.8 | Estimate on the tile; Estimate vs actual | — | done (s21-p4hw) | 2026-10-31 |
 | 1 | 1.9 | Progress strip | — | todo | |
 | 1 | 1.10 | Six-tile layout and lane order | — | todo | |
 | 2 | 2.1-2.10 | SQL queue, links, click pages, runner, read-only queries: spec §8 | see below | todo | |
@@ -413,6 +413,11 @@ Every report ends with the next step's block, copied from here. The progress fil
   - The estimate comes from `.clip/scope.json` (`estimate`, matched on `run_tag`), which the prompt hook already writes; no test seam needed. Elapsed counts from `prompt_at`, or `since` for an older status file.
   - `RunTint` colours only the drawing (button and tile); `s.color` stays green, so focus, taskbar and alerts are unchanged and the tints never flash.
   - Colours (light / dark): olive `#9E9D24` / `#8A8A1E`, text `#1A1600`; ochre `#B7791F` / `#8C5A12`, text `#1A1600` (5.0:1) / white (5.9:1), about ΔE 30 from yellow and from orange; overrun is ochre plus a 6px inset edge `#C62828` / `#FF8A80`. The old panel uses pastel `B8B850` and `C8924A`, with no edge.
+- **1.8 (s21-p4hw), estimate on the tile; Estimate vs actual, done:**
+  - The running tile's action line reads `Working 0:30 / 7:00` (or `Both working …`) when the run has an estimate; elapsed is then the whole run's, from `prompt_at`, the clock the tint uses. No estimate: elapsed only, as before. The old panel's button label is unchanged.
+  - `node scripts/clip.mjs --estimate .clip/last-report.md` prints `Estimate vs actual: 7m00s vs 5m15s (-25%)` from scope.json's estimate and the report's Total row, and writes `{ project, run_tag, estimate, actual }` (seconds) to `.clip/estimates.jsonl`, one line per run tag (a rerun replaces it). It pushes nothing. Run it after the timing table, paste the line in, then push.
+  - switchboard.html needed no change: the estimate is part of the action text.
+  - Diagnosis (no change): gitpush's console flashes are the detached Overwatch sender's un-hidden children: `resolveRepo`'s git (`scripts/lib/claims-core.mjs:96`) and two PowerShell registry reads (`scripts/lib/overwatch-post.mjs:229`). Fix: `windowsHide: true` on both.
 
 ## Deferred and parked
 
@@ -452,3 +457,4 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s19 (1.6) | 7m05s (estimate 8m) |
 | s19c (1.6 follow-up) | 3m32s (estimate 4m) |
 | s20 (1.7) | 5m15s (estimate 5m) |
+| s21 (1.8) | 3m40s (estimate 7m) |

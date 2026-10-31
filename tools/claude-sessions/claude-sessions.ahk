@@ -1156,8 +1156,10 @@ TouchState() {
     for code in touchOrder.Count ? order : StartupOrder(order, SessionStarts()) {
         s := sessions[code]
         stamp := s.since != "" ? IsoToStamp(s.since) : nowUtc
+        ; With an estimate, elapsed is the whole run's, the same clock the tint uses.
+        est := s.runTag != "" && s.estimateTag = s.runTag ? s.estimate : 0
         action := CliAction({color: s.color, label: s.label, kind: s.kind, free: s.free, closed: s.closed
-            , paused: s.paused, elapsed: DateDiff(nowUtc, stamp, "Seconds")
+            , paused: s.paused, estimate: est, elapsed: est ? RunElapsed(s, nowUtc) : DateDiff(nowUtc, stamp, "Seconds")
             , age: DateDiff(nowUtc, s.paused && s.pausedAt != "" ? s.pausedAt : stamp, "Minutes")})
         git := GitText(s.changed, s.ahead)
         idle := 0

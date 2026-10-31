@@ -631,7 +631,7 @@ TileIcon(kind, hasChat) => kind = "chat" ? "chat" : kind = "cli" ? (hasChat ? "b
 
 ShortAge(minutes) => minutes < 60 ? Max(0, minutes) "m" : minutes < 1440 ? minutes // 60 "h" : minutes // 1440 "d"
 
-; A CLI tile's action line. p: color, label, kind, free, closed, paused, elapsed
+; A CLI tile's action line. p: color, label, kind, free, closed, paused, elapsed, estimate (optional, seconds)
 ; (seconds in the current state) and age (minutes since it changed).
 CliAction(p) {
     if p.free
@@ -642,9 +642,11 @@ CliAction(p) {
         return "Paused " ShortAge(p.age)
     if p.kind = "none"
         return "No status"
+    ; "0:30 / 7:00" when the run has an estimate (spec 7.4), else elapsed alone.
+    est := p.HasOwnProp("estimate") && p.estimate > 0 ? " / " FormatElapsed(p.estimate) : ""
     switch p.label {
-        case "CLI working": return "Working " FormatElapsed(p.elapsed)
-        case "Both working": return "Both working " FormatElapsed(p.elapsed)
+        case "CLI working": return "Working " FormatElapsed(p.elapsed) est
+        case "Both working": return "Both working " FormatElapsed(p.elapsed) est
         case "Claude writing": return "Chat writing"
         case "chat unknown": return "Chat unknown"
     }
