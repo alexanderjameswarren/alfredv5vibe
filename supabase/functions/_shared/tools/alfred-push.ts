@@ -22,12 +22,12 @@ import { dbError, fail, KINDS, logNotification, optionalText, requireEnum, requi
 
 type Row = Record<string, unknown>;
 
-/** An Alfred path such as /inbox/abc. The service worker resolves it against its own origin. */
+/** An Alfred path, /<id>. The service worker resolves it against its own origin. */
 export function requireAlfredPath(tool: string, v: unknown): string | null {
   const link = optionalText(tool, "link", v);
   if (link === null) return null;
   if (!link.startsWith("/") || link.startsWith("//") || /\s/.test(link)) {
-    throw fail(tool, `\`link\` must be an Alfred path starting with "/", e.g. "/inbox/<id>", got ${JSON.stringify(link)}.`);
+    throw fail(tool, `\`link\` must be an Alfred path starting with "/", e.g. "/<id>", got ${JSON.stringify(link)}.`);
   }
   return link;
 }
