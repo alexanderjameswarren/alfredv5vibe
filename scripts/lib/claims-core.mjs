@@ -138,14 +138,17 @@ export function resolveRepo(cwd = process.cwd()) {
  * From a worktree, the main-relative form of a path in the main checkout or in
  * another worktree, or null. Those were "outside the repo" and allowed, so a
  * worktree session could write main's files (switchboard_guard, bug 3).
- * Exempt paths (`.git/`, `.clip/`, …) are not foreign.
+ * Exempt paths (`.git/`, …) are not foreign, except `.clip/`: it is exempt because
+ * each checkout has its own, so another checkout's is that thread's (the s25 stray file).
  */
 export function foreignPath(p, ctx) {
   if (!ctx.isWorktree || !ctx.mainRoot) return null;
   const abs = path.resolve(ctx.root, nativePath(p));
   if (fold(abs) === fold(path.resolve(ctx.root)) || toRepoRelative(abs, ctx.root) !== null) return null;
   const rel = toRepoRelative(abs, ctx.mainRoot);
-  if (rel === null || isExempt(rel)) return null;
+  if (rel === null) return null;
+  const isClip = fold(rel) === fold(".clip") || fold(rel).startsWith(fold(".clip/"));
+  if (isExempt(rel) && !isClip) return null;
   // Same debris rule as repoPathsIn: a real target's folder exists.
   return existsSync(abs) || existsSync(path.dirname(abs)) ? rel : null;
 }

@@ -629,6 +629,75 @@ test("a worktree cannot edit a sibling worktree", () => {
   assert.match(run.stderr, /in the wt-b worktree/);
 });
 
+/** A scratch pair with a .clip/ in every checkout, and a scope that declares nothing. */
+function scratchClips() {
+  const trees = scratchWorktrees();
+  for (const root of Object.values(trees)) mkdirSync(path.join(root, ".clip"), { recursive: true });
+  const scopeFile = path.join(scratchDir(), "scope.json");
+  writeFileSync(scopeFile, JSON.stringify({
+    run_tag: "wt-a-s1-zz99", found: true,
+    scope: { create: [], update: [], delete: [], deploy: [], sql: [] },
+  }), "utf8");
+  const plan = (cwd, tool_name, tool_input) =>
+    drive(PLAN, { hook_event_name: "PreToolUse", cwd, tool_name, tool_input }, { scopeFile });
+  return { ...trees, plan };
+}
+
+test("both guards: a thread's own .clip is allowed", () => {
+  const { wtA, plan } = scratchClips();
+  const input = { file_path: path.join(wtA, ".clip", "last-report.md"), content: "x" };
+  assert.equal(guardIn(wtA, "Write", input).code, 0);
+  assert.equal(plan(wtA, "Write", input).code, 0);
+});
+
+test("both guards: main's .clip is refused from a worktree", () => {
+  const { main, wtA, plan } = scratchClips();
+  const input = { file_path: path.join(main, ".clip", "scope.json"), content: "x" };
+  const claims = guardIn(wtA, "Write", input);
+  assert.equal(claims.code, 2);
+  assert.match(claims.stderr, /in the main checkout/);
+  const scoped = plan(wtA, "Write", input);
+  assert.equal(scoped.code, 2);
+  assert.match(scoped.stderr, /another checkout/);
+});
+
+test("both guards: a sibling worktree's .clip is refused", () => {
+  const { wtA, wtB, plan } = scratchClips();
+  const input = { file_path: path.join(wtB, ".clip", "last-report.md"), content: "x" };
+  const claims = guardIn(wtA, "Write", input);
+  assert.equal(claims.code, 2);
+  assert.match(claims.stderr, /in the wt-b worktree/);
+  assert.equal(plan(wtA, "Write", input).code, 2);
+});
+
+test("both guards: a shell write or delete in main's .clip is refused", () => {
+  const { main, wtA, plan } = scratchClips();
+  const abs = path.join(main, ".clip", "x");
+  for (const command of [`rm "${abs}"`, `echo x > "${abs}"`]) {
+    assert.equal(guardIn(wtA, "Bash", { command }).code, 2, command);
+    assert.equal(plan(wtA, "Bash", { command }).code, 2, command);
+  }
+});
+
+test("the plan guard refuses any file in another checkout", () => {
+  const { main, wtA, wtB, plan } = scratchClips();
+  for (const file_path of [path.join(main, "src", "a.js"), path.join(wtB, "src", "a.js")]) {
+    const run = plan(wtA, "Edit", { file_path, old_string: "a", new_string: "b" });
+    assert.equal(run.code, 2, file_path);
+    assert.match(run.stderr, /another checkout/);
+  }
+});
+
+test("both guards: a path outside the repo behaves as before", () => {
+  const { wtA, plan } = scratchClips();
+  const input = { file_path: path.join(tmpdir(), "x.txt"), content: "x" };
+  assert.equal(guardIn(wtA, "Write", input).code, 0);
+  assert.equal(plan(wtA, "Write", input).code, 0);
+  const command = `echo x > "${path.join(tmpdir(), "x.txt")}"`;
+  assert.equal(guardIn(wtA, "Bash", { command }).code, 0);
+  assert.equal(plan(wtA, "Bash", { command }).code, 0);
+});
+
 test("a worktree's shell cannot write into main, however the path is spelt", () => {
   const { main, wtA } = scratchWorktrees();
   const abs = path.join(main, "src", "a.js");

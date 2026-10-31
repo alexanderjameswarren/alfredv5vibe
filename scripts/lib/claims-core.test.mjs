@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   claimsCommandApproval,
   covers,
+  foreignPath,
   DB_CLAIM_STALE_MS,
   heldBy,
   holderOf,
@@ -788,4 +789,19 @@ test("the guard reads the spaced path whole", () => {
   const root = spaced();
   const r = writeCheck(`rm "${W7B}"`, root);
   assert.deepEqual(r?.paths, [W7B]);
+});
+
+test("foreignPath: .clip is exempt only in a thread's own checkout", () => {
+  const main = mkdtempSync(path.join(tmpdir(), "foreign-"));
+  const root = path.join(main, ".claude", "worktrees", "wt-a");
+  for (const dir of [".clip", ".git", ".claude/worktrees/wt-a/.clip", ".claude/worktrees/wt-b/.clip"]) {
+    mkdirSync(path.join(main, dir), { recursive: true });
+  }
+  const ctx = { isWorktree: true, mainRoot: main, root };
+  assert.equal(foreignPath(path.join(root, ".clip", "x"), ctx), null);
+  assert.equal(foreignPath(path.join(main, ".clip", "x"), ctx), ".clip/x");
+  assert.equal(foreignPath(path.join(main, ".CLIP"), ctx), ".CLIP");
+  assert.equal(foreignPath(path.join(main, ".claude", "worktrees", "wt-b", ".clip", "x"), ctx), ".claude/worktrees/wt-b/.clip/x");
+  assert.equal(foreignPath(path.join(main, ".git", "x"), ctx), null);
+  assert.equal(foreignPath(path.join(tmpdir(), "x.txt"), ctx), null);
 });
