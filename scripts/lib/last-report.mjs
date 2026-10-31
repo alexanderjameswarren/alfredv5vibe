@@ -94,6 +94,48 @@ export function scopeVsChanges({ record, changed = [], touched = [] }) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Estimate vs actual (switchboard2-h8r 1.8, spec 7.4)
+// ---------------------------------------------------------------------------
+
+/** "2m30s", "7m", "1h2m", "**5m15s**" -> seconds; null for anything else. */
+export function parseDuration(text) {
+  const m = /^\s*(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?\s*$/i.exec(String(text ?? "").replace(/\*/g, ""));
+  if (!m || !(m[1] || m[2] || m[3])) return null;
+  return (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0);
+}
+
+export function formatDuration(seconds) {
+  const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h ? `${h}h${pad(m)}m${pad(s)}s` : m ? `${m}m${pad(s)}s` : `${s}s`;
+}
+
+/** The timing table's Total row, from its last cell, in seconds; null without one. */
+export function totalFromReport(text) {
+  for (const line of String(text ?? "").split(/\r?\n/).reverse()) {
+    const cells = line.split("|").map((c) => c.trim()).filter(Boolean);
+    if (cells.length >= 2 && /^\**total\**$/i.test(cells[0])) return parseDuration(cells.at(-1));
+  }
+  return null;
+}
+
+export function estimateLine(estimate, actual) {
+  if (estimate == null) return "Estimate vs actual: no estimate recorded for this run";
+  if (actual == null) return "Estimate vs actual: no Total row in the report's timing table";
+  const pct = Math.round(((actual - estimate) / estimate) * 100);
+  return `Estimate vs actual: ${formatDuration(estimate)} vs ${formatDuration(actual)} (${pct >= 0 ? "+" : ""}${pct}%)`;
+}
+
+/** .clip/estimates.jsonl with `entry` replacing any earlier line for its run tag. */
+export function upsertEstimate(text, entry) {
+  const keep = String(text ?? "").split(/\r?\n/).filter((l) => {
+    if (!l.trim()) return false;
+    try { return JSON.parse(l).run_tag !== entry.run_tag; } catch { return true; }
+  });
+  return `${[...keep, JSON.stringify(entry)].join("\n")}\n`;
+}
+
 /** The "Scope vs changes" report section, as markdown. */
 export function formatScopeVsChanges(result, record) {
   const lines = ["## Scope vs changes"];

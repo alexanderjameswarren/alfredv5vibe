@@ -320,6 +320,11 @@ ActionArgs(label, more := "") {
     return fields
 }
 Check("action working", CliAction(ActionArgs("CLI working")), "Working 3:41")
+WithEstimate(label, est) => (a := ActionArgs(label), a.estimate := est, a)
+Check("action working against estimate", CliAction(WithEstimate("CLI working", 420)), "Working 3:41 / 7:00")
+Check("action both against estimate", CliAction(WithEstimate("Both working", 420)), "Both working 3:41 / 7:00")
+Check("action overrun shows it", CliAction(WithEstimate("CLI working", 150)), "Working 3:41 / 2:30")
+Check("action no estimate", CliAction(WithEstimate("CLI working", 0)), "Working 3:41")
 Check("action approve", CliAction(ActionArgs("Approve")), "Approve")
 Check("action chat writing", CliAction(ActionArgs("Claude writing")), "Chat writing")
 Check("action paused", CliAction(ActionArgs("Your turn", "paused")), "Paused 2h")

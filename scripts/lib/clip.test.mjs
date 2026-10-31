@@ -10,7 +10,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeFailure } from "../clip.mjs";
-import { changedFromStatus, formatScopeVsChanges, missingSections, scopeVsChanges, touchedFromLog } from "./last-report.mjs";
+import { mkdirSync, readFileSync } from "node:fs";
+import {
+  changedFromStatus, estimateLine, formatDuration, formatScopeVsChanges, missingSections, parseDuration,
+  scopeVsChanges, totalFromReport, touchedFromLog, upsertEstimate,
+} from "./last-report.mjs";
 
 const CLIP = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "clip.mjs");
 const REPORT = "Run exactly: bash -c \"echo x > docs/a.md\" && node -e \"require('fs')\"\n";
@@ -174,6 +178,66 @@ test("--scope prints the section without pushing", async () => {
   });
   assert.equal(r.code, 0);
   assert.match(r.out, /## Scope vs changes/);
+});
+
+test("parseDuration and formatDuration", () => {
+  assert.equal(parseDuration("7m"), 420);
+  assert.equal(parseDuration("2m30s"), 150);
+  assert.equal(parseDuration("0m05s"), 5);
+  assert.equal(parseDuration("1h2m"), 3720);
+  assert.equal(parseDuration("**5m15s**"), 315);
+  assert.equal(parseDuration("soon"), null);
+  assert.equal(parseDuration(""), null);
+  assert.equal(formatDuration(315), "5m15s");
+  assert.equal(formatDuration(420), "7m00s");
+  assert.equal(formatDuration(5), "5s");
+  assert.equal(formatDuration(3725), "1h02m05s");
+});
+
+const TABLE = "## Timing (estimate 7m)\n| phase | start | end | took |\n|---|---|---|---|\n| work | 06:00:00 | 06:05:00 | 5m00s |\n| **total** | 06:00:00 | 06:05:15 | **5m15s** |\n";
+
+test("totalFromReport: the Total row's last cell", () => {
+  assert.equal(totalFromReport(TABLE), 315);
+  assert.equal(totalFromReport("| Total | 3m10s |"), 190);
+  assert.equal(totalFromReport("no table"), null);
+});
+
+test("estimateLine: signed percentage, or why there is none", () => {
+  assert.equal(estimateLine(150, 190), "Estimate vs actual: 2m30s vs 3m10s (+27%)");
+  assert.equal(estimateLine(420, 315), "Estimate vs actual: 7m00s vs 5m15s (-25%)");
+  assert.equal(estimateLine(300, 300), "Estimate vs actual: 5m00s vs 5m00s (+0%)");
+  assert.match(estimateLine(null, 190), /no estimate recorded/);
+  assert.match(estimateLine(150, null), /no Total row/);
+});
+
+test("upsertEstimate: one line per run tag, latest wins", () => {
+  const a = { project: "p-x", run_tag: "p-x-s1-aaaa", estimate: 60, actual: 70 };
+  const b = { project: "p-x", run_tag: "p-x-s2-bbbb", estimate: 60, actual: 50 };
+  let t = upsertEstimate("", a);
+  t = upsertEstimate(t, b);
+  t = upsertEstimate(t, { ...a, actual: 80 });
+  const rows = t.trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepEqual(rows.map((r) => `${r.run_tag}:${r.actual}`), ["p-x-s2-bbbb:50", "p-x-s1-aaaa:80"]);
+  assert.equal(upsertEstimate("not json\n", a).trim().split("\n").length, 2);
+});
+
+test("--estimate prints the line and records it, pushing nothing", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "clip-est-"));
+  mkdirSync(path.join(dir, ".clip"));
+  writeFileSync(path.join(dir, ".clip", "scope.json"), JSON.stringify({ run_tag: "proj-x-s3-ab12", found: true, estimate: "7m" }));
+  writeFileSync(path.join(dir, "report.md"), TABLE);
+  const r = await new Promise((resolve) => {
+    const env = { ...process.env, CLIPBOARD_URL: "", CLIPBOARD_SECRET: "" };
+    delete env.PLAN_SCOPE_FILE;
+    const child = spawn(process.execPath, [CLIP, "--estimate", "report.md"], { cwd: dir, env });
+    let out = "";
+    child.stdout.on("data", (c) => (out += c));
+    child.on("close", (code) => resolve({ code, out }));
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.out, "Estimate vs actual: 7m00s vs 5m15s (-25%)\n");
+  const row = JSON.parse(readFileSync(path.join(dir, ".clip", "estimates.jsonl"), "utf8").trim());
+  assert.deepEqual(row, { project: "proj-x", run_tag: "proj-x-s3-ab12", estimate: 420, actual: 315 });
 });
 
 test("describeFailure: JSON error, HTML title, or the start of the text", () => {
