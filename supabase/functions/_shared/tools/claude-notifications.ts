@@ -6,6 +6,8 @@
 //
 //   log_claude_notification   tier 1  log a claude_push or inbox_item notification
 //   get_claude_notifications  tier 1  read the log, with today's counts by kind
+//   get_claude_notification_settings     tier 1  the shared window and caps, with pushes sent
+//   update_claude_notification_settings  tier 2  change them (creates the row if none)
 //
 // Alfred pushes are logged by send_alfred_push (alfred-push.ts), which logs and
 // sends in one call. Database access ONLY through ctx.db.
@@ -193,5 +195,82 @@ export const getClaudeNotificationsTool = defineTool({
       fullText: ["body"],
     });
     return envelope({ today, notifications: page.data }, page.meta);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// claude_notification_settings — the shared window and caps (spec §3.6)
+// ---------------------------------------------------------------------------
+
+/** Push channels: the shared caps count these, not inbox items. */
+const PUSH_CHANNELS = ["alfred_push", "claude_push"];
+const SETTINGS_FIELDS = ["window_start", "window_end", "max_per_hour", "max_per_day", "apps"];
+
+/** Start of the current clock hour. Pacific is a whole-hour offset, so the UTC hour start is the same instant. */
+export function hourStart(d: Date = new Date()): string {
+  const h = new Date(d);
+  h.setUTCMinutes(0, 0, 0);
+  return h.toISOString();
+}
+
+async function readSettings(db: Db, tool: string): Promise<Row | null> {
+  const { data, error } = await db.from("claude_notification_settings").select("*").limit(1);
+  if (error) throw dbError(tool, "reading claude_notification_settings", error);
+  return ((data ?? []) as Row[])[0] ?? null;
+}
+
+async function pushCount(db: Db, tool: string, what: string, filter: (q: Db) => Db): Promise<number> {
+  const q = db.from("claude_notifications").select("id", { count: "exact", head: true })
+    .in("channel", PUSH_CHANNELS).in("delivery_status", COUNTED_STATUSES);
+  const { count, error } = await filter(q);
+  if (error) throw dbError(tool, what, error);
+  return count ?? 0;
+}
+
+export const getClaudeNotificationSettingsTool = defineTool({
+  name: "get_claude_notification_settings",
+  tables: { reads: ["claude_notification_settings", "claude_notifications"], writes: [] },
+  tier: 1,
+  handler: async (_args: Record<string, unknown>, ctx) => {
+    const tool = "get_claude_notification_settings";
+    const settings = await readSettings(ctx.db, tool);
+    const today = ptDate();
+    const since = hourStart();
+    const sent = {
+      this_hour: await pushCount(ctx.db, tool, "this hour's count", (q) => q.gte("created_at", since)),
+      today: await pushCount(ctx.db, tool, "today's count", (q) => q.eq("local_date", today)),
+      hour_start: since,
+      date: today,
+    };
+    if (!settings) {
+      return { settings: null, sent,
+        note: "No shared notification settings yet. Create them with update_claude_notification_settings." };
+    }
+    return { settings, sent };
+  },
+});
+
+export const updateClaudeNotificationSettingsTool = defineTool({
+  name: "update_claude_notification_settings",
+  tables: { reads: ["claude_notification_settings"], writes: ["claude_notification_settings"] },
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "update_claude_notification_settings";
+    const patch: Row = {};
+    for (const f of SETTINGS_FIELDS) if (args[f] !== undefined) patch[f] = args[f];
+    if (Object.keys(patch).length === 0) {
+      throw fail(tool, `pass at least one of ${SETTINGS_FIELDS.join(", ")}.`);
+    }
+    if (patch.apps !== undefined && !Array.isArray(patch.apps)) {
+      throw fail(tool, "`apps` must be the whole list, an array of {app, enabled, plan_tool, progress_tool}.");
+    }
+    // The database validates everything else; its message comes back as a validation error.
+    const existing = await readSettings(ctx.db, tool);
+    const q = existing
+      ? ctx.db.from("claude_notification_settings").update(patch).eq("id", existing.id)
+      : ctx.db.from("claude_notification_settings").insert(patch);
+    const { data, error } = await q.select();
+    if (error) throw dbError(tool, existing ? "update" : "insert", error);
+    return { settings: ((data ?? []) as Row[])[0] ?? null, created: !existing };
   },
 });

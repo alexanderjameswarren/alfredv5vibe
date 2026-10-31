@@ -13,15 +13,15 @@ const m = await loadTool("claude-notifications.ts");
 const LOG_SETTINGS = settingsFor("claude_notifications", ["id", "user_id", "app", "job", "kind", "channel", "title",
   "body", "link", "local_date", "dedupe_key", "delivery_status", "delivery_detail", "created_at", "updated_at"]);
 
-/** Fake db: chains on a table resolve to `rows`; rpc answers from `rpcs`. Every call is logged. */
-function fakeDb({ rows = [], rpcs = {} } = {}) {
+/** Fake db: chains on a table resolve to `tables[table]` or `rows`; rpc answers from `rpcs`. Every call is logged. */
+function fakeDb({ rows = [], rpcs = {}, tables = {} } = {}) {
   const calls = [];
   const db = {
     calls,
     from(table) {
       const b = new Proxy({}, {
         get: (_t, k) => {
-          if (k === "then") return (res) => res({ data: rows, error: null, count: rows.length });
+          if (k === "then") return (res) => res(tables[table] ?? { data: rows, error: null, count: rows.length });
           return (...args) => { calls.push([table, k, ...args]); return b; };
         },
       });
@@ -109,4 +109,68 @@ test("get: a reversed range or a bad channel is refused", async () => {
   const db = fakeDb();
   await assert.rejects(m.getClaudeNotificationsTool.handler({ date_from: "2026-10-29", date_to: "2026-10-01" }, { db }), /after/);
   await assert.rejects(m.getClaudeNotificationsTool.handler({ channel: "sms" }, { db }), /`channel` must be one of/);
+});
+
+const SETTINGS_ROW = { id: "s1", window_start: "05:00", window_end: "20:00", max_per_hour: 3, max_per_day: null, apps: [] };
+
+test("settings tools: get is tier 1, update tier 2", () => {
+  assert.equal(m.getClaudeNotificationSettingsTool.tier, 1);
+  assert.equal(m.updateClaudeNotificationSettingsTool.tier, 2);
+});
+
+test("hourStart: the top of the current hour", () => {
+  assert.equal(m.hourStart(new Date("2026-10-31T16:42:10.500Z")), "2026-10-31T16:00:00.000Z");
+});
+
+test("get settings: the row plus pushes this hour and today, push channels, pending and sent", async () => {
+  const db = fakeDb({ tables: {
+    claude_notification_settings: { data: [SETTINGS_ROW], error: null },
+    claude_notifications: { data: null, error: null, count: 2 },
+  } });
+  const out = await m.getClaudeNotificationSettingsTool.handler({}, { db });
+  assert.deepEqual(out.settings, SETTINGS_ROW);
+  assert.equal(out.sent.this_hour, 2);
+  assert.equal(out.sent.today, 2);
+  assert.ok(db.calls.some(([t, k, c, v]) => t === "claude_notifications" && k === "in" && c === "channel"
+    && v.join() === "alfred_push,claude_push"));
+  assert.ok(db.calls.some(([, k, c, v]) => k === "in" && c === "delivery_status" && v.join() === "pending,sent"));
+  assert.ok(db.calls.some(([, k, c, v]) => k === "gte" && c === "created_at" && v === out.sent.hour_start));
+  assert.ok(db.calls.some(([, k, c, v]) => k === "eq" && c === "local_date" && v === out.sent.date));
+});
+
+test("get settings: none yet is null with a note", async () => {
+  const db = fakeDb({ tables: { claude_notifications: { data: null, error: null, count: 0 } } });
+  const out = await m.getClaudeNotificationSettingsTool.handler({}, { db });
+  assert.equal(out.settings, null);
+  assert.match(out.note, /update_claude_notification_settings/);
+});
+
+test("update settings: inserts only the passed fields when there is no row", async () => {
+  const db = fakeDb({ tables: { claude_notification_settings: { data: [], error: null } } });
+  const out = await m.updateClaudeNotificationSettingsTool.handler({ max_per_hour: 2, max_per_day: null }, { db });
+  assert.equal(out.created, true);
+  const ins = db.calls.find(([, k]) => k === "insert");
+  assert.deepEqual(ins[2], { max_per_hour: 2, max_per_day: null });
+});
+
+test("update settings: updates the existing row by id", async () => {
+  const db = fakeDb({ tables: { claude_notification_settings: { data: [SETTINGS_ROW], error: null } } });
+  const out = await m.updateClaudeNotificationSettingsTool.handler({ window_end: "19:00" }, { db });
+  assert.equal(out.created, false);
+  assert.deepEqual(db.calls.find(([, k]) => k === "update")[2], { window_end: "19:00" });
+  assert.ok(db.calls.some(([, k, c, v]) => k === "eq" && c === "id" && v === "s1"));
+});
+
+test("update settings: nothing passed or apps not a list is refused before the database", async () => {
+  const db = fakeDb();
+  await assert.rejects(m.updateClaudeNotificationSettingsTool.handler({}, { db }), /at least one of/);
+  await assert.rejects(m.updateClaudeNotificationSettingsTool.handler({ apps: { app: "arnold" } }, { db }), /whole list/);
+  assert.equal(db.calls.length, 0);
+});
+
+test("update settings: the trigger's message is a validation error", async () => {
+  const db = fakeDb({ tables: { claude_notification_settings: { data: null,
+    error: { code: "23503", message: 'unknown app "arnie". Use an id from get_apps.' } } } });
+  await assert.rejects(m.updateClaudeNotificationSettingsTool.handler({ max_per_hour: 2 }, { db }),
+    /validation error: unknown app "arnie"/);
 });

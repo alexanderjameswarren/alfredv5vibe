@@ -76,7 +76,12 @@ import {
   updateReminderTool,
 } from "../_shared/tools/reminders.ts";
 import { createArnoldPlanTool, getArnoldPlanTool, getArnoldProgressTool } from "../_shared/tools/arnold.ts";
-import { getClaudeNotificationsTool, logClaudeNotificationTool } from "../_shared/tools/claude-notifications.ts";
+import {
+  getClaudeNotificationSettingsTool,
+  getClaudeNotificationsTool,
+  logClaudeNotificationTool,
+  updateClaudeNotificationSettingsTool,
+} from "../_shared/tools/claude-notifications.ts";
 import { sendAlfredPushTool } from "../_shared/tools/alfred-push.ts";
 import { getAppsTool, checkSourceApp } from "../_shared/tools/apps.ts";
 import { checkSuggestedGroupId, suggestedGroupError, withSuggestedGroups } from "../_shared/tools/inbox-groups.ts";
@@ -3136,6 +3141,40 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(getClaudeNotificationsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_claude_notification_settings",
+    {
+      title: "Get Claude Notification Settings",
+      description:
+        "Read the shared settings the Claude hourly notifications task applies across every app: the window (window_start, window_end, HH:MM Pacific), max_per_hour, max_per_day (null = no shared daily cap) and apps (which apps take part, with the plan and progress tools to read for each). " +
+        "Returns { settings, sent }: `sent` counts push notifications (alfred_push and claude_push, pending or sent) across all apps this clock hour and today (Pacific), so the task checks the shared caps in this one call. settings is null, with a note, until they are first saved. Tier 1.",
+      inputSchema: {},
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getClaudeNotificationSettingsTool, args, token),
+  );
+
+  server.registerTool(
+    "update_claude_notification_settings",
+    {
+      title: "Update Claude Notification Settings",
+      description:
+        "Change the shared Claude notification settings. Only the fields you pass change; the row is created on first use. `apps` replaces the whole list. Refused with a plain message when a time is not HH:MM, the window is reversed, a cap is out of range, an app is listed twice or is not an id from get_apps. Returns { settings, created }. Tier 2.",
+      inputSchema: {
+        window_start: z.string().optional().describe("HH:MM Pacific, e.g. 05:00. No push before it."),
+        window_end: z.string().optional().describe("HH:MM Pacific, after window_start. No push after it."),
+        max_per_hour: z.number().int().optional().describe("Most pushes in one clock hour, all apps, 0-24."),
+        max_per_day: z.number().int().nullable().optional().describe("Most pushes in one Pacific day, all apps, 0-200; null for no shared cap."),
+        apps: z.array(z.object({
+          app: z.string(),
+          enabled: z.boolean(),
+          plan_tool: z.string(),
+          progress_tool: z.string(),
+        })).optional().describe("The whole list: [{app, enabled, plan_tool, progress_tool}], e.g. {app: \"arnold\", enabled: true, plan_tool: \"get_arnold_plan\", progress_tool: \"get_arnold_progress\"}."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateClaudeNotificationSettingsTool, args, token),
   );
 
   // --- Overwatch, Phase 3 (docs/technical-spec-overwatch-q4n.md §7) ---
