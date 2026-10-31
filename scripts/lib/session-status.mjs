@@ -76,7 +76,7 @@ export function projectFor(root, prev) {
  * wrong. `promptAt` is set by a prompt Alex typed, never by machine traffic:
  * Switchboard counts a report pushed after it as the answer to it.
  */
-export function nextStatus(prev, state, { root, sessionId, transcriptPath, runTag, event, promptAt, now = new Date() }) {
+export function nextStatus(prev, state, { root, sessionId, transcriptPath, runTag, event, promptAt, outsideScope, now = new Date() }) {
   const red =
     state === "approval" || state === "blocked" ? true : state === "processing" || state === "wrong" ? false : !!prev?.red;
   return {
@@ -91,6 +91,8 @@ export function nextStatus(prev, state, { root, sessionId, transcriptPath, runTa
     prompt_at: promptAt || prev?.prompt_at || null,
     red,
     event: event ?? null,
+    // The plan guard's last refusal: latched across every write until a Switchboard tap.
+    outside_scope: outsideScope !== undefined ? outsideScope : prev?.outside_scope ?? null,
   };
 }
 
@@ -164,13 +166,14 @@ export function writeAtomic(file, text) {
  * Record `state` for the checkout at `root`. Returns the record written, or
  * null if nothing was written. Never throws.
  */
-export function writeSessionStatus(root, state, { sessionId, transcriptPath, runTag, event, promptAt, file, onlyIf } = {}) {
+export function writeSessionStatus(root, state, { sessionId, transcriptPath, runTag, event, promptAt, outsideScope, file, onlyIf } = {}) {
   try {
-    if (!STATES.includes(state)) return null;
     const target = file ?? statusFile(root);
     const prev = readStatus(target);
+    if (typeof state === "function") state = state(prev);
+    if (!STATES.includes(state)) return null;
     if (onlyIf && !onlyIf(prev)) return null;
-    const record = nextStatus(prev, state, { root, sessionId, transcriptPath, runTag, event, promptAt });
+    const record = nextStatus(prev, state, { root, sessionId, transcriptPath, runTag, event, promptAt, outsideScope });
     writeAtomic(target, `${JSON.stringify(record, null, 2)}\n`);
     return record;
   } catch {
@@ -178,9 +181,16 @@ export function writeSessionStatus(root, state, { sessionId, transcriptPath, run
   }
 }
 
-/** Switchboard's tap on a "Wrong window" tile: back to waiting, only if it is still wrong. */
+/**
+ * Switchboard's tap on a red "Wrong window" or "Outside scope" tile: wrong goes
+ * back to waiting, any other state stays, and the outside-scope latch clears.
+ */
 export function clearWrong(root) {
-  return writeSessionStatus(root, "waiting", { event: "cleared on Switchboard", onlyIf: (prev) => prev?.state === "wrong" });
+  return writeSessionStatus(root, (prev) => (prev?.state === "wrong" ? "waiting" : prev?.state), {
+    event: "cleared on Switchboard",
+    outsideScope: null,
+    onlyIf: (prev) => prev?.state === "wrong" || !!prev?.outside_scope,
+  });
 }
 
 // `node scripts/lib/session-status.mjs clear-wrong <checkout>`, run by Switchboard.

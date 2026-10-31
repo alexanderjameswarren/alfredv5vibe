@@ -45,7 +45,7 @@ ms.statusFile := statusPath, ms.reportFile := reportPath
 ms.reportMetaFile := dir "\last-report.json"
 try FileDelete(ms.reportMetaFile)
 try FileDelete(BRIDGE_DIR "\chats.json")
-; Paired with a finished chat, so a CLI that stops waiting shows yellow (bridge spec, section 5).
+; Paired with a finished chat, so a CLI that stops waiting shows a colour (bridge spec, section 5).
 ms.paused := false, ms.chromeTitle := "", ms.chatLink := "https://claude.ai/chat/smoke-start", ms.chatLinkFor := "smoke-proj"
 fakeWindows := []
 for smokeCode in order    ; not `code`: the panel's functions use a local code
@@ -106,9 +106,11 @@ TileField(id, field) => TileOf(id).Get(field, "(no tile)")
 ; --- states -----------------------------------------------------------------
 Step("processing", "2026-09-30T10:00:00.000Z", false)
 Expect("processing", ms.kind, "processing")
+FileOpen(ms.reportMetaFile, "w", "UTF-8-RAW").Write('{"run_tag":"","pushed_at":"' IsoAgo(0) '"}')
 Step("waiting", "2026-09-30T10:01:00.000Z", false)
 Expect("finished turn waits", ms.kind, "waiting")
-Expect("finished turn alerts", ms.unseen, true)
+Expect("finished turn with a report alerts", ms.unseen, true)
+FileDelete(ms.reportMetaFile)
 ButtonClick("main")
 Expect("click marks seen", ms.unseen, false)
 Expect("click arranges", arranged.Length ? arranged[1] : "", "main")
@@ -273,13 +275,15 @@ Expect("bound main shows project", TileField("cli:main", "name"), "main · rem")
 Expect("bound main not free", ms.free, false)
 Expect("bound main chat follows binding", FindChromeWindow(ms), 602)
 
-; --- yellow flashes five times, then stays solid ---------------------------------
+; --- orange (Report ready) flashes five times, then stays solid ---------------------
 ms.chatLink := "https://claude.ai/chat/abc-1", ms.chatLinkFor := "rem-j7p"   ; unbinding above dropped the link
 WriteChats("https://claude.ai/chat/abc-1|finished|9999||1|1|abc")
 FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"processing","since":"2026-09-30T10:08:00.000Z","project":"rem-j7p","red":false}')
 Refresh()
+FileOpen(ms.reportMetaFile, "w", "UTF-8-RAW").Write('{"run_tag":"","pushed_at":"' IsoAgo(0) '"}')
 FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"waiting","since":"2026-09-30T10:09:00.000Z","project":"rem-j7p","red":false}')
 Refresh()
+Expect("report ready", ms.color " / " ms.label, "orange / Report ready")
 Expect("bound main alerts", ms.unseen, true)
 lit := 0
 blinkOn := false
@@ -288,9 +292,13 @@ Loop 30 {
     if SubStr(ms.painted, 1, 6) = BLINK_COLOR
         lit++
 }
-Expect("yellow lit five times", lit, 5)
-Expect("then solid yellow", SubStr(ms.painted, 1, 6), COLORS["yellow"])
+Expect("orange lit five times", lit, 5)
+Expect("then solid orange", SubStr(ms.painted, 1, 6), COLORS["orange"])
 Expect("still unseen until clicked", ms.unseen, true)
+FileDelete(ms.reportMetaFile)
+Refresh()
+Expect("then Your turn", ms.color " / " ms.label, "yellow / Your turn")
+Expect("Your turn still unseen", ms.unseen, true)
 
 ; --- state model: one project through every colour ------------------------------
 T9 := "rem-j7p-s9-aaaa", T10 := "rem-j7p-s10-bbbb"
@@ -303,18 +311,19 @@ Expect("no report for the run: Check CLI", ms.color " / " ms.label, "red / Check
 Expect("Check CLI alerts", ms.unseen, true)
 FileOpen(ms.reportMetaFile, "w", "UTF-8-RAW").Write('{"run_tag":"' T9 '","pushed_at":"' IsoAgo(10) '"}')
 Refresh()
-Expect("report not read: Send cli", ms.color " / " ms.label, "orange / Send cli")
+Expect("report not read: Report ready", ms.color " / " ms.label, "orange / Report ready")
 WriteChats("https://claude.ai/chat/abc-1|finished|5|" T10 "|1|1|abc")
 Refresh()
-Expect("newer tag: Paste prompt", ms.color " / " ms.label, "purple / Paste prompt")
+Expect("newer tag: Prompt to paste", ms.color " / " ms.label, "purple / Prompt to paste")
 Expect("handover tile shows the new step only", TileField("cli:main", "step"), "→s10")
-Expect("purple tile", TileField("cli:main", "color") " / " TileField("cli:main", "action"), "purple / Paste prompt")
+Expect("purple tile", TileField("cli:main", "color") " / " TileField("cli:main", "action"), "purple / Prompt to paste")
 arranged := []
 ButtonClick("main")
 Expect("purple click arranges, nothing more", JoinCodes(arranged), "main|")
 WriteChats("https://claude.ai/chat/abc-1|finished|4|" T9 "|1|1|abc")
 Refresh()
 Expect("no newer tag: Your turn", ms.color " / " ms.label, "yellow / Your turn")
+Expect("yellow tile", TileField("cli:main", "color"), "yellow")
 Expect("paired chat: both icons", TileField("cli:main", "icon"), "both")
 
 ; --- where the keyboard lands after a click ----------------------------------------
@@ -323,12 +332,12 @@ chromeWindows := [{hwnd: 701, title: "abc chat - Claude - Google Chrome"}]
 focusReply := Map("ok", true, "windowTitle", "abc chat - Claude")
 composerCalls := [], activated := [], placed := [], actionCalls := [], pointed := []
 Arrange(ms)
-Expect("yellow: pointer to Chrome", JoinCodes(pointed), "701|")
-Expect("yellow: cursor to the chat's message box", composerCalls.Length = 1 ? composerCalls[1] : composerCalls.Length, true)
-Expect("yellow: Chrome placed last, VS Code not re-activated", JoinCodes(placed) "/" activated.Length, "99@1|701@2|/0")
-Expect("yellow never types", JoinCodes(actionCalls), "focus|")
+Expect("your turn: pointer to Chrome", JoinCodes(pointed), "701|")
+Expect("your turn: cursor to the chat's message box", composerCalls.Length = 1 ? composerCalls[1] : composerCalls.Length, true)
+Expect("your turn: Chrome placed last, VS Code not re-activated", JoinCodes(placed) "/" activated.Length, "99@1|701@2|/0")
+Expect("your turn never types", JoinCodes(actionCalls), "focus|")
 
-; --- Send cli: orange only, and the extension decides on the live page --------------
+; --- Report ready: orange only types cli, and the extension decides on the live page --
 FileOpen(ms.reportMetaFile, "w", "UTF-8-RAW").Write('{"run_tag":"' T9 '","pushed_at":"' IsoAgo(0) '"}')
 Refresh()
 Expect("orange again", ms.color, "orange")
@@ -374,6 +383,13 @@ Expect("back to yellow", ms.color, "yellow")
 WriteChats("https://claude.ai/chat/abc-1|responding|3||1|1|abc")
 Refresh()
 Expect("Claude writing is green", ms.color " / " ms.label, "green / Claude writing")
+; The plan guard's latch: red over a running CLI, from the status file.
+FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"processing","since":"' IsoAgo(1) '","project":"main","red":false,"run_tag":"' T9 '","outside_scope":"undeclared update: a.js"}')
+Refresh()
+Expect("outside scope: red", ms.color " / " ms.label, "red / Outside scope")
+Expect("outside scope tile", TileField("cli:main", "color"), "red")
+Step("waiting", IsoAgo(1), false, T9)
+Expect("latch gone: green again", ms.color, "green")
 FileDelete(BRIDGE_DIR "\chats.json")
 Refresh()
 Expect("no chat file: grey", ms.color " / " ms.label, "grey / chat unknown")

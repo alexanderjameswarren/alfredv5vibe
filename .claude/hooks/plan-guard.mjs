@@ -31,7 +31,15 @@ const SHELL_TOOLS = new Map([["Bash", "bash"], ["PowerShell", "powershell"]]);
 const LOG_RELATIVE = ".clip/claims-guard.log";
 const LOG_MAX_BYTES = 256 * 1024;
 
-const entry = { tool: "?", root: null, cwd: null, tag: null };
+const entry = { tool: "?", root: null, cwd: null, tag: null, sessionId: null };
+
+// The Switchboard status writer, loaded so that a broken one cannot change a decision.
+let writeSessionStatus = () => null;
+try {
+  ({ writeSessionStatus } = await import("../../scripts/lib/session-status.mjs"));
+} catch {
+  /* no status this time */
+}
 
 function log(decision, detail) {
   try {
@@ -56,6 +64,12 @@ function allow(detail) {
 
 function block(reason, record) {
   log("BLOCK", reason);
+  // Switchboard's red "Outside scope", until tapped: Alex does not read the CLI's reply.
+  try {
+    writeSessionStatus(entry.root, "processing", { sessionId: entry.sessionId, event: "outside scope", outsideScope: reason });
+  } catch {
+    /* never the reason a call passes */
+  }
   const s = record.scope;
   const list = (xs) => (xs.length ? xs.join(", ") : "nothing");
   process.stderr.write(
@@ -87,6 +101,7 @@ function main() {
   }
   entry.tool = payload?.tool_name ?? "?";
   entry.cwd = payload?.cwd ?? process.cwd();
+  entry.sessionId = payload?.session_id ?? null;
   const input = payload?.tool_input ?? {};
   const shell = SHELL_TOOLS.get(entry.tool);
   if (!EDIT_TOOLS.has(entry.tool) && !shell) allow("not an edit or a command");

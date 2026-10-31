@@ -14,6 +14,7 @@
   --red:#C62828; --onRed:#FFFFFF; --orange:#F57C00; --onOrange:#1A1200;
   --purple:#7E57C2; --onPurple:#FFFFFF;
   --yellow:#FBC02D; --onYellow:#1A1600; --green:#2E7D32; --onGreen:#FFFFFF;
+  --tan:#E4D2C3; --onTan:#2A2520;   /* Waiting on SQL (Alfred --secondary) */
   --grey:#7A8494; --onGrey:#FFFFFF; --dbRed:#C62828;
   --paused:#3F4652; --onPaused:#FFFFFF;   /* darker than chat grey; white text about 10:1 */
   --idle:.3;   /* an arrow with nothing to scroll to, and the status button behind its icon */
@@ -21,9 +22,11 @@
   --nameSize:30px; --actSize:26px; --metaSize:26px;
 }
 @media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){--bg:#1C222C;--rail:#262E3A;--railBtn:#34404F;--railText:#EEF1F5;--line:#3D4858;--grey:#4E5868;--onGrey:#DDE2EA;--dbRed:#FF8A80;--paused:#2B323D;--onPaused:#E6EAF0}
+  :root:not([data-theme="light"]){--bg:#1C222C;--rail:#262E3A;--railBtn:#34404F;--railText:#EEF1F5;--line:#3D4858;--grey:#4E5868;--onGrey:#DDE2EA;--dbRed:#FF8A80;--paused:#2B323D;--onPaused:#E6EAF0;
+    --red:#B3261E;--orange:#E07000;--purple:#6A48B0;--yellow:#E0A800;--green:#256B29;--tan:#B8A595}
 }
-:root[data-theme="dark"]{--bg:#1C222C;--rail:#262E3A;--railBtn:#34404F;--railText:#EEF1F5;--line:#3D4858;--grey:#4E5868;--onGrey:#DDE2EA;--dbRed:#FF8A80;--paused:#2B323D;--onPaused:#E6EAF0}
+:root[data-theme="dark"]{--bg:#1C222C;--rail:#262E3A;--railBtn:#34404F;--railText:#EEF1F5;--line:#3D4858;--grey:#4E5868;--onGrey:#DDE2EA;--dbRed:#FF8A80;--paused:#2B323D;--onPaused:#E6EAF0;
+  --red:#B3261E;--orange:#E07000;--purple:#6A48B0;--yellow:#E0A800;--green:#256B29;--tan:#B8A595}
 *,*::before,*::after{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verdana,"Segoe UI",sans-serif;
@@ -59,6 +62,7 @@ body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verd
   justify-content:space-between;text-align:left;font:inherit;position:relative;overflow:hidden;min-height:0;touch-action:pan-y}
 .t-red{background:var(--red);color:var(--onRed)} .t-orange{background:var(--orange);color:var(--onOrange)}
 .t-purple{background:var(--purple);color:var(--onPurple)}
+.t-tan{background:var(--tan);color:var(--onTan)}
 .t-yellow{background:var(--yellow);color:var(--onYellow)} .t-green{background:var(--green);color:var(--onGreen)}
 .t-grey{background:var(--grey);color:var(--onGrey)}
 .t-paused{background:var(--paused);color:var(--onPaused);font-style:italic}
