@@ -121,3 +121,15 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/overwatch-ingest/deno.json"
 entrypoint = "./functions/overwatch-ingest/index.ts"
+
+[functions.switchboard-runner]
+enabled = true
+# 🛑 JWT verification OFF. /queue is called by scripts/sql-queue.mjs, which holds no Supabase session, and checks
+# SWITCHBOARD_QUEUE_SECRET itself (length check plus timingSafeEqual). The run routes (/preview, /dry-run, /approve)
+# check Alex's JWT themselves, so the gateway must not refuse /queue first.
+#
+# ⚠️ Declared BEFORE THE FIRST DEPLOY, for the reason given under overwatch-ingest. Re-check after every deploy: a POST
+# to /queue without the key must come back 401 with this function's own body (`{"ok":false,"error":"unauthorized"}`).
+verify_jwt = false
+import_map = "./functions/switchboard-runner/deno.json"
+entrypoint = "./functions/switchboard-runner/index.ts"

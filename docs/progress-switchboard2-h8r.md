@@ -40,7 +40,8 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 2 | 2.2 | Write the plan into the progress file and spec | — | done (s25-m4tc) | 2026-10-31 |
 | 2 | 2.3 | Queue schema | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:switchboard_settings`, `db:fn:switchboard_issue_link`, `db:fn:switchboard_consume_link` | done (s26-r7kd, s26b-t3wn): migration 189 run by Alex; all 40 verify checks passed; CONFORMANT (97 tables); checkpointed | 2026-10-31 |
 | 2 | 2.3b | `.clip` exemption only inside a thread's own checkout; plan guard refuses other checkouts | — | done (s27-h9qp) | 2026-10-31 |
-| 2 | 2.4 | Runner function and CLI queue | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_consume_link`, `db:deploy` | todo | |
+| 2 | 2.4 | Runner function and CLI queue | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_consume_link`, `db:deploy` | done (s28-w2bv, s28b-k5fd, s28c-n8jx): deployed, verify_jwt off, `/queue` smoke-tested; run routes first exercised at 2.6 | 2026-10-31 |
+| 2 | 2.4b | `deployTargets` skips flag values and stops at redirects | — | todo | |
 | 2 | 2.5 | MCP tools: issue a link, get a run | `db:fn:switchboard_issue_link`, `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` | todo | |
 | 2 | 2.6 | Approve page | — | todo | |
 | 2 | 2.7 | Extension: approval link and result | — | todo | |
@@ -226,6 +227,13 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: switchboard-runner
 - SQL: none
 
+**2.4b, fix `deployTargets`** (estimated run: 4m; added in s28c). `deployTargets` in scripts/lib/plan-scope.mjs takes every word after `deploy` that does not start with `-` as a function name, so `deploy x --project-ref abc 2>&1` was refused as "undeclared deploy: abc, 2>". Skip flag values, stop at redirects, with tests. A real second function name must still be refused.
+- create: nothing
+- update: scripts/lib/plan-scope.mjs, scripts/lib/plan-scope.test.mjs
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
 **2.5, MCP tools: issue a link, get a run** (database step; estimated run: 8m). `issue_switchboard_link` (tier 2) writes the link hash through `switchboard_issue_link`, which refuses a second live link. `get_switchboard_run` (tier 1). Alex tests: ask Claude to issue a link for the queued item, then a second, which is refused.
 - create: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs
 - update: supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
@@ -294,17 +302,18 @@ Database items per step are in the table at the top. Report unread and lane orde
 |---|---|---|
 | 0 | Fixes, boundaries, plan guard | 8 |
 | 1 | Send link, fallback page, skill rule, tile states, estimates, layout | 10 |
-| 2 | SQL queue, read-only queries (2.2-2.12 and 2.3b, after the 2.1 plan) | 12 |
+| 2 | SQL queue, read-only queries (2.2-2.12, 2.3b and 2.4b, after the 2.1 plan) | 13 |
 | 3 | Multi-repo and clients | 18 |
 | 4 | Salesforce reads | 5 |
 | 5 | Git and Salesforce by link | 6 |
 | 6 | Spec files, archiving | 2 |
 | 7 | npm start per tile | 2 |
 | 8 | Remote devices | 4 |
-| | **total** | **67** |
+| | **total** | **68** |
 
 ## Decisions
 
+- **s28, on the runner (Alex approved):** one run at a time with several queued; a script's outer begin and commit dropped, other transaction control refused; one command per send; `/preview`; an index on a table the same script creates is not slow; run routes open to any origin, with access by JWT. Smoke-test action 26f0cc8f-6ef0-4f14-81da-a915ad086e5b (`select 1`) stays queued; nothing runs it without a link. `scripts/sql-queue.mjs` uses `process.exitCode`, because `process.exit` straight after an HTTPS fetch exits 127 on Windows; a plain-HTTP test does not reproduce that, so it was checked by hand over HTTPS.
 - **s27, the `.clip` gap closed:** `foreignPath` no longer exempts `.clip/` in another checkout, so the claims guard refuses main's. A sibling worktree's was already refused there, because its path is not exempt from main's root. The plan guard now uses `foreignPath` for edits and shell writes and refuses "writes into another checkout". `.git/` and the other exempt folders in main stay as they were. Other threads get this once they sync.
 - **s26b, on the 2.3 schema (Alex approved):** read-only grants on `switchboard_actions` and `switchboard_runs`; a trigger that fixes payload, fingerprint, kind and headline; no audit on `switchboard_runs`, so results do not outlive the prune; `link_hash` a secret column. The numbered file is `189_switchboard_queue.sql`, the name in Alex's scope, not the `189_queue.sql` that `number-migration` suggested. Open for 2.7: nothing writes `chat_url` yet.
 - **s25, on the Phase 2 plan (Alex):**
@@ -595,3 +604,6 @@ Database items per step are in the table at the top. Report unread and lane orde
 | s26 (2.3, stopped at the block) | 4m44s (estimate 12m) |
 | s26b (2.3) | 2m14s (estimate 8m) |
 | s27 (2.3b) | 1m55s (estimate 5m) |
+| s28 (2.4, code) | 5m24s (estimate 15m) |
+| s28b (2.4, stopped at the block) | 0m45s (estimate 6m) |
+| s28c (2.4, deploy and smoke) | deploy not timed; 1m00s measured after it (estimate 4m) |
