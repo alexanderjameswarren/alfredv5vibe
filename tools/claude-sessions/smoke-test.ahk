@@ -461,18 +461,34 @@ Expect("send: prompt file taken", FileExist(BRIDGE_DIR "\prompt-rem-j7p.json"), 
 Step("waiting", IsoAgo(1), false, "rem-j7p-s7-abcd")
 Expect("send: delivered, nothing pending", ms.label != "Not delivered" && ms.sendTag = "", true)
 
-; Focus in an editor: the focus key is tried once, then nothing is pasted.
-focusNow := {name: "Editor content", helpText: "", className: "inputarea monaco-mouse-cursor-text"}
+; Focus in an editor or terminal: one press of the focus key, then focus is read again.
+; focusSeq: what each read returns; the last one repeats.
+focusSeq := []
+focusReader := () => focusSeq.Length > 1 ? focusSeq.RemoveAt(1) : focusSeq[1]
+editorEl := {name: "Editor content", helpText: "", className: "inputarea monaco-mouse-cursor-text"}
+termEl := {name: "Terminal 1, bash", helpText: "", className: "xterm-helper-textarea"}
+focusSeq := [editorEl, {name: "Message Claude", helpText: "", className: ""}]
 pasted := [], keys := []
+Step("waiting", IsoAgo(5), false, "rem-j7p-s7-abcd")
 WritePrompt("rem-j7p-s8-efgh")
 Refresh()
-Expect("editor: nothing pasted", pasted.Length, 0)
-Expect("editor: focus key tried once", JoinCodes(keys), "^{Esc}|")
-Expect("editor: red Not sent", ms.color " / " ms.label, "red / Not sent: focus is in an editor or terminal")
-Expect("editor: tag freed for a retry", FileRead(BRIDGE_DIR "\sent.json", "UTF-8") ~= "rem-j7p-s8-efgh", 0)
+Expect("editor, then input: pasted once", pasted.Length = 1 && pasted[1] == SP, true)
+Expect("editor, then input: focus key once", JoinCodes(keys), "^{Esc}|")
+Expect("editor, then input: no Not sent", InStr(ms.label, "Not sent"), 0)
+Step("waiting", IsoAgo(1), false, "rem-j7p-s8-efgh")
+focusSeq := [termEl]
+pasted := [], keys := []
+WritePrompt("rem-j7p-s9-ijkl")
+Refresh()
+Expect("terminal stays: nothing pasted", pasted.Length, 0)
+Expect("terminal stays: focus key once", JoinCodes(keys), "^{Esc}|")
+Expect("terminal stays: red Not sent", ms.color " / " ms.label
+    , "red / Not sent: the focus could not be moved to Claude's input: focus is in an editor or terminal")
+Expect("terminal stays: tag freed for a retry", FileRead(BRIDGE_DIR "\sent.json", "UTF-8") ~= "rem-j7p-s9-ijkl", 0)
 ButtonClick("main")
 Refresh()
-Expect("a tap clears Not sent", ms.label != "Not sent: focus is in an editor or terminal", true)
+Expect("a tap clears Not sent", InStr(ms.label, "Not sent"), 0)
+focusReader := () => focusNow
 
 ; Two windows for the project: refuse, never guess.
 focusNow := {name: "Message Claude", helpText: "", className: ""}

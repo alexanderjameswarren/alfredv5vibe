@@ -170,13 +170,17 @@ PasteIntoClaude(hwnd, text) {
     Sleep(150)
     if !windowIsActive(hwnd)
         return "its VS Code window would not come to the front"
-    if FocusVerdict(focusReader(), names) != "" {
-        ; One press of Claude Code's focus key, which toggles: only when focus is elsewhere.
+    if (verdict := FocusVerdict(focusReader(), names)) != "" {
+        if !FocusKeyHelps(verdict)
+            return verdict
+        ; Focus left in an editor or terminal (after a gitsync, say): one press of Claude
+        ; Code's focus key, which toggles, so only when focus is elsewhere. Nothing is typed
+        ; until UI Automation confirms Claude's input.
         keySender(IniRead(SETTINGS_INI, "send", "focusKey", "^{Esc}"))
         Sleep(300)
         if !windowIsActive(hwnd)
             return "the focus key took focus out of VS Code"
-        if (verdict := FocusVerdict(focusReader(), names)) != ""
+        if (verdict := FocusAfterKey(focusReader(), names)) != ""
             return verdict
     }
     if !windowIsActive(hwnd)

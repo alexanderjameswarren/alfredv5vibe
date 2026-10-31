@@ -437,7 +437,8 @@ Every report ends with the next step's block, copied from here. The progress fil
   - `TileInfoWidth` scales the room by 26/30: 225 / 197 / 185. "1 held · Blocking 1" no longer fits, and a holder's git counts drop beside "s3 · Blocking 1".
   - Fixes: `TimerText` keeps "0:33 / 20:00" together with non-breaking spaces and breaks at the slash past 8 digits; tabular digits on the action line. No estimate draws the short green `#C5E1A5`. Orange is "Send cli" again.
   - Lane order: no lane data in the panel. See "Database items by step (Phase 2)".
-  - Follow-up (s23c-p8rl), done: the purple label is "Prompt ready" (was "Prompt to paste"); wording only, in status.ahk, the tests and spec §7.1-7.2. tools/claude-sessions/README.md still says "Paste prompt" (out of scope).
+  - Follow-up (s23c-p8rl), done: the purple label is "Prompt ready" (was "Prompt to paste"); wording only, in status.ahk, the tests and spec §7.1-7.2. tools/claude-sessions/README.md still said "Paste prompt"; fixed in s23d.
+  - Send follow-up (s23d-f2ck), done: focus left in an editor or terminal gets one press of `[send] focusKey` (`^+!c` in Alex's settings), then a fresh UI Automation read; paste only into Claude's input, else "the focus could not be moved to Claude's input: …". `FocusKeyHelps` (no key press when the input is not set up) and `FocusAfterKey` in status.ahk; bridge.ahk uses them. The refusal in live use came from the old keybinding's `editorTextFocus` condition, which made the key do nothing in the terminal. Spec §7.1 step 5.
   - Follow-up (s23b-r6gb), done: one gradual running colour replaces the three bands. `greenrun` blends `#43A047` into `#C5E1A5` (dark `#388E3C` into `#AED581`) by elapsed ÷ (estimate − 60s); `greenshort` from a minute before the estimate; `overrun` past it, also for estimates of a minute or less. `RunBlend` and `BlendHex` in status.ahk; the page uses `color-mix` with the tile's `blend`, and the old panel paints `BlendHex`. The strip has a faint full-width track (`#111111` at 18%). `#8BC34A` and `greenlong`/`greenmid` are gone. Spec §7.5 and §7.6 updated.
 
 ## Deferred and parked
@@ -484,3 +485,4 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s23 (1.10 + fixes) | 6m14s (estimate 10m) |
 | s23b (1.10 follow-up) | 3m03s (estimate 5m) |
 | s23c (Prompt ready) | 1m00s (estimate 2m) |
+| s23d (focus key) | 3m43s (estimate 4m) |
