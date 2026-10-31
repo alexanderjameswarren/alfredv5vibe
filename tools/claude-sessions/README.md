@@ -60,7 +60,7 @@ CLI's run-tag step (`s9`, or `s9 -> s10` when Claude has issued a newer prompt).
 | Green | `CLI working` / `Both working` | VS Code |
 | Green | `Claude writing` | the chat's message box |
 | Orange | `Send cli`: there's a report Claude hasn't read. A click types and sends `cli` if the box is empty and Claude is idle. | the chat |
-| Purple | `Paste prompt`: Claude issued a newer run tag. Nothing is typed. | the chat |
+| Purple | `Prompt ready`: Claude issued a newer run tag. Nothing is typed. | the chat |
 | Yellow | `Your turn` | the chat |
 | Grey | `chat unknown`, `paused`, `closed`, `free`, `no status` | the chat |
 

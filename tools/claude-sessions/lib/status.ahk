@@ -415,6 +415,15 @@ FocusVerdict(el, inputNames) {
     return "focus is not in Claude's input (" el.name ")"
 }
 
+; Whether one press of the focus key could fix this verdict: not when nothing is set up.
+FocusKeyHelps(verdict) => verdict != "" && !InStr(verdict, "not set up")
+
+; After that one press: why focus is still not Claude's input, or "".
+FocusAfterKey(el, inputNames) {
+    why := FocusVerdict(el, inputNames)
+    return why = "" ? "" : "the focus could not be moved to Claude's input: " why
+}
+
 ; After a paste: "delivered" once the prompt hook records `sentTag`, "missing"
 ; after `timeoutMs`, else "waiting". Ticks are A_TickCount values.
 DeliveryState(sentTag, runTag, sentAt, now, timeoutMs) => runTag = sentTag ? "delivered"
