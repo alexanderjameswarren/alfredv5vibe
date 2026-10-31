@@ -35,6 +35,7 @@ export function git(args, cwd) {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
   }).trim();
 }
 
@@ -57,7 +58,7 @@ export function removeEmptyDir(dir) {
 
 /** Run git and hand back the result without throwing. */
 export function tryGit(args, cwd) {
-  const r = spawnSync("git", args, { cwd, encoding: "utf8" });
+  const r = spawnSync("git", args, { cwd, encoding: "utf8", windowsHide: true });
   return {
     ok: r.status === 0,
     code: r.status,
@@ -72,7 +73,7 @@ export function tryGit(args, cwd) {
  */
 export function gitLive(args, cwd) {
   say(`\n${commandEcho(args)}`);
-  const r = spawnSync("git", args, { cwd, stdio: "inherit" });
+  const r = spawnSync("git", args, { cwd, stdio: "inherit", windowsHide: true });
   return r.status === 0;
 }
 
@@ -147,6 +148,7 @@ export function changedFiles(cwd) {
   const out = execFileSync("git", ["status", "--porcelain=v1", "-z", "-uall"], {
     cwd,
     encoding: "utf8",
+    windowsHide: true,
   });
   const parts = out.split("\0");
   const files = [];
@@ -1014,6 +1016,7 @@ export function runAppBuild(cwd, { spawn = spawnSync, platform = process.platfor
     stdio: "inherit",
     env: { ...env, CI: "true" },
     shell: win,
+    windowsHide: true,
   });
   return r.status === 0;
 }

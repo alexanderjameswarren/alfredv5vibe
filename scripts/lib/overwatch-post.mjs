@@ -229,7 +229,7 @@ function fromWindowsUserEnv(name) {
     const out = execFileSync(
       "powershell.exe",
       ["-NoProfile", "-Command", `[Environment]::GetEnvironmentVariable('${name}','User')`],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 15000 },
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 15000, windowsHide: true },
     );
     return out.trim() || null;
   } catch {
