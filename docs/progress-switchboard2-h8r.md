@@ -35,7 +35,7 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 1 | 1.7 | Running colours by time left | — | done (s20-m7qc) | 2026-10-31 |
 | 1 | 1.8 | Estimate on the tile; Estimate vs actual | — | done (s21-p4hw) | 2026-10-31 |
 | 1 | 1.9 | Progress strip | — | done (s22-g3lm) | 2026-10-31 |
-| 1 | 1.10 | Six-tile layout and lane order | — | todo | |
+| 1 | 1.10 | Six-tile layout and lane order | — | partly done (s23-x5lt): layout done; lane order needs lane data, moved to Phase 2 | 2026-10-31 |
 | 2 | 2.1-2.10 | SQL queue, links, click pages, runner, read-only queries: spec §8 | see below | todo | |
 | 3 | 3.1-3.18 | The move, settings, `sb` commands, Salesforce guard, deploy wrapper, PII hold: spec §9 | — | todo | |
 | 4 | 4.1-4.5 | Salesforce reads: spec §10 | the Phase 2 tables, re-claimed | todo | |
@@ -179,9 +179,17 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: nothing
 - SQL: none
 
+**2.1, Phase 2 plan** (estimated run: 6m; written in s23, since the progress file had no 2.1 block). Read-only: break 2.1-2.10 (spec §8) into steps, each with its scope block, database items and estimate; run `claims.mjs check` on all of it; fold in Report unread (from 1.6) and the lane read (from 1.10). Changes nothing but this file.
+- create: nothing
+- update: nothing
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
 **Database items by step (Phase 2):**
 - **2.1-2.4:** `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_issue_link`, `db:fn:switchboard_consume_link`, `db:deploy`.
 - **2.7-2.8:** `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read only), `db:deploy`.
+- **Lane order (moved from 1.10, s23):** the panel orders tiles by portfolio lane once it can read each project's lane from Alfred: the same function and key as Report unread, plus a read of the portfolio plan's table (name to confirm at 2.1). The panel caches lane by project code in its settings folder and refreshes it every few minutes; an unknown lane sorts last.
 - **Report unread (moved from 1.6, s19c):** orange clears when the report's inbox item is archived. Interface 3: `db:fn:clip-capture` (or a new function) for a status read by inbox id, its own key, a read of `db:table:inbox`, `db:deploy`; then the panel polls it for the tile's last report. Fold into whichever 2.x step builds the function and key.
 
 ## Estimate
@@ -405,6 +413,7 @@ Every report ends with the next step's block, copied from here. The progress fil
   - Order after the reds: Waiting on SQL (tan), Prompt to paste (purple), Report ready (orange), Running (green), Your turn (yellow, flashes; green "Claude writing" while Claude writes).
   - s19c: the slate blue "Talking" from s19 is removed; it lost Your turn's flash, the "Claude is waiting on you" alert. Live test passed for the labels and the Outside scope latch.
   - **Outside scope is a latched field, not the `wrong` state** the spec proposed: the Stop hook rewrites the state to waiting at the end of every turn, so `wrong` would vanish. `session-status.json` `outside_scope` holds the refusal and carries over every write; `clear-wrong` (a tap) clears it and leaves the CLI's state alone.
+  - s23: the orange label is "Send cli" again (it says what the tap does); "Report ready" below is that same state.
   - Report ready keeps today's test (the report was pushed after the chat last changed) and only shows while the CLI is idle. True "unread until archived" moved to Phase 2 (see "Database items by step").
   - Waiting on SQL is wired (`sqlWaiting`) but nothing sets it until Phase 2.
   - Not sent was already red until tapped (1.3).
@@ -423,6 +432,11 @@ Every report ends with the next step's block, copied from here. The progress fil
 - **1.9 (s22-g3lm), progress strip, done:**
   - An 8px strip along a running tile's bottom edge, `StripPercent` 0-100 from elapsed over the estimate, stopping at full; red `#C62828` past the estimate. Colour `rgba(17,17,17,.7)`, visible on all three greens (white was not). Only for CLI or Both working with the run's own estimate; not on writing or paused tiles. Touch page only.
   - `progressstrip` in `[panel]` of settings.ini, default 1. "Progress strip" on the tray menu and the tile's right-click menu toggles it at once (`SetProgressStrip` refreshes). Spec §7.6 updated.
+- **1.10 (s23-x5lt), six-tile layout, done; lane order moved to Phase 2:**
+  - 3 × 2 grid (`ROWS = 2`), tiles about 288 × 240. Name 39px, action 34px, meta 30px (not 34: block lines would be cut off), strip 10px. A seventh tile is on page two; the down arrow reads "7+".
+  - `TileInfoWidth` scales the room by 26/30: 225 / 197 / 185. "1 held · Blocking 1" no longer fits, and a holder's git counts drop beside "s3 · Blocking 1".
+  - Fixes: `TimerText` keeps "0:33 / 20:00" together with non-breaking spaces and breaks at the slash past 8 digits; tabular digits on the action line. No estimate draws the short green `#C5E1A5`. Orange is "Send cli" again.
+  - Lane order: no lane data in the panel. See "Database items by step (Phase 2)".
 
 ## Deferred and parked
 
@@ -465,3 +479,4 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s21 (1.8) | 3m40s (estimate 7m) |
 | s21b (1.8 follow-up) | 2m28s (estimate 4m) |
 | s22 (1.9 + greens) | 6m35s (estimate 7m) |
+| s23 (1.10 + fixes) | 6m14s (estimate 10m) |

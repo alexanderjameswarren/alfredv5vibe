@@ -240,23 +240,23 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 
 | State | When | Colour (light) | Text |
 |---|---|---|---|
-| Running | The CLI is working. It pales through three greens as the estimate runs out (§7.5). | green `#2E7D32` with no estimate (today's "CLI working") | white |
-| Report ready | The CLI is idle and a report was pushed after the chat last changed. A tap types "cli". | orange `#F57C00` (was "Send cli") | `#1A1200` |
+| Running | The CLI is working. It pales through three greens as the estimate runs out (§7.5). | greens `#43A047` / `#8BC34A` / `#C5E1A5`; `#C5E1A5` with no estimate | `#111111` |
+| Send cli | The CLI is idle and a report was pushed after the chat last changed. A tap types "cli". The label says what the tap does (briefly "Report ready" in 1.6; restored in s23). | orange `#F57C00` | `#1A1200` |
 | Prompt to paste | A chat reply carries a run tag the CLI has not received. Display only: sending is the reply's link (§7.1). | purple `#7E57C2` (was "Paste prompt") | white |
 | Your turn | The CLI is idle, its report is handled, and Claude has finished a reply: Alex's move. It flashes. While Claude writes, the tile is green "Claude writing". | yellow `#FBC02D` (unchanged) | `#1A1600` |
 | Waiting on SQL | A queued SQL item for this project awaits a click (Phase 2). | Alfred light tan `#E4D2C3` (`--secondary`) | `#2A2520` |
 
-- **Precedence:** Waiting on SQL, then Prompt to paste, then Report ready, then Running, then Your turn.
+- **Precedence:** Waiting on SQL, then Prompt to paste, then Send cli, then Running, then Your turn.
 - **Unchanged:** red (Approve, Wrong window, Check CLI) keeps priority over all five, and the free, closed and paused states stay as they are.
 - **Outside scope (red, new).** When the plan guard refuses an action, the tile turns red "Outside scope" and stays red until tapped, like "Already pasted". Without it the refusal shows only inside the CLI's reply, which Alex does not read. The plan guard writes a latched `outside_scope` field (the refused path or deploy target) into the session status; it survives the Stop hook's rewrite to waiting, and a tap clears it. It ranks with the other reds.
 - **Dark mode:** each colour gets a dark-theme variant in `switchboard.html`.
-- **Report unread (Phase 2).** Orange clearing only when the report's Alfred inbox item is archived, however it was fetched, needs interface 3 (§4): a Supabase function, its key and a deploy. Phase 2 builds those, so it moves there. The clip push already returns the inbox id, and `.clip/last-report.json` stores it. Until then orange is "Report ready" above.
+- **Report unread (Phase 2).** Orange clearing only when the report's Alfred inbox item is archived, however it was fetched, needs interface 3 (§4): a Supabase function, its key and a deploy. Phase 2 builds those, so it moves there. The clip push already returns the inbox id, and `.clip/last-report.json` stores it. Until then orange is "Send cli" above.
 - **Talking (dropped).** Step 1.6 briefly replaced Your turn with a slate blue "Talking" that did not flash. It lost the "Claude is waiting on you" alert, so s19c restored Your turn.
 
 ### 7.3 Panel items
 
 - Instant colour feedback when a Send link is clicked: green at once, red if the send is refused.
-- Tiles ordered by lane: Fast track, Main, Side road, Country road.
+- Tiles ordered by lane: Fast track, Main, Side road, Country road. **Not built (s23):** the panel has no lane data; the lane lives in Alfred's portfolio plan. Recommended source: an Alfred read in Phase 2 (see the progress file).
 - A finished run needs no new signal: Alex's existing sound hook (`Notification`) already plays one.
 
 ### 7.4 Estimated run duration
@@ -265,13 +265,13 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 
 **Recording.** The `UserPromptSubmit` hook records the estimate, with the run tag and `prompt_at`, beside the scope in `.clip/scope.json`. The panel reads it from there.
 
-**On the tile.** The Running state shows elapsed time against the estimate, as text: `0:30 / 2:30`. With no estimate it shows elapsed time only: `0:30`.
+**On the tile.** The Running state shows elapsed time against the estimate, as text: `0:30 / 2:30`. With no estimate it shows elapsed time only: `0:30`. Digits are tabular, so a ticking timer never rewraps. The timer never breaks inside itself (non-breaking spaces), except that when elapsed and estimate together have more than 8 digits it breaks at the slash, with `/ 1:00:00` on the next line.
 
 **Calibration.** `node scripts/clip.mjs --estimate .clip/last-report.md`, run once the timing table is written, reads the Total row of the report's timing table, which every report already carries. It prints one line for the CLI to paste into the report (as `--scope` does, so the pushed and printed reports stay identical), `Estimate vs actual: 2m30s vs 3m10s (+27%)`, and appends `{ project, run_tag, estimate, actual }` to `.clip/estimates.jsonl`. Claude can then see how far off its estimates run, per project, from the reports alone.
 
 ### 7.5 Running colours by time left
 
-While Running, the tile stays green, because green means Claude is working, and pales as the estimate runs out. When the report arrives it lands on the orange "Report ready".
+While Running, the tile stays green, because green means Claude is working, and pales as the estimate runs out. When the report arrives it lands on the orange "Send cli".
 
 | Time left | Light | Dark theme | Text (light / dark) |
 |---|---|---|---|
@@ -279,10 +279,10 @@ While Running, the tile stays green, because green means Claude is working, and 
 | 5 to 2 minutes | `#8BC34A` | `#7CB342` | `#111111`, 9.0:1 / 7.5:1 |
 | Under 2 minutes | `#C5E1A5` | `#AED581` | `#111111`, 13.2:1 / 11.4:1 |
 | Past the estimate | `#C5E1A5`, plus a 6px red inset edge `#C62828` | `#AED581`, same edge | as above |
-| Report arrived | orange `#F57C00` (Report ready) | — | `#1A1600` |
+| Report arrived | orange `#F57C00` (Send cli) | — | `#1A1600` |
 
 - **The overrun look is off the scale.** The short shade stays and the red edge is added. The text shows the overrun as well: `3:15 / 2:30`. The edge is `#C62828` in both themes: the dark theme's old `#FF8A80` barely shows on a pale green.
-- **With no estimate,** the tile stays today's green `#2E7D32` with white text (5.1:1) the whole run.
+- **With no estimate,** the tile is the short shade `#C5E1A5` / `#AED581` with `#111111` text the whole run (s23; it was `#2E7D32` with white).
 - **Claude writing** (on chat tiles and project tiles: "Claude writing", "Chat writing", "Writing") uses the short shade `#C5E1A5` / `#AED581` with black text, since chat replies are usually short. It never flashes or alerts.
 - **Greens, not olive and ochre (decided in s22, replacing 1.7).** Ochre was too dark to read, and a warm colour said "stop" while Claude was still working.
 
@@ -299,9 +299,9 @@ While Running, the tile stays green, because green means Claude is working, and 
 Tiles are designed for at most 6 projects, not 9.
 
 - **Grid.** The tile area is a 3 × 2 grid that fills the space between the top bar and the bottom of the window. Each row is (area height − one gap) ÷ 2, about 1.5 times today's 3 × 3 tiles.
-- **Larger type.** Name, action and meta text scale by 1.3 (`--nameSize`, `--actSize`, `--metaSize`). The kind icons and the strip scale with them.
-- **A seventh project** goes on a second page, which the existing scroll-snap and arrows already handle. The panel shows a "7+" hint on the down arrow.
-- **Fit tables.** The bottom-line width table in `status.ahk` (today: 219px, 184px and 167px for 26px Atkinson Bold) is re-measured for the new tile width and font size.
+- **Larger type.** Name 39px and action 34px (×1.3). Meta 30px (×1.15), not 34px: at 34px the deadlock and padlock lines ("⇄ restructure p1", "restructure p1") would be cut off. The kind icons scale with the meta text, and the strip is 10px.
+- **A seventh project** goes on a second page, which the existing scroll-snap and arrows already handle. The down arrow shows "7+" (the number of the next page's first tile) instead of "N more".
+- **Fit tables.** The tile width is unchanged (3 columns, 260px inside), so only the type size matters. `TileTextWidth` keeps its 26px advance widths; `TileInfoWidth` scales the room by 26/30: 225 with no icon, 197 beside the padlock, 185 beside the terminal (was 260, 231, 219). Still fit: "⇄ restructure p1", "s11 · Blocking 1", and project names beside the padlock. No longer fit: "1 held · Blocking 1" (cut off with "…"), and a holder's git counts beside "s3 · Blocking 1" (dropped, as before when there is no room).
 
 ## 8. Phase 2 — SQL approval queue and read-only Supabase queries (in place, in alfred-v5)
 
