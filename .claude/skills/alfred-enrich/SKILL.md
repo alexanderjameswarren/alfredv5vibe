@@ -5,7 +5,7 @@ description: "Enrich Alfred inbox items with AI-powered suggestions for organizi
 
 # Alfred Inbox Enrichment
 
-Skill version: 2026-10-28a
+Skill version: 2026-10-31a
 
 This skill defines how to analyze Alfred inbox captures and write structured suggestions back using the `update_inbox_item` MCP tool.
 
@@ -131,6 +131,20 @@ For each inbox item, determine:
 - Example: a health insurance bill belongs to Warren Buffet (`warren_buffet`), not Arnold. Arnold never sees it.
 - Changing an item's app moves it to the other app's queue. Do it only when the first choice was clearly wrong.
 - In conversation, when Alex asks what needs his attention or about one app's items, enrich and route on the spot any item still at `ai_status: "not_started"` — the hourly job may not have reached it yet.
+
+**Gym class confirmation emails go to Arnold**, the workout coach. A Gmail label
+`alfred/arnold` may already have set `source_app: "arnold"` at capture; if so keep it, and if
+not, set it. Enrich them as usual, with:
+- the **Alex (body, mind, spirit)** context, found by name in `get_contexts`;
+- tags `health`, `yoga` and `arnold`;
+- **the "Yoga class" intention, found by name** with `get_intents` and `search_text`. No field
+  links an existing intention, so do not set `suggest_intent` (that would create a second one).
+  Name it with its id in `ai_reasoning`, e.g. "Gym class confirmation: process against the Yoga
+  class intention (id …) to log the class." Processing the email against it logs the execution
+  Arnold counts.
+
+A confirmation counts as attended unless Alex says otherwise. A gym bill or membership charge is
+not a class: it goes to Warren Buffet.
 
 **Item vs. Intent vs. Both**:
 - **Item** (`suggest_item: true`): Reusable reference material — recipes, checklists, project notes, how-tos. Things you'd want to find and use again.
