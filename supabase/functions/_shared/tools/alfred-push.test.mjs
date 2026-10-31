@@ -65,7 +65,7 @@ function fakeDb({ subs = [], logResult = { data: { created: true, id: "n1" }, er
 }
 
 const ARGS = { app: "arnold", job: "arnold_hourly", kind: "nudge", title: "Microworkouts",
-  body: "2 of 5 so far. One more now?", link: "/intentions/mur79qma8apmj8yc4i",
+  body: "2 of 5 so far. One more now?", link: "/mur79qma8apmj8yc4i",
   dedupe_key: "arnold:2026-10-29:microworkout:behind_pace:14:00" };
 const SUBS = [
   { id: "sub-phone", endpoint: "https://fcm.example/phone-secret", p256dh: "p", auth_key: "a" },
@@ -90,7 +90,7 @@ test("logs first, sends to every device, records the result; dead devices report
 
   assert.equal(sends.length, 2);
   assert.deepEqual(sends[0].payload, { title: "Microworkouts", body: "2 of 5 so far. One more now?",
-    tag: `claude-arnold-${ARGS.dedupe_key}`, url: "/intentions/mur79qma8apmj8yc4i" });
+    tag: `claude-arnold-${ARGS.dedupe_key}`, url: "/mur79qma8apmj8yc4i" });
 
   const update = db.calls.find(([t, k]) => t === "claude_notifications" && k === "update");
   assert.equal(update[2].delivery_status, "sent");
@@ -142,7 +142,7 @@ test("missing VAPID secrets: refused before anything is logged", async () => {
 test("bad input is refused before the database: links must be Alfred paths", async () => {
   const db = fakeDb();
   for (const link of ["https://evil.example/x", "//evil.example", "inbox/1", "/a b"]) {
-    await assert.rejects(m.sendAlfredPushTool.handler({ ...ARGS, link }, { db }), /must be an Alfred path/);
+    await assert.rejects(m.sendAlfredPushTool.handler({ ...ARGS, link }, { db }), /must be an Alfred path .*"\/<id>"/);
   }
   await assert.rejects(m.sendAlfredPushTool.handler({ ...ARGS, kind: "spam" }, { db }), /`kind` must be one of/);
   await assert.rejects(m.sendAlfredPushTool.handler({ ...ARGS, dedupe_key: "" }, { db }), /`dedupe_key` is required/);
