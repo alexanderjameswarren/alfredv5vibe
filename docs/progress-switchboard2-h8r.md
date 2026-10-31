@@ -38,8 +38,8 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 1 | 1.10 | Six-tile layout and lane order | — | partly done (s23-x5lt): layout done; lane order needs lane data, moved to Phase 2 | 2026-10-31 |
 | 2 | 2.1 | Phase 2 plan | — | done (s24-q8pn) | 2026-10-31 |
 | 2 | 2.2 | Write the plan into the progress file and spec | — | done (s25-m4tc) | 2026-10-31 |
-| 2 | 2.3 | Queue schema | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:switchboard_settings`, `db:fn:switchboard_issue_link`, `db:fn:switchboard_consume_link` | in progress (s26-r7kd, s26b-t3wn): written and numbered 189; awaiting Alex's run of the migration and verify script | |
-| 2 | 2.3b | `.clip` exemption only inside a thread's own checkout; plan guard refuses other checkouts | — | todo | |
+| 2 | 2.3 | Queue schema | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:switchboard_settings`, `db:fn:switchboard_issue_link`, `db:fn:switchboard_consume_link` | done (s26-r7kd, s26b-t3wn): migration 189 run by Alex; all 40 verify checks passed; CONFORMANT (97 tables); checkpointed | 2026-10-31 |
+| 2 | 2.3b | `.clip` exemption only inside a thread's own checkout; plan guard refuses other checkouts | — | done (s27-h9qp) | 2026-10-31 |
 | 2 | 2.4 | Runner function and CLI queue | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_consume_link`, `db:deploy` | todo | |
 | 2 | 2.5 | MCP tools: issue a link, get a run | `db:fn:switchboard_issue_link`, `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` | todo | |
 | 2 | 2.6 | Approve page | — | todo | |
@@ -305,6 +305,7 @@ Database items per step are in the table at the top. Report unread and lane orde
 
 ## Decisions
 
+- **s27, the `.clip` gap closed:** `foreignPath` no longer exempts `.clip/` in another checkout, so the claims guard refuses main's. A sibling worktree's was already refused there, because its path is not exempt from main's root. The plan guard now uses `foreignPath` for edits and shell writes and refuses "writes into another checkout". `.git/` and the other exempt folders in main stay as they were. Other threads get this once they sync.
 - **s26b, on the 2.3 schema (Alex approved):** read-only grants on `switchboard_actions` and `switchboard_runs`; a trigger that fixes payload, fingerprint, kind and headline; no audit on `switchboard_runs`, so results do not outlive the prune; `link_hash` a secret column. The numbered file is `189_switchboard_queue.sql`, the name in Alex's scope, not the `189_queue.sql` that `number-migration` suggested. Open for 2.7: nothing writes `chat_url` yet.
 - **s25, on the Phase 2 plan (Alex):**
   - **Row-level security:** Claude's read-only queries run through a guarded function that runs as `claude_reader` and answers only for Alex's user. Step 2.10 starts with a small test of this before the real work.
@@ -592,3 +593,5 @@ Database items per step are in the table at the top. Report unread and lane orde
 | s24 (2.1 plan) | 2m31s (estimate 6m) |
 | s25 (2.2) | 1m35s (estimate 3m) |
 | s26 (2.3, stopped at the block) | 4m44s (estimate 12m) |
+| s26b (2.3) | 2m14s (estimate 8m) |
+| s27 (2.3b) | 1m55s (estimate 5m) |

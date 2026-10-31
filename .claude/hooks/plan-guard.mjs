@@ -23,7 +23,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { isExempt, isLoneScriptCommand, repoPathsIn, resolveCheckout, toRepoRelative, writeCheck } from "../../scripts/lib/claims-core.mjs";
+import { foreignPath, isExempt, isLoneScriptCommand, repoPathsIn, resolveCheckout, toRepoRelative, writeCheck } from "../../scripts/lib/claims-core.mjs";
 import { deleteParts, judgeDelete, judgeDeploy, judgeWrite, readScope, scopeFile } from "../../scripts/lib/plan-scope.mjs";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -121,7 +121,11 @@ function main() {
     const p = input.notebook_path ?? input.file_path;
     if (!p) allow("no path");
     const rel = toRepoRelative(p, ctx.root);
-    if (rel === null) allow("outside the repo");
+    if (rel === null) {
+      const foreign = foreignPath(p, ctx);
+      if (foreign) block(`writes into another checkout: ${foreign}`, record);
+      allow("outside the repo");
+    }
     if (isExempt(rel)) allow(`exempt: ${rel}`);
     const text =
       entry.tool === "Write" ? input.content
@@ -145,7 +149,8 @@ function main() {
   }
 
   const redirectsOnly = isLoneScriptCommand(command.trim());
-  const write = writeCheck(command, ctx.root, shell, { redirectsOnly });
+  const write = writeCheck(command, ctx.root, shell, { redirectsOnly, checkout: ctx });
+  if (write?.foreign.length) block(`writes into another checkout: ${write.foreign.join(", ")}`, record);
   for (const rel of write?.paths ?? []) {
     if (deleted.has(rel)) continue;
     const reason = judgeWrite(record, rel, existsSync(path.resolve(ctx.root, rel)));
