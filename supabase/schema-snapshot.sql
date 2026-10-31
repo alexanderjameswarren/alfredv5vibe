@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-31 09:39, through migration 188 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-10-31 11:26, through migration 189 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -6558,6 +6558,214 @@ ALTER FUNCTION "public"."status_guard"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."status_guard"() IS 'Restructure P1, P4, P5. BEFORE UPDATE on items, intents and item_groups. Keeps the old status when an update would move it back to someday, except closed -> someday within 10 minutes of the close by status_written_at (Undo). On a status change, stamps status_written_at now(), keeps an app-supplied status_changed_at that is no later than now() and otherwise stamps now(), and (P5) clears closed_reason when the status leaves closed; an update that does not change status keeps both stored dates.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."switchboard_actions_guard"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if tg_op = 'INSERT' then
+    new.fingerprint     := public.switchboard_fingerprint(new.payload);
+    new.status          := 'queued';
+    new.link_hash       := null;
+    new.link_expires_at := null;
+    new.link_used_at    := null;
+    return new;
+  end if;
+  if new.payload is distinct from old.payload or new.fingerprint is distinct from old.fingerprint
+     or new.kind is distinct from old.kind or new.headline is distinct from old.headline then
+    raise exception 'switchboard_actions: payload, fingerprint, kind and headline never change. Queue a new action.'
+      using errcode = '23514';
+  end if;
+  if old.link_used_at is not null
+     and (new.link_used_at is distinct from old.link_used_at or new.link_hash is distinct from old.link_hash
+          or new.link_expires_at is distinct from old.link_expires_at) then
+    raise exception 'switchboard_actions: a used link never changes.' using errcode = '23514';
+  end if;
+  new.id         := old.id;
+  new.user_id    := old.user_id;
+  new.created_by := old.created_by;
+  new.created_at := old.created_at;
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_actions_guard"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_actions_guard"() IS 'Switchboard: before insert or update on switchboard_actions. An insert gets its fingerprint and starts queued with no link. An update cannot change what will run or reopen a used link, whoever makes it.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."switchboard_consume_link"("p_token" "text", "p_fingerprint" "text") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_user   uuid := auth.uid();
+  v_hash   text := encode(sha256(convert_to(coalesce(p_token, ''), 'UTF8')), 'hex');
+  v_id     uuid;
+  v_action public.switchboard_actions;
+begin
+  if v_user is null then
+    raise exception 'switchboard_consume_link: no signed-in user.' using errcode = '28000';
+  end if;
+
+  -- One atomic update: of two clicks at once, only one gets a row back.
+  update public.switchboard_actions
+     set link_used_at = now(), status = 'consumed'
+   where link_hash = v_hash and user_id = v_user and link_used_at is null
+     and link_expires_at > now() and fingerprint = p_fingerprint
+  returning id into v_id;
+  if v_id is not null then
+    return jsonb_build_object('consumed', true, 'action_id', v_id);
+  end if;
+
+  select * into v_action from public.switchboard_actions where link_hash = v_hash and user_id = v_user;
+  if not found then
+    raise exception 'switchboard_consume_link: no such link.' using errcode = 'P0002';
+  elsif v_action.link_used_at is not null then
+    raise exception 'switchboard_consume_link: this link has already been used.' using errcode = '55000';
+  elsif v_action.link_expires_at <= now() then
+    raise exception 'switchboard_consume_link: this link has expired.' using errcode = '55000';
+  end if;
+  raise exception 'switchboard_consume_link: the SQL does not match what this link approved.' using errcode = '55000';
+end;
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_consume_link"("p_token" "text", "p_fingerprint" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_consume_link"("p_token" "text", "p_fingerprint" "text") IS 'Switchboard: spend an approval link, given its token and the fingerprint of the SQL about to run. Returns {consumed, action_id} once. Raises for a used, expired, unknown or mismatched link, or another user''s. A mismatch does not spend the link. Called by switchboard-runner with Alex''s JWT.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."switchboard_fingerprint"("p_payload" "jsonb") RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+  select encode(sha256(convert_to(
+    (case when jsonb_typeof(p_payload->'sql') = 'string'
+          then jsonb_set(p_payload, '{sql}', to_jsonb(btrim(replace(p_payload->>'sql', E'\r\n', E'\n'), E' \t\r\n')))
+          else p_payload end)::text, 'UTF8')), 'hex');
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_fingerprint"("p_payload" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_fingerprint"("p_payload" "jsonb") IS 'Switchboard: sha256 hex of an action''s normalised payload. For a payload with sql, CRLF becomes LF and outer whitespace is trimmed, so a re-saved file keeps its fingerprint. Any other change gives a new one.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."switchboard_issue_link"("p_action_id" "uuid") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_user    uuid := auth.uid();
+  v_action  public.switchboard_actions;
+  v_live    uuid;
+  v_base    text;
+  v_token   text;
+  v_expires timestamptz := now() + interval '30 minutes';
+begin
+  if v_user is null then
+    raise exception 'switchboard_issue_link: no signed-in user.' using errcode = '28000';
+  end if;
+  -- Two calls at once must not both find no live link.
+  perform pg_advisory_xact_lock(hashtextextended('switchboard_issue_link:' || v_user::text, 0));
+
+  select * into v_action from public.switchboard_actions
+   where id = p_action_id and user_id = v_user for update;
+  if not found then
+    raise exception 'switchboard_issue_link: no such action.' using errcode = 'P0002';
+  end if;
+  if v_action.link_used_at is not null or v_action.status not in ('queued', 'link_issued') then
+    raise exception 'switchboard_issue_link: this action is %, so it cannot have a new link. Queue it again.',
+      v_action.status using errcode = '55000';
+  end if;
+
+  select id into v_live from public.switchboard_actions
+   where user_id = v_user and link_hash is not null and link_used_at is null and link_expires_at > now()
+   limit 1;
+  if v_live is not null then
+    raise exception 'switchboard_issue_link: another link is live (action %). One at a time: wait until it is used or expires.',
+      v_live using errcode = '55000';
+  end if;
+
+  select link_base_url into v_base from public.switchboard_settings where user_id = v_user;
+  if v_base is null then
+    raise exception 'switchboard_issue_link: no switchboard_settings row for this user.' using errcode = 'P0002';
+  end if;
+
+  -- Two v4 UUIDs: 244 random bits from the server's strong source. Only the hash is kept.
+  v_token := replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
+  update public.switchboard_actions
+     set link_hash = encode(sha256(convert_to(v_token, 'UTF8')), 'hex'),
+         link_expires_at = v_expires,
+         status = 'link_issued'
+   where id = v_action.id;
+
+  return jsonb_build_object('action_id', v_action.id, 'url', v_base || '/approve/' || v_token,
+                            'expires_at', v_expires, 'headline', v_action.headline);
+end;
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_issue_link"("p_action_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_issue_link"("p_action_id" "uuid") IS 'Switchboard: issue the approval link for one of the caller''s actions. Returns {action_id, url, expires_at, headline}. The token appears only in this result; the row keeps its hash. Refused while any link of the caller''s is live, and for an action already consumed. An expired link can be replaced. Called by the issue_switchboard_link tool.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."switchboard_prune_runs"() RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_count integer;
+begin
+  update public.switchboard_runs
+     set result = null, result_pruned_at = now()
+   where result is not null and started_at < now() - interval '30 days';
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_prune_runs"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_prune_runs"() IS 'Switchboard: clear the result of every run older than 30 days and keep the row. Returns how many. Run daily by the cron job switchboard-prune-runs; no API role can call it.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."switchboard_settings_guard"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  new.id         := old.id;
+  new.user_id    := old.user_id;
+  new.created_at := old.created_at;
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_settings_guard"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_settings_guard"() IS 'Switchboard: before update on switchboard_settings. Keeps id, user_id and created_at fixed and stamps updated_at.';
 
 
 
@@ -14520,6 +14728,202 @@ COMMENT ON COLUMN "public"."sam_songs"."archived_at" IS 'When this row was archi
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."switchboard_actions" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "kind" "text" NOT NULL,
+    "project_code" "text" NOT NULL,
+    "chat_url" "text",
+    "payload" "jsonb" NOT NULL,
+    "fingerprint" "text" NOT NULL,
+    "status" "text" DEFAULT 'queued'::"text" NOT NULL,
+    "link_hash" "text",
+    "link_expires_at" timestamp with time zone,
+    "link_used_at" timestamp with time zone,
+    "created_by" "text" DEFAULT 'cli'::"text" NOT NULL,
+    "needs_click" boolean DEFAULT true NOT NULL,
+    "headline" "text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "switchboard_actions_kind_valid" CHECK (("kind" = ANY (ARRAY['sql'::"text", 'git'::"text", 'sf_deploy'::"text", 'sf_test'::"text", 'sf_read_prod_data'::"text", 'docs'::"text"]))),
+    CONSTRAINT "switchboard_actions_link_complete" CHECK ((("link_hash" IS NULL) = ("link_expires_at" IS NULL))),
+    CONSTRAINT "switchboard_actions_project_format" CHECK (("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text")),
+    CONSTRAINT "switchboard_actions_sql_payload" CHECK ((("kind" <> 'sql'::"text") OR ("jsonb_typeof"(("payload" -> 'sql'::"text")) = 'string'::"text"))),
+    CONSTRAINT "switchboard_actions_status_valid" CHECK (("status" = ANY (ARRAY['queued'::"text", 'link_issued'::"text", 'consumed'::"text", 'succeeded'::"text", 'failed'::"text", 'cancelled'::"text"]))),
+    CONSTRAINT "switchboard_actions_used_needs_link" CHECK ((("link_used_at" IS NULL) OR ("link_hash" IS NOT NULL)))
+);
+
+
+ALTER TABLE "public"."switchboard_actions" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."switchboard_actions" IS 'SWITCHBOARD. One queue for every action Alex approves by a link: SQL now, git and Salesforce later. The CLI queues through switchboard-runner; Claude issues the link with switchboard_issue_link; the runner consumes it with switchboard_consume_link. Authenticated can only read: every write goes through those. Payload and fingerprint never change after insert. Spec: docs/technical-spec-switchboard2-h8r.md 8.1.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."id" IS 'Row id, the action id Claude issues a link for.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."kind" IS 'sql, git, sf_deploy, sf_test, sf_read_prod_data or docs.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."project_code" IS 'The project that queued it, e.g. switchboard2-h8r.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."chat_url" IS 'Address of the chat the result goes back to. The extension checks the tab against it.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. For kind sql: {"sql": "..."}. Fixed after insert.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."fingerprint" IS 'switchboard_fingerprint(payload), set by the guard trigger. A link is bound to it.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."status" IS 'queued, link_issued, consumed, succeeded, failed or cancelled.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."link_hash" IS 'sha256 hex of the link token. The token itself is never stored. Secret: no MCP read returns it.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."link_expires_at" IS 'When the link stops working: 30 minutes after it was issued.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."link_used_at" IS 'When the link was consumed. Set once, never cleared.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."created_by" IS 'Who queued it, e.g. cli.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."needs_click" IS 'Whether it waits for Alex''s click. Drives the panel''s Waiting on SQL.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."headline" IS 'The capitals line on the click page. Built by the server from kind and payload, never written by Claude.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."created_at" IS 'Row creation.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_actions"."updated_at" IS 'Last change. Stamped by the guard trigger.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."switchboard_runs" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "action_id" "uuid" NOT NULL,
+    "mode" "text" NOT NULL,
+    "summary" "text",
+    "result" "jsonb",
+    "result_pruned_at" timestamp with time zone,
+    "started_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "finished_at" timestamp with time zone,
+    CONSTRAINT "switchboard_runs_mode_valid" CHECK (("mode" = ANY (ARRAY['dry_run'::"text", 'real'::"text"])))
+);
+
+
+ALTER TABLE "public"."switchboard_runs" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."switchboard_runs" IS 'SWITCHBOARD. One row per dry run or real run of an action, written by switchboard-runner. Visible only to its owner. switchboard_prune_runs clears result after 30 days; the row stays. Not audited, so that no copy of a result outlives the prune in the audit log. Claude reads it with get_switchboard_run.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_runs"."id" IS 'Row id, the run id the chat receives as "sql <run id>".';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_runs"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_runs"."action_id" IS 'The action this ran.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_runs"."mode" IS 'dry_run (rolled back) or real.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_runs"."summary" IS 'One plain line of what happened, e.g. deletes 3 rows from wb_rules.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_runs"."result" IS 'The full result. Cleared after 30 days.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_runs"."result_pruned_at" IS 'When result was cleared. Empty until then.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_runs"."started_at" IS 'When the run began.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_runs"."finished_at" IS 'When it ended. Empty while running.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."switchboard_settings" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "reads_enabled" boolean DEFAULT true NOT NULL,
+    "link_base_url" "text" DEFAULT 'https://alfredv5vibe.vercel.app'::"text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "switchboard_settings_base_format" CHECK (("link_base_url" ~ '^https://[^/]+$'::"text"))
+);
+
+
+ALTER TABLE "public"."switchboard_settings" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."switchboard_settings" IS 'SWITCHBOARD. One row per user: the kill switch for Claude''s read-only queries, and the address approval links are built on. Seeded for Alex by migration; authenticated can read and update it, not add or remove it.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_settings"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_settings"."user_id" IS 'Owner. Owner RLS; one row per user.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_settings"."reads_enabled" IS 'The kill switch. False stops every read-only query.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_settings"."link_base_url" IS 'https://host with no trailing slash. A server setting, never code (spec 2, rule 8).';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_settings"."created_at" IS 'Row creation.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_settings"."updated_at" IS 'Last change. Stamped by the guard trigger.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."wb_accounts" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -16892,6 +17296,26 @@ ALTER TABLE ONLY "public"."sam_songs"
 
 
 
+ALTER TABLE ONLY "public"."switchboard_actions"
+    ADD CONSTRAINT "switchboard_actions_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."switchboard_runs"
+    ADD CONSTRAINT "switchboard_runs_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."switchboard_settings"
+    ADD CONSTRAINT "switchboard_settings_one_per_user" UNIQUE ("user_id");
+
+
+
+ALTER TABLE ONLY "public"."switchboard_settings"
+    ADD CONSTRAINT "switchboard_settings_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."wb_accounts"
     ADD CONSTRAINT "wb_accounts_pkey" PRIMARY KEY ("id");
 
@@ -17678,6 +18102,22 @@ CREATE UNIQUE INDEX "sam_song_fingerings_coord_source_key" ON "public"."sam_song
 
 
 
+CREATE UNIQUE INDEX "switchboard_actions_link_hash_key" ON "public"."switchboard_actions" USING "btree" ("link_hash") WHERE ("link_hash" IS NOT NULL);
+
+
+
+CREATE INDEX "switchboard_actions_waiting_idx" ON "public"."switchboard_actions" USING "btree" ("user_id", "project_code") WHERE ("status" = ANY (ARRAY['queued'::"text", 'link_issued'::"text"]));
+
+
+
+CREATE INDEX "switchboard_runs_action_idx" ON "public"."switchboard_runs" USING "btree" ("action_id");
+
+
+
+CREATE INDEX "switchboard_runs_prune_idx" ON "public"."switchboard_runs" USING "btree" ("started_at") WHERE ("result" IS NOT NULL);
+
+
+
 CREATE INDEX "wb_accounts_context_idx" ON "public"."wb_accounts" USING "btree" ("context_id");
 
 
@@ -18058,6 +18498,14 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."switchboard_actions" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."switchboard_settings" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."wb_accounts" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -18383,6 +18831,14 @@ CREATE OR REPLACE TRIGGER "stamp_song_on_measures_insert" AFTER INSERT ON "publi
 
 
 COMMENT ON TRIGGER "stamp_song_on_measures_insert" ON "public"."sam_song_measures" IS 'SAM analyzer (M6). Once per INSERT statement, stamps sam_songs.measures_edited_at for every song inserted into.';
+
+
+
+CREATE OR REPLACE TRIGGER "switchboard_actions_guard" BEFORE INSERT OR UPDATE ON "public"."switchboard_actions" FOR EACH ROW EXECUTE FUNCTION "public"."switchboard_actions_guard"();
+
+
+
+CREATE OR REPLACE TRIGGER "switchboard_settings_guard" BEFORE UPDATE ON "public"."switchboard_settings" FOR EACH ROW EXECUTE FUNCTION "public"."switchboard_settings_guard"();
 
 
 
@@ -19208,6 +19664,26 @@ ALTER TABLE ONLY "public"."sam_songs"
 
 ALTER TABLE ONLY "public"."sam_songs"
     ADD CONSTRAINT "sam_songs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."switchboard_actions"
+    ADD CONSTRAINT "switchboard_actions_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."switchboard_runs"
+    ADD CONSTRAINT "switchboard_runs_action_id_fkey" FOREIGN KEY ("action_id") REFERENCES "public"."switchboard_actions"("id");
+
+
+
+ALTER TABLE ONLY "public"."switchboard_runs"
+    ADD CONSTRAINT "switchboard_runs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."switchboard_settings"
+    ADD CONSTRAINT "switchboard_settings_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
 
 
@@ -20206,6 +20682,27 @@ ALTER TABLE "public"."sam_song_scores" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."sam_songs" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."switchboard_actions" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "switchboard_actions_owner_access" ON "public"."switchboard_actions" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."switchboard_runs" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "switchboard_runs_owner_access" ON "public"."switchboard_runs" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."switchboard_settings" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "switchboard_settings_owner_access" ON "public"."switchboard_settings" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
 ALTER TABLE "public"."wb_accounts" ENABLE ROW LEVEL SECURITY;
 
 
@@ -20985,6 +21482,38 @@ GRANT ALL ON FUNCTION "public"."status_guard"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."switchboard_actions_guard"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_actions_guard"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."switchboard_actions_guard"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."switchboard_consume_link"("p_token" "text", "p_fingerprint" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_consume_link"("p_token" "text", "p_fingerprint" "text") TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "public"."switchboard_fingerprint"("p_payload" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_fingerprint"("p_payload" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."switchboard_fingerprint"("p_payload" "jsonb") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."switchboard_issue_link"("p_action_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_issue_link"("p_action_id" "uuid") TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "public"."switchboard_prune_runs"() FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."switchboard_settings_guard"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_settings_guard"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."switchboard_settings_guard"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."update_modified_column"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."update_modified_column"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."update_modified_column"() TO "service_role";
@@ -21678,6 +22207,21 @@ GRANT ALL ON TABLE "public"."sam_song_scores" TO "service_role";
 
 GRANT ALL ON TABLE "public"."sam_songs" TO "authenticated";
 GRANT ALL ON TABLE "public"."sam_songs" TO "service_role";
+
+
+
+GRANT SELECT,REFERENCES,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."switchboard_actions" TO "authenticated";
+GRANT ALL ON TABLE "public"."switchboard_actions" TO "service_role";
+
+
+
+GRANT SELECT,REFERENCES,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."switchboard_runs" TO "authenticated";
+GRANT ALL ON TABLE "public"."switchboard_runs" TO "service_role";
+
+
+
+GRANT SELECT,REFERENCES,TRIGGER,TRUNCATE,MAINTAIN,UPDATE ON TABLE "public"."switchboard_settings" TO "authenticated";
+GRANT ALL ON TABLE "public"."switchboard_settings" TO "service_role";
 
 
 

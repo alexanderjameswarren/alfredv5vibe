@@ -63,7 +63,7 @@ Alfred keeps the clipper extension, the Supabase migrations and functions, and t
 
 1. **Clipboard push.** `CLIPBOARD_URL` plus `CLIPBOARD_SECRET`, and the `clip-capture` function.
 2. **Activity.** `overwatch-ingest` (session status and finish summaries).
-3. **Report status** (Phase 1). The panel reads whether a report's inbox item is archived, using a key that can only read that.
+3. **Panel read** (Phase 2, `switchboard-panel`). The panel reads whether a report's inbox item is archived, which projects wait on SQL, and each project's lane, using a key that can only read those.
 4. **Action queue** (Phase 2): the `switchboard-runner` function. The CLI uses a queue-only key; the desktop helper uses its own pickup key.
 5. **MCP tools** for Claude: issue a link, get a run's result, read-only query, and (Phase 4) Salesforce read.
 
@@ -257,7 +257,7 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 ### 7.3 Panel items
 
 - Instant colour feedback when a Send link is clicked: green at once, red if the send is refused.
-- Tiles ordered by lane: Fast track, Main, Side road, Country road. **Not built (s23):** the panel has no lane data; the lane lives in Alfred's portfolio plan. Recommended source: an Alfred read in Phase 2 (see the progress file).
+- Tiles ordered by lane: Fast track, Main, Side road, Country road. **Not built (s23):** the panel has no lane data; the lane lives in Alfred's portfolio plan. It comes in Phase 2 from `switchboard-panel` (steps 2.8 and 2.9).
 - A finished run needs no new signal: Alex's existing sound hook (`Notification`) already plays one.
 
 ### 7.4 Estimated run duration
@@ -336,6 +336,8 @@ Both tables have row-level security: Alex's user only. Neither gets any anon gra
 - `THIS PUSHES TO MAIN AND MAKES IT LIVE IN PRODUCTION`
 - `THIS DEPLOYS TO SANDBOX ACME-UAT AND DELETES FIELD Account.Old__c`
 
+**Decided in s25.** The run id travels on the approve page as a data attribute, and the extension reads it there to post `sql <run id>`. `switchboard_issue_link` allows one live link at a time. Only the runner executes queued SQL, and only with a valid JWT and approval link.
+
 **Runner.** `switchboard-runner` connects with `SUPABASE_DB_URL` and is the only code that does.
 - **Up front, it flags:**
   - statements that cannot run in a transaction (`CREATE INDEX CONCURRENTLY`, `VACUUM`, `ALTER SYSTEM`, `CREATE DATABASE`),
@@ -345,12 +347,12 @@ Both tables have row-level security: Alex's user only. Neither gets any anon gra
 - **Every approved write** runs in one transaction, then runs `check_platform_conformance` and records the run in `switchboard_runs`. Nothing is written to Supabase's own migration history table. Migration files stay in git.
 - **Pruning:** a pg_cron job clears `result` after 30 days; the run rows stay.
 
-**Panel.** A project with a waiting SQL item shows Waiting on SQL (§7.2).
+**Panel.** A project with a waiting SQL item shows Waiting on SQL (§7.2). The panel learns this, Report unread and each project's lane from `switchboard-panel`, a separate read-only function with its own key (interface 3).
 
 ### 8.2 Claude's read-only Supabase queries
 
-MCP tool `switchboard_query(sql)`, which calls `switchboard_readonly_query`. It runs as role `claude_reader`:
-- **Access:** usage on `public` only. Select on every `public` table except a deny list of token and secret tables, kept in the migration. No other schema is granted.
+MCP tool `get_sql_read(sql)` (decided in s25; the house prefixes rule out `switchboard_query`), which calls `switchboard_readonly_query`. That is a guarded function that runs as role `claude_reader` and answers only for Alex's user. Step 2.10 starts with a small test of this before the real work.
+- **Access:** usage on `public` only. Column-level select built from `platform_read_settings()`, so secret columns and hidden tables are never granted, in place of a deny list kept in the migration. A helper re-applies the grants when that list changes. This touches the platform layer, and Alex has approved that. No other schema is granted.
 - **Transaction:** read-only, one statement only. A `;` outside quotes, or more than one parsed statement, is refused.
 - **Limits:** 1000-row cap, `statement_timeout` 10s, `lock_timeout` 1s.
 - **Budget:** `check_call_budget` is called twice, once for 20 queries per 600 seconds and once for 200 per 86400 seconds, with no change to the function.

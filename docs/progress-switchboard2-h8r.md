@@ -36,7 +36,19 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 1 | 1.8 | Estimate on the tile; Estimate vs actual | — | done (s21-p4hw) | 2026-10-31 |
 | 1 | 1.9 | Progress strip | — | done (s22-g3lm) | 2026-10-31 |
 | 1 | 1.10 | Six-tile layout and lane order | — | partly done (s23-x5lt): layout done; lane order needs lane data, moved to Phase 2 | 2026-10-31 |
-| 2 | 2.1-2.10 | SQL queue, links, click pages, runner, read-only queries: spec §8 | see below | todo | |
+| 2 | 2.1 | Phase 2 plan | — | done (s24-q8pn) | 2026-10-31 |
+| 2 | 2.2 | Write the plan into the progress file and spec | — | done (s25-m4tc) | 2026-10-31 |
+| 2 | 2.3 | Queue schema | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:switchboard_settings`, `db:fn:switchboard_issue_link`, `db:fn:switchboard_consume_link` | in progress (s26-r7kd, s26b-t3wn): written and numbered 189; awaiting Alex's run of the migration and verify script | |
+| 2 | 2.3b | `.clip` exemption only inside a thread's own checkout; plan guard refuses other checkouts | — | todo | |
+| 2 | 2.4 | Runner function and CLI queue | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_consume_link`, `db:deploy` | todo | |
+| 2 | 2.5 | MCP tools: issue a link, get a run | `db:fn:switchboard_issue_link`, `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` | todo | |
+| 2 | 2.6 | Approve page | — | todo | |
+| 2 | 2.7 | Extension: approval link and result | — | todo | |
+| 2 | 2.8 | Panel read endpoint | `db:table:switchboard_actions`, `db:table:inbox`, `db:table:project_plans`, `db:table:portfolio_plans`, `db:table:portfolio_lanes`, `db:table:portfolio_slices` (all read), `db:deploy` | todo | |
+| 2 | 2.9 | Panel: Waiting on SQL, Report unread, lane order | — | todo | |
+| 2 | 2.10 | Read-only role and query function, with secret-column grants | `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read), `db:fn:register_table`, `db:fn:set_read_settings` | todo | |
+| 2 | 2.11 | MCP read-only query tool, `get_sql_read` | `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget`, `db:deploy` | todo | |
+| 2 | 2.12 | Skill rule and Phase 2 checklist | — | todo | |
 | 3 | 3.1-3.18 | The move, settings, `sb` commands, Salesforce guard, deploy wrapper, PII hold: spec §9 | — | todo | |
 | 4 | 4.1-4.5 | Salesforce reads: spec §10 | the Phase 2 tables, re-claimed | todo | |
 | 5 | 5.1-5.6 | Git and Salesforce actions by link: spec §11 | `db:table:switchboard_actions` | todo | |
@@ -179,18 +191,102 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: nothing
 - SQL: none
 
-**2.1, Phase 2 plan** (estimated run: 6m; written in s23, since the progress file had no 2.1 block). Read-only: break 2.1-2.10 (spec §8) into steps, each with its scope block, database items and estimate; run `claims.mjs check` on all of it; fold in Report unread (from 1.6) and the lane read (from 1.10). Changes nothing but this file.
+**2.1, Phase 2 plan** (estimated run: 6m). Done in s24-q8pn; read-only.
 - create: nothing
 - update: nothing
 - delete: nothing
 - deploy: nothing
 - SQL: none
 
-**Database items by step (Phase 2):**
-- **2.1-2.4:** `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_issue_link`, `db:fn:switchboard_consume_link`, `db:deploy`.
-- **2.7-2.8:** `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read only), `db:deploy`.
-- **Lane order (moved from 1.10, s23):** the panel orders tiles by portfolio lane once it can read each project's lane from Alfred: the same function and key as Report unread, plus a read of the portfolio plan's table (name to confirm at 2.1). The panel caches lane by project code in its settings folder and refreshes it every few minutes; an unknown lane sorts last.
-- **Report unread (moved from 1.6, s19c):** orange clears when the report's inbox item is archived. Interface 3: `db:fn:clip-capture` (or a new function) for a status read by inbox id, its own key, a read of `db:table:inbox`, `db:deploy`; then the panel polls it for the tile's last report. Fold into whichever 2.x step builds the function and key.
+**2.2, write the plan into the progress file and spec** (estimated run: 3m). Done in s25-m4tc.
+- create: nothing
+- update: docs/progress-switchboard2-h8r.md, docs/technical-spec-switchboard2-h8r.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**2.3, queue schema** (database step; estimated run: 12m). Tables `switchboard_actions`, `switchboard_runs` and `switchboard_settings`, with RLS via `register_table`, explicit grants, nothing for anon, and a pg_cron prune at 30 days. Functions `switchboard_issue_link` and `switchboard_consume_link`: single-use, bound to the fingerprint, 30-minute expiry, one live link at a time. Alex tests: run the migration and get CONFORMANT; in the verify script a second use, a changed fingerprint, an expired link and a second live link each fail.
+- create: supabase/migrations/_pending_switchboard2-h8r_queue.sql, supabase/tests/switchboard2-h8r/1_verify_queue.sql
+- update: nothing
+- delete: nothing
+- deploy: nothing
+- SQL: switchboard_actions, switchboard_runs, switchboard_settings
+
+**2.3b, close the `.clip` gap** (estimated run: 5m; added in s26b, from the stray file in s25). A worktree could write the main checkout's `.clip/` files, because `foreignPath` treats exempt paths as not foreign and the plan guard allows anything outside its own checkout. Apply the `.clip` exemption only inside a thread's own checkout, make the plan guard refuse writes to other checkouts, and add tests, including another worktree's `.clip/`. Alex tests: nothing by hand; the hooks suite covers it.
+- create: nothing
+- update: scripts/lib/claims-core.mjs, scripts/lib/claims-core.test.mjs, .claude/hooks/plan-guard.mjs, scripts/lib/hooks.test.mjs
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**2.4, runner function and CLI queue** (database step; estimated run: 15m). `switchboard-runner`: a `queue` endpoint (queue key, inserts `kind='sql'` only); `dry-run` and `approve` endpoints (valid JWT and approval link, one transaction over `SUPABASE_DB_URL`). It flags statements that cannot run in a transaction and slow statement types, and sends those to the SQL editor. It builds the capitals headline on the server, runs `check_platform_conformance` after each write and records each run in `switchboard_runs`. `scripts/sql-queue.mjs` queues a `_pending_` or numbered file. Alex tests: set `SWITCHBOARD_QUEUE_SECRET`, queue a harmless SELECT from the CLI, see the row.
+- create: supabase/functions/switchboard-runner/index.ts, supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs, scripts/sql-queue.mjs, scripts/lib/sql-queue.mjs, scripts/lib/sql-queue.test.mjs
+- update: nothing
+- delete: nothing
+- deploy: switchboard-runner
+- SQL: none
+
+**2.5, MCP tools: issue a link, get a run** (database step; estimated run: 8m). `issue_switchboard_link` (tier 2) writes the link hash through `switchboard_issue_link`, which refuses a second live link. `get_switchboard_run` (tier 1). Alex tests: ask Claude to issue a link for the queued item, then a second, which is refused.
+- create: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs
+- update: supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
+- delete: nothing
+- deploy: mcp
+- SQL: none
+
+**2.6, approve page** (estimated run: 10m). `/approve/:token`: needs Alex's Alfred login; shows the headline, the SQL, Dry run, then Approve. After Approve the run id is on the page as a data attribute. Alex tests, after a push: a dry run rolls back; Approve runs once; a second click fails; logged out asks for login; it works from the phone.
+- create: src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx
+- update: src/App.js
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**2.7, extension: approval link and result** (estimated run: 12m). Recognises `/approve/` on the listed hosts. It goes ahead only if the tab address equals `chat_url` and the title contains the project code. It reads the run id from the approve page's data attribute and posts `sql <run id>` into that tab once the chat is idle. Alex tests: approve from the right chat (posted); from another tab (refused).
+- create: nothing
+- update: extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, extension/bridge.js, extension/claude-watch.js, extension/lib/config.js, tools/claude-sessions/bridge/host.mjs, tools/claude-sessions/bridge/host.test.mjs
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**2.8, panel read endpoint** (database step; estimated run: 8m). `switchboard-panel`, with its own key that can do nothing else. It returns which projects are waiting on SQL, whether each report inbox id is archived, and the lane per project code (`project_plans.project_code` → group → `portfolio_slices` → `portfolio_lanes` in the current plan). Alex tests: curl with the key returns his lanes.
+- create: supabase/functions/switchboard-panel/index.ts, supabase/functions/switchboard-panel/core.ts, supabase/functions/switchboard-panel/core.test.mjs
+- update: nothing
+- delete: nothing
+- deploy: switchboard-panel
+- SQL: none
+
+**2.9, panel: Waiting on SQL, Report unread, lane order** (estimated run: 8m). The panel polls the endpoint and caches the lanes; an unknown lane sorts last. Alex tests: a queued item shows tan; archiving the report clears orange; tiles follow his lanes.
+- create: nothing
+- update: tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/lib/status.ahk, tools/claude-sessions/test-status.ahk, tools/claude-sessions/smoke-test.ahk, tools/claude-sessions/INTERFACES.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**2.10, read-only role and query function** (database step; estimated run: 12m). Starts with a small test of the guarded function: it runs as `claude_reader` and answers only for Alex's user. Only then the real work: `switchboard_read_log`, `switchboard_readonly_query` (read-only, one statement, 1000 rows, 10s timeout, 1s lock wait), and column-level grants built from `platform_read_settings()`, with a helper that re-applies them when the list changes. The kill switch is `switchboard_settings.reads_enabled`. Alex tests: a write, two statements, a secret column and a slow query are each refused; rows are capped; another user's rows never appear.
+- create: supabase/migrations/_pending_switchboard2-h8r_reads.sql, supabase/tests/switchboard2-h8r/2_verify_reads.sql
+- update: nothing
+- delete: nothing
+- deploy: nothing
+- SQL: switchboard_read_log, switchboard_settings
+
+**2.11, MCP read-only query tool** (database step; estimated run: 8m). `get_sql_read` calls `check_call_budget` twice (20 per 10 minutes, 200 per day), checks the kill switch, and logs every call. Alex tests: Claude runs a query; the 21st in 10 minutes is refused; the kill switch blocks reads.
+- create: nothing
+- update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
+- delete: nothing
+- deploy: mcp
+- SQL: none
+
+**2.12, skill rule and Phase 2 checklist** (estimated run: 5m). The cli-workflow skill gets the order: queue, Claude reviews, Claude issues the link (one at a time), then fetches the result. Alex tests: the Phase 2 checklist below.
+- create: nothing
+- update: .claude/skills/cli-workflow/SKILL.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+Database items per step are in the table at the top. Report unread and lane order (moved from 1.6 and 1.10) are 2.8 and 2.9. The migration number comes from `claims.mjs number-migration` at the deploy step, after `gitsync` and the drift check.
+
+**Claims and drift (s25-m4tc):**
+- `claims.mjs check` on supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs and `db:deploy`: all free, no conflicts. Arnold's s24 conflict is clear. Nothing claimed.
+- Drift from the 2026-10-31 gitsync (db331fc to a7f0030, Arnold and Gmail capture): migrations 186-188 touch only `arnold_*` and `claude_notification*` objects, and platform.ts is unchanged. No Phase 2 table or function is touched, and no step needs re-planning. `mcp/index.ts` and its test gained Arnold's tools, so 2.5 builds on the new versions. The new tables are registered, so 2.10's grants cover them like any other.
 
 ## Estimate
 
@@ -198,16 +294,23 @@ Every report ends with the next step's block, copied from here. The progress fil
 |---|---|---|
 | 0 | Fixes, boundaries, plan guard | 8 |
 | 1 | Send link, fallback page, skill rule, tile states, estimates, layout | 10 |
-| 2 | SQL queue, read-only queries | 10 |
+| 2 | SQL queue, read-only queries (2.2-2.12 and 2.3b, after the 2.1 plan) | 12 |
 | 3 | Multi-repo and clients | 18 |
 | 4 | Salesforce reads | 5 |
 | 5 | Git and Salesforce by link | 6 |
 | 6 | Spec files, archiving | 2 |
 | 7 | npm start per tile | 2 |
 | 8 | Remote devices | 4 |
-| | **total** | **65** |
+| | **total** | **67** |
 
 ## Decisions
+
+- **s26b, on the 2.3 schema (Alex approved):** read-only grants on `switchboard_actions` and `switchboard_runs`; a trigger that fixes payload, fingerprint, kind and headline; no audit on `switchboard_runs`, so results do not outlive the prune; `link_hash` a secret column. The numbered file is `189_switchboard_queue.sql`, the name in Alex's scope, not the `189_queue.sql` that `number-migration` suggested. Open for 2.7: nothing writes `chat_url` yet.
+- **s25, on the Phase 2 plan (Alex):**
+  - **Row-level security:** Claude's read-only queries run through a guarded function that runs as `claude_reader` and answers only for Alex's user. Step 2.10 starts with a small test of this before the real work.
+  - **Secret columns, approved:** blocked for `claude_reader` with column-level grants built from `platform_read_settings()`, plus a helper that re-applies them when the list changes. This touches the platform layer, and Alex has approved that.
+  - **Tool name:** the read-only query tool is `get_sql_read`.
+  - **Also confirmed:** the run id travels on the approve page as a data attribute. Only the runner function executes queued SQL, over `SUPABASE_DB_URL`, and only with a valid JWT and approval link. `switchboard_issue_link` allows one live link at a time.
 
 - **s2, on the step 1 risks:**
   - The tab check binds to the chat address, with the title as a second check.
@@ -486,3 +589,6 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s23b (1.10 follow-up) | 3m03s (estimate 5m) |
 | s23c (Prompt ready) | 1m00s (estimate 2m) |
 | s23d (focus key) | 3m43s (estimate 4m) |
+| s24 (2.1 plan) | 2m31s (estimate 6m) |
+| s25 (2.2) | 1m35s (estimate 3m) |
+| s26 (2.3, stopped at the block) | 4m44s (estimate 12m) |
