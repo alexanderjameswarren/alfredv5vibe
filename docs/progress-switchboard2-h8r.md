@@ -32,7 +32,7 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 1 | 1.4 | Alfred `/send/:runTag` fallback page | — | done (s17-c4mz) | 2026-10-30 |
 | 1 | 1.5 | Skill: a Send link under every prompt | — | done (s18-k8tn) | 2026-10-30 |
 | 1 | 1.6 | Tile states, including Outside scope and Not sent | — | done (s19-v6pd, s19c-y2rt); Report unread moved to Phase 2 | 2026-10-30 |
-| 1 | 1.7 | Running colours by time left | — | todo | |
+| 1 | 1.7 | Running colours by time left | — | done (s20-m7qc) | 2026-10-31 |
 | 1 | 1.8 | Estimate on the tile; Estimate vs actual | — | todo | |
 | 1 | 1.9 | Progress strip | — | todo | |
 | 1 | 1.10 | Six-tile layout and lane order | — | todo | |
@@ -158,9 +158,9 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: nothing
 - SQL: none
 
-**1.8, estimate on the tile; Estimate vs actual** (estimated run: 10m). The panel reads `estimate` from `.clip/scope.json` and shows `0:30 / 2:30`. `clip.mjs` prints the Estimate vs actual line for the report and appends to `.clip/estimates.jsonl`.
+**1.8, estimate on the tile; Estimate vs actual** (estimated run: 10m). The panel already reads `estimate` from `.clip/scope.json` (1.7, `ReadScope`, `s.estimate`); 1.8 shows it as `0:30 / 2:30`. `clip.mjs` prints the Estimate vs actual line for the report and appends to `.clip/estimates.jsonl`.
 - create: nothing
-- update: scripts/clip.mjs, scripts/lib/last-report.mjs, scripts/lib/clip.test.mjs, tools/claude-sessions/lib/status.ahk, tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/ui/switchboard.html, tools/claude-sessions/test-status.ahk
+- update: scripts/clip.mjs, scripts/lib/last-report.mjs, scripts/lib/clip.test.mjs, tools/claude-sessions/lib/status.ahk, tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/ui/switchboard.html, tools/claude-sessions/test-status.ahk, tools/claude-sessions/smoke-test.ahk
 - delete: nothing
 - deploy: nothing
 - SQL: none
@@ -409,6 +409,10 @@ Every report ends with the next step's block, copied from here. The progress fil
   - Waiting on SQL is wired (`sqlWaiting`) but nothing sets it until Phase 2.
   - Not sent was already red until tapped (1.3).
   - Three claims-guard tests fail while this thread holds src/App.js (from 1.4): they expect it unclaimed. They pass once 1.4's claim is released by Finish.
+- **1.7 (s20-m7qc), running colours by time left, done:**
+  - The estimate comes from `.clip/scope.json` (`estimate`, matched on `run_tag`), which the prompt hook already writes; no test seam needed. Elapsed counts from `prompt_at`, or `since` for an older status file.
+  - `RunTint` colours only the drawing (button and tile); `s.color` stays green, so focus, taskbar and alerts are unchanged and the tints never flash.
+  - Colours (light / dark): olive `#9E9D24` / `#8A8A1E`, text `#1A1600`; ochre `#B7791F` / `#8C5A12`, text `#1A1600` (5.0:1) / white (5.9:1), about ΔE 30 from yellow and from orange; overrun is ochre plus a 6px inset edge `#C62828` / `#FF8A80`. The old panel uses pastel `B8B850` and `C8924A`, with no edge.
 
 ## Deferred and parked
 
@@ -447,3 +451,4 @@ Every report ends with the next step's block, copied from here. The progress fil
 | s18 (1.5) | 1m28s (estimate 3m) |
 | s19 (1.6) | 7m05s (estimate 8m) |
 | s19c (1.6 follow-up) | 3m32s (estimate 4m) |
+| s20 (1.7) | 5m15s (estimate 5m) |

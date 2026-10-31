@@ -48,6 +48,7 @@ FREE_COLOR := "D4D4D4"     ; main with no project bound
 BLINK_COLOR := "FFFFFF"
 ; Colour says which window to go to; the label says what to do there (bridge spec, section 5).
 COLORS := Map("green", "70C070", "yellow", "E8C840", "red", "E06060", "orange", "F0A040", "purple", "B48CE6"
+    , "olive", "B8B850", "ochre", "C8924A", "overrun", "C8924A"   ; running by time left; the touch page adds overrun's red edge
     , "tan", "E4D2C3", "grey", "D8D8D8", "none", "F4F4F4", "paused", PAUSED_COLOR, "closed", CLOSED_COLOR, "free", FREE_COLOR)
 DIM_COLORS := "grey|none|paused|closed|free"   ; drawn with grey text
 CHAT_ROWS_MAX := 8, CHAT_ROW_H := 36
@@ -240,6 +241,8 @@ NewSession(code, root) {
         statusFile: root "\.clip\session-status.json",
         reportFile: root "\.clip\last-report.md",
         reportMetaFile: root "\.clip\last-report.json",
+        scopeFile: root "\.clip\scope.json",
+        scopeRaw: "", estimateTag: "", estimate: 0, tint: "",   ; tint: s.color as drawn (running by time left)
         raw: "", hasStatus: false,
         state: "", since: "", red: false, project: "", transcript: "", sessionId: "", runTag: "", promptAt: "", event: "", outsideScope: "",
         metaRaw: "", reportTag: "", reportAt: "",
@@ -297,6 +300,29 @@ ReadReportMeta(s) {
     catch
         return
     s.metaRaw := text, s.reportTag := data.Get("run_tag", ""), s.reportAt := data.Get("pushed_at", "")
+}
+
+; .clip\scope.json, written by the prompt hook: the run's estimate (spec 7.4).
+ReadScope(s) {
+    try text := FileRead(s.scopeFile, "UTF-8")
+    catch {
+        if !FileExist(s.scopeFile)
+            s.scopeRaw := "", s.estimateTag := "", s.estimate := 0
+        return
+    }
+    if text == s.scopeRaw
+        return
+    try data := JSON.parse(text)
+    catch
+        return
+    est := data.Get("estimate", "")
+    s.scopeRaw := text, s.estimateTag := data.Get("run_tag", ""), s.estimate := ParseDuration(est is String ? est : "")
+}
+
+; Running time for the tint: from the prompt, or from `since` for an older status file.
+RunElapsed(s, nowUtc) {
+    start := s.promptAt != "" ? s.promptAt : s.since
+    return start = "" ? 0 : DateDiff(nowUtc, IsoToStamp(start), "Seconds")
 }
 
 ; Approval or processing with an interrupt line after `since` shows as waiting.
@@ -616,6 +642,7 @@ Refresh() {
         if ReadStatus(s)
             s.gitDirty := true
         ReadReportMeta(s)
+        ReadScope(s)
         gitKey := StampKey(s.gitWatch)
         if gitKey != s.gitKey
             s.gitKey := gitKey, s.gitDirty := true
@@ -652,6 +679,8 @@ Refresh() {
         }
         v := SendView(v, s.sendNote)
         s.color := v.color, s.label := v.label, s.step := StepText(s.runTag, issued, project)
+        s.tint := RunTint({color: s.color, label: s.label, runTag: s.runTag, estimateTag: s.estimateTag
+            , estimate: s.estimate, elapsed: RunElapsed(s, A_NowUTC)})
         Paint(s, offset)
         if !s.paused && !s.closed && !s.free
             liveColors.Push(s.color)
@@ -685,7 +714,7 @@ Paint(s, offset := "") {
     if offset = ""
         offset := DateDiff(A_Now, A_NowUTC, "Minutes") * 60
     ctrl := controls[s.code]
-    color := s.unseen && blinkOn && StillFlashing(s.flashes) ? BLINK_COLOR : COLORS.Get(s.color, COLORS["none"])
+    color := s.unseen && blinkOn && StillFlashing(s.flashes) ? BLINK_COLOR : COLORS.Get(s.tint != "" ? s.tint : s.color, COLORS["none"])
     look := color (InStr("|" DIM_COLORS "|", "|" s.color "|") ? " c707070" : " c000000")
     if look != s.painted {
         ctrl.Opt("Background" look)
@@ -1142,7 +1171,7 @@ TouchState() {
         bl := BlockLine({owner: code, view: view, names: names, step: TileStep(s.step), git: git})
         ; A paused tile keeps its place (group 0), only dimmed.
         tiles.Push({id: "cli:" code, kind: "cli", icon: bl.icon != "" ? bl.icon : TileIcon("cli", s.hasChat), group: 0
-            , color: s.paused ? "paused" : TileColor(s.color), name: TileName(code, mainProject), action: action
+            , color: s.paused ? "paused" : TileColor(s.tint != "" ? s.tint : s.color), name: TileName(code, mainProject), action: action
             , step: bl.step, git: bl.git, note: bl.note, blocked: bl.blocked})
     }
     for tabId in rowTabs {

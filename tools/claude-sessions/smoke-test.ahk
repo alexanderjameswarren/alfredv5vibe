@@ -44,6 +44,8 @@ ms := sessions["main"]    ; not `s`: the panel's functions use a local s
 ms.statusFile := statusPath, ms.reportFile := reportPath
 ms.reportMetaFile := dir "\last-report.json"
 try FileDelete(ms.reportMetaFile)
+ms.scopeFile := dir "\scope.json"
+try FileDelete(ms.scopeFile)
 try FileDelete(BRIDGE_DIR "\chats.json")
 ; Paired with a finished chat, so a CLI that stops waiting shows a colour (bridge spec, section 5).
 ms.paused := false, ms.chromeTitle := "", ms.chatLink := "https://claude.ai/chat/smoke-start", ms.chatLinkFor := "smoke-proj"
@@ -306,6 +308,26 @@ Step("processing", IsoAgo(30), false, T9)
 Expect("green CLI working", ms.color " / " ms.label, "green / CLI working")
 Expect("tile shows the step", TileField("cli:main", "step"), "s9")
 Expect("tile shows the timer", TileField("cli:main", "action") ~= "^Working 0:3\d$", 1)
+; Running colours by time left, from the estimate the prompt hook writes to scope.json.
+Expect("no estimate: plain green", TileField("cli:main", "color"), "green")
+WriteScope(tag, estimate) {
+    FileOpen(ms.scopeFile, "w", "UTF-8-RAW").Write('{"run_tag":"' tag '","found":true,"estimate":"' estimate '"}')
+    Refresh()
+}
+WriteScope(T9, "10m")
+Expect("10m estimate, 30s in: green", TileField("cli:main", "color"), "green")
+WriteScope(T9, "5m")
+Expect("4m30 left: olive", TileField("cli:main", "color"), "olive")
+WriteScope(T9, "2m")
+Expect("1m30 left: ochre", TileField("cli:main", "color") " / " SubStr(ms.painted, 1, 6), "ochre / " COLORS["ochre"])
+WriteScope(T9, "20s")
+Expect("past the estimate: overrun", TileField("cli:main", "color"), "overrun")
+Expect("overrun keeps the logic colour", ms.color " / " ms.label, "green / CLI working")
+WriteScope("rem-j7p-s8-zzzz", "20s")
+Expect("another run's estimate: green", TileField("cli:main", "color"), "green")
+FileDelete(ms.scopeFile)
+Refresh()
+Expect("scope file gone: green", TileField("cli:main", "color"), "green")
 Step("waiting", IsoAgo(20), false, T9)
 Expect("no report for the run: Check CLI", ms.color " / " ms.label, "red / Check CLI")
 Expect("Check CLI alerts", ms.unseen, true)
