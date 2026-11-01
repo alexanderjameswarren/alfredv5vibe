@@ -369,6 +369,37 @@ CheckInterrupt(s) {
 ; Strips: claims, main's project, git counts, orphans
 ; ---------------------------------------------------------------------------
 
+; The Send link's last word (2.9b), through the host: delivery-<project>.json. Tag, outcome and reason, never the text.
+ReportDelivery(tag, ok, reason := "") {
+    target := BRIDGE_DIR "\delivery-" ProjectOfTag(tag) ".json"
+    try {
+        ; Written by hand: ToJson has no true or false, and the host wants a real true.
+        FileOpen(target ".tmp-panel", "w", "UTF-8-RAW").Write('{"tag":' ToJson(tag) ',"ok":' (ok ? "true" : "false") ',"error":' ToJson(ok ? "" : reason) '}')
+        FileMove(target ".tmp-panel", target, 1)
+    }
+}
+
+; TakePrompts, then tell each link that was refused. One that was pasted waits for CheckDelivery.
+TakePromptsAndReport() {
+    waiting := Map()
+    Loop Files BRIDGE_DIR "\prompt-*.json" {
+        if A_LoopFileName = "prompt-result.json"
+            continue
+        try {
+            data := JSON.parse(FileRead(A_LoopFileFullPath, "UTF-8"))
+            waiting[data.Get("project", "")] := data.Get("tag", "")
+        }
+    }
+    TakePrompts()
+    for project, tag in waiting {
+        code := SessionForProject(order, mainProject, project)
+        if code = ""
+            ReportDelivery(tag, false, "no checkout for " project)
+        else if sessions[code].sendTag != tag
+            ReportDelivery(tag, false, RegExReplace(sessions[code].sendNote, "^Not sent: "))
+    }
+}
+
 ; An environment value, or the Windows user registry for a panel started before setx. Never shown.
 UserEnv(name) {
     if (value := EnvGet(name)) != ""
@@ -720,7 +751,7 @@ Refresh() {
     codeWindows := listCodeWindows()
     ReadTabs(), ReadChats()
     ; Send links: refusals first, then deliveries, judged on last poll's states.
-    ReadPromptResult(), TakePrompts()
+    ReadPromptResult(), TakePromptsAndReport()
     chatsOk := ChatsFresh()    ; not `chatsFresh` or `colors`: names are case-insensitive
     liveColors := [], tip := "", anyAlert := false, paired := Map()
 
@@ -737,7 +768,10 @@ Refresh() {
         if s.gitDirty
             GitCounts(s)
         CheckInterrupt(s)
+        pendingTag := s.sendTag
         CheckDelivery(s)
+        if pendingTag != "" && s.sendTag = ""
+            ReportDelivery(pendingTag, s.sendNote = "", "the prompt never reached the CLI")
         s.unread := IsUnread(NewestStamp([s.reportFile]), s.lastClick)
         s.misses := FindCodeWindow(s, codeWindows) ? 0 : s.misses + 1
         s.closed := s.misses >= CLOSED_AFTER

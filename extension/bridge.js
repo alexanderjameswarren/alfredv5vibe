@@ -15,7 +15,7 @@ import {
   HOST_NAME, HEARTBEAT_MS, DEBOUNCE_MS, buildTabsMessage, buildChatsMessage, nextDelay, isHostMissing, debounce,
   normaliseUrl, pickTab, focusResult, checkPrompt, cleanHosts, promptFrame, sendTagOf,
   approveStatus, approveTokenOf, approveWatcher, chatForRun, cleanRun, closesApproveTab, GRANT_BADGE, grantNotice, hostOrigins, isApprovePage,
-  postProblem, pruneApprovals,
+  deliveryMessage, notPostedText, postProblem, pruneApprovals,
 } from "./lib/bridge-core.js";
 
 let port = null;
@@ -120,11 +120,26 @@ async function broadcastHosts() {
   }
 }
 
+// The panel or host has the last word on a Send: tell the tab its link is in.
+const sendingTabs = new Map();   // run tag -> tabId
+function onDelivery(frame) {
+  try {
+    const out = deliveryMessage(frame);
+    const tabId = out && sendingTabs.get(out.tag);
+    if (!Number.isInteger(tabId)) return;
+    sendingTabs.delete(out.tag);
+    chrome.tabs.sendMessage(tabId, out).catch(() => {});
+  } catch (e) {
+    quiet(e);
+  }
+}
+
 // A watcher caught a Send link click: check again and hand the prompt to the host.
 function onSendPrompt(msg, sender) {
   try {
     if (sender?.id !== chrome.runtime.id || !String(sender?.url ?? "").startsWith("https://claude.ai/")) return;
     if (typeof msg.tag !== "string") return;
+    if (Number.isInteger(sender.tab?.id)) sendingTabs.set(msg.tag, sender.tab.id);
     const error = typeof msg.error === "string" ? msg.error : checkPrompt({ tag: msg.tag }, msg.prompt);
     port?.postMessage(promptFrame(`ext-${Date.now().toString(36)}-${++promptSeq}`, msg.tag, msg.prompt, error));
   } catch (e) {
@@ -358,7 +373,7 @@ async function postRuns() {
         if (closesApproveTab(did, page?.url, approvals.hosts)) await chrome.tabs.remove(run.approveTabId).catch(quiet);
       } else {
         run.stopped = true;
-        await sayAboutRun(run, `Not posted, and the chat wasn't touched: ${postProblem(chat, why, did) ?? "the post wasn't confirmed"}. Copy the line above, or clear that and try again.`);
+        await sayAboutRun(run, notPostedText(did, postProblem(chat, why, did) ?? "the post wasn't confirmed"));
       }
     }
   } catch (e) {
@@ -414,6 +429,7 @@ function connect() {
         });
       }
       if (msg?.type === "command" && typeof msg.id === "string") onCommand(msg);
+      if (msg?.type === "delivery") onDelivery(msg);
     });
   } catch (e) {
     port = null;

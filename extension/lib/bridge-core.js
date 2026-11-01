@@ -128,6 +128,13 @@ export function checkPrompt(cmd, prompt) {
   return null;
 }
 
+/** The host's word on a Send, as the message for the link's tab. Null for anything else. */
+export function deliveryMessage(frame) {
+  if (typeof frame?.tag !== "string" || !TAG_SHAPE.test(frame.tag)) return null;
+  const ok = frame.ok === true;
+  return { type: "send-status", tag: frame.tag, state: ok ? "sent" : "notsent", reason: ok ? "" : String(frame.error ?? "").slice(0, 500) };
+}
+
 /** The frame for the host. The text travels only when the prompt passed. */
 export function promptFrame(id, tag, prompt, error) {
   return error ? { type: "prompt", id, tag, error } : { type: "prompt", id, tag, text: prompt.text };
@@ -213,6 +220,14 @@ export function postProblem(chat, why, did) {
   if (did === "unknown") return "the extension can't read that chat's page";
   if (did === "unsent") return "that chat's Send button didn't take it, so the line was taken back out";
   return "that chat's tab didn't answer";
+}
+
+/** The approval page's status line: why, then the advice that fits it. `did`: the watcher's answer. */
+export function notPostedText(did, problem) {
+  const advice = did === "writing" ? " Copy the line above, or wait until Claude finishes, then try again."
+    : did === "box" ? " Copy the line above, or clear that and try again."
+    : " Copy the line above, or try again.";
+  return `Not posted, and the chat wasn't touched: ${problem}.${advice}`;
 }
 
 const CLICK_KEEP_MS = 60 * 60 * 1000;

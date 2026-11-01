@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  bridgeDir, cleanChat, commandToForward, createDecoder, encode, extensionIdOf, handleMessage, readLinkHosts, takeCommand,
+  bridgeDir, cleanChat, commandToForward, createDecoder, encode, extensionIdOf, handleMessage, readLinkHosts, takeCommand, takeDeliveries,
 } from "./host.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -165,6 +165,33 @@ function startHost(dir) {
     ? spawn("cmd.exe", ["/d", "/s", "/c", `"${path.join(HERE, "host.bat")}" ${ORIGIN} --parent-window=0`], { env, windowsVerbatimArguments: true })
     : spawn(process.execPath, [path.join(HERE, "host.mjs"), ORIGIN], { env });
 }
+
+test("a refused prompt goes straight back to the extension; an accepted one waits for the panel", () => {
+  const dir = scratch(), sent = [];
+  const tag = "sb-h8r-s13-q2vx";
+  handleMessage({ type: "prompt", id: "p1", tag, error: "Claude is still writing" }, { dir, origin: ORIGIN, send: (m) => sent.push(m) });
+  assert.deepEqual(sent, [{ type: "delivery", tag, ok: false, error: "Claude is still writing" }]);
+  sent.length = 0;
+  handleMessage({ type: "prompt", id: "p2", tag, text: `Run tag: ${tag}\nWindow: x\n\nRun tag: ${tag}` }, { dir, origin: ORIGIN, send: (m) => sent.push(m) });
+  assert.deepEqual(sent, []);
+});
+
+test("delivery files: forwarded cleaned, deleted, and a bad one dropped", () => {
+  const dir = scratch(), sent = [];
+  const tag = "sb-h8r-s13-q2vx";
+  writeFileSync(path.join(dir, "delivery-sb-h8r.json"), JSON.stringify({ tag, ok: true, error: "", text: "never" }));
+  writeFileSync(path.join(dir, "delivery-bad.json"), JSON.stringify({ tag: "nope", ok: true }));
+  writeFileSync(path.join(dir, "delivery-half.json"), '{"tag":');
+  writeFileSync(path.join(dir, "chats.json"), "{}");
+  takeDeliveries(dir, (m) => sent.push(m));
+  assert.deepEqual(sent, [{ type: "delivery", tag, ok: true, error: null }]);
+  assert.deepEqual(readdirSync(dir).sort(), ["chats.json", "delivery-half.json"]);
+  sent.length = 0;
+  writeFileSync(path.join(dir, "delivery-x.json"), JSON.stringify({ tag, ok: false, error: "the CLI is running" }));
+  takeDeliveries(dir, (m) => sent.push(m));
+  assert.equal(sent[0].ok, false);
+  assert.equal(sent[0].error, "the CLI is running");
+});
 
 test("the host process speaks only frames, forwards a command, and exits on EOF", async () => {
   const dir = scratch();

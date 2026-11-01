@@ -193,6 +193,23 @@
     return true;
   }
 
+  /** What a Send link says once clicked. */
+  function sendLabel(state, reason = "") {
+    if (state === "sending") return "Sending…";
+    if (state === "sent") return "Sent ✓";
+    return reason ? `Not sent: ${reason}` : "Not sent";
+  }
+
+  /** A link that is on its way or delivered takes no more clicks; a refused one can be tried again. */
+  const sendAllowed = (state) => state !== "sending" && state !== "sent";
+
+  /** Every link in the page with this tag says so. Only ever its own words, and only when they differ. */
+  function markSendLinks(root, hosts, tag, state, reason) {
+    const text = sendLabel(state, reason);
+    for (const a of root.querySelectorAll("a[href]"))
+      if (sendTagOf(a.href, hosts) === tag && a.textContent !== text) a.textContent = text;
+  }
+
   /** An approval link's token, or null. Same rule as lib/bridge-core.js approveTokenOf; the tests hold them equal. */
   function approveTokenOf(href, hosts) {
     let u;
@@ -230,16 +247,15 @@
     return true;
   }
 
-  /** What Send cli may do, from the page as it is now: "send", "type" (Claude is writing) or "focus". */
+  /** What Send cli may do, from the page as it is now: "send" only when idle with an empty box, else "focus". */
   function cliPlan(state, composerEmpty) {
-    if (state === "unknown" || composerEmpty !== true) return "focus";
-    return state === "responding" ? "type" : "send";
+    return state === "finished" && composerEmpty === true ? "send" : "focus";
   }
 
   /**
    * Send cli, decided on the live page: focus the box, and type "cli" and press
-   * send only when the box is empty. Reads only whether the box is empty.
-   * Resolves to "sent", "typed" or "focused".
+   * send only when the chat is idle and the box empty. Reads only whether the box
+   * is empty. Resolves to "sent", "focused", or "typed" if Send won't take it.
    */
   async function sendCli(root) {
     const q = (s) => root.querySelector(s);
@@ -249,7 +265,6 @@
     focusComposer(root);
     if (plan === "focus") return "focused";
     root.execCommand("insertText", false, "cli");
-    if (plan === "type") return "typed";
     // The send button enables a moment after the box has text.
     for (let i = 0; i < 30; i++) {
       const button = q(SELECTORS.send);
@@ -300,7 +315,7 @@
 
   globalThis.__alfredWatchCore = {
     decideState, extractTag, extractPrompt, isChatPath, latestMessage, readTag, readPrompt, readPromptIn, sendTagOf,
-    promptForLink, onLinkClick, approveTokenOf, onApproveClick, focusComposer, cliPlan, sendCli, postLine, postBlock, boxEmpty, SELECTORS,
+    promptForLink, onLinkClick, sendLabel, sendAllowed, markSendLinks, approveTokenOf, onApproveClick, focusComposer, cliPlan, sendCli, postLine, postBlock, boxEmpty, SELECTORS,
   };
   if (typeof chrome === "undefined" || !chrome.runtime?.id || typeof document === "undefined") return;
 
@@ -345,6 +360,7 @@
   function check() {
     timer = null;
     try {
+      for (const [tag, { state, reason }] of sendStates) markSendLinks(document, linkHosts, tag, state, reason);
       if (!isChatPath(location.pathname)) {
         if (reported !== "gone") send(null), (reported = "gone"), (shown = null);
         return;
@@ -389,7 +405,19 @@
   // Send links: the host list arrives from bridge.js; with none, no link is caught.
   let linkHosts = [];
   const say = (...a) => console.info("[Alfred watch]", ...a);
+  // What each clicked link says, kept so a re-render of the reply can't undo it.
+  const sendStates = new Map();   // tag -> { state, reason }
+  const setSend = (tag, state, reason = "") => {
+    sendStates.set(tag, { state, reason });
+    markSendLinks(document, linkHosts, tag, state, reason);
+  };
+  const SEND_ANSWER_MS = 30000;   // longer than the panel's own wait for the prompt hook
   const sendLink = (anchor, tag) => {
+    if (!sendAllowed(sendStates.get(tag)?.state)) return;
+    setSend(tag, "sending");
+    setTimeout(() => {
+      if (sendStates.get(tag)?.state === "sending") setSend(tag, "notsent", "no answer from the panel");
+    }, SEND_ANSWER_MS);
     const r = probe().state === "responding" ? { prompt: null, error: "Claude is still writing" } : promptForLink(anchor, tag);
     say(`Send ${tag}:`, r.error ?? "prompt found, handed to the bridge");
     try {
@@ -441,6 +469,7 @@
       sendCli(document).then((did) => reply({ did }), () => reply({ did: "focused" }));
       return true;    // answers asynchronously
     }
+    if (msg?.type === "send-status" && typeof msg.tag === "string") setSend(msg.tag, msg.state === "sent" ? "sent" : "notsent", String(msg.reason ?? ""));
     if (msg?.type === "post-check") return reply({ did: postBlock(document) }), false;
     if (msg?.type === "post-line" && /^sql [0-9a-f-]{36}$/i.test(String(msg.text))) {
       // A reply lost on the way back must not post it twice.

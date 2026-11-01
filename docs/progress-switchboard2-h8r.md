@@ -50,8 +50,8 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 2 | 2.7d | Missed post, honest headline, plain description | `db:deploy` | done with one serious bug (s35-k2pe): headline, description and automatic dry run correct; run 3f6609cd-5867-457e-b88b-8147e6f373e7 succeeded after an extension reload. But Alex was mid-message with a screenshot in the box and no text: the extension sent his unfinished message, posted the line and closed the tab, because the box check treated an attachment as empty. Fixed in 2.7e | 2026-11-01 |
 | 2 | 2.7e | Posting guards, matching Send cli | — | done (s36-r4vh), extension 1.2.4: with a screenshot in the chat's box, Approve ran run 5596a17d-fdc3-4892-9cc4-8859dd2e813e (succeeded); nothing was sent, the chat wasn't touched, the tab stayed open with the line, Copy and the banner; after the box was cleared, Try again posted "sql 5596a17d-..." and the tab closed | 2026-11-01 |
 | 2 | 2.7f | The approve page looks and behaves like the rest of Alfred | — | done (s37-w6fa), extension 1.2.5: Alex checkpointed and tested; the page matches Alfred, the message and Try again sit inside the card, Copy works, and Try again posted run d3b5b803-a007-40fa-986c-220f4e501ee0 (succeeded) and closed the tab | 2026-11-01 |
-| 2 | 2.9 | Panel: Waiting on SQL, Report unread, lane order, tap rules | — | built (s38-d4ms), tests pass; panel not yet restarted on it. The read checked live: 25 projects, `waiting_on_alex` true for the queued select | |
-| 2 | 2.9b | Send to CLI link shows Sending, Sent or Not sent | — | todo | |
+| 2 | 2.9 | Panel: Waiting on SQL, Report unread, lane order, tap rules | — | done (s38-d4ms): Alex checkpointed and restarted the panel; the switchboard2 tile showed tan "Waiting on SQL"; lanes ran gmail capture, switchboard2, arnold v1, warren buffet p4, then the rest; approving ran run 014ef9a9-c2d1-4fbb-92de-0dbcb7b0a6a7 (succeeded), which posted back by itself. The orange and red tap rules are not yet seen live | 2026-11-01 |
+| 2 | 2.9b | Send to CLI link shows Sending, Sent or Not sent | — | built (s39-g8pt), extension 1.2.6, tests pass; not yet seen live | |
 | 2 | 2.10 | Read-only role and query function, with secret-column grants | `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read), `db:fn:register_table`, `db:fn:set_read_settings` | todo | |
 | 2 | 2.11 | MCP read-only query tool, `get_sql_read` | `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget`, `db:deploy` | todo | |
 | 2 | 2.12 | Skill rule and Phase 2 checklist | — | todo | |
@@ -661,3 +661,4 @@ Database items per step are in the table at the top. Report unread and lane orde
 | s36 (2.7e) | 3m23s (estimate 10m) |
 | s37 (2.7f) | 2m00s (estimate 10m) |
 | s38 (2.9) | 9m12s (estimate 12m) |
+| s39 (2.9b) | 4m08s (estimate 12m) |
