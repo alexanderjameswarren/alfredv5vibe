@@ -61,6 +61,18 @@ test('shows the headline, project and whole SQL, with his JWT and the token', as
   expect(JSON.parse(init.body)).toEqual({ token: 'tok1' });
 });
 
+test('the description sits above the SQL; an older action without one shows none', async () => {
+  runner({ preview: reply({ ...PREVIEW, description: 'Sets status to done for 3 reminders' }), 'dry-run': CLEAN });
+  const { unmount } = open();
+  const shown = await screen.findByText('Sets status to done for 3 reminders');
+  expect(shown.compareDocumentPosition(screen.getByTestId('approve-sql')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  unmount();
+  runner({ preview: reply(PREVIEW), 'dry-run': CLEAN });
+  open();
+  await screen.findByText('THIS RUNS A SELECT');
+  expect(screen.queryByTestId('approve-description')).not.toBeInTheDocument();
+});
+
 test('the dry run starts by itself, once, and Approve waits for it; no run id on the page', async () => {
   let finish;
   runner({ preview: reply(PREVIEW), 'dry-run': () => new Promise((r) => { finish = r; }) });

@@ -370,24 +370,30 @@
   // Says why a /send/ link was let through, since that only shows in Chrome.
   const onClick = (e) => {
     if (onLinkClick(e, linkHosts, sendLink)) return;
-    if (onApproveClick(e, linkHosts, noteApprove)) return;
+    if (onApproveClick(e, approveHosts, noteApprove)) return;
     const a = e.target?.closest?.("a[href]");
     if (a && /\/send\//.test(a.href)) say("Send link not caught:", a.href, linkHosts.length ? `host not in [${linkHosts}]` : "no link hosts from the bridge");
   };
-  const setHosts = (hosts) => { linkHosts = hosts; say("link hosts:", hosts.join(", ") || "(none)"); };
+  // Approval links don't need the host, so they keep the list as it was last sent.
+  let approveHosts = [];
+  const setHosts = (hosts, forApprove) => {
+    linkHosts = hosts;
+    if (Array.isArray(forApprove)) approveHosts = forApprove;
+    say("link hosts:", hosts.join(", ") || "(none)");
+  };
   for (const type of ["click", "auxclick"]) {
     document.addEventListener(type, onClick, true);
     cleanups.push(() => document.removeEventListener(type, onClick, true));
   }
   try {
-    chrome.runtime.sendMessage({ type: "link-hosts?" }).then((r) => { if (Array.isArray(r?.hosts)) setHosts(r.hosts); }, () => {});
+    chrome.runtime.sendMessage({ type: "link-hosts?" }).then((r) => { if (Array.isArray(r?.hosts)) setHosts(r.hosts, r.approveHosts); }, () => {});
   } catch { /* old context */ }
 
   const postedLines = new Set();
   const onNudge = (msg, _sender, reply) => {
     if (msg?.type === "watch-recheck") onAddress(), schedule(0);
     if (msg?.type === "focus-composer") focusComposer(document);
-    if (msg?.type === "link-hosts" && Array.isArray(msg.hosts)) setHosts(msg.hosts);
+    if (msg?.type === "link-hosts" && Array.isArray(msg.hosts)) setHosts(msg.hosts, msg.approveHosts);
     if (msg?.type === "send-link" && typeof msg.tag === "string") {
       // The backup: a /send/ tab opened anyway. Act on the last link with that tag.
       const anchors = [...document.querySelectorAll("a[href]")].filter((a) => sendTagOf(a.href, linkHosts) === msg.tag);

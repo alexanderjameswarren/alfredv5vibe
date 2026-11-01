@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 const MIN_SECRET = 32;
+const MAX_DESCRIPTION = 300;
 
 /** A Windows USER environment variable from the registry, for a shell that predates setx. Null on any failure. */
 function fromWindowsUserEnv(name) {
@@ -34,8 +35,12 @@ export function readQueueSettings(env = process.env, fromRegistry = fromWindowsU
 const refuse = (error) => ({ ok: false, error });
 
 /** Returns the function's answer, or { ok: false, error } without sending anything. */
-export async function queueFile({ file, project }, settings, fetchFn = fetch) {
+export async function queueFile({ file, project, description }, settings, fetchFn = fetch) {
   if (!project || project === "main") return refuse("no project code here: pass --project <code>.");
+  const said = (description ?? "").trim();
+  if (!said || said.length > MAX_DESCRIPTION || /[\r\n]/.test(said)) {
+    return refuse(`--describe needs one sentence, on one line of at most ${MAX_DESCRIPTION} characters, saying what the SQL does: what it inserts, updates, deletes or creates, in which table, and roughly how many rows or what values.`);
+  }
   if (!settings.secret) return refuse("SWITCHBOARD_QUEUE_SECRET is not set, or is too short.");
   if (!settings.url) return refuse("no queue URL: set SWITCHBOARD_QUEUE_URL or CLIPBOARD_URL.");
   if (path.extname(file ?? "").toLowerCase() !== ".sql") return refuse("the file must be a .sql file.");
@@ -51,7 +56,7 @@ export async function queueFile({ file, project }, settings, fetchFn = fetch) {
     const res = await fetchFn(settings.url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-switchboard-queue-secret": settings.secret },
-      body: JSON.stringify({ project_code: project, sql }),
+      body: JSON.stringify({ project_code: project, sql, description: said }),
     });
     const body = await res.json().catch(() => ({}));
     return body.ok ? body : { ok: false, error: body.error ?? `the queue answered ${res.status}.`, reasons: body.reasons };

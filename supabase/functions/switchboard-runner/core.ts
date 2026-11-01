@@ -5,6 +5,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
 
 export const MAX_SQL_CHARS = 512 * 1024;
+const MAX_DESCRIPTION = 300;
 const MIN_SECRET = 32;
 const PROJECT_CODE = /^[a-z0-9_-]{1,40}$/;
 
@@ -20,7 +21,7 @@ export type RunOutcome = {
 export type Action = {
   id: string;
   user_id: string;
-  payload: { sql?: string };
+  payload: { sql?: string; description?: string };
   fingerprint: string;
   headline: string;
   status: string;
@@ -136,13 +137,38 @@ const ACTIONS: [RegExp, (name: string) => string][] = [
   [new RegExp(`^drop view ${IF_EXISTS}${NAME}`, "i"), (n) => `drops view ${n}`],
 ];
 const READ_ONLY = /^(select|show|explain|values|table)\b/i;
+// Words that take a bracket but call nothing, then built-ins that only compute. Any other call may write, and so
+// does any schema-qualified one, since a qualified name can be Alfred's own function with a built-in's name.
+const NOT_A_WRITING_CALL = new Set(`
+  all and any as array between by case cast date decimal distinct else except exists explain filter from group having
+  ilike in intersect interval is join lateral like limit not numeric offset on or order over partition row select
+  table then time timestamp timestamptz union using values varchar char when where with within
+  abs age array_agg array_length avg bool_and bool_or btrim ceil ceiling char_length coalesce concat concat_ws count
+  current_timestamp date_part date_trunc dense_rank extract first_value floor format generate_series greatest json_agg
+  json_build_array json_build_object json_object_agg jsonb_agg jsonb_array_elements jsonb_array_elements_text
+  jsonb_array_length jsonb_build_array jsonb_build_object jsonb_each jsonb_object_agg jsonb_typeof lag last_value lead
+  least left length lower ltrim max min mod now nullif position rank replace right round row_number row_to_json rtrim
+  split_part string_agg substr substring sum to_char to_date to_json to_jsonb to_timestamp trim unnest upper
+`.trim().split(/\s+/));
+const CALL = /("[^"]+"|[\w$]+)(\s*\.\s*(?:"[^"]+"|[\w$]+))?\s*\(/g;
+
+/** Why a statement that starts like a read could still change something, or null. Reads only `bare`, so never a string. */
+function mayWrite(bare: string): string | null {
+  if (/^explain\b/i.test(bare) && /^explain\s*(\([^)]*\b(analyze|analyse)\b[^)]*\)|(verbose\s+)?(analyze|analyse)\b)/i.test(bare)) return "explain analyze";
+  if (/^select\b/i.test(bare) && /\binto\b/i.test(bare)) return "select into";
+  if (/\bfor (no key )?update\b|\bfor (key )?share\b/i.test(bare)) return "locks rows";
+  for (const [, name, schema] of bare.matchAll(CALL)) {
+    if (schema || !NOT_A_WRITING_CALL.has(name.toLowerCase())) return `calls function ${name}${(schema ?? "").replace(/\s/g, "")}`;
+  }
+  return null;
+}
 
 function describe(s: Statement): string {
   for (const [re, phrase] of ACTIONS) {
     const m = re.exec(s.bare);
     if (m) return phrase(shortName(m[1]));
   }
-  if (READ_ONLY.test(s.bare)) return "runs a select";
+  if (READ_ONLY.test(s.bare)) return mayWrite(s.bare) ?? "runs a select";
   if (/^do\b/i.test(s.bare)) return "runs a do block";
   return `runs ${(/^\S+(?: \S+)?/.exec(s.bare)?.[0] ?? "a statement").toLowerCase()}`;
 }
@@ -150,13 +176,14 @@ function describe(s: Statement): string {
 /** The capitals line on the click page, from the statements alone. */
 export function buildHeadline(sql: string): string {
   const statements = prepare(sql).statements;
-  if (statements.length && statements.every((s) => READ_ONLY.test(s.bare))) {
-    return "THIS RUNS A SELECT ON THE LIVE ALFRED DATABASE";
-  }
-  const phrases = [...new Set(statements.filter((s) => !READ_ONLY.test(s.bare)).map(describe))];
+  const phrases = [...new Set(statements.map(describe))].filter((p) => p !== "runs a select");
+  if (statements.length && !phrases.length) return "THIS RUNS A SELECT ON THE LIVE ALFRED DATABASE";
   const shown = phrases.slice(0, 4).join(", ");
   const more = phrases.length > 4 ? ` AND ${phrases.length - 4} MORE` : "";
-  return `THIS CHANGES THE LIVE ALFRED DATABASE: ${shown.toUpperCase()}${more}`;
+  const lead = statements.length && statements.every((s) => READ_ONLY.test(s.bare))
+    ? "THIS MAY CHANGE DATA IN THE LIVE ALFRED DATABASE"
+    : "THIS CHANGES THE LIVE ALFRED DATABASE";
+  return `${lead}: ${shown.toUpperCase()}${more}`;
 }
 
 const NOT_IN_TRANSACTION: RegExp[] = [
@@ -274,13 +301,17 @@ async function handleQueue(req: Request, deps: Deps): Promise<Response> {
   if (typeof code !== "string" || !PROJECT_CODE.test(code)) return json({ ok: false, error: "project_code is missing or malformed." }, 400);
   if (typeof sql !== "string" || !sql.trim()) return json({ ok: false, error: "sql is missing." }, 400);
   if (sql.length > MAX_SQL_CHARS) return json({ ok: false, error: `sql is over ${MAX_SQL_CHARS} characters.` }, 400);
+  const description = typeof body?.description === "string" ? body.description.trim() : "";
+  if (!description || description.length > MAX_DESCRIPTION || /[\r\n]/.test(description)) {
+    return json({ ok: false, error: `description must be one line of at most ${MAX_DESCRIPTION} characters, saying what the SQL does.` }, 400);
+  }
   const { reasons } = prepare(sql);
   if (reasons.length) return json({ ok: false, error: "this goes to the SQL editor, not the queue.", reasons }, 422);
 
   // Only these fields reach the row. The kind, owner and headline are never the caller's.
   const headline = buildHeadline(sql);
   const row = await deps.insertAction({
-    user_id: deps.userId, kind: "sql", project_code: code, payload: { sql }, headline, created_by: "cli",
+    user_id: deps.userId, kind: "sql", project_code: code, payload: { sql, description }, headline, created_by: "cli",
   });
   return json({ ok: true, action_id: row.id, headline });
 }
@@ -305,7 +336,7 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
 
   if (route === "preview") {
     return reply({
-      ok: true, action_id: action.id, headline: action.headline, sql, fingerprint: action.fingerprint,
+      ok: true, action_id: action.id, headline: action.headline, description: action.payload?.description ?? null, sql, fingerprint: action.fingerprint,
       project_code: action.project_code, expires_at: action.link_expires_at,
     });
   }
