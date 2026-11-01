@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase, supabaseUrl, supabaseAnonKey } from '../supabaseClient';
+import CopyButton from '../shared/CopyButton';
 
 // Where a Switchboard approval link lands (spec §8.1). The runner decides everything;
 // this page shows the SQL, runs the dry run by itself, then offers Approve. Only a real run puts
 // its id on the page, as data-switchboard-run-id; the extension reads that and data-switchboard-project,
 // posts the result to the chat and closes this tab. Where it can't, the line is here to copy.
 
-const BUTTON = 'w-full sm:w-auto px-4 py-3 rounded-lg bg-primary text-white font-medium disabled:opacity-50';
-const SECOND_BUTTON = 'w-full sm:w-auto px-4 py-3 rounded-lg border border-primary text-dark font-medium disabled:opacity-50';
+// As on OAuthConsent (primary) and ItemAddToCollection (secondary).
+const BUTTON = 'w-full sm:w-auto px-4 py-3 min-h-[44px] bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50';
+const SECOND_BUTTON = 'w-full sm:w-auto px-4 py-3 min-h-[44px] rounded-lg border border-border text-primary hover:border-primary transition-colors disabled:opacity-50';
 
 /** The plain sentence for a refusal that ends this link, or null if the page can carry on. */
 export function linkEnded(status, error) {
@@ -35,7 +37,8 @@ function Shell({ children }) {
   return (
     <div className="flex justify-center min-h-screen bg-primary-bg p-4">
       <div className="w-full max-w-3xl self-start p-4 sm:p-8 bg-white rounded-lg shadow-md">
-        <h1 className="text-2xl font-bold text-dark mb-4">Alfred</h1>
+        <h1 className="text-2xl font-bold text-dark mb-2 text-center">Alfred</h1>
+        <p className="text-sm text-muted text-center mb-6">Approve</p>
         {children}
       </div>
     </div>
@@ -53,21 +56,22 @@ function RunResult({ title, summary, conformance, runId }) {
   );
 }
 
-/** The line for the chat, for wherever the extension can't post it. Where it can, this tab closes first. */
+/**
+ * The line for the chat, for wherever the extension can't post it. Where it can, this tab closes first.
+ * The extension fills the hidden status and shows Try again; it adds no markup or styling of its own.
+ */
 function ResultLine({ runId }) {
-  const [copied, setCopied] = useState(false);
   const line = `sql ${runId}`;
   return (
-    <div className="mb-16">
+    <div>
       <p className="text-dark mb-2">Paste this into the Claude chat, then close this tab.</p>
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+      <div className="flex items-center gap-2">
         <code className="font-mono text-dark break-all">{line}</code>
-        <button
-          className={SECOND_BUTTON}
-          onClick={() => navigator.clipboard.writeText(line).then(() => setCopied(true))}
-        >
-          {copied ? 'Copied' : 'Copy'}
-        </button>
+        <CopyButton getText={() => line} title="Copy this line for the chat" />
+      </div>
+      <div data-switchboard-status="" hidden className="mt-4">
+        <p data-switchboard-status-text="" className="text-dark mb-3 break-words" />
+        <button type="button" data-switchboard-retry="" className={SECOND_BUTTON}>Try again</button>
       </div>
     </div>
   );

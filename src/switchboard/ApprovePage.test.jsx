@@ -102,9 +102,18 @@ test('Approve sends the fingerprint, shows the result and puts the run id on the
   expect(screen.getByText('sql run9')).toBeInTheDocument();
   expect(screen.getByText('Paste this into the Claude chat, then close this tab.')).toBeInTheDocument();
   Object.assign(navigator, { clipboard: { writeText: jest.fn().mockResolvedValue() } });
-  fireEvent.click(screen.getByRole('button', { name: /^copy$/i }));
+  const copy = screen.getByRole('button', { name: /^copy$/i });
+  expect(copy.querySelector('svg')).not.toBeNull();
+  fireEvent.click(copy);
   expect(navigator.clipboard.writeText).toHaveBeenCalledWith('sql run9');
   expect(await screen.findByRole('button', { name: /^copied$/i })).toBeInTheDocument();
+  // The extension's place: under the line, in the card, empty and hidden until it has something to say.
+  const status = container.querySelector('[data-switchboard-status]');
+  expect(status).not.toBeVisible();
+  expect(status.querySelector('[data-switchboard-status-text]').textContent).toBe('');
+  expect(status.querySelector('button[data-switchboard-retry]').textContent).toBe('Try again');
+  expect(screen.getByText('sql run9').compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(status.closest('.shadow-md')).not.toBeNull();
   expect(screen.getByText(/CONFORMANT/)).toBeInTheDocument();
   expect(container.querySelector('[data-switchboard-run-id]').getAttribute('data-switchboard-run-id')).toBe('run9');
   expect(JSON.parse(called('approve')[0][1].body)).toEqual({ token: 'tok1', fingerprint: 'fp1' });

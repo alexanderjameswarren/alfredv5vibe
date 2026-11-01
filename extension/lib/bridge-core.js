@@ -230,24 +230,25 @@ export function pruneApprovals(state, now = Date.now()) {
   };
 }
 
-/** Injected into the approval page: one banner saying why the chat didn't get the result, with Try again. Stands alone. */
-export function approveBanner(text, runId) {
-  let el = document.querySelector("[data-alfred-post-note]");
-  if (!el) {
-    el = document.createElement("div");
-    el.setAttribute("data-alfred-post-note", "");
-    el.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:2147483647;padding:12px 16px;background:#fff;color:#111;border-top:2px solid #d97706;font:14px/1.4 sans-serif;";
-    document.body.append(el);
-  }
-  el.textContent = `${text} `;
-  const again = document.createElement("button");
-  again.textContent = "Try again";
-  again.style.cssText = "margin-left:8px;padding:6px 12px;border:1px solid #111;border-radius:6px;background:#fff;color:#111;font:inherit;cursor:pointer;";
-  again.addEventListener("click", () => {
-    el.textContent = "Trying again…";
+/**
+ * Injected into the approval page: says why the chat didn't get the result, in the status element the
+ * page reserves, and wires its Try again. Adds no markup or styling. False if the page has no such element.
+ */
+export function approveStatus(text, runId) {
+  const status = document.querySelector("[data-switchboard-status]");
+  const words = status?.querySelector("[data-switchboard-status-text]");
+  const again = status?.querySelector("[data-switchboard-retry]");
+  if (!words || !again) return false;
+  words.textContent = text;
+  status.hidden = false;
+  again.hidden = false;
+  // Assigned, not added: a second fill or a re-injection replaces the last one.
+  again.onclick = () => {
+    words.textContent = "Trying again…";
+    again.hidden = true;
     chrome.runtime.sendMessage({ type: "approve-retry", runId }).catch(() => {});
-  });
-  el.append(again);
+  };
+  return true;
 }
 
 /**

@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  approveBanner, approveTokenOf, approveWatcher, buildChatsMessage, buildTabsMessage, checkPrompt, chatForProject, chatForRun, cleanHosts, cleanRun, closesApproveTab, debounce, focusResult,
+  approveStatus, approveTokenOf, approveWatcher, buildChatsMessage, buildTabsMessage, checkPrompt, chatForProject, chatForRun, cleanHosts, cleanRun, closesApproveTab, debounce, focusResult,
   GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, isHostMissing, nextDelay, normaliseUrl, pickTab, postProblem, projectOfTag, promptFrame, pruneApprovals, sendTagOf,
 } from "./bridge-core.js";
 import "../claude-watch.js";
@@ -350,24 +350,39 @@ test("approvals: old clicks and seen runs are dropped; waiting runs stay", () =>
   assert.deepEqual(pruneApprovals({ hosts: 1, clicks: null, runs: "x", seen: 2 }, now), { hosts: [], clicks: {}, runs: [], seen: {} });
 });
 
-test("approve banner: says it on the page, once, and replaces its own words", async (t) => {
-  const w = await dom(t, "");
+const STATUS_HTML = `<div data-switchboard-status hidden><p data-switchboard-status-text></p><button data-switchboard-retry>Try again</button></div>`;
+
+test("approve status: fills the page's own element, adds and styles nothing", async (t) => {
+  const w = await dom(t, STATUS_HTML);
   if (!w) return;
   const sent = [];
   const chrome = { runtime: { sendMessage: async (m) => sent.push(m) } };
-  const run = new Function("document", "chrome", `return (${approveBanner.toString()})(...[...arguments].slice(2));`);
-  run(w.document, chrome, "first <b>", RUN);
-  run(w.document, chrome, "second <b>", RUN);
-  const shown = w.document.querySelectorAll("[data-alfred-post-note]");
-  assert.equal(shown.length, 1);
-  assert.equal(shown[0].querySelector("b"), null);
-  assert.match(shown[0].textContent, /second <b>/);
-  const buttons = shown[0].querySelectorAll("button");
-  assert.equal(buttons.length, 1);
-  assert.equal(buttons[0].textContent, "Try again");
-  buttons[0].click();
+  const run = new Function("document", "chrome", `return (${approveStatus.toString()})(...[...arguments].slice(2));`);
+  const d = w.document;
+  const before = d.body.querySelectorAll("*").length;
+  assert.equal(run(d, chrome, "first <b>", RUN), true);
+  assert.equal(run(d, chrome, "second <b>", RUN), true);
+  const status = d.querySelector("[data-switchboard-status]");
+  const text = d.querySelector("[data-switchboard-status-text]");
+  const retry = d.querySelector("[data-switchboard-retry]");
+  assert.equal(status.hidden, false);
+  assert.equal(retry.hidden, false);
+  assert.equal(text.textContent, "second <b>");
+  assert.equal(d.body.querySelectorAll("*").length, before);
+  assert.equal(d.querySelector("[style]"), null);
+  // Two fills, one click: one retry.
+  retry.click();
   assert.deepEqual(sent, [{ type: "approve-retry", runId: RUN }]);
-  assert.doesNotMatch(shown[0].textContent, /second/);
+  assert.equal(text.textContent, "Trying again…");
+  assert.equal(retry.hidden, true);
+});
+
+test("approve status: a page without the element gets nothing added, and says so", async (t) => {
+  const w = await dom(t, "<p>old page</p>");
+  if (!w) return;
+  const run = new Function("document", "chrome", `return (${approveStatus.toString()})(...[...arguments].slice(2));`);
+  assert.equal(run(w.document, {}, "why", RUN), false);
+  assert.equal(w.document.body.children.length, 1);
 });
 
 test("approvals: a run left to Alex goes after a day", () => {
@@ -387,7 +402,7 @@ test("host access: origins from the list, and a notice only when one is missing"
 
 test("manifest: no Alfred host in the code, asked for at run time", () => {
   const m = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
-  assert.equal(m.version, "1.2.4");
+  assert.equal(m.version, "1.2.5");
   assert.equal(m.host_permissions.some((h) => /vercel\.app/.test(h)), false);
   assert.deepEqual(m.optional_host_permissions, ["https://*/*"]);
 });
