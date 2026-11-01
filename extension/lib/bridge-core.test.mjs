@@ -105,10 +105,14 @@ test("send cli on a page: sent, typed or only focused", async (t) => {
     const clicks = [];
     document.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => clicks.push(b.getAttribute("aria-label"))));
     // jsdom has no editing commands; this stands in for the editor's insertText.
-    document.execCommand = (cmd, _ui, text) => { document.querySelector(".ProseMirror").textContent += text; return true; };
+    document.execCommand = (cmd, _ui, text) => {
+      document.querySelector(".ProseMirror").textContent += text;
+      document.querySelector('button[aria-label^="Send"]')?.removeAttribute("disabled");
+      return true;
+    };
     return { document, clicks, box: () => document.querySelector(".ProseMirror").textContent };
   };
-  const idle = page("", '<button aria-label="Send message">s</button>');
+  const idle = page("", '<button aria-label="Send message" disabled>s</button>');
   assert.equal(await sendCli(idle.document), "sent");
   assert.deepEqual([idle.box(), idle.clicks], ["cli", ["Send message"]]);
 
@@ -119,6 +123,11 @@ test("send cli on a page: sent, typed or only focused", async (t) => {
   const draft = page("<p>my draft</p>", '<button aria-label="Send message">s</button>');
   assert.equal(await sendCli(draft.document), "focused");
   assert.deepEqual([draft.box(), draft.clicks], ["my draft", []]);
+
+  // A screenshot with no text: Send lit up is the sign, and his message must not go.
+  const shot = page("", '<button aria-label="Send message">s</button>');
+  assert.equal(await sendCli(shot.document), "focused");
+  assert.deepEqual([shot.box(), shot.clicks], ["", []]);
 
   const unknown = page("", "");
   assert.equal(await sendCli(unknown.document), "focused");
@@ -312,14 +321,16 @@ test("the approve tab closes only once the line is sent, and only if it is still
   assert.equal(closesApproveTab("sent", "https://claude.ai/chat/one", hosts), false);
 });
 
-test("postProblem: why a line can't go yet, in plain words, or null", () => {
-  const chat = { state: "finished", composerEmpty: true };
-  assert.equal(postProblem(chat, null), null);
-  assert.match(postProblem(null, "no open chat for p-x"), /no open chat for p-x/);
-  assert.match(postProblem({ ...chat, state: "responding" }, null), /still writing/);
-  assert.match(postProblem({ ...chat, composerEmpty: false }, null), /message box has text/);
-  assert.match(postProblem({ ...chat, composerEmpty: null }, null), /message box/);
-  assert.match(postProblem({ ...chat, state: "unknown" }, null), /can't read/);
+test("postProblem: why a line can't go, in plain words, or null", () => {
+  const chat = { tabId: 1 };
+  assert.equal(postProblem(chat, null, "clear"), null);
+  assert.equal(postProblem(chat, null, "sent"), null);
+  assert.match(postProblem(null, "no open chat for p-x", "clear"), /no open chat for p-x/);
+  assert.match(postProblem(chat, null, "writing"), /still writing/);
+  assert.match(postProblem(chat, null, "box"), /text, an image, a file/);
+  assert.match(postProblem(chat, null, "unknown"), /can't read/);
+  assert.match(postProblem(chat, null, "unsent"), /Send button/);
+  assert.match(postProblem(chat, null, undefined), /didn't answer/);
 });
 
 test("approvals: old clicks and seen runs are dropped; waiting runs stay", () => {
@@ -342,13 +353,27 @@ test("approvals: old clicks and seen runs are dropped; waiting runs stay", () =>
 test("approve banner: says it on the page, once, and replaces its own words", async (t) => {
   const w = await dom(t, "");
   if (!w) return;
-  const run = new Function("document", `return (${approveBanner.toString()})(...[...arguments].slice(1));`);
-  run(w.document, "first <b>");
-  run(w.document, "second <b>");
+  const sent = [];
+  const chrome = { runtime: { sendMessage: async (m) => sent.push(m) } };
+  const run = new Function("document", "chrome", `return (${approveBanner.toString()})(...[...arguments].slice(2));`);
+  run(w.document, chrome, "first <b>", RUN);
+  run(w.document, chrome, "second <b>", RUN);
   const shown = w.document.querySelectorAll("[data-alfred-post-note]");
   assert.equal(shown.length, 1);
-  assert.equal(shown[0].textContent, "second <b>");
   assert.equal(shown[0].querySelector("b"), null);
+  assert.match(shown[0].textContent, /second <b>/);
+  const buttons = shown[0].querySelectorAll("button");
+  assert.equal(buttons.length, 1);
+  assert.equal(buttons[0].textContent, "Try again");
+  buttons[0].click();
+  assert.deepEqual(sent, [{ type: "approve-retry", runId: RUN }]);
+  assert.doesNotMatch(shown[0].textContent, /second/);
+});
+
+test("approvals: a run left to Alex goes after a day", () => {
+  const now = 10 * 24 * 3600 * 1000;
+  const out = pruneApprovals({ runs: [{ runId: "old", at: now - 25 * 3600 * 1000 }, { runId: "new", at: now - 3600 * 1000 }] }, now);
+  assert.deepEqual(out.runs.map((r) => r.runId), ["new"]);
 });
 
 test("host access: origins from the list, and a notice only when one is missing", () => {
@@ -362,7 +387,7 @@ test("host access: origins from the list, and a notice only when one is missing"
 
 test("manifest: no Alfred host in the code, asked for at run time", () => {
   const m = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
-  assert.equal(m.version, "1.2.3");
+  assert.equal(m.version, "1.2.4");
   assert.equal(m.host_permissions.some((h) => /vercel\.app/.test(h)), false);
   assert.deepEqual(m.optional_host_permissions, ["https://*/*"]);
 });
@@ -436,37 +461,61 @@ test("approve watcher: a re-injection replaces the one a reload left dead", asyn
   assert.deepEqual(sent, [{ type: "approve-run", runId: RUN, project: "switchboard2-h8r" }]);
 });
 
-function composerPage(w, { box = "", stop = false, onSend = () => {} } = {}) {
+// A claude.ai message box: Send is lit only with something to send, and sending empties the box.
+function composerPage(w, { box = "", stop = false, extra = "", lit = false, sends = true } = {}) {
   const d = w.document;
-  d.body.innerHTML = `<div contenteditable="true" role="textbox">${box}</div>` +
-    (stop ? `<button aria-label="Stop"></button>` : `<button aria-label="Send"></button>`);
-  d.querySelector('button[aria-label="Send"]')?.addEventListener("click", onSend);
+  d.body.innerHTML = `<form><div contenteditable="true" role="textbox">${box}</div>${extra}` +
+    (stop ? `<button type="button" aria-label="Stop"></button>` : `<button type="button" aria-label="Send" ${lit ? "" : "disabled"}></button>`) + "</form>";
+  const el = d.querySelector("[contenteditable]");
+  // jsdom has no innerText.
+  el.innerText = el.textContent;
   const typed = [];
-  d.execCommand = (_c, _u, text) => { typed.push(text); return true; };
-  return { document: d, typed };
+  const send = d.querySelector('button[aria-label="Send"]');
+  let clicks = 0;
+  send?.addEventListener("click", () => { clicks++; if (sends) el.innerText = ""; });
+  d.execCommand = (cmd, _u, text) => {
+    if (cmd === "insertText") { typed.push(text); el.innerText = text; send?.removeAttribute("disabled"); }
+    if (cmd === "delete") el.innerText = "";
+    return true;
+  };
+  return { document: d, typed, el, clicks: () => clicks };
 }
 
-test("postLine: types and sends only into an idle, empty chat", async (t) => {
-  const { postLine } = globalThis.__alfredWatchCore;
+const COMPOSERS = [
+  ["text", { box: "half a thought" }, "box"],
+  ["only an attachment: Send lit, nothing typed", { lit: true }, "box"],
+  ["only a thumbnail", { extra: '<div data-testid="file-thumbnail"><span>shot.png</span></div>' }, "box"],
+  ["a file chip with a remove button", { extra: '<button type="button" aria-label="Remove shot.png"></button>' }, "box"],
+  ["an image in the box", { box: '<img src="x.png">' }, "box"],
+  ["Claude mid-reply", { stop: true }, "writing"],
+];
+
+test("postLine: anything in the box, or Claude replying, touches nothing", async (t) => {
+  const { postLine, postBlock } = globalThis.__alfredWatchCore;
   const w = await dom(t, "");
   if (!w) return;
-  let clicks = 0;
-  const idle = composerPage(w, { onSend: () => clicks++ });
-  // jsdom has no innerText.
-  idle.document.querySelector("[contenteditable]").innerText = "";
+  for (const [name, setup, want] of COMPOSERS) {
+    const page = composerPage(w, setup);
+    const before = page.el.innerHTML;
+    assert.equal(postBlock(page.document), want, name);
+    assert.equal(await postLine(page.document, "sql x"), want, name);
+    assert.deepEqual([page.typed, page.clicks(), page.el.innerHTML], [[], 0, before], name);
+  }
+});
+
+test("postLine: an empty box and an idle chat send, and only a box that empties counts as sent", async (t) => {
+  const { postLine, postBlock } = globalThis.__alfredWatchCore;
+  const w = await dom(t, "");
+  if (!w) return;
+  const idle = composerPage(w);
+  assert.equal(postBlock(idle.document), "clear");
   assert.equal(await postLine(idle.document, `sql ${RUN}`), "sent");
-  assert.deepEqual(idle.typed, [`sql ${RUN}`]);
-  assert.equal(clicks, 1);
+  assert.deepEqual([idle.typed, idle.clicks()], [[`sql ${RUN}`], 1]);
 
-  const writing = composerPage(w, { stop: true });
-  writing.document.querySelector("[contenteditable]").innerText = "";
-  assert.equal(await postLine(writing.document, "sql x"), "busy");
-  assert.deepEqual(writing.typed, []);
-
-  const draft = composerPage(w, { box: "half a thought" });
-  draft.document.querySelector("[contenteditable]").innerText = "half a thought";
-  assert.equal(await postLine(draft.document, "sql x"), "busy");
-  assert.deepEqual(draft.typed, []);
+  // Send pressed, nothing left: our own line comes back out, and it isn't "sent".
+  const stuck = composerPage(w, { sends: false });
+  assert.equal(await postLine(stuck.document, "sql x"), "unsent");
+  assert.equal(stuck.el.innerText, "");
 });
 
 test("watcher: chat pages only", () => {

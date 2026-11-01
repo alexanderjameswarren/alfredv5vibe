@@ -14,7 +14,8 @@
 // "Run tag:"/"Window:" header to its closing "Run tag:" line, nothing around them.
 //
 // It also types one line into the chat when bridge.js asks (switchboard2-h8r 2.7):
-// "sql <run id>", after a real run, only when the chat is idle and its box empty.
+// "sql <run id>", after a real run, only when the chat is idle and its box completely
+// empty: no text, images or files. It never submits anything Alex put there.
 // And when Alex clicks an /approve/ link on a listed host, it tells bridge.js that
 // link's address, so the line comes back to this tab. The link still opens as usual.
 //
@@ -28,6 +29,8 @@
     stop: 'button[aria-label*="Stop" i]',
     send: 'button[aria-label*="Send" i]',
     streaming: '[data-is-streaming="true"]',
+    attachment: '[data-testid*="thumbnail" i]:not(input):not(button), [data-testid*="attachment" i]:not(input):not(button), ' +
+      '[class*="thumbnail" i], button[aria-label*="Remove" i]',
   };
   // Claude's messages, most stable first. Each is tried alone, and only the
   // outermost matches count, so a nested element never stands in for a message.
@@ -46,6 +49,30 @@
   function decideState({ composer, stop, send, streaming }) {
     if (!composer || !(stop || send)) return "unknown";
     return stop || streaming ? "responding" : "finished";
+  }
+
+  /**
+   * Is the message box completely empty? Null if there is no box. The one rule for Send cli, the reports and
+   * posting. Send lit up with no text means something unseen waits to go, such as a screenshot, so a change to
+   * claude.ai's attachment markup fails safe. Reads no text out of the page.
+   */
+  function boxEmpty(root) {
+    const box = root.querySelector(SELECTORS.composer);
+    if (!box) return null;
+    if (box.innerText.trim() !== "" || box.querySelector("img, video, audio, figure")) return false;
+    const area = box.closest("fieldset, form") ?? box.parentElement?.parentElement ?? box;
+    if (area.querySelector(SELECTORS.attachment)) return false;
+    const send = area.querySelector(SELECTORS.send) ?? root.querySelector(SELECTORS.send);
+    return !send || send.disabled || send.getAttribute("aria-disabled") === "true";
+  }
+
+  /** What stops a line going in: "unknown", "writing", "box", or "clear". */
+  function postBlock(root) {
+    const q = (s) => root.querySelector(s);
+    const state = decideState({ composer: !!q(SELECTORS.composer), stop: !!q(SELECTORS.stop), send: !!q(SELECTORS.send), streaming: !!q(SELECTORS.streaming) });
+    if (state === "unknown") return "unknown";
+    if (state === "responding") return "writing";
+    return boxEmpty(root) === true ? "clear" : "box";
   }
 
   const WINDOW_LINE = new RegExp(`^${SPACE}*Window:`, "i");
@@ -218,7 +245,7 @@
     const q = (s) => root.querySelector(s);
     const box = q(SELECTORS.composer);
     const state = decideState({ composer: !!box, stop: !!q(SELECTORS.stop), send: !!q(SELECTORS.send), streaming: !!q(SELECTORS.streaming) });
-    const plan = cliPlan(state, box ? box.innerText.trim() === "" : null);
+    const plan = cliPlan(state, boxEmpty(root));
     focusComposer(root);
     if (plan === "focus") return "focused";
     root.execCommand("insertText", false, "cli");
@@ -236,25 +263,36 @@
   }
 
   /**
-   * The approval result: type `text` and press send, only if the chat is idle and its
-   * box empty. Otherwise touches nothing and resolves to "busy". Else "sent" or "typed".
+   * The approval result: type `text` and press send, only if postBlock says "clear".
+   * Otherwise touches nothing and resolves to what blocked it. "sent" only once the box
+   * has emptied; if it doesn't, our own line comes back out and it resolves to "unsent".
    */
   async function postLine(root, text) {
+    const block = postBlock(root);
+    if (block !== "clear") return block;
     const q = (s) => root.querySelector(s);
     const box = q(SELECTORS.composer);
-    const state = decideState({ composer: !!box, stop: !!q(SELECTORS.stop), send: !!q(SELECTORS.send), streaming: !!q(SELECTORS.streaming) });
-    if (state !== "finished" || !box || box.innerText.trim() !== "") return "busy";
+    const wait = () => new Promise((r) => setTimeout(r, 50));
     focusComposer(root);
     root.execCommand("insertText", false, text);
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 30 && box.innerText.trim() === text; i++) {
       const button = q(SELECTORS.send);
       if (button && !button.disabled) {
         button.click();
-        return "sent";
+        for (let j = 0; j < 60; j++) {
+          if (box.innerText.trim() === "") return "sent";
+          await wait();
+        }
+        break;
       }
-      await new Promise((r) => setTimeout(r, 50));
+      await wait();
     }
-    return "typed";
+    if (box.innerText.trim() === text) {
+      focusComposer(root);
+      root.execCommand("selectAll");
+      root.execCommand("delete");
+    }
+    return "unsent";
   }
 
   const isChatPath = (pathname) => /^\/chat\/[^/]+/.test(pathname);
@@ -262,7 +300,7 @@
 
   globalThis.__alfredWatchCore = {
     decideState, extractTag, extractPrompt, isChatPath, latestMessage, readTag, readPrompt, readPromptIn, sendTagOf,
-    promptForLink, onLinkClick, approveTokenOf, onApproveClick, focusComposer, cliPlan, sendCli, postLine, SELECTORS,
+    promptForLink, onLinkClick, approveTokenOf, onApproveClick, focusComposer, cliPlan, sendCli, postLine, postBlock, boxEmpty, SELECTORS,
   };
   if (typeof chrome === "undefined" || !chrome.runtime?.id || typeof document === "undefined") return;
 
@@ -284,7 +322,7 @@
     });
     // Tags are read only from a finished message, so a half-written one is never sent.
     const issuedTag = state === "finished" ? readTag(document) : null;
-    return { state, issuedTag, composerEmpty: composerEl ? composerEl.innerText.trim() === "" : null };
+    return { state, issuedTag, composerEmpty: boxEmpty(document) };
   }
 
   function stop() {
@@ -403,13 +441,14 @@
       sendCli(document).then((did) => reply({ did }), () => reply({ did: "focused" }));
       return true;    // answers asynchronously
     }
+    if (msg?.type === "post-check") return reply({ did: postBlock(document) }), false;
     if (msg?.type === "post-line" && /^sql [0-9a-f-]{36}$/i.test(String(msg.text))) {
       // A reply lost on the way back must not post it twice.
       if (postedLines.has(msg.text)) return reply({ did: "sent" }), false;
       postLine(document, msg.text).then((did) => {
-        if (did !== "busy") postedLines.add(msg.text);
+        if (did === "sent") postedLines.add(msg.text);
         reply({ did });
-      }, () => reply({ did: "busy" }));
+      }, () => reply({ did: "unknown" }));
       return true;
     }
     return false;

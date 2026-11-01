@@ -5,7 +5,7 @@ import { supabase, supabaseUrl, supabaseAnonKey } from '../supabaseClient';
 // Where a Switchboard approval link lands (spec §8.1). The runner decides everything;
 // this page shows the SQL, runs the dry run by itself, then offers Approve. Only a real run puts
 // its id on the page, as data-switchboard-run-id; the extension reads that and data-switchboard-project,
-// posts the result to the chat and closes this tab. Where it can't, the page says the tab can be closed.
+// posts the result to the chat and closes this tab. Where it can't, the line is here to copy.
 
 const BUTTON = 'w-full sm:w-auto px-4 py-3 rounded-lg bg-primary text-white font-medium disabled:opacity-50';
 const SECOND_BUTTON = 'w-full sm:w-auto px-4 py-3 rounded-lg border border-primary text-dark font-medium disabled:opacity-50';
@@ -49,6 +49,26 @@ function RunResult({ title, summary, conformance, runId }) {
       <p className="text-dark break-words">{summary}</p>
       {conformance && <p className="text-dark mt-2 break-words">{conformance}</p>}
       {runId && <p className="text-dark mt-2 font-mono break-all">Run {runId}</p>}
+    </div>
+  );
+}
+
+/** The line for the chat, for wherever the extension can't post it. Where it can, this tab closes first. */
+function ResultLine({ runId }) {
+  const [copied, setCopied] = useState(false);
+  const line = `sql ${runId}`;
+  return (
+    <div className="mb-16">
+      <p className="text-dark mb-2">Paste this into the Claude chat, then close this tab.</p>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <code className="font-mono text-dark break-all">{line}</code>
+        <button
+          className={SECOND_BUTTON}
+          onClick={() => navigator.clipboard.writeText(line).then(() => setCopied(true))}
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -162,7 +182,7 @@ export default function ApprovePage() {
             conformance={real.conformance}
             runId={real.run_id}
           />
-          {real.ok && <p className="text-dark">Done, you can close this tab.</p>}
+          <ResultLine runId={real.run_id} />
         </>
       ) : (
         <>

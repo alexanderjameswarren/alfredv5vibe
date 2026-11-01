@@ -47,7 +47,8 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 2 | 2.7 | Extension: approval link and result | — | done (s32-j3ya, s32b-q6hu, s32c-f2wl): end-to-end in Chrome. Claude issued a link for action c0c8ead7-da8d-4967-8f79-d284e6a2df5b in a claude.ai tab; Alex clicked it there; dry run posted nothing; Approve ran it; "sql 773effb0-0bc4-414a-bae1-c00ce4e6d81b" sent itself to that tab; get_switchboard_run shows succeeded with one row. `chat_url` dropped from the spec; hosts are allowed at run time (1.2.1) | 2026-11-01 |
 | 2 | 2.8 | Panel read endpoint | `db:table:switchboard_actions`, `db:table:inbox`, `db:table:clips`, `db:table:portfolios`, `db:table:project_plans`, `db:table:portfolio_plans`, `db:table:portfolio_lanes`, `db:table:portfolio_slices` (all read), `db:deploy` | done (s33-x7gd, s33b-m5cq): deployed, verify_jwt off; no key 401, wrong key 401, POST 405; with the key 25 projects; switchboard2-h8r in lane Main, order 2, nothing waiting; report_unread seen true on a fresh clip. `waiting_on_alex` true not yet seen live: first at 2.9. Checkpointed by Alex; `db:deploy` released | 2026-11-01 |
 | 2 | 2.7c | One-click approve and closing the tab | — | done with one bug (s34-b9tn): checkpointed, extension 1.2.2. The dry run ran on open and Approve ran run eaf76ba0-ae0d-4620-a414-ff46b24f3d68 (succeeded, select 3), but `sql <run id>` was never posted and the tab didn't close; the page showed "Done, you can close this tab." Fixed in 2.7d. Skipping the dry run for selects dropped by Alex | 2026-11-01 |
-| 2 | 2.7d | Missed post, honest headline, plain description | `db:deploy` | built and deployed (s35-k2pe), extension 1.2.3; Chrome test pending | |
+| 2 | 2.7d | Missed post, honest headline, plain description | `db:deploy` | done with one serious bug (s35-k2pe): headline, description and automatic dry run correct; run 3f6609cd-5867-457e-b88b-8147e6f373e7 succeeded after an extension reload. But Alex was mid-message with a screenshot in the box and no text: the extension sent his unfinished message, posted the line and closed the tab, because the box check treated an attachment as empty. Fixed in 2.7e | 2026-11-01 |
+| 2 | 2.7e | Posting guards, matching Send cli | — | built (s36-r4vh), extension 1.2.4, tests pass; Chrome test pending | |
 | 2 | 2.9 | Panel: Waiting on SQL, Report unread, lane order | — | todo | |
 | 2 | 2.10 | Read-only role and query function, with secret-column grants | `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read), `db:fn:register_table`, `db:fn:set_read_settings` | todo | |
 | 2 | 2.11 | MCP read-only query tool, `get_sql_read` | `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget`, `db:deploy` | todo | |
@@ -278,6 +279,13 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: switchboard-runner
 - SQL: none
 
+**2.7e, posting guards** (added in s36; estimated run: 10m). Post only into a completely empty box with Claude not replying, one rule shared with Send cli. If it can't post, the chat isn't touched and the tab stays open with the line, Copy, and Try again. The tab closes only after a confirmed post.
+- create: nothing
+- update: extension/bridge.js, extension/claude-watch.js, extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, extension/manifest.json, src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
 **2.9, panel: Waiting on SQL, Report unread, lane order** (estimated run: 8m). The panel polls the endpoint and caches the lanes; an unknown lane sorts last. Alex tests: a queued item shows tan; archiving the report clears orange; tiles follow his lanes. Also: a tap on a red latch tile (such as Outside scope) only clears the latch, even if a report is waiting underneath. In s32's session a tap on a red Outside scope tile typed "cli" instead.
 - create: nothing
 - update: tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/lib/status.ahk, tools/claude-sessions/test-status.ahk, tools/claude-sessions/smoke-test.ahk, tools/claude-sessions/INTERFACES.md
@@ -318,14 +326,14 @@ Database items per step are in the table at the top. Report unread and lane orde
 |---|---|---|
 | 0 | Fixes, boundaries, plan guard | 8 |
 | 1 | Send link, fallback page, skill rule, tile states, estimates, layout | 10 |
-| 2 | SQL queue, read-only queries (2.2-2.12, 2.3b, 2.4b, 2.7c and 2.7d, after the 2.1 plan) | 15 |
+| 2 | SQL queue, read-only queries (2.2-2.12, 2.3b, 2.4b, 2.7c, 2.7d and 2.7e, after the 2.1 plan) | 16 |
 | 3 | Multi-repo and clients | 18 |
 | 4 | Salesforce reads | 5 |
 | 5 | Git and Salesforce by link | 6 |
 | 6 | Spec files, archiving | 2 |
 | 7 | npm start per tile | 2 |
 | 8 | Remote devices | 4 |
-| | **total** | **70** |
+| | **total** | **71** |
 
 ## Decisions
 
@@ -632,3 +640,4 @@ Database items per step are in the table at the top. Report unread and lane orde
 | s33b (2.8) | 1m25s (estimate 5m) |
 | s34 (2.7c) | 2m35s (estimate 8m) |
 | s35 (2.7d) | 2h02m13s (estimate 15m), of which 1h55m59s was the claim, deploy and queue phase, most likely waiting at a permission prompt |
+| s36 (2.7e) | 3m23s (estimate 10m) |
