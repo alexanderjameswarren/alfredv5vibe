@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Alfred from './Alfred';
 import OAuthConsent from './OAuthConsent';
 import SendFromDesktop from './switchboard/SendFromDesktop';
+import ApprovePage from './switchboard/ApprovePage';
 
 // Step 2 of docs/technical-spec-navigation-urls.md: mount the router and
 // change nothing else. This replaces the hard-coded
@@ -19,6 +20,7 @@ function App() {
       <Routes>
         <Route path="/oauth/consent" element={<OAuthConsent />} />
         <Route path="/send/:runTag" element={<SendFromDesktop />} />
+        <Route path="/approve/:token" element={<ApprovePage />} />
         <Route path="*" element={<Alfred />} />
       </Routes>
     </BrowserRouter>
