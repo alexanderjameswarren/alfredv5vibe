@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  approveTokenOf, approveWatcher, buildChatsMessage, buildTabsMessage, checkPrompt, chatForProject, chatForRun, cleanHosts, cleanRun, debounce, focusResult,
+  approveTokenOf, approveWatcher, buildChatsMessage, buildTabsMessage, checkPrompt, chatForProject, chatForRun, cleanHosts, cleanRun, closesApproveTab, debounce, focusResult,
   GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, isHostMissing, nextDelay, normaliseUrl, pickTab, projectOfTag, promptFrame, sendTagOf,
 } from "./bridge-core.js";
 import "../claude-watch.js";
@@ -301,6 +301,17 @@ test("chatForRun: the clicked tab wins while it shows the same chat; else the ma
   assert.equal(chatForRun([moved, titled], { project: "switchboard2-h8r", from }).chat.tabId, 8);
 });
 
+test("the approve tab closes only once the line is sent, and only if it is still that page", () => {
+  const hosts = ["alfredv5vibe.vercel.app"];
+  const page = "https://alfredv5vibe.vercel.app/approve/abc123";
+  assert.equal(closesApproveTab("sent", page, hosts), true);
+  assert.equal(closesApproveTab("typed", page, hosts), false);
+  assert.equal(closesApproveTab("busy", page, hosts), false);
+  assert.equal(closesApproveTab(undefined, page, hosts), false);
+  assert.equal(closesApproveTab("sent", "https://alfredv5vibe.vercel.app/", hosts), false);
+  assert.equal(closesApproveTab("sent", "https://claude.ai/chat/one", hosts), false);
+});
+
 test("host access: origins from the list, and a notice only when one is missing", () => {
   assert.deepEqual(hostOrigins(["alfredv5vibe.vercel.app", "alfred.example:8443"]), ["https://alfredv5vibe.vercel.app/*", "https://alfred.example/*"]);
   assert.equal(grantNotice([]), null);
@@ -312,7 +323,7 @@ test("host access: origins from the list, and a notice only when one is missing"
 
 test("manifest: no Alfred host in the code, asked for at run time", () => {
   const m = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
-  assert.equal(m.version, "1.2.1");
+  assert.equal(m.version, "1.2.2");
   assert.equal(m.host_permissions.some((h) => /vercel\.app/.test(h)), false);
   assert.deepEqual(m.optional_host_permissions, ["https://*/*"]);
 });

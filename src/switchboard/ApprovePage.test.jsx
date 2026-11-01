@@ -49,7 +49,7 @@ test('signed out asks for login and calls nothing', async () => {
 });
 
 test('shows the headline, project and whole SQL, with his JWT and the token', async () => {
-  runner({ preview: reply(PREVIEW) });
+  runner({ preview: reply(PREVIEW), 'dry-run': CLEAN });
   open();
   expect(await screen.findByText('THIS RUNS A SELECT')).toBeInTheDocument();
   expect(screen.getByText('switchboard2-h8r')).toHaveAttribute('data-switchboard-project', 'switchboard2-h8r');
@@ -61,22 +61,22 @@ test('shows the headline, project and whole SQL, with his JWT and the token', as
   expect(JSON.parse(init.body)).toEqual({ token: 'tok1' });
 });
 
-test('no Approve until a clean dry run, and a dry run puts no run id on the page', async () => {
-  runner({ preview: reply(PREVIEW), 'dry-run': CLEAN });
+test('the dry run starts by itself, once, and Approve waits for it; no run id on the page', async () => {
+  let finish;
+  runner({ preview: reply(PREVIEW), 'dry-run': () => new Promise((r) => { finish = r; }) });
   const { container } = open();
-  await screen.findByText('THIS RUNS A SELECT');
+  expect(await screen.findByText(/running the dry run/i)).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /^approve/i })).not.toBeInTheDocument();
-  dryRun();
+  finish(await CLEAN());
   expect(await screen.findByText(/runs a select/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /^approve/i })).toBeInTheDocument();
+  expect(called('dry-run')).toHaveLength(1);
   expect(container.querySelector('[data-switchboard-run-id]')).toBeNull();
 });
 
 test('a failed dry run shows why and offers no Approve', async () => {
   runner({ preview: reply(PREVIEW), 'dry-run': reply({ ok: false, run_id: 'dry1', summary: 'failed at statement 1: boom' }) });
   open();
-  await screen.findByText('THIS RUNS A SELECT');
-  dryRun();
   expect(await screen.findByText(/failed at statement 1: boom/)).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /^approve/i })).not.toBeInTheDocument();
 });
@@ -85,10 +85,9 @@ test('Approve sends the fingerprint, shows the result and puts the run id on the
   runner({ preview: reply(PREVIEW), 'dry-run': CLEAN,
     approve: reply({ ok: true, run_id: 'run9', summary: 'done it', conformance: 'CONFORMANT' }) });
   const { container } = open();
-  await screen.findByText('THIS RUNS A SELECT');
-  dryRun();
   fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
   expect(await screen.findByText(/done it/)).toBeInTheDocument();
+  expect(screen.getByText('Done, you can close this tab.')).toBeInTheDocument();
   expect(screen.getByText(/CONFORMANT/)).toBeInTheDocument();
   expect(container.querySelector('[data-switchboard-run-id]').getAttribute('data-switchboard-run-id')).toBe('run9');
   expect(JSON.parse(called('approve')[0][1].body)).toEqual({ token: 'tok1', fingerprint: 'fp1' });
@@ -99,10 +98,9 @@ test('Approve sends the fingerprint, shows the result and puts the run id on the
 test('a real run that fails still shows its run id, and cannot be approved again', async () => {
   runner({ preview: reply(PREVIEW), 'dry-run': CLEAN, approve: reply({ ok: false, run_id: 'run9', summary: 'failed at statement 1: boom' }) });
   const { container } = open();
-  await screen.findByText('THIS RUNS A SELECT');
-  dryRun();
   fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
   expect(await screen.findByText(/failed at statement 1: boom/)).toBeInTheDocument();
+  expect(screen.queryByText(/you can close this tab/i)).not.toBeInTheDocument();
   expect(container.querySelector('[data-switchboard-run-id]').getAttribute('data-switchboard-run-id')).toBe('run9');
   expect(screen.queryByRole('button', { name: /^approve/i })).not.toBeInTheDocument();
 });
@@ -117,14 +115,13 @@ test.each([
   open();
   expect(await screen.findByText(want)).toBeInTheDocument();
   expect(screen.queryByTestId('approve-sql')).not.toBeInTheDocument();
+  expect(called('dry-run')).toHaveLength(0);
 });
 
 test('a mismatched link at Approve says so and nothing more can be run', async () => {
   runner({ preview: reply(PREVIEW), 'dry-run': CLEAN,
     approve: reply({ ok: false, error: 'switchboard_consume_link: the SQL does not match what this link approved.' }, 409) });
   open();
-  await screen.findByText('THIS RUNS A SELECT');
-  dryRun();
   fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
   expect(await screen.findByText(/does not match what this link approved/i)).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /^approve/i })).not.toBeInTheDocument();
@@ -134,8 +131,6 @@ test('a busy dry run keeps the page and can be tried again', async () => {
   let n = 0;
   runner({ preview: reply(PREVIEW), 'dry-run': () => (n++ ? CLEAN() : reply({ ok: false, error: 'another run is in progress.' }, 409)) });
   open();
-  await screen.findByText('THIS RUNS A SELECT');
-  dryRun();
   expect(await screen.findByText(/another run is in progress/)).toBeInTheDocument();
   dryRun();
   expect(await screen.findByRole('button', { name: /^approve/i })).toBeInTheDocument();
@@ -144,8 +139,6 @@ test('a busy dry run keeps the page and can be tried again', async () => {
 test('a lost connection at Approve warns it may have run and offers no retry', async () => {
   runner({ preview: reply(PREVIEW), 'dry-run': CLEAN, approve: () => Promise.reject(new Error('network')) });
   open();
-  await screen.findByText('THIS RUNS A SELECT');
-  dryRun();
   fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
   expect(await screen.findByText(/may have run/i)).toBeInTheDocument();
   await waitFor(() => expect(screen.queryByRole('button', { name: /^approve/i })).not.toBeInTheDocument());

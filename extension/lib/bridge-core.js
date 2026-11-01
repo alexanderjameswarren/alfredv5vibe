@@ -175,6 +175,9 @@ export function grantNotice(missing) {
   };
 }
 
+/** Close the approval tab only once the line is really sent, and only if that tab still shows an approval page. */
+export const closesApproveTab = (did, tabUrl, hosts) => did === "sent" && isApprovePage(tabUrl, hosts);
+
 /** Only a well-formed run id and project from a page's message go any further. */
 export function cleanRun(msg) {
   return RUN_ID_SHAPE.test(msg?.runId ?? "") && PROJECT_SHAPE.test(msg?.project ?? "") ? { runId: msg.runId, project: msg.project } : null;

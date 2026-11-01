@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase, supabaseUrl, supabaseAnonKey } from '../supabaseClient';
 
 // Where a Switchboard approval link lands (spec §8.1). The runner decides everything;
-// this page shows the SQL, then a dry run, then Approve. Only a real run puts its id on
-// the page, as data-switchboard-run-id; the extension reads that and data-switchboard-project.
+// this page shows the SQL, runs the dry run by itself, then offers Approve. Only a real run puts
+// its id on the page, as data-switchboard-run-id; the extension reads that and data-switchboard-project,
+// posts the result to the chat and closes this tab. Where it can't, the page says the tab can be closed.
 
 const BUTTON = 'w-full sm:w-auto px-4 py-3 rounded-lg bg-primary text-white font-medium disabled:opacity-50';
 const SECOND_BUTTON = 'w-full sm:w-auto px-4 py-3 rounded-lg border border-primary text-dark font-medium disabled:opacity-50';
@@ -61,6 +62,7 @@ export default function ApprovePage() {
   const [dry, setDry] = useState(null);
   const [real, setReal] = useState(null);
   const [busy, setBusy] = useState(false);
+  const dryStarted = useRef(false);
 
   useEffect(() => {
     let live = true;
@@ -100,6 +102,13 @@ export default function ApprovePage() {
     }
     setBusy(false);
   }
+
+  useEffect(() => {
+    if (!preview || dryStarted.current) return;
+    dryStarted.current = true;
+    runDry();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preview]);
 
   async function runReal() {
     setBusy(true);
@@ -145,17 +154,21 @@ export default function ApprovePage() {
       {note && <p className="mb-4 text-sm text-dark break-words">{note}</p>}
 
       {real ? (
-        <RunResult
-          title={real.ok ? 'Ran for real' : 'The real run failed'}
-          summary={real.summary}
-          conformance={real.conformance}
-          runId={real.run_id}
-        />
+        <>
+          <RunResult
+            title={real.ok ? 'Ran for real' : 'The real run failed'}
+            summary={real.summary}
+            conformance={real.conformance}
+            runId={real.run_id}
+          />
+          {real.ok && <p className="text-dark">Done, you can close this tab.</p>}
+        </>
       ) : (
         <>
           {dry && <RunResult title={dry.ok ? 'Dry run, rolled back' : 'The dry run failed, rolled back'} summary={dry.summary} />}
+          {busy && !dry && <p className="mb-4 text-dark">Running the dry run…</p>}
           <div className="flex flex-col sm:flex-row gap-3">
-            {dry?.ok ? (
+            {busy && !dry ? null : dry?.ok ? (
               <>
                 <button className={BUTTON} disabled={busy} onClick={runReal}>Approve and run for real</button>
                 <button className={SECOND_BUTTON} disabled={busy} onClick={runDry}>Run the dry run again</button>

@@ -14,7 +14,7 @@
 import {
   HOST_NAME, HEARTBEAT_MS, DEBOUNCE_MS, buildTabsMessage, buildChatsMessage, nextDelay, isHostMissing, debounce,
   normaliseUrl, pickTab, focusResult, checkPrompt, cleanHosts, promptFrame, sendTagOf,
-  approveTokenOf, approveWatcher, chatForRun, cleanRun, GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, RUN_POST_MS,
+  approveTokenOf, approveWatcher, chatForRun, cleanRun, closesApproveTab, GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, RUN_POST_MS,
 } from "./lib/bridge-core.js";
 
 let port = null;
@@ -192,7 +192,7 @@ function grantHosts() {
 // The approval result (spec 8.1): an approval page on a listed host reports its run id,
 // and "sql <run id>" goes to the tab its link was clicked in, once that chat is idle.
 const seenRuns = new Set();
-let waitingRuns = [];   // { runId, project, from, at }
+let waitingRuns = [];   // { runId, project, from, approveTabId, at }
 let posting = false;
 const clickedChats = new Map();   // approval token -> { tabId, url, at }
 
@@ -236,7 +236,7 @@ function onApproveRun(msg, sender) {
     const run = cleanRun(msg);
     if (!run || seenRuns.has(run.runId)) return;
     seenRuns.add(run.runId);
-    waitingRuns.push({ ...run, from: clickedChats.get(token), at: Date.now() });
+    waitingRuns.push({ ...run, from: clickedChats.get(token), approveTabId: sender.tab?.id, at: Date.now() });
     clickedChats.delete(token);
     postRuns();
   } catch (e) {
@@ -263,6 +263,11 @@ async function postRuns() {
       await chrome.windows.update(chat.windowId, { focused: true });
       const answer = await chrome.tabs.sendMessage(chat.tabId, { type: "post-line", text: `sql ${run.runId}` }).catch(() => null);
       if (answer?.did === "sent" || answer?.did === "typed") waitingRuns = waitingRuns.filter((r) => r !== run);
+      if (Number.isInteger(run.approveTabId)) {
+        // Alex may have closed it already; then there is nothing to do.
+        const page = await chrome.tabs.get(run.approveTabId).catch(() => null);
+        if (closesApproveTab(answer?.did, page?.url, linkHosts)) await chrome.tabs.remove(run.approveTabId).catch(quiet);
+      }
     }
   } catch (e) {
     quiet(e);
