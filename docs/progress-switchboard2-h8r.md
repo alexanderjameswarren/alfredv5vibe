@@ -44,8 +44,9 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 2 | 2.4b | `deployTargets` skips flag values and stops at redirects | — | done (s29-c6mt) | 2026-10-31 |
 | 2 | 2.5 | MCP tools: issue a link, get a run | `db:fn:switchboard_issue_link`, `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` | deployed (s30-p4zr), CONFORMANT (97 tables); neither tool has run live yet: first calls from claude.ai | 2026-11-01 |
 | 2 | 2.6 | Approve page | — | done (s31-v8ke): end-to-end on the live app. Claude read action 26f0cc8f-6ef0-4f14-81da-a915ad086e5b and issued the link (second link refused); Alex dry-ran and approved; run b9a740a5-53e3-409f-a503-122ec57e310a succeeded with one row; reload showed "already been used"; get_switchboard_run by run id shows succeeded. Run id is `data-switchboard-run-id`, real runs only | 2026-11-01 |
-| 2 | 2.7 | Extension: approval link and result | — | built (s32-j3ya, s32b-q6hu), tests pass; end-to-end test pending. Alex dropped `chat_url` from the spec; the clicked tab gets the result, hosts are allowed at run time (1.2.1) | 2026-11-01 |
-| 2 | 2.8 | Panel read endpoint | `db:table:switchboard_actions`, `db:table:inbox`, `db:table:project_plans`, `db:table:portfolio_plans`, `db:table:portfolio_lanes`, `db:table:portfolio_slices` (all read), `db:deploy` | todo | |
+| 2 | 2.7 | Extension: approval link and result | — | done (s32-j3ya, s32b-q6hu, s32c-f2wl): end-to-end in Chrome. Claude issued a link for action c0c8ead7-da8d-4967-8f79-d284e6a2df5b in a claude.ai tab; Alex clicked it there; dry run posted nothing; Approve ran it; "sql 773effb0-0bc4-414a-bae1-c00ce4e6d81b" sent itself to that tab; get_switchboard_run shows succeeded with one row. `chat_url` dropped from the spec; hosts are allowed at run time (1.2.1) | 2026-11-01 |
+| 2 | 2.8 | Panel read endpoint | `db:table:switchboard_actions`, `db:table:inbox`, `db:table:clips`, `db:table:portfolios`, `db:table:project_plans`, `db:table:portfolio_plans`, `db:table:portfolio_lanes`, `db:table:portfolio_slices` (all read), `db:deploy` | done (s33-x7gd, s33b-m5cq): deployed, verify_jwt off; no key 401, wrong key 401, POST 405; with the key 25 projects; switchboard2-h8r in lane Main, order 2, nothing waiting; report_unread seen true on a fresh clip. `waiting_on_alex` true not yet seen live: first at 2.9 | 2026-11-01 |
+| 2 | 2.7c | One-click approve and closing the tab | — | todo | |
 | 2 | 2.9 | Panel: Waiting on SQL, Report unread, lane order | — | todo | |
 | 2 | 2.10 | Read-only role and query function, with secret-column grants | `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read), `db:fn:register_table`, `db:fn:set_read_settings` | todo | |
 | 2 | 2.11 | MCP read-only query tool, `get_sql_read` | `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget`, `db:deploy` | todo | |
@@ -255,11 +256,18 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: nothing
 - SQL: none
 
-**2.8, panel read endpoint** (database step; estimated run: 8m). `switchboard-panel`, with its own key that can do nothing else. It returns which projects are waiting on SQL, whether each report inbox id is archived, and the lane per project code (`project_plans.project_code` → group → `portfolio_slices` → `portfolio_lanes` in the current plan). Alex tests: curl with the key returns his lanes.
-- create: supabase/functions/switchboard-panel/index.ts, supabase/functions/switchboard-panel/core.ts, supabase/functions/switchboard-panel/core.test.mjs
-- update: nothing
+**2.8, panel read endpoint** (database step; estimated run: 10m). `switchboard-panel`, with its own key that can do nothing else. It returns, per project code, whether the latest CLI report's inbox item is unarchived, whether an action is waiting on Alex, and the lane (`project_plans.project_code` → group → `portfolio_slices` → `portfolio_lanes` in the active plans). Alex tests: curl with the key returns his lanes.
+- create: supabase/functions/switchboard-panel/index.ts, supabase/functions/switchboard-panel/core.ts, supabase/functions/switchboard-panel/core.test.mjs, supabase/functions/switchboard-panel/deno.json
+- update: supabase/config.toml
 - delete: nothing
 - deploy: switchboard-panel
+- SQL: none
+
+**2.7c, one-click approve and closing the tab** (added in s33; estimated run: 8m). The approve page runs the dry run by itself when it opens, so Alex makes one click, Approve. After `sql <run id>` has been posted, the extension closes the approve tab. Where it can't (the phone, or posting failed), the page says "Done, you can close this tab." Alex tests: from a claude.ai tab, one click posts the line and the tab closes; on the phone, the page shows the sentence.
+- create: nothing
+- update: src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, extension/bridge.js, extension/claude-watch.js, extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, extension/manifest.json
+- delete: nothing
+- deploy: nothing
 - SQL: none
 
 **2.9, panel: Waiting on SQL, Report unread, lane order** (estimated run: 8m). The panel polls the endpoint and caches the lanes; an unknown lane sorts last. Alex tests: a queued item shows tan; archiving the report clears orange; tiles follow his lanes. Also: a tap on a red latch tile (such as Outside scope) only clears the latch, even if a report is waiting underneath. In s32's session a tap on a red Outside scope tile typed "cli" instead.
@@ -302,14 +310,14 @@ Database items per step are in the table at the top. Report unread and lane orde
 |---|---|---|
 | 0 | Fixes, boundaries, plan guard | 8 |
 | 1 | Send link, fallback page, skill rule, tile states, estimates, layout | 10 |
-| 2 | SQL queue, read-only queries (2.2-2.12, 2.3b and 2.4b, after the 2.1 plan) | 13 |
+| 2 | SQL queue, read-only queries (2.2-2.12, 2.3b, 2.4b and 2.7c, after the 2.1 plan) | 14 |
 | 3 | Multi-repo and clients | 18 |
 | 4 | Salesforce reads | 5 |
 | 5 | Git and Salesforce by link | 6 |
 | 6 | Spec files, archiving | 2 |
 | 7 | npm start per tile | 2 |
 | 8 | Remote devices | 4 |
-| | **total** | **68** |
+| | **total** | **69** |
 
 ## Decisions
 
@@ -612,3 +620,5 @@ Database items per step are in the table at the top. Report unread and lane orde
 | s31 (2.6) | 1m58s (estimate 10m) |
 | s32 (2.7) | 3m15s (estimate 12m) |
 | s32b (2.7) | 4m05s (estimate 10m) |
+| s33 (2.8) | 2m35s (estimate 10m) |
+| s33b (2.8) | 1m25s (estimate 5m) |

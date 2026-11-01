@@ -133,3 +133,14 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/switchboard-runner/deno.json"
 entrypoint = "./functions/switchboard-runner/index.ts"
+
+[functions.switchboard-panel]
+enabled = true
+# 🛑 JWT verification OFF. The Switchboard panel holds no Supabase session, and this function checks
+# SWITCHBOARD_PANEL_KEY itself (length check plus timingSafeEqual). It only reads.
+#
+# ⚠️ Declared BEFORE THE FIRST DEPLOY, for the reason given under overwatch-ingest. Re-check after every deploy: a GET
+# without the key must come back 401 with this function's own body (`{"ok":false,"error":"unauthorized"}`).
+verify_jwt = false
+import_map = "./functions/switchboard-panel/deno.json"
+entrypoint = "./functions/switchboard-panel/index.ts"
