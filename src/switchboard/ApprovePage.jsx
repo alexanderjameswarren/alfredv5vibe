@@ -38,7 +38,7 @@ function Shell({ children }) {
     <div className="flex justify-center min-h-screen bg-primary-bg p-4">
       <div className="w-full max-w-3xl self-start p-4 sm:p-8 bg-white rounded-lg shadow-md">
         <h1 className="text-2xl font-bold text-dark mb-2 text-center">Alfred</h1>
-        <p className="text-sm text-muted text-center mb-6">Approve</p>
+        <p className="text-sm text-dark text-center mb-6">Approve</p>
         {children}
       </div>
     </div>

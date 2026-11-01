@@ -8,7 +8,7 @@
 // Its hello carries Alfred's link hosts, read from the panel's settings.ini. It never runs a program. stdout carries protocol frames and
 // nothing else, so every diagnostic goes to host.log.
 
-import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -212,13 +212,15 @@ function acceptPrompt(msg, { dir, now }) {
 }
 
 /** Write the file a message from the extension calls for. Returns the file name, or null. */
-export function handleMessage(msg, { dir, origin, now = new Date(), log = () => {} }) {
+export function handleMessage(msg, { dir, origin, now = new Date(), log = () => {}, send = () => {} }) {
   const stamp = { at: now.toISOString(), origin: origin ?? null, extension_id: extensionIdOf(origin) };
   let name = null, body = null;
   if (msg?.type === "prompt") {
     // Its own file: a prompt outcome must never overwrite a focus reply the panel is waiting on.
     name = "prompt-result.json"; body = { ...stamp, ...acceptPrompt(msg, { dir, now }) };
     log(`prompt ${body.ok ? `written for ${body.tag}` : `refused: ${body.error}`}`);
+    // A refusal never reaches the panel's delivery step, so the link hears it from here.
+    if (!body.ok && body.tag) send({ type: "delivery", tag: body.tag, ok: false, error: body.error });
   } else if (msg?.type === "tabs" && Array.isArray(msg.tabs)) {
     name = "tabs.json"; body = { ...stamp, tabs: msg.tabs.map(cleanTab) };
   } else if (msg?.type === "chats" && Array.isArray(msg.chats)) {
@@ -277,6 +279,30 @@ export function takeCommand(dir, state, send, log = () => {}) {
   return frame;
 }
 
+/**
+ * The panel's word on each Send (delivery-<project>.json): forward it to the extension and
+ * delete the file. Only the tag, the outcome and the reason travel. A half-written file waits.
+ */
+export function takeDeliveries(dir, send, log = () => {}) {
+  for (const name of readdirSync(dir)) {
+    if (!/^delivery-[A-Za-z0-9_-]+\.json$/.test(name)) continue;
+    const file = path.join(dir, name);
+    let d;
+    try {
+      d = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, ""));
+    } catch {
+      continue;
+    }
+    try { unlinkSync(file); } catch { /* the panel may hold it; next poll */ }
+    if (typeof d?.tag !== "string" || !TAG_SHAPE.test(d.tag)) {
+      log(`refused ${name}`);
+      continue;
+    }
+    send({ type: "delivery", tag: d.tag, ok: d.ok === true, error: d.ok === true ? null : str(d.error, 500) });
+    log(`delivery ${d.tag}: ${d.ok === true ? "sent" : "not sent"}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -296,7 +322,7 @@ function main() {
   process.stdin.on("data", (chunk) => {
     for (const msg of decode(chunk)) {
       try {
-        handleMessage(msg, { dir, origin, log });
+        handleMessage(msg, { dir, origin, log, send });
       } catch (e) {
         log(`write failed: ${e.message}`);
       }
@@ -310,9 +336,10 @@ function main() {
   mkdirSync(dir, { recursive: true });
   const check = () => {
     try { takeCommand(dir, state, send, log); } catch (e) { log(`command failed: ${e.message}`); }
+    try { takeDeliveries(dir, send, log); } catch (e) { log(`delivery failed: ${e.message}`); }
   };
   try {
-    watch(dir, (_, name) => { if (name === "command.json") check(); });
+    watch(dir, (_, name) => { if (name === "command.json" || name?.startsWith("delivery-")) check(); });
   } catch (e) {
     log(`watch unavailable: ${e.message}`);
   }

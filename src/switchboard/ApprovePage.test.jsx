@@ -54,6 +54,7 @@ test('shows the headline, project and whole SQL, with his JWT and the token', as
   expect(await screen.findByText('THIS RUNS A SELECT')).toBeInTheDocument();
   expect(screen.getByText('switchboard2-h8r')).toHaveAttribute('data-switchboard-project', 'switchboard2-h8r');
   expect(screen.getByTestId('approve-sql').textContent).toBe(PREVIEW.sql);
+  expect(screen.getByText('Approve')).toHaveClass('text-dark');
   const [url, init] = called('preview')[0];
   expect(url).toBe('https://db.example/functions/v1/switchboard-runner/preview');
   expect(init.method).toBe('POST');

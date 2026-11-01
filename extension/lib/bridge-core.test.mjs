@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  approveStatus, approveTokenOf, approveWatcher, buildChatsMessage, buildTabsMessage, checkPrompt, chatForProject, chatForRun, cleanHosts, cleanRun, closesApproveTab, debounce, focusResult,
+  approveStatus, approveTokenOf, approveWatcher, buildChatsMessage, buildTabsMessage, checkPrompt, chatForProject, chatForRun, cleanHosts, cleanRun, closesApproveTab, debounce, deliveryMessage, focusResult, notPostedText,
   GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, isHostMissing, nextDelay, normaliseUrl, pickTab, postProblem, projectOfTag, promptFrame, pruneApprovals, sendTagOf,
 } from "./bridge-core.js";
 import "../claude-watch.js";
@@ -81,10 +81,10 @@ test("watcher: focusing the message box moves the cursor and types nothing", asy
   assert.equal(focusComposer(new JSDOM("<body></body>").window.document), false);
 });
 
-test("send cli plan: only an empty box types, only an idle chat sends", () => {
+test("send cli plan: only an idle chat with an empty box sends; nothing else types", () => {
   const { cliPlan } = globalThis.__alfredWatchCore;
   assert.equal(cliPlan("finished", true), "send");
-  assert.equal(cliPlan("responding", true), "type");
+  assert.equal(cliPlan("responding", true), "focus");
   assert.equal(cliPlan("finished", false), "focus");
   assert.equal(cliPlan("responding", false), "focus");
   assert.equal(cliPlan("unknown", true), "focus");
@@ -117,8 +117,8 @@ test("send cli on a page: sent, typed or only focused", async (t) => {
   assert.deepEqual([idle.box(), idle.clicks], ["cli", ["Send message"]]);
 
   const writing = page("", '<button aria-label="Stop response">x</button>');
-  assert.equal(await sendCli(writing.document), "typed");
-  assert.deepEqual([writing.box(), writing.clicks], ["cli", []]);
+  assert.equal(await sendCli(writing.document), "focused");
+  assert.deepEqual([writing.box(), writing.clicks], ["", []]);
 
   const draft = page("<p>my draft</p>", '<button aria-label="Send message">s</button>');
   assert.equal(await sendCli(draft.document), "focused");
@@ -248,6 +248,48 @@ test("send link: a listed link's click is stopped before navigation; others are 
   };
   assert.deepEqual(fire(listed), { prevented: true, seen: ["sb-h8r-s13-q2vx"] });
   assert.deepEqual(fire(unlisted), { prevented: false, seen: [] });
+});
+
+test("send link: what it says, and which clicks count", () => {
+  const { sendLabel, sendAllowed } = globalThis.__alfredWatchCore;
+  assert.equal(sendLabel("sending"), "Sending…");
+  assert.equal(sendLabel("sent"), "Sent ✓");
+  assert.equal(sendLabel("notsent", "the CLI is running"), "Not sent: the CLI is running");
+  assert.equal(sendLabel("notsent"), "Not sent");
+  assert.deepEqual(["sending", "sent", "notsent", undefined].map(sendAllowed), [false, false, true, true]);
+});
+
+test("send link: every link with the tag says so, and only those", async (t) => {
+  const { markSendLinks } = globalThis.__alfredWatchCore;
+  const hosts = ["alfredv5vibe.vercel.app"];
+  const page = await chatPage(t);
+  if (!page) return;
+  const other = page.document.createElement("a");
+  other.href = "https://alfredv5vibe.vercel.app/send/sb-h8r-s12-aaaa";
+  other.textContent = "Send to CLI";
+  page.document.body.append(other);
+  markSendLinks(page.document, hosts, "sb-h8r-s13-q2vx", "sending");
+  assert.equal(page.anchor.textContent, "Sending…");
+  assert.equal(other.textContent, "Send to CLI");
+  markSendLinks(page.document, hosts, "sb-h8r-s13-q2vx", "notsent", "no <b>");
+  assert.equal(page.anchor.textContent, "Not sent: no <b>");
+  assert.equal(page.anchor.querySelector("b"), null);
+});
+
+test("delivery: a host frame becomes one clean message for the tab", () => {
+  assert.deepEqual(deliveryMessage({ tag: "sb-h8r-s13-q2vx", ok: true, error: "ignored", text: "x" }), { type: "send-status", tag: "sb-h8r-s13-q2vx", state: "sent", reason: "" });
+  assert.deepEqual(deliveryMessage({ tag: "sb-h8r-s13-q2vx", ok: false, error: "the CLI is running" }), { type: "send-status", tag: "sb-h8r-s13-q2vx", state: "notsent", reason: "the CLI is running" });
+  assert.equal(deliveryMessage({ tag: "nope", ok: true }), null);
+  assert.equal(deliveryMessage(null), null);
+});
+
+test("not posted: the advice fits the reason", () => {
+  const writing = notPostedText("writing", "Claude is still writing in that chat");
+  assert.match(writing, /wait until Claude finishes, then try again/);
+  assert.doesNotMatch(writing, /clear that/);
+  assert.match(notPostedText("box", "that chat's message box isn't empty"), /clear that and try again/);
+  assert.match(notPostedText("unknown", "the extension can't read that chat's page"), /chat wasn't touched: the extension can't read/);
+  assert.doesNotMatch(notPostedText("unknown", "x"), /clear that|wait until/);
 });
 
 const RUN = "b9a740a5-53e3-409f-a503-122ec57e310a";
@@ -402,7 +444,7 @@ test("host access: origins from the list, and a notice only when one is missing"
 
 test("manifest: no Alfred host in the code, asked for at run time", () => {
   const m = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
-  assert.equal(m.version, "1.2.5");
+  assert.equal(m.version, "1.2.6");
   assert.equal(m.host_permissions.some((h) => /vercel\.app/.test(h)), false);
   assert.deepEqual(m.optional_host_permissions, ["https://*/*"]);
 });

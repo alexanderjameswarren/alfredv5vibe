@@ -104,6 +104,15 @@ TileOf(id) {
     return Map()
 }
 TileField(id, field) => TileOf(id).Get(field, "(no tile)")
+; "tag|ok|error" from the panel's report to the host, taken as the host would; "" for none.
+DeliveryFile(project) {
+    target := BRIDGE_DIR "\delivery-" project ".json"
+    if !FileExist(target)
+        return ""
+    d := JSON.parse(FileRead(target, "UTF-8"))
+    FileDelete(target)
+    return d.Get("tag", "") "|" (d.Get("ok", false) ? 1 : 0) "|" d.Get("error", "")
+}
 
 ; --- states -----------------------------------------------------------------
 Step("processing", "2026-09-30T10:00:00.000Z", false)
@@ -577,6 +586,8 @@ Expect("terminal stays: focus key once", JoinCodes(keys), "^{Esc}|")
 Expect("terminal stays: red Not sent", ms.color " / " ms.label
     , "red / Not sent: the focus could not be moved to Claude's input: focus is in an editor or terminal")
 Expect("terminal stays: tag freed for a retry", FileRead(BRIDGE_DIR "\sent.json", "UTF-8") ~= "rem-j7p-s9-ijkl", 0)
+Expect("terminal stays: the link is told why", DeliveryFile("rem-j7p")
+    , "rem-j7p-s9-ijkl|0|the focus could not be moved to Claude's input: focus is in an editor or terminal")
 ButtonClick("main")
 Refresh()
 Expect("a tap clears Not sent", InStr(ms.label, "Not sent"), 0)
@@ -609,7 +620,22 @@ Expect("missing: pasted", pasted.Length, 1)
 ms.sendAt -= 3000
 Refresh()
 Expect("missing: Not delivered", ms.color " / " ms.label, "red / Not delivered")
+Expect("missing: the link is told", DeliveryFile("rem-j7p"), "rem-j7p-s11-qrst|0|the prompt never reached the CLI")
 ButtonClick("main")
+
+; Pasted, and the prompt hook records it: the link says Sent.
+Step("waiting", IsoAgo(5), false, "rem-j7p-s6-zzzz")
+WritePrompt("rem-j7p-s11-abab")
+Refresh()
+Expect("pasted: nothing told yet", DeliveryFile("rem-j7p"), "")
+Step("processing", IsoAgo(1), false, "rem-j7p-s11-abab")
+Expect("delivered: the link is told", DeliveryFile("rem-j7p"), "rem-j7p-s11-abab|1|")
+Step("waiting", IsoAgo(5), false, "rem-j7p-s6-zzzz")
+
+; No checkout for the project: refused, and the link still hears.
+FileOpen(BRIDGE_DIR "\prompt-nobody-x1y.json", "w", "UTF-8-RAW").Write(ToJson({at: IsoAgo(0), id: "p2", project: "nobody-x1y", tag: "nobody-x1y-s1-cdcd", text: "x"}))
+Refresh()
+Expect("no checkout: the link is told", DeliveryFile("nobody-x1y"), "nobody-x1y-s1-cdcd|0|no checkout for nobody-x1y")
 
 ; The host or extension refused: shown from prompt-result.json.
 FileOpen(BRIDGE_DIR "\prompt-result.json", "w", "UTF-8-RAW").Write('{"id":"ext-9","ok":false,"tag":"rem-j7p-s12-uvwx","project":"rem-j7p","error":"the link is in an older reply"}')
