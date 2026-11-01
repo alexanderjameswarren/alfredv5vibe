@@ -40,6 +40,8 @@ before the move, so a mismatch is refused rather than guessed at.
 | 15 | Clipboard push | `clip.mjs` → Alfred | `CLIPBOARD_URL` `/finish` (`clip-capture`), base64 title and text, `run_tag`, `repo`, `branch` | `CLIPBOARD_SECRET` header | by behaviour: a 400 on `page_text` falls back to plain text; a stored `run_tag` that differs from the one sent is flagged |
 | 16 | Activity | `overwatch-post.mjs` → Alfred | `OVERWATCH_INGEST_URL` (`overwatch-ingest`): claim blocks, finish summaries (`scripts/lib/finish-summary.mjs`) | `OVERWATCH_INGEST_SECRET` | none |
 | 17 | Reports to claude.ai | Alfred → claude.ai | MCP `get_recent_clips` by `run_tag` / `run_tag_prefix`; `archive_inbox_item` | MCP connector | none |
+| 18 | Panel read | Alfred → panel (`PanelTick` in `claude-sessions.ahk`) | `GET` `switchboard-panel`, every 15 s, asynchronously: `{ok, projects: {<code>: {report_unread, waiting_on_alex, lane, lane_order}}}`. The address is settings.ini `[panel] panelurl`, or by default `CLIPBOARD_URL` with `clip-capture` replaced | `x-switchboard-panel-key`: `SWITCHBOARD_PANEL_KEY` from the environment, or the Windows user registry | none. A failed read keeps what was last known; after 5 minutes "waiting" and "unread" aren't believed, so tiles follow today's rule, and the lanes stay |
 
-Planned, not built: report status (Phase 1, spec §4 item 3), the action queue
-(Phase 2, item 4), and the Switchboard MCP tools (items 5).
+Tile taps across interfaces 13 and 14: a page tile carries `cliTap` (`send`, `busy` or none) and `outline`. The panel asks for `sendcli` only on a tap on orange; `result.json`'s `did` of `sent` is the one success, and anything else is "Send cli blocked".
+
+Planned, not built: the Switchboard MCP tools (items 5) beyond those already in Alfred.

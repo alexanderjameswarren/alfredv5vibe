@@ -67,6 +67,8 @@ body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verd
   justify-content:space-between;text-align:left;font:inherit;position:relative;overflow:hidden;min-height:0;touch-action:pan-y}
 .t-red{background:var(--red);color:var(--onRed)} .t-orange{background:var(--orange);color:var(--onOrange)}
 .t-purple{background:var(--purple);color:var(--onPurple)}
+.t-paleorange{background:#FFCC80;color:#000}   /* Sending cli: the same in both themes */
+.tile.sendblocked{box-shadow:inset 0 0 0 6px var(--edge)}   /* Send cli blocked: orange with a red outline */
 .t-tan{background:var(--tan);color:var(--onTan)}
 /* --blend (0-100%) comes from AutoHotkey each tick: start green into the short shade, a minute before the estimate */
 .t-greenrun{background:color-mix(in srgb,var(--gShort) var(--blend,0%),var(--gLong));color:var(--onRun)}
@@ -184,6 +186,7 @@ function tileEl(id) {
     b = document.createElement("button");
     b.innerHTML = '<div class="name"></div><div class="action"></div>' +
       '<div class="meta"><span class="kind"></span><span class="info"></span></div><span class="fill"></span><span class="strip" hidden></span>';
+    b.dataset.id = id;
     wire(b, id);
     b.addEventListener("animationend", () => b.classList.remove("cleared"));
     els.set(id, b);
@@ -211,10 +214,22 @@ function wire(b, id) {
   });
   b.addEventListener("click", () => {
     if (fired) { fired = false; return; }
+    const cliTap = tileData.get(id)?.cliTap;
+    if (cliTap === "busy") return;                 // Sending cli: already going
     flash(b);
+    if (cliTap === "send") showSending(b);         // at once, before AutoHotkey has heard about it
     if (id.startsWith("orphan:")) openPanel(id);   // look first: release is one more, deliberate tap
     else post({type: "tap", id});
   });
+}
+
+function showSending(b) {
+  const cls = "tile t-paleorange";
+  b.className = cls + " pressed";
+  b.dataset.cls = cls;
+  setAction(b.children[1], "Sending cli", false);
+  const t = tileData.get(b.dataset.id);
+  if (t) t.cliTap = "busy";
 }
 
 // The orphan release panel. The page's one bit of state besides scroll: which tile it is for.
@@ -289,7 +304,7 @@ function render(st) {
   st.tiles.forEach((t, i) => {
     tileData.set(t.id, t);
     const b = tileEl(t.id);
-    const cls = "tile t-" + t.color + (t.kind === "chat" ? " chat" : "") + (t.blocked ? " blocked" : "");
+    const cls = "tile t-" + t.color + (t.kind === "chat" ? " chat" : "") + (t.outline ? " sendblocked" : "") + (t.blocked ? " blocked" : "");
     const unblocked = b.dataset.cls && b.dataset.cls.endsWith(" blocked") && !t.blocked;
     if (b.dataset.cls !== cls) {   // keep a press, hold or flash in progress across an update
       const live = ["pressed", "holding", "cleared"].filter(c => b.classList.contains(c));

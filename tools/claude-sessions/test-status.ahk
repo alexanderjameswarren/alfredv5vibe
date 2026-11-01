@@ -479,6 +479,68 @@ StrRepeat(s, n) {
     return out
 }
 
+; --- the panel endpoint (spec 8.1) and the tap rules (switchboard2-h8r 2.9) ---
+READ := "2026-10-03T10:10:00Z", BEFORE := "2026-10-03T10:00:00.000Z", AFTER := "2026-10-03T10:20:00.000Z"
+Check("url: a setting wins", PanelUrl("https://own/p", "https://x/functions/v1/clip-capture"), "https://own/p")
+Check("url: beside the clipboard's", PanelUrl("", "https://x/functions/v1/clip-capture/"), "https://x/functions/v1/switchboard-panel")
+Check("url: neither", PanelUrl("", ""), "")
+Check("url: not a clipboard address", PanelUrl("", "https://x/other"), "")
+Check("reply: not ok is nothing", PanelProjects(Map("ok", false)), "")
+Check("reply: no projects is nothing", PanelProjects(Map("ok", true)), "")
+got := PanelProjects(Map("ok", true, "projects", Map("a-b1c", Map("report_unread", 1, "waiting_on_alex", 0, "lane", "Main", "lane_order", 2), "d-e2f", Map("lane_order", ""))))
+Check("reply: a project", got["a-b1c"].unread " " got["a-b1c"].sql " " got["a-b1c"].lane, "1 0 2")
+Check("reply: no lane is 0", got["d-e2f"].lane, 0)
+
+; Today's rule when the panel knows nothing: orange until the chat has moved on since the report.
+Check("unread: no read, chat older", ReportPending({reportAt: BEFORE, chatSince: "2026-10-03T09:00:00.000Z"}), true)
+Check("unread: no read, chat newer", ReportPending({reportAt: BEFORE, chatSince: AFTER}), false)
+Check("unread: endpoint says unread, chat moved on", ReportPending({reportAt: BEFORE, chatSince: AFTER, reportUnread: true, panelAt: READ}), true)
+Check("unread: endpoint says archived, chat older", ReportPending({reportAt: BEFORE, chatSince: "2026-10-03T09:00:00.000Z", reportUnread: false, panelAt: READ}), false)
+Check("unread: a report newer than the read is not judged by it", ReportPending({reportAt: AFTER, chatSince: "2026-10-03T09:00:00.000Z", reportUnread: false, panelAt: READ}), true)
+Check("unread: no report at all", ReportPending({reportAt: "", chatSince: BEFORE, reportUnread: true, panelAt: READ}), false)
+Check("view: orange stays until archived", V(P("waiting", , {reportUnread: true, panelAt: READ})), "orange / Send cli")
+Check("view: archived clears orange", V(P("waiting", , {reportUnread: false, panelAt: READ})), "yellow / Your turn")
+Check("view: replying beats unread", V(P("waiting", "responding", {reportUnread: true, panelAt: READ})), "green / Claude writing")
+
+Check("latch: Outside scope", IsLatchTile("red", "Outside scope"), true)
+Check("latch: Wrong window", IsLatchTile("red", "Wrong window"), true)
+Check("latch: Already pasted", IsLatchTile("red", "Already pasted"), true)
+Check("latch: Not sent", IsLatchTile("red", "Not sent: the CLI is running"), true)
+Check("latch: Not delivered", IsLatchTile("red", "Not delivered"), true)
+Check("not a latch: Approve", IsLatchTile("red", "Approve"), false)
+Check("not a latch: Check CLI", IsLatchTile("red", "Check CLI"), false)
+Check("not a latch: orange", IsLatchTile("orange", "Send cli"), false)
+
+Orange := {color: "orange", label: "Send cli"}
+Check("send view: none", V(SendCliView(Orange, "")), "orange / Send cli")
+Check("send view: sending", V(SendCliView(Orange, "sending")), "paleorange / Sending cli")
+Check("send view: sent, until the chat replies", V(SendCliView(Orange, "sent")), "paleorange / Sending cli")
+Check("send view: blocked", V(SendCliView(Orange, "blocked")), "orange / Send cli blocked")
+Check("send view: red note wins", V(SendCliView({color: "red", label: "Not delivered"}, "blocked")), "red / Not delivered")
+Check("send outcome: sent", SendCliOutcome("sent"), "sent")
+for did in ["typed", "focused", "", 3]
+    Check("send outcome: " did, SendCliOutcome(did), "blocked")
+Check("send next: stays", CliSendNext("blocked", true, 999999), "blocked")
+Check("send next: orange gone", CliSendNext("blocked", false, 0), "")
+Check("send next: moved on after sending", CliSendNext("sent", false, 0), "")
+Check("send next: sent, fresh", CliSendNext("sent", true, 1000), "sent")
+Check("send next: sent, nothing happened", CliSendNext("sent", true, 16000), "")
+Check("send next: sending stuck", CliSendNext("sending", true, 16000), "")
+Check("send next: nothing", CliSendNext("", true, 0), "")
+Check("tile colour pale orange", TileColor("paleorange"), "paleorange")
+Check("keyboard: blocked to Chrome", FocusTarget("orange", "Send cli blocked"), "chrome")
+Check("keyboard: sending to Chrome", FocusTarget("paleorange", "Sending cli"), "chrome")
+Check("pale orange is no alert", IsAttention("paleorange"), false)
+Check("tap: send", CliTapKind("orange"), "send")
+Check("tap: busy", CliTapKind("paleorange"), "busy")
+Check("tap: other", CliTapKind("yellow"), "")
+
+TlL(id, lane) => {id: id, group: 0, color: "grey", lane: lane}
+Check("lanes first, in order", Ids(TileSort([TlL("n", 0), TlL("b", 2), TlL("a", 1)], Map())), "abn")
+Check("no lane keeps its order", Ids(TileSort([TlL("x", 0), TlL("y", 0), TlL("a", 1)], Map("y", 1, "x", 2))), "ayx")
+Check("a lane beats the old order", Ids(TileSort([TlL("a", 2), TlL("b", 1)], Map("a", 1, "b", 2))), "ba")
+Check("groups still come first", Ids(TileSort([{id: "c", group: 1, color: "grey"}, TlL("a", 1)], Map("c", 1))), "ac")
+
 ; #Warn only prints, so load this file again with /validate and fail on any warning.
 warnOut := A_Temp "\claude-sessions-test-warnings.txt"
 RunWait(A_ComSpec ' /c ""' A_AhkPath '" /ErrorStdOut /validate "' A_ScriptFullPath '" > "' warnOut '" 2>&1"', , "Hide")

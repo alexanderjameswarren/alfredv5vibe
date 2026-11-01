@@ -49,8 +49,8 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 2 | 2.7c | One-click approve and closing the tab | — | done with one bug (s34-b9tn): checkpointed, extension 1.2.2. The dry run ran on open and Approve ran run eaf76ba0-ae0d-4620-a414-ff46b24f3d68 (succeeded, select 3), but `sql <run id>` was never posted and the tab didn't close; the page showed "Done, you can close this tab." Fixed in 2.7d. Skipping the dry run for selects dropped by Alex | 2026-11-01 |
 | 2 | 2.7d | Missed post, honest headline, plain description | `db:deploy` | done with one serious bug (s35-k2pe): headline, description and automatic dry run correct; run 3f6609cd-5867-457e-b88b-8147e6f373e7 succeeded after an extension reload. But Alex was mid-message with a screenshot in the box and no text: the extension sent his unfinished message, posted the line and closed the tab, because the box check treated an attachment as empty. Fixed in 2.7e | 2026-11-01 |
 | 2 | 2.7e | Posting guards, matching Send cli | — | done (s36-r4vh), extension 1.2.4: with a screenshot in the chat's box, Approve ran run 5596a17d-fdc3-4892-9cc4-8859dd2e813e (succeeded); nothing was sent, the chat wasn't touched, the tab stayed open with the line, Copy and the banner; after the box was cleared, Try again posted "sql 5596a17d-..." and the tab closed | 2026-11-01 |
-| 2 | 2.7f | The approve page looks and behaves like the rest of Alfred | — | built (s37-w6fa), extension 1.2.5, tests pass; Chrome test pending | |
-| 2 | 2.9 | Panel: Waiting on SQL, Report unread, lane order | — | todo | |
+| 2 | 2.7f | The approve page looks and behaves like the rest of Alfred | — | done (s37-w6fa), extension 1.2.5: Alex checkpointed and tested; the page matches Alfred, the message and Try again sit inside the card, Copy works, and Try again posted run d3b5b803-a007-40fa-986c-220f4e501ee0 (succeeded) and closed the tab | 2026-11-01 |
+| 2 | 2.9 | Panel: Waiting on SQL, Report unread, lane order, tap rules | — | built (s38-d4ms), tests pass; panel not yet restarted on it. The read checked live: 25 projects, `waiting_on_alex` true for the queued select | |
 | 2 | 2.9b | Send to CLI link shows Sending, Sent or Not sent | — | todo | |
 | 2 | 2.10 | Read-only role and query function, with secret-column grants | `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read), `db:fn:register_table`, `db:fn:set_read_settings` | todo | |
 | 2 | 2.11 | MCP read-only query tool, `get_sql_read` | `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget`, `db:deploy` | todo | |
@@ -296,8 +296,10 @@ Every report ends with the next step's block, copied from here. The progress fil
 - SQL: none
 
 **2.9b, Send to CLI link shows what happened** (added in s37; estimated run: 12m; after 2.9). The link changes the moment it's clicked to "Sending…" and ignores further clicks, then "Sent ✓" once the panel confirms delivery, or "Not sent" with the reason. The panel and host report delivery back to the extension. The extension's link text on claude.ai is the only page change. Alex tests: a double click sends once; a delivered prompt shows Sent ✓; with the project's window closed, Not sent and why.
+
+Also in 2.9b (noted in s38): the "Claude is still writing" reason says "wait until Claude finishes, then try again", not "clear that". The "Approve" subtitle under "Alfred" on the approve page is too faint: normal dark text. And Send cli while Claude is replying still types `cli` into the box unsent (`cliPlan` "type"); the panel now calls that blocked, but the typed word then blocks the retry, so Send cli should touch nothing there.
 - create: nothing
-- update: extension/bridge.js, extension/claude-watch.js, extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, extension/manifest.json, tools/claude-sessions/bridge/host.mjs, tools/claude-sessions/bridge/host.test.mjs, tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/smoke-test.ahk, tools/claude-sessions/INTERFACES.md
+- update: src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, extension/bridge.js, extension/claude-watch.js, extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, extension/manifest.json, tools/claude-sessions/bridge/host.mjs, tools/claude-sessions/bridge/host.test.mjs, tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/smoke-test.ahk, tools/claude-sessions/INTERFACES.md
 - delete: nothing
 - deploy: nothing
 - SQL: none
@@ -658,3 +660,4 @@ Database items per step are in the table at the top. Report unread and lane orde
 | s35 (2.7d) | 2h02m13s (estimate 15m), of which 1h55m59s was the claim, deploy and queue phase, most likely waiting at a permission prompt |
 | s36 (2.7e) | 3m23s (estimate 10m) |
 | s37 (2.7f) | 2m00s (estimate 10m) |
+| s38 (2.9) | 9m12s (estimate 12m) |
