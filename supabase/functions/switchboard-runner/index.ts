@@ -11,8 +11,8 @@ import { type Action, type Deps, handle, type RunOutcome, type Statement, type S
 //
 // 🛑 A SERVER-TO-SERVER EXCEPTION, LIKE clip-capture. Not an MCP tool: no defineTool, no ctx.db.
 //
-//   POST /queue    x-switchboard-queue-secret. { project_code, sql } -> { ok, action_id, headline }
-//   POST /preview  Alex's JWT. { token } -> { headline, sql, fingerprint, ... }. Runs nothing.
+//   POST /queue    x-switchboard-queue-secret. { project_code, sql, description } -> { ok, action_id, headline }
+//   POST /preview  Alex's JWT. { token } -> { headline, description, sql, fingerprint, ... }. Runs nothing.
 //   POST /dry-run  Alex's JWT. { token } -> { run_id, summary }. Rolled back; the link is not spent.
 //   POST /approve  Alex's JWT. { token, fingerprint } -> { run_id, summary, conformance }. Needs a clean dry run.
 //

@@ -147,6 +147,7 @@ export default function ApprovePage() {
       <p className="font-bold text-dark mb-2 break-words">{preview.headline}</p>
       <p className="text-sm text-dark">Project</p>
       <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code}>{preview.project_code}</p>
+      {preview.description && <p data-testid="approve-description" className="text-dark mb-4 break-words">{preview.description}</p>}
       <pre data-testid="approve-sql" className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark whitespace-pre-wrap break-words">
         {preview.sql}
       </pre>

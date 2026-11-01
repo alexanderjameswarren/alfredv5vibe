@@ -64,6 +64,43 @@ test("headline: built from the statements, not their strings", () => {
   assert.equal(buildHeadline("do $$ begin delete from x; end $$"), "THIS CHANGES THE LIVE ALFRED DATABASE: RUNS A DO BLOCK");
 });
 
+const SELECT = "THIS RUNS A SELECT ON THE LIVE ALFRED DATABASE";
+const MAY = "THIS MAY CHANGE DATA IN THE LIVE ALFRED DATABASE: ";
+
+test("headline: a select that may write says so", () => {
+  for (const [sql, why] of [
+    ["select delete_all_rows()", "CALLS FUNCTION DELETE_ALL_ROWS"],
+    ["select * from public.count(1)", "CALLS FUNCTION PUBLIC.COUNT"],
+    ['select "Odd Name" (1)', 'CALLS FUNCTION "ODD NAME"'],
+    ["select a from t where wb_process (a)", "CALLS FUNCTION WB_PROCESS"],
+    ["select nextval('s')", "CALLS FUNCTION NEXTVAL"],
+    ["select pg_terminate_backend(1)", "CALLS FUNCTION PG_TERMINATE_BACKEND"],
+    ["values (setval('s', 1))", "CALLS FUNCTION SETVAL"],
+    ["select * into new_t from t", "SELECT INTO"],
+    ["explain analyze delete from t where a = 1", "EXPLAIN ANALYZE"],
+    ["explain analyse select 1", "EXPLAIN ANALYZE"],
+    ["explain (verbose, analyze) update t set a = 1 where b = 2", "EXPLAIN ANALYZE"],
+    ["select * from t for update", "LOCKS ROWS"],
+    ["select * from t for no key update", "LOCKS ROWS"],
+    ["select * from t for share", "LOCKS ROWS"],
+  ]) assert.equal(buildHeadline(sql), MAY + why, sql);
+});
+
+test("headline: a plain select stays a select, including built-ins and strings", () => {
+  for (const sql of ["select 1", "select count(*) from t", "select a from t where b in (1, 2) and exists (select 1 from u)",
+    "select json_build_object('a', (select json_agg(t) from (select 1) t)) as result", "select lower(a), coalesce(b, 0) from t",
+    "select 'delete_all_rows()', 'into', 'for update'", "explain select 1", "show server_version", "table t", "values (1)",
+    "select $$evil()$$", "-- evil()\nselect 1", "select a::numeric(10, 2) from t"]) {
+    assert.equal(buildHeadline(sql), SELECT, sql);
+  }
+});
+
+test("headline: a sure write outranks a maybe, and both are named", () => {
+  assert.equal(buildHeadline("delete from t where a = 1; select evil()"),
+    "THIS CHANGES THE LIVE ALFRED DATABASE: DELETES ROWS FROM T, CALLS FUNCTION EVIL");
+  assert.equal(buildHeadline("select 1; select evil()"), `${MAY}CALLS FUNCTION EVIL`);
+});
+
 test("editor: what cannot run in a transaction", () => {
   for (const sql of ["create index concurrently i on t (a)", "drop index concurrently i", "vacuum t",
     "alter system set x = 1", "create database d", "reindex table concurrently t"]) {
@@ -128,19 +165,31 @@ test("queue: an unset or short server secret refuses everyone", async () => {
 
 test("queue: inserts kind sql for Alex's user, with a server headline", async () => {
   const { deps, calls } = fakes();
-  const res = await handle(queue({ project_code: "p-x", sql: "select 1", kind: "git", user_id: "evil", headline: "FINE", fingerprint: "x" }), deps);
+  const res = await handle(queue({ project_code: "p-x", sql: "select 1", description: "  Reads the number 1.  ", kind: "git", user_id: "evil", headline: "FINE", fingerprint: "x" }), deps);
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { ok: true, action_id: "new-1", headline: "THIS RUNS A SELECT ON THE LIVE ALFRED DATABASE" });
   assert.deepEqual(calls.inserted, [{
-    user_id: USER, kind: "sql", project_code: "p-x", payload: { sql: "select 1" },
+    user_id: USER, kind: "sql", project_code: "p-x", payload: { sql: "select 1", description: "Reads the number 1." },
     headline: "THIS RUNS A SELECT ON THE LIVE ALFRED DATABASE", created_by: "cli",
   }]);
 });
 
+test("preview: carries the description, or null for an older action", async () => {
+  const { deps, action } = fakes();
+  const body = { token: TOKEN };
+  assert.equal((await (await handle(post("preview", body, jwt()), deps)).json()).description, null);
+  action.payload.description = "Deletes 1 rule.";
+  assert.equal((await (await handle(post("preview", body, jwt()), deps)).json()).description, "Deletes 1 rule.");
+});
+
 test("queue: bad input, and SQL for the editor, is refused with no row", async () => {
+  const description = "Reads something.";
   const cases = [
-    [{ sql: "select 1" }, 400], [{ project_code: "Bad Code", sql: "select 1" }, 400], [{ project_code: "p-x" }, 400],
-    [{ project_code: "p-x", sql: "x".repeat(600000) }, 400], [{ project_code: "p-x", sql: "vacuum t" }, 422],
+    [{ sql: "select 1", description }, 400], [{ project_code: "Bad Code", sql: "select 1", description }, 400], [{ project_code: "p-x", description }, 400],
+    [{ project_code: "p-x", sql: "x".repeat(600000), description }, 400], [{ project_code: "p-x", sql: "vacuum t", description }, 422],
+    [{ project_code: "p-x", sql: "select 1" }, 400], [{ project_code: "p-x", sql: "select 1", description: "   " }, 400],
+    [{ project_code: "p-x", sql: "select 1", description: 7 }, 400], [{ project_code: "p-x", sql: "select 1", description: "two\nlines" }, 400],
+    [{ project_code: "p-x", sql: "select 1", description: "x".repeat(301) }, 400],
   ];
   for (const [body, status] of cases) {
     const { deps, calls } = fakes();

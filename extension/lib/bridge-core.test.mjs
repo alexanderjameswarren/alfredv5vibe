@@ -3,8 +3,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  approveTokenOf, approveWatcher, buildChatsMessage, buildTabsMessage, checkPrompt, chatForProject, chatForRun, cleanHosts, cleanRun, closesApproveTab, debounce, focusResult,
-  GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, isHostMissing, nextDelay, normaliseUrl, pickTab, projectOfTag, promptFrame, sendTagOf,
+  approveBanner, approveTokenOf, approveWatcher, buildChatsMessage, buildTabsMessage, checkPrompt, chatForProject, chatForRun, cleanHosts, cleanRun, closesApproveTab, debounce, focusResult,
+  GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, isHostMissing, nextDelay, normaliseUrl, pickTab, postProblem, projectOfTag, promptFrame, pruneApprovals, sendTagOf,
 } from "./bridge-core.js";
 import "../claude-watch.js";
 
@@ -312,6 +312,45 @@ test("the approve tab closes only once the line is sent, and only if it is still
   assert.equal(closesApproveTab("sent", "https://claude.ai/chat/one", hosts), false);
 });
 
+test("postProblem: why a line can't go yet, in plain words, or null", () => {
+  const chat = { state: "finished", composerEmpty: true };
+  assert.equal(postProblem(chat, null), null);
+  assert.match(postProblem(null, "no open chat for p-x"), /no open chat for p-x/);
+  assert.match(postProblem({ ...chat, state: "responding" }, null), /still writing/);
+  assert.match(postProblem({ ...chat, composerEmpty: false }, null), /message box has text/);
+  assert.match(postProblem({ ...chat, composerEmpty: null }, null), /message box/);
+  assert.match(postProblem({ ...chat, state: "unknown" }, null), /can't read/);
+});
+
+test("approvals: old clicks and seen runs are dropped; waiting runs stay", () => {
+  const now = 10 * 24 * 3600 * 1000;
+  const out = pruneApprovals({
+    hosts: ["a.b"],
+    clicks: { old: { tabId: 1, url: "u", at: now - 3700 * 1000 }, fresh: { tabId: 2, url: "u", at: now - 60 * 1000 } },
+    runs: [{ runId: RUN, at: now - 3700 * 1000 }],
+    seen: { [RUN]: now - 25 * 3600 * 1000, other: now - 3600 * 1000 },
+  }, now);
+  assert.deepEqual(Object.keys(out.clicks), ["fresh"]);
+  assert.deepEqual(Object.keys(out.seen), ["other"]);
+  assert.equal(out.runs.length, 1);
+  assert.deepEqual(out.hosts, ["a.b"]);
+  // Anything stored wrongly, or nothing stored, reads as empty.
+  assert.deepEqual(pruneApprovals(undefined, now), { hosts: [], clicks: {}, runs: [], seen: {} });
+  assert.deepEqual(pruneApprovals({ hosts: 1, clicks: null, runs: "x", seen: 2 }, now), { hosts: [], clicks: {}, runs: [], seen: {} });
+});
+
+test("approve banner: says it on the page, once, and replaces its own words", async (t) => {
+  const w = await dom(t, "");
+  if (!w) return;
+  const run = new Function("document", `return (${approveBanner.toString()})(...[...arguments].slice(1));`);
+  run(w.document, "first <b>");
+  run(w.document, "second <b>");
+  const shown = w.document.querySelectorAll("[data-alfred-post-note]");
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0].textContent, "second <b>");
+  assert.equal(shown[0].querySelector("b"), null);
+});
+
 test("host access: origins from the list, and a notice only when one is missing", () => {
   assert.deepEqual(hostOrigins(["alfredv5vibe.vercel.app", "alfred.example:8443"]), ["https://alfredv5vibe.vercel.app/*", "https://alfred.example/*"]);
   assert.equal(grantNotice([]), null);
@@ -323,7 +362,7 @@ test("host access: origins from the list, and a notice only when one is missing"
 
 test("manifest: no Alfred host in the code, asked for at run time", () => {
   const m = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
-  assert.equal(m.version, "1.2.2");
+  assert.equal(m.version, "1.2.3");
   assert.equal(m.host_permissions.some((h) => /vercel\.app/.test(h)), false);
   assert.deepEqual(m.optional_host_permissions, ["https://*/*"]);
 });
@@ -363,7 +402,7 @@ async function dom(t, html) {
 
 const APPROVE_HTML = `<p>Project</p><p>wrong-label</p><p data-switchboard-project="switchboard2-h8r">shown</p><div id="r"></div>`;
 
-test("approve watcher: a dry run sends nothing; a real run sends its id once", async (t) => {
+test("approve watcher: a dry run sends nothing; a real run sends its id once per injection", async (t) => {
   const w = await dom(t, APPROVE_HTML);
   if (!w) return;
   const sent = [];
@@ -378,8 +417,23 @@ test("approve watcher: a dry run sends nothing; a real run sends its id once", a
   assert.deepEqual(sent, [{ type: "approve-run", runId: RUN, project: "switchboard2-h8r" }]);
   w.document.getElementById("r").innerHTML = "<p>again</p>";
   await new Promise((r) => setTimeout(r, 20));
-  run(...Object.values(scope));
   assert.equal(sent.length, 1);
+  // A re-injection after an extension reload reports again; bridge.js drops a run it has seen.
+  run(...Object.values(scope));
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[1], sent[0]);
+});
+
+test("approve watcher: a re-injection replaces the one a reload left dead", async (t) => {
+  const w = await dom(t, APPROVE_HTML);
+  if (!w) return;
+  const sent = [];
+  const make = (chrome) => new Function("document", "MutationObserver", "chrome", `return (${approveWatcher.toString()})();`)(w.document, w.MutationObserver, chrome);
+  make({ runtime: { sendMessage: () => { throw new Error("Extension context invalidated."); } } });
+  make({ runtime: { sendMessage: async (m) => sent.push(m) } });
+  w.document.getElementById("r").setAttribute("data-switchboard-run-id", RUN);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(sent, [{ type: "approve-run", runId: RUN, project: "switchboard2-h8r" }]);
 });
 
 function composerPage(w, { box = "", stop = false, onSend = () => {} } = {}) {

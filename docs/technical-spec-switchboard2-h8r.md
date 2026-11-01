@@ -319,16 +319,17 @@ Tiles are designed for at most 6 projects, not 9.
 Both tables have row-level security: Alex's user only. Neither gets any anon grant.
 
 **Flow.**
-1. **Queue.** The CLI queues SQL with its own key, which can only insert `kind = 'sql'` rows.
+1. **Queue.** The CLI queues SQL with its own key, which can only insert `kind = 'sql'` rows. `--describe` is required: one plain sentence saying what the SQL does, stored as `payload.description`, which never changes after insert.
 2. **Review.** Claude reviews the SQL in the chat.
 3. **Issue.** Claude calls `issue_switchboard_link(action_id)`. It returns a URL with a random token, stores only the token's hash, binds the link to the fingerprint, and expires it in 30 minutes. The URL's base address is a server setting, never code. The extension and the panel recognise it by path on the hosts in the same list as the Send links (§2, rule 8).
 4. **Click.** Alex clicks in the chat tab. The extension remembers that tab for the link's token, and the link opens as usual. A link opened elsewhere, such as on the phone, has no remembered tab: the result then goes to the one chat whose latest reply issued the project's run tag, or else the one whose title contains the project code, and two matches post nothing. `chat_url` is dropped: the extension can't write it, and Alex's login plus the single-use link are what keep the SQL safe.
-5. **Approve page.** It requires Alex's Alfred login. It shows the headline, the SQL, and a **Dry run** button. A dry run runs the SQL in a transaction, reports what would change ("deletes 3 rows from wb_rules"), and rolls back. **Approve** runs it for real.
+5. **Approve page.** It requires Alex's Alfred login. It shows the headline, the description, then the SQL, and runs the dry run by itself when it opens. A dry run runs the SQL in a transaction, reports what would change ("deletes 3 rows from wb_rules"), and rolls back. **Approve**, offered once a dry run is clean, runs it for real; every action needs that dry run, selects included.
 6. **Consume.** The link is single-use, consumed with an atomic `update ... where link_used_at is null and fingerprint = $1`.
-7. **Result.** The extension reads the run id and project from the page's data attributes (`data-switchboard-run-id`, `data-switchboard-project`) and posts `sql <run id>` into the remembered tab once the chat is idle. Claude fetches the result with `get_switchboard_run`. Approving from the phone just opens the Alfred page.
+7. **Result.** The extension reads the run id and project from the page's data attributes (`data-switchboard-run-id`, `data-switchboard-project`) and posts `sql <run id>` into the remembered tab once the chat is idle, then closes the approve tab. Clicked tabs and waiting runs are stored, so an extension reload or a worker restart loses neither. While it can't post, a banner on the approve page says why; with that tab gone, the toolbar icon does. The page says "Done, you can close this tab." after a successful run, which is all the phone sees. Claude fetches the result with `get_switchboard_run`. Approving from the phone just opens the Alfred page.
 
 **Headlines.** Every click page leads with one plain line in capitals, saying what happens. The headline is built by the server from the action's kind and payload, never written by Claude. Examples:
 - `THIS CHANGES THE LIVE ALFRED DATABASE: DELETES ROWS FROM WB_RULES`
+- `THIS MAY CHANGE DATA IN THE LIVE ALFRED DATABASE: CALLS FUNCTION WB_PROCESS`, for a read that could write: a call to anything but a short list of built-ins that only compute, `select into`, `explain analyze`, or row locks. A view that writes through a function it calls can't be seen from the text.
 - `THIS PUSHES TO MAIN AND MAKES IT LIVE IN PRODUCTION`
 - `THIS DEPLOYS TO SANDBOX ACME-UAT AND DELETES FIELD Account.Old__c`
 

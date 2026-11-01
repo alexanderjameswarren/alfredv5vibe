@@ -46,7 +46,8 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 2 | 2.6 | Approve page | — | done (s31-v8ke): end-to-end on the live app. Claude read action 26f0cc8f-6ef0-4f14-81da-a915ad086e5b and issued the link (second link refused); Alex dry-ran and approved; run b9a740a5-53e3-409f-a503-122ec57e310a succeeded with one row; reload showed "already been used"; get_switchboard_run by run id shows succeeded. Run id is `data-switchboard-run-id`, real runs only | 2026-11-01 |
 | 2 | 2.7 | Extension: approval link and result | — | done (s32-j3ya, s32b-q6hu, s32c-f2wl): end-to-end in Chrome. Claude issued a link for action c0c8ead7-da8d-4967-8f79-d284e6a2df5b in a claude.ai tab; Alex clicked it there; dry run posted nothing; Approve ran it; "sql 773effb0-0bc4-414a-bae1-c00ce4e6d81b" sent itself to that tab; get_switchboard_run shows succeeded with one row. `chat_url` dropped from the spec; hosts are allowed at run time (1.2.1) | 2026-11-01 |
 | 2 | 2.8 | Panel read endpoint | `db:table:switchboard_actions`, `db:table:inbox`, `db:table:clips`, `db:table:portfolios`, `db:table:project_plans`, `db:table:portfolio_plans`, `db:table:portfolio_lanes`, `db:table:portfolio_slices` (all read), `db:deploy` | done (s33-x7gd, s33b-m5cq): deployed, verify_jwt off; no key 401, wrong key 401, POST 405; with the key 25 projects; switchboard2-h8r in lane Main, order 2, nothing waiting; report_unread seen true on a fresh clip. `waiting_on_alex` true not yet seen live: first at 2.9. Checkpointed by Alex; `db:deploy` released | 2026-11-01 |
-| 2 | 2.7c | One-click approve and closing the tab | — | built (s34-b9tn), tests pass; Chrome test pending. Skipping the dry run for selects not built: the runner's `/approve` requires a clean dry run, and the runner is outside this step's scope | |
+| 2 | 2.7c | One-click approve and closing the tab | — | done with one bug (s34-b9tn): checkpointed, extension 1.2.2. The dry run ran on open and Approve ran run eaf76ba0-ae0d-4620-a414-ff46b24f3d68 (succeeded, select 3), but `sql <run id>` was never posted and the tab didn't close; the page showed "Done, you can close this tab." Fixed in 2.7d. Skipping the dry run for selects dropped by Alex | 2026-11-01 |
+| 2 | 2.7d | Missed post, honest headline, plain description | `db:deploy` | built and deployed (s35-k2pe), extension 1.2.3; Chrome test pending | |
 | 2 | 2.9 | Panel: Waiting on SQL, Report unread, lane order | — | todo | |
 | 2 | 2.10 | Read-only role and query function, with secret-column grants | `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read), `db:fn:register_table`, `db:fn:set_read_settings` | todo | |
 | 2 | 2.11 | MCP read-only query tool, `get_sql_read` | `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget`, `db:deploy` | todo | |
@@ -270,9 +271,9 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: nothing
 - SQL: none
 
-**2.7d, skip the dry run for read-only SQL** (proposed in s34; estimated run: 8m). Awaiting Alex's decision. The runner's preview returns `read_only`, and `/approve` accepts a read-only action with no dry run; the page then shows Approve at once. `READ_ONLY` needs narrowing first: it lets through `select some_function()`, `select ... into`, and `explain analyze`, which can write.
+**2.7d, missed post, honest headline, plain description** (added in s35; estimated run: 15m). The extension stores clicked tabs and waiting runs and says on the page why a post can't go. A select that may write gets a "may change data" headline. `sql-queue.mjs` requires `--describe`, stored as `payload.description` and shown above the SQL. Alex tests: the steps in the s35 report.
 - create: nothing
-- update: supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs, src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx
+- update: supabase/functions/switchboard-runner/index.ts, supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs, scripts/sql-queue.mjs, scripts/lib/sql-queue.mjs, scripts/lib/sql-queue.test.mjs, src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, extension/bridge.js, extension/claude-watch.js, extension/service-worker.js, extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, extension/manifest.json, docs/technical-spec-switchboard2-h8r.md
 - delete: nothing
 - deploy: switchboard-runner
 - SQL: none
@@ -298,7 +299,7 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: mcp
 - SQL: none
 
-**2.12, skill rule and Phase 2 checklist** (estimated run: 5m). The cli-workflow skill gets the order: queue, Claude reviews, Claude issues the link (one at a time), then fetches the result. Alex tests: the Phase 2 checklist below.
+**2.12, skill rule and Phase 2 checklist** (estimated run: 5m). The cli-workflow skill gets the order: queue, Claude reviews, Claude issues the link (one at a time), then fetches the result. Claude quotes the description next to the headline and link in chat, and shows only the approve link, not a link to the action as an Alfred record. Alex tests: the Phase 2 checklist below.
 - create: nothing
 - update: .claude/skills/cli-workflow/SKILL.md
 - delete: nothing
@@ -317,14 +318,14 @@ Database items per step are in the table at the top. Report unread and lane orde
 |---|---|---|
 | 0 | Fixes, boundaries, plan guard | 8 |
 | 1 | Send link, fallback page, skill rule, tile states, estimates, layout | 10 |
-| 2 | SQL queue, read-only queries (2.2-2.12, 2.3b, 2.4b and 2.7c, after the 2.1 plan) | 14 |
+| 2 | SQL queue, read-only queries (2.2-2.12, 2.3b, 2.4b, 2.7c and 2.7d, after the 2.1 plan) | 15 |
 | 3 | Multi-repo and clients | 18 |
 | 4 | Salesforce reads | 5 |
 | 5 | Git and Salesforce by link | 6 |
 | 6 | Spec files, archiving | 2 |
 | 7 | npm start per tile | 2 |
 | 8 | Remote devices | 4 |
-| | **total** | **69** |
+| | **total** | **70** |
 
 ## Decisions
 
@@ -630,3 +631,4 @@ Database items per step are in the table at the top. Report unread and lane orde
 | s33 (2.8) | 2m35s (estimate 10m) |
 | s33b (2.8) | 1m25s (estimate 5m) |
 | s34 (2.7c) | 2m35s (estimate 8m) |
+| s35 (2.7d) | 2h02m13s (estimate 15m), of which 1h55m59s was the claim, deploy and queue phase, most likely waiting at a permission prompt |

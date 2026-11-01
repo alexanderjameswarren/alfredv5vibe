@@ -205,14 +205,49 @@ export function chatForRun(chats, run) {
   return clicked ? { chat: clicked, why: null } : chatForProject(chats, run.project);
 }
 
+/** Why "sql <run id>" can't go into this chat yet, in plain words, or null when it can. */
+export function postProblem(chat, why) {
+  if (!chat) return why ?? "no open chat was found";
+  if (chat.state === "unknown") return "the extension can't read that chat's state";
+  if (chat.state !== "finished") return "Claude is still writing in that chat";
+  if (chat.composerEmpty !== true) return "that chat's message box has text in it, or can't be read";
+  return null;
+}
+
+const CLICK_KEEP_MS = 60 * 60 * 1000;
+const SEEN_KEEP_MS = 24 * 60 * 60 * 1000;
+const fresh = (obj, keep, now) => Object.fromEntries(Object.entries(obj).filter(([, v]) => now - (v?.at ?? v) <= keep));
+const isMap = (v) => Boolean(v) && typeof v === "object" && !Array.isArray(v);
+
+/** The stored approval state, with old entries gone. Whatever was stored wrongly reads as empty. */
+export function pruneApprovals(state, now = Date.now()) {
+  return {
+    hosts: Array.isArray(state?.hosts) ? state.hosts : [],
+    clicks: fresh(isMap(state?.clicks) ? state.clicks : {}, CLICK_KEEP_MS, now),
+    runs: Array.isArray(state?.runs) ? state.runs : [],
+    seen: fresh(isMap(state?.seen) ? state.seen : {}, SEEN_KEEP_MS, now),
+  };
+}
+
+/** Injected into the approval page: one banner saying why the chat didn't get the result. Stands alone. */
+export function approveBanner(text) {
+  let el = document.querySelector("[data-alfred-post-note]");
+  if (!el) {
+    el = document.createElement("div");
+    el.setAttribute("data-alfred-post-note", "");
+    el.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:2147483647;padding:12px 16px;background:#fff;color:#111;border-top:2px solid #d97706;font:14px/1.4 sans-serif;";
+    document.body.append(el);
+  }
+  el.textContent = text;
+}
+
 /**
  * Injected into the approval page by bridge.js, so it must stand alone. Waits for
- * the run id only a real run puts on the page, and hands it over once with the
- * page's project code.
+ * the run id only a real run puts on the page, and hands it over with the page's
+ * project code. A new injection replaces the last, which an extension reload left dead.
  */
 export function approveWatcher() {
-  if (document.__alfredApproveWatch) return;
-  document.__alfredApproveWatch = true;
+  document.__alfredApproveWatch?.disconnect?.();
   const check = () => {
     const runId = document.querySelector("[data-switchboard-run-id]")?.getAttribute("data-switchboard-run-id");
     if (!runId) return false;
@@ -222,6 +257,7 @@ export function approveWatcher() {
   };
   if (check()) return;
   const observer = new MutationObserver(() => { if (check()) observer.disconnect(); });
+  document.__alfredApproveWatch = observer;
   observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-switchboard-run-id"] });
 }
 
