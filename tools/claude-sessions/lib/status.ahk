@@ -201,7 +201,7 @@ ViewOf(p) {
     ; A reply pushed with no run tag: answered, but not a step report.
     if cliIdle && promptAt != "" && p.reportTag = ""
         return {color: "orange", label: "Reply (untagged)"}
-    if cliIdle && finished && p.reportAt != "" && StrCompare(p.chatSince, p.reportAt) <= 0
+    if cliIdle && finished && ReportPending(p)
         return {color: "orange", label: "Send cli"}
     writing := p.chatState = "responding"
     if !cliIdle
@@ -211,6 +211,67 @@ ViewOf(p) {
     if !finished
         return {color: "grey", label: "chat unknown"}
     return {color: "yellow", label: "Your turn"}
+}
+
+; Is a report waiting for Claude? The endpoint's word once it has read this report: until
+; its inbox item is archived. Without a read, or for a report newer than the last one,
+; the chat not having moved on since the push. p: reportAt, chatSince, and optionally reportUnread, panelAt.
+ReportPending(p) {
+    if p.reportAt = ""
+        return false
+    if p.HasOwnProp("reportUnread") && p.reportUnread != "" && p.HasOwnProp("panelAt") && StrCompare(p.reportAt, p.panelAt) <= 0
+        return !!p.reportUnread
+    return StrCompare(p.chatSince, p.reportAt) <= 0
+}
+
+; --- The switchboard-panel endpoint (spec 8.1) ---
+
+; A setting wins, otherwise beside the clipboard's function, as sql-queue.mjs finds the queue. "" for neither.
+PanelUrl(setting, clipboardUrl) {
+    if setting != ""
+        return setting
+    return clipboardUrl ~= "/clip-capture/?$" ? RegExReplace(clipboardUrl, "/clip-capture/?$", "/switchboard-panel") : ""
+}
+
+; A parsed reply as Map(project -> {unread, sql, lane}), lane 0 for none, or "" for a reply that isn't usable.
+PanelProjects(reply) {
+    if !(reply is Map) || !reply.Get("ok", false) || !(reply.Get("projects", "") is Map)
+        return ""
+    out := Map()
+    for code, row in reply["projects"] {
+        if !(row is Map)
+            continue
+        lane := row.Get("lane_order", "")
+        out[code] := {unread: row.Get("report_unread", false) ? 1 : 0, sql: row.Get("waiting_on_alex", false) ? 1 : 0, lane: IsNumber(lane) ? lane : 0}
+    }
+    return out
+}
+
+; --- Tile taps (switchboard2-h8r 2.9) ---
+
+; A red tile that only needs acknowledging: a tap clears it and does nothing else.
+; Approve and Check CLI are not latches: they need VS Code.
+IsLatchTile(color, label) => color = "red" && label ~= "^(Wrong window|Already pasted|Outside scope|Not sent|Not delivered)"
+
+; What a tap on this colour means to Send cli: "send", "busy" (already going, ignored) or "".
+CliTapKind(color) => color = "orange" ? "send" : color = "paleorange" ? "busy" : ""
+
+; Send cli's state over an orange tile: "sending" (tapped), "sent" (until the chat replies), "blocked".
+SendCliView(v, state) {
+    if v.color != "orange" || state = ""
+        return v
+    return state = "blocked" ? {color: "orange", label: "Send cli blocked"} : {color: "paleorange", label: "Sending cli"}
+}
+
+; `did` is the extension's answer. Anything but a confirmed send is blocked.
+SendCliOutcome(did) => did == "sent" ? "sent" : "blocked"
+
+; The state on the next poll. Orange gone means it worked, or Alex dealt with it. A send
+; with nothing to show after 15 s gives way, so the tile can't stick at Sending cli.
+CliSendNext(state, isOrange, ageMs) {
+    if state = "" || !isOrange
+        return ""
+    return state != "blocked" && ageMs > 15000 ? "" : state
 }
 
 ; The centre of a window from WinGetPos, as {x, y} screen coordinates.
@@ -563,15 +624,17 @@ FenceBox(monitors) {
 ; --- Touch page state (docs\history\technical-spec-switchboard_touch-t4n.md, "Layout") ---
 
 ; Colours the page draws; everything else is grey.
-TileColor(c) => c ~= "^(red|orange|purple|yellow|green|greenrun|greenshort|overrun|tan)$" ? c : "grey"
+TileColor(c) => c ~= "^(red|orange|paleorange|purple|yellow|green|greenrun|greenshort|overrun|tan)$" ? c : "grey"
 
-; Sorted by group (0 CLI, paused ones included, 1 chats, 3 orphans), then by the
-; previous order (`prev`: id -> position), so a colour or status change never moves
-; a tile. New tiles go at the end of their group, in input order.
+; Sorted by group (0 CLI, paused ones included, 1 chats, 3 orphans), then lane order
+; (t.lane; none or 0 comes after), then the previous order (`prev`: id -> position), so a
+; colour or status change never moves a tile. New tiles go at the end, in input order.
 TileSort(tiles, prev) {
     keyed := []
-    for t in tiles
-        keyed.Push({t: t, k: Format("{}{:06}{:06}", t.group, prev.Get(t.id, 999999), A_Index)})
+    for t in tiles {
+        lane := t.HasOwnProp("lane") && t.lane ? t.lane : 999999
+        keyed.Push({t: t, k: Format("{}{:06}{:06}{:06}", t.group, lane, prev.Get(t.id, 999999), A_Index)})
+    }
     out := []
     for e in keyed {           ; insertion sort: a dozen tiles
         i := out.Length + 1

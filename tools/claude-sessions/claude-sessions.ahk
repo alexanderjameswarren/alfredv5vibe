@@ -51,6 +51,7 @@ BLINK_COLOR := "FFFFFF"
 ; Colour says which window to go to; the label says what to do there (bridge spec, section 5).
 COLORS := Map("green", "70C070", "yellow", "E8C840", "red", "E06060", "orange", "F0A040", "purple", "B48CE6"
     , "greenrun", "43A047", "greenshort", "C5E1A5", "overrun", "C5E1A5"   ; spec 7.5: greenrun blends into greenshort; the touch page adds overrun's red edge
+    , "paleorange", "FFCC80"   ; Sending cli
     , "tan", "E4D2C3", "grey", "D8D8D8", "none", "F4F4F4", "paused", PAUSED_COLOR, "closed", CLOSED_COLOR, "free", FREE_COLOR)
 DIM_COLORS := "grey|none|paused|closed|free"   ; drawn with grey text
 CHAT_ROWS_MAX := 8, CHAT_ROW_H := 36
@@ -102,6 +103,12 @@ touchSent := ""            ; the last state JSON posted to the page
 touchPlace := ""           ; TouchPlacement() the window is at now
 touchMonitors := ""        ; the monitor layout it was placed for, to notice a plug or unplug
 touchOrder := Map()        ; tile id -> position last shown, so ties keep their place
+panelKnown := Map()        ; project code -> {unread, sql, lane}, from switchboard-panel
+panelLanes := Map()        ; project code -> lane order: kept when the endpoint can't be reached
+panelAt := ""              ; ISO UTC when the last good read was asked for
+panelRequest := "", panelAsked := "", panelAskedTick := 0, panelNextTick := 0
+PANEL_POLL_MS := 15000     ; a queued item shows within this; a new report goes orange at once from its own file
+PANEL_TRUST_S := 300       ; older than this, "waiting" and "unread" are not believed
 
 ; ---------------------------------------------------------------------------
 ; Panel, taskbar and tray
@@ -158,6 +165,9 @@ lastTaskbar := -1
 Refresh()                  ; again, now the taskbar button exists
 SetTimer(Refresh, 1000)
 SetTimer(Blink, 500)
+; Only the panel itself goes to the network; test scripts feed ApplyPanelReply.
+if A_LineFile = A_ScriptFullPath
+    SetTimer(PanelTick, 1000)
 
 ; ---------------------------------------------------------------------------
 ; Sessions
@@ -257,6 +267,7 @@ NewSession(code, root) {
         misses: CLOSED_AFTER - 1, closed: false,   ; the first poll decides at once
         lastClick: lastClick, unread: false,
         sendNote: "", sendTag: "", sendAt: 0,       ; Send link: red note until tapped; tag awaiting delivery
+        baseColor: "", cliSend: "", cliSendAt: 0,   ; the colour before any tap's overlay; Send cli's state (SendCliView)
         gitDirty: true, changed: "", ahead: "",     ; git runs on the first poll
         gitWatch: GitWatchFiles(code), gitKey: "",
         paused: IniRead(SETTINGS_INI, "paused", code, 0) = 1,
@@ -357,6 +368,63 @@ CheckInterrupt(s) {
 ; ---------------------------------------------------------------------------
 ; Strips: claims, main's project, git counts, orphans
 ; ---------------------------------------------------------------------------
+
+; An environment value, or the Windows user registry for a panel started before setx. Never shown.
+UserEnv(name) {
+    if (value := EnvGet(name)) != ""
+        return value
+    try return RegRead("HKEY_CURRENT_USER\Environment", name, "")
+    return ""
+}
+
+; Each second: collect a reply if one is in, or ask again when it's time. Asynchronous, so
+; a slow network never holds up a tile. A failure keeps what was last known.
+PanelTick() {
+    global panelRequest, panelNextTick, panelAsked, panelAskedTick
+    if panelRequest != "" {
+        try {
+            if !panelRequest.WaitForResponse(0) {
+                if A_TickCount - panelAskedTick > 30000
+                    panelRequest := ""
+                return
+            }
+            if panelRequest.Status = 200
+                ApplyPanelReply(panelRequest.ResponseText, panelAsked)
+        }
+        panelRequest := ""
+        return
+    }
+    if A_TickCount < panelNextTick
+        return
+    panelNextTick := A_TickCount + PANEL_POLL_MS
+    url := PanelUrl(IniRead(SETTINGS_INI, "panel", "panelurl", ""), UserEnv("CLIPBOARD_URL"))
+    key := UserEnv("SWITCHBOARD_PANEL_KEY")
+    if url = "" || key = ""
+        return
+    try {
+        r := ComObject("WinHttp.WinHttpRequest.5.1")
+        r.Open("GET", url, true)
+        r.SetRequestHeader("x-switchboard-panel-key", key)
+        panelAsked := FormatTime(A_NowUTC, "yyyy-MM-dd'T'HH:mm:ss") "Z", panelAskedTick := A_TickCount
+        r.Send()
+        panelRequest := r
+    }
+}
+
+; `asked` is when the read was asked for: a report pushed after that isn't covered by it.
+ApplyPanelReply(text, asked) {
+    global panelKnown, panelLanes, panelAt
+    try reply := JSON.parse(text)
+    catch
+        return
+    projects := PanelProjects(reply)
+    if !IsObject(projects)
+        return
+    panelKnown := projects, panelAt := asked, panelLanes := Map()
+    for code, p in projects
+        if p.lane
+            panelLanes[code] := p.lane
+}
 
 ; Parsed only when the text changes; a failed parse is retried once, then the
 ; last good state is kept.
@@ -493,11 +561,26 @@ Arrange(s) {
     codeHwnd := FindCodeWindow(s)
     if codeHwnd
         placeWindow(codeHwnd, VS_MONITOR)
-    ; Only orange types "cli", and the extension decides from the live page (Send cli).
-    chromeHwnd := ArrangeChrome(s, !toCode, s.color = "orange" ? "sendcli" : "focus")
+    ; Only a tap on orange types "cli", decided at the tap, not from a colour a poll could have
+    ; changed by now. The extension decides from the live page, and its answer is returned.
+    answer := Map("did", "")
+    real := focusRequester
+    if s.cliSend = "sending"
+        global focusRequester := (tabId, composer := false, action := "focus") => NoteDid(answer, real(tabId, composer, action))
+    try
+        chromeHwnd := ArrangeChrome(s, !toCode, s.cliSend = "sending" ? "sendcli" : "focus")
+    finally
+        focusRequester := real
     if toCode && codeHwnd
         activateWindow(codeHwnd)
     PointTo(toCode ? codeHwnd : chromeHwnd)
+    return answer["did"]
+}
+
+NoteDid(answer, reply) {
+    if IsObject(reply)
+        answer["did"] := reply.Get("did", "")
+    return reply
 }
 
 ; Returns the Chrome window it placed, or 0.
@@ -673,16 +756,22 @@ Refresh() {
             SetPaused(s, false)
         s.kind := kind
         issued := chat ? chat.Get("issuedTag", "") : ""
+        ; Too old to believe: as if the endpoint had never answered.
+        known := panelAt != "" && IsFresh(panelAt, A_NowUTC, PANEL_TRUST_S) ? panelKnown.Get(project, "") : ""
         v := ViewOf({free: s.free, closed: s.closed, paused: s.paused, kind: kind, runTag: s.runTag
             , promptAt: s.promptAt, reportTag: s.reportTag, reportAt: s.reportAt, chatState: chat ? chat.Get("state", "") : ""
             , chatSince: chat ? chat.Get("since", "") : "", issuedTag: issued, project: project, event: s.event
-            , outsideScope: s.outsideScope})
-        if v.color != s.color {
+            , outsideScope: s.outsideScope, sqlWaiting: IsObject(known) && known.sql
+            , reportUnread: IsObject(known) ? known.unread : "", panelAt: panelAt})
+        ; Compared before any overlay: a tap's own colours must not raise an alert.
+        if v.color != s.baseColor {
             s.unseen := false
-            if ShouldAlert(s.color, v.color)
+            if ShouldAlert(s.baseColor, v.color)
                 s.unseen := true, s.flashes := 0, anyAlert := true
+            s.baseColor := v.color
         }
-        v := SendView(v, s.sendNote)
+        s.cliSend := CliSendNext(s.cliSend, v.color = "orange", A_TickCount - s.cliSendAt)
+        v := SendView(SendCliView(v, s.cliSend), s.sendNote)
         s.color := v.color, s.label := v.label, s.step := StepText(s.runTag, issued, project)
         s.tint := RunTint({color: s.color, label: s.label, runTag: s.runTag, estimateTag: s.estimateTag
             , estimate: s.estimate, elapsed: RunElapsed(s, A_NowUTC)})
@@ -896,6 +985,8 @@ ButtonClick(code, *) {
     s := sessions[code]
     s.lastClick := A_Now, s.unread := false
     IniWrite(s.lastClick, SETTINGS_INI, "lastclick", code)
+    ; Decided from what Alex saw, before anything below can change it.
+    latch := IsLatchTile(s.color, s.label), tap := CliTapKind(s.color)
     if s.state = "wrong" || s.outsideScope != ""
         ClearWrong(s)
     s.sendNote := ""
@@ -907,6 +998,26 @@ ButtonClick(code, *) {
         return
     }
     s.unseen := false
+    if latch {             ; acknowledged, and that is all, even with a report waiting underneath
+        s.outsideScope := ""
+        Paint(s)
+        return
+    }
+    if tap = "busy"
+        return
+    if tap = "send" {      ; the tile changes before anything else happens
+        s.cliSend := "sending", s.cliSendAt := A_TickCount
+        s.color := "paleorange", s.tint := "", s.label := "Sending cli"
+        Paint(s)
+        TouchSend()
+        s.cliSend := SendCliOutcome(arrangeAction(s)), s.cliSendAt := A_TickCount
+        if s.cliSend = "blocked" {
+            s.color := "orange", s.label := "Send cli blocked"
+            Paint(s)
+            TouchSend()
+        }
+        return
+    }
     Paint(s)
     arrangeAction(s)
 }
@@ -1195,6 +1306,8 @@ TouchState() {
         tiles.Push({id: "cli:" code, kind: "cli", icon: bl.icon != "" ? bl.icon : TileIcon("cli", s.hasChat), group: 0
             , color: s.paused ? "paused" : TileColor(s.tint != "" ? s.tint : s.color), name: TileName(code, mainProject), action: action
             , step: bl.step, git: bl.git, note: bl.note, blocked: bl.blocked, strip: strip
+            , lane: panelLanes.Get(ChatCode(code, mainProject), 0)
+            , outline: s.label = "Send cli blocked" ? 1 : 0, cliTap: s.paused ? "" : CliTapKind(s.color)
             , blend: s.tint = "greenrun" ? RunBlend(RunElapsed(s, nowUtc), est) : 100})
     }
     for tabId in rowTabs {

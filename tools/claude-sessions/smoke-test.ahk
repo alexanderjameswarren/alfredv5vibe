@@ -380,8 +380,100 @@ FileOpen(ms.reportMetaFile, "w", "UTF-8-RAW").Write('{"run_tag":"' T9 '","pushed
 Refresh()
 Expect("orange again", ms.color, "orange")
 actionCalls := [], composerCalls := []
-Arrange(ms)
+ms.cliSend := "sending"
+Expect("orange sends a sendcli command, reports what the page did", Arrange(ms), "")
 Expect("orange sends a sendcli command", JoinCodes(actionCalls), "sendcli|")
+ms.cliSend := ""
+
+; --- the orange tap (2.9): pale at once, then blocked, then again, then on ---------
+Refresh()
+seenDuring := [], realArrange := arrangeAction
+arrangeAction := (t) => (seenDuring.Push(TileField("cli:main", "color") " / " TileField("cli:main", "action")), "focused")
+ButtonClick("main")
+Expect("tap: pale before anything else", JoinCodes(seenDuring), "paleorange / Sending cli|")
+Refresh()
+Expect("tap: blocked is orange", ms.color " / " ms.label, "orange / Send cli blocked")
+Expect("tap: blocked tile is outlined", TileField("cli:main", "outline") " " TileField("cli:main", "color") " " TileField("cli:main", "cliTap"), "1 orange send")
+Expect("tap: going blocked does not flash", ms.unseen, false)
+arrangeAction := (t) => "sent"
+ButtonClick("main")
+Refresh()
+Expect("tap: a blocked tile tries again", ms.color " / " ms.label, "paleorange / Sending cli")
+Expect("tap: sending is not outlined, and takes no second tap", TileField("cli:main", "outline") " " TileField("cli:main", "cliTap"), "0 busy")
+secondTap := []
+arrangeAction := (t) => (secondTap.Push(t.code), "sent")
+ButtonClick("main")
+Expect("tap: a second tap does nothing", secondTap.Length, 0)
+WriteChats("https://claude.ai/chat/abc-1|responding|0|" T9 "|1|1|abc")
+Refresh()
+Expect("tap: on to Claude writing", ms.color " / " ms.label " / " ms.cliSend, "green / Claude writing / ")
+arrangeAction := realArrange
+WriteChats("https://claude.ai/chat/abc-1|finished|0|" T9 "|1|1|abc")
+Refresh()
+
+; The real Arrange takes the outcome from the extension's reply.
+focusReply := Map("ok", true, "windowTitle", "abc chat - Claude", "did", "sent")
+ms.cliSend := "sending"
+Expect("arrange returns sent", Arrange(ms), "sent")
+focusReply := Map("ok", true, "windowTitle", "abc chat - Claude", "did", "focused")
+Expect("arrange returns focused", Arrange(ms), "focused")
+ms.cliSend := ""
+focusReply := Map("ok", true, "windowTitle", "abc chat - Claude")
+
+; --- the panel endpoint ---------------------------------------------------------
+PanelReply(fields) => '{"ok":true,"projects":{"rem-j7p":{' fields '}}}'
+ApplyPanelReply(PanelReply('"report_unread":false,"waiting_on_alex":true,"lane":"Main","lane_order":2'), IsoAgo(0))
+Refresh()
+Expect("waiting on Alex: tan", ms.color " / " ms.label, "tan / Waiting on SQL")
+Expect("waiting on Alex: tan tile", TileField("cli:main", "color") " / " TileField("cli:main", "action"), "tan / Waiting on SQL")
+Expect("lane on the tile", TileField("cli:main", "lane"), 2)
+ApplyPanelReply(PanelReply('"report_unread":true,"waiting_on_alex":false,"lane":null,"lane_order":null'), IsoAgo(0))
+WriteChats("https://claude.ai/chat/abc-1|finished|0|" T9 "|1|1|abc")
+Refresh()
+Expect("unread: orange", ms.color " / " ms.label, "orange / Send cli")
+Expect("null lane is none", TileField("cli:main", "lane"), 0)
+ApplyPanelReply(PanelReply('"report_unread":false,"waiting_on_alex":false,"lane":"Main","lane_order":2'), IsoAgo(0))
+Refresh()
+Expect("archived: clears", ms.color " / " ms.label, "yellow / Your turn")
+Expect("lane back", TileField("cli:main", "lane"), 2)
+ApplyPanelReply("not json", IsoAgo(0))
+ApplyPanelReply('{"ok":false,"error":"unauthorized"}', IsoAgo(0))
+Refresh()
+Expect("a bad reply keeps the lanes", TileField("cli:main", "lane"), 2)
+; Old news is not trusted for what's waiting; the lanes are only an order, so they stay.
+ApplyPanelReply(PanelReply('"report_unread":true,"waiting_on_alex":true,"lane":"Main","lane_order":2'), IsoAgo(400))
+Refresh()
+Expect("a stale read: no tan", ms.color != "tan", true)
+Expect("a stale read: lanes stay", TileField("cli:main", "lane"), 2)
+panelKnown := Map(), panelAt := "", panelLanes := Map()
+Refresh()
+page := FileRead(PANEL_DIR "\ui\switchboard.html", "UTF-8")
+Expect("page draws pale orange, black text", InStr(page, ".t-paleorange{background:#FFCC80;color:#000}") > 0, true)
+Expect("page outlines a blocked tile", InStr(page, ".tile.sendblocked") > 0, true)
+Expect("page goes pale on the tap itself", InStr(page, 'cliTap === "send"') > 0, true)
+
+; --- a red latch: a tap only clears it, even with a report waiting ------------------
+FileOpen(statusPath, "w", "UTF-8-RAW").Write('{"state":"waiting","since":"' IsoAgo(1) '","project":"main","red":false,"run_tag":"' T9 '","outside_scope":"undeclared update: a.js"}')
+FileOpen(ms.reportMetaFile, "w", "UTF-8-RAW").Write('{"run_tag":"' T9 '","pushed_at":"' IsoAgo(0) '"}')
+WriteChats("https://claude.ai/chat/abc-1|finished|0|" T9 "|1|1|abc")
+Refresh()
+Expect("latch over a waiting report", ms.color " / " ms.label, "red / Outside scope")
+arranged := [], actionCalls := []
+ButtonClick("main")
+Expect("latch tap arranges nothing", arranged.Length, 0)
+Expect("latch tap types nothing", actionCalls.Length, 0)
+Expect("latch tap leaves no send", ms.cliSend, "")
+Step("waiting", IsoAgo(1), false, T9)
+FileOpen(ms.reportMetaFile, "w", "UTF-8-RAW").Write('{"run_tag":"' T9 '","pushed_at":"' IsoAgo(0) '"}')
+Refresh()
+; Not a latch: Check CLI and Approve still go to VS Code.
+Step("approval", IsoAgo(1), true, T9)
+arranged := []
+ButtonClick("main")
+Expect("Approve still arranges", JoinCodes(arranged), "main|")
+Step("waiting", IsoAgo(1), false, T9)
+Refresh()
+actionCalls := [], composerCalls := []
 WriteChats("https://claude.ai/chat/abc-1|finished|0|" "rem-j7p-s10-bbbb" "|1|1|abc")
 FileOpen(ms.reportMetaFile, "w", "UTF-8-RAW").Write('{"run_tag":"' T9 '","pushed_at":"' IsoAgo(30) '"}')
 Refresh()
