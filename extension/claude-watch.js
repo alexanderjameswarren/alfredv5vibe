@@ -13,6 +13,11 @@
 // bridge.js the CLI prompt in that link's own reply: the lines from its
 // "Run tag:"/"Window:" header to its closing "Run tag:" line, nothing around them.
 //
+// It also types one line into the chat when bridge.js asks (switchboard2-h8r 2.7):
+// "sql <run id>", after a real run, only when the chat is idle and its box empty.
+// And when Alex clicks an /approve/ link on a listed host, it tells bridge.js that
+// link's address, so the line comes back to this tab. The link still opens as usual.
+//
 // A classic script, not a module: content scripts cannot be modules. Node loads
 // it for the tests, where `chrome` is missing and only the pure core registers.
 
@@ -161,6 +166,27 @@
     return true;
   }
 
+  /** An approval link's token, or null. Same rule as lib/bridge-core.js approveTokenOf; the tests hold them equal. */
+  function approveTokenOf(href, hosts) {
+    let u;
+    try {
+      u = new URL(String(href));
+    } catch {
+      return null;
+    }
+    if (u.protocol !== "https:" || !hosts.includes(u.host.toLowerCase())) return null;
+    return /^\/approve\/([^/]+)\/?$/.exec(u.pathname)?.[1] ?? null;
+  }
+
+  /** Capture-phase click: note a listed approval link and let it open as usual. True if it was one. */
+  function onApproveClick(event, hosts, handle) {
+    if (event.button > 1) return false;
+    const anchor = event.target?.closest?.("a[href]");
+    if (!anchor || !approveTokenOf(anchor.href, hosts)) return false;
+    handle(anchor.href);
+    return true;
+  }
+
   /** Put the cursor at the end of the message box. Types nothing, reads nothing. True if found. */
   function focusComposer(root) {
     const el = root.querySelector(SELECTORS.composer);
@@ -209,12 +235,34 @@
     return "typed";
   }
 
+  /**
+   * The approval result: type `text` and press send, only if the chat is idle and its
+   * box empty. Otherwise touches nothing and resolves to "busy". Else "sent" or "typed".
+   */
+  async function postLine(root, text) {
+    const q = (s) => root.querySelector(s);
+    const box = q(SELECTORS.composer);
+    const state = decideState({ composer: !!box, stop: !!q(SELECTORS.stop), send: !!q(SELECTORS.send), streaming: !!q(SELECTORS.streaming) });
+    if (state !== "finished" || !box || box.innerText.trim() !== "") return "busy";
+    focusComposer(root);
+    root.execCommand("insertText", false, text);
+    for (let i = 0; i < 30; i++) {
+      const button = q(SELECTORS.send);
+      if (button && !button.disabled) {
+        button.click();
+        return "sent";
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return "typed";
+  }
+
   const isChatPath = (pathname) => /^\/chat\/[^/]+/.test(pathname);
   const normalise = (url) => String(url).split(/[?#]/)[0];
 
   globalThis.__alfredWatchCore = {
     decideState, extractTag, extractPrompt, isChatPath, latestMessage, readTag, readPrompt, readPromptIn, sendTagOf,
-    promptForLink, onLinkClick, focusComposer, cliPlan, sendCli, SELECTORS,
+    promptForLink, onLinkClick, approveTokenOf, onApproveClick, focusComposer, cliPlan, sendCli, postLine, SELECTORS,
   };
   if (typeof chrome === "undefined" || !chrome.runtime?.id || typeof document === "undefined") return;
 
@@ -312,9 +360,17 @@
       stop();
     }
   };
+  const noteApprove = (href) => {
+    try {
+      chrome.runtime.sendMessage({ type: "approve-click", href }).catch(() => {});
+    } catch {
+      stop();
+    }
+  };
   // Says why a /send/ link was let through, since that only shows in Chrome.
   const onClick = (e) => {
     if (onLinkClick(e, linkHosts, sendLink)) return;
+    if (onApproveClick(e, linkHosts, noteApprove)) return;
     const a = e.target?.closest?.("a[href]");
     if (a && /\/send\//.test(a.href)) say("Send link not caught:", a.href, linkHosts.length ? `host not in [${linkHosts}]` : "no link hosts from the bridge");
   };
@@ -327,6 +383,7 @@
     chrome.runtime.sendMessage({ type: "link-hosts?" }).then((r) => { if (Array.isArray(r?.hosts)) setHosts(r.hosts); }, () => {});
   } catch { /* old context */ }
 
+  const postedLines = new Set();
   const onNudge = (msg, _sender, reply) => {
     if (msg?.type === "watch-recheck") onAddress(), schedule(0);
     if (msg?.type === "focus-composer") focusComposer(document);
@@ -339,6 +396,15 @@
     if (msg?.type === "send-cli") {
       sendCli(document).then((did) => reply({ did }), () => reply({ did: "focused" }));
       return true;    // answers asynchronously
+    }
+    if (msg?.type === "post-line" && /^sql [0-9a-f-]{36}$/i.test(String(msg.text))) {
+      // A reply lost on the way back must not post it twice.
+      if (postedLines.has(msg.text)) return reply({ did: "sent" }), false;
+      postLine(document, msg.text).then((did) => {
+        if (did !== "busy") postedLines.add(msg.text);
+        reply({ did });
+      }, () => reply({ did: "busy" }));
+      return true;
     }
     return false;
   };

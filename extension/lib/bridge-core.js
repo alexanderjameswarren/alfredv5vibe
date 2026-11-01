@@ -133,6 +133,95 @@ export function promptFrame(id, tag, prompt, error) {
   return error ? { type: "prompt", id, tag, error } : { type: "prompt", id, tag, text: prompt.text };
 }
 
+// ---------------------------------------------------------------------------
+// The approval result (switchboard2-h8r 2.7, spec 8.1)
+// ---------------------------------------------------------------------------
+
+const RUN_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PROJECT_SHAPE = /^[a-z0-9_-]{1,40}$/;
+export const RUN_POST_MS = 10 * 60 * 1000;
+
+/**
+ * The token of an approval link: https, a host exactly in `hosts`, path /approve/<token>.
+ * Null otherwise. claude-watch.js has a copy (it cannot import); the tests hold them equal.
+ */
+export function approveTokenOf(href, hosts) {
+  let u;
+  try {
+    u = new URL(String(href));
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:" || !hosts.includes(u.host.toLowerCase())) return null;
+  return /^\/approve\/([^/]+)\/?$/.exec(u.pathname)?.[1] ?? null;
+}
+
+export const isApprovePage = (href, hosts) => approveTokenOf(href, hosts) !== null;
+
+export const GRANT_BADGE = "SITE";
+
+/** The Chrome match patterns for listed hosts. A pattern needs no port to cover one. */
+export function hostOrigins(hosts) {
+  return hosts.map((h) => `https://${h.split(":")[0]}/*`);
+}
+
+/** What the toolbar icon says while a listed host is not allowed, or null. */
+export function grantNotice(missing) {
+  if (!missing.length) return null;
+  return {
+    badge: GRANT_BADGE,
+    title: `Alfred's Clipboard can't read ${missing.join(", ")}, so approval results won't reach the chat. ` +
+      `Right-click this icon, choose "Allow Alfred's sites", then reload the approval page.`,
+  };
+}
+
+/** Only a well-formed run id and project from a page's message go any further. */
+export function cleanRun(msg) {
+  return RUN_ID_SHAPE.test(msg?.runId ?? "") && PROJECT_SHAPE.test(msg?.project ?? "") ? { runId: msg.runId, project: msg.project } : null;
+}
+
+/**
+ * The one open chat for a project: { chat, why }. The chat whose latest reply issued
+ * the project's run tag comes first, then the title, as the panel's mapping does.
+ * More than one match posts nothing rather than guess.
+ */
+export function chatForProject(chats, project) {
+  const issued = chats.filter((c) => projectOfTag(c.issuedTag) === project);
+  const code = new RegExp(`(^|[^a-z0-9_-])${project.replace(/[^a-z0-9_-]/g, "")}($|[^a-z0-9_-])`, "i");
+  const found = issued.length ? issued : chats.filter((c) => code.test(c.title ?? ""));
+  if (found.length === 1) return { chat: found[0], why: null };
+  return { chat: null, why: found.length ? `${found.length} chats match ${project}` : `no open chat for ${project}` };
+}
+
+/**
+ * The chat for a run: the tab its link was clicked in, while that tab still shows the
+ * same chat. Links opened elsewhere (the phone) fall back to chatForProject.
+ */
+export function chatForRun(chats, run) {
+  const clicked = run.from && chats.find((c) => c.tabId === run.from.tabId && c.url === run.from.url);
+  return clicked ? { chat: clicked, why: null } : chatForProject(chats, run.project);
+}
+
+/**
+ * Injected into the approval page by bridge.js, so it must stand alone. Waits for
+ * the run id only a real run puts on the page, and hands it over once with the
+ * page's project code.
+ */
+export function approveWatcher() {
+  if (document.__alfredApproveWatch) return;
+  document.__alfredApproveWatch = true;
+  const check = () => {
+    const runId = document.querySelector("[data-switchboard-run-id]")?.getAttribute("data-switchboard-run-id");
+    if (!runId) return false;
+    const project = document.querySelector("[data-switchboard-project]")?.getAttribute("data-switchboard-project");
+    chrome.runtime.sendMessage({ type: "approve-run", runId, project }).catch(() => {});
+    return true;
+  };
+  if (check()) return;
+  const observer = new MutationObserver(() => { if (check()) observer.disconnect(); });
+  observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-switchboard-run-id"] });
+}
+
 /** Next reconnect delay: 1 s, doubling, capped at 60 s. */
 export const nextDelay = (prev) => (prev ? Math.min(prev * 2, MAX_RETRY_MS) : FIRST_RETRY_MS);
 

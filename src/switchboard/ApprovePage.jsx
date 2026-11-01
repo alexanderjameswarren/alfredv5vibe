@@ -4,7 +4,7 @@ import { supabase, supabaseUrl, supabaseAnonKey } from '../supabaseClient';
 
 // Where a Switchboard approval link lands (spec §8.1). The runner decides everything;
 // this page shows the SQL, then a dry run, then Approve. Only a real run puts its id on
-// the page, as data-switchboard-run-id, for the extension to read.
+// the page, as data-switchboard-run-id; the extension reads that and data-switchboard-project.
 
 const BUTTON = 'w-full sm:w-auto px-4 py-3 rounded-lg bg-primary text-white font-medium disabled:opacity-50';
 const SECOND_BUTTON = 'w-full sm:w-auto px-4 py-3 rounded-lg border border-primary text-dark font-medium disabled:opacity-50';
@@ -46,8 +46,8 @@ function RunResult({ title, summary, conformance, runId }) {
     <div className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm" {...(runId ? { 'data-switchboard-run-id': runId } : {})}>
       <p className="font-medium text-dark mb-1">{title}</p>
       <p className="text-dark break-words">{summary}</p>
-      {conformance && <p className="text-muted mt-2 break-words">{conformance}</p>}
-      {runId && <p className="text-muted mt-2 font-mono break-all">Run {runId}</p>}
+      {conformance && <p className="text-dark mt-2 break-words">{conformance}</p>}
+      {runId && <p className="text-dark mt-2 font-mono break-all">Run {runId}</p>}
     </div>
   );
 }
@@ -136,8 +136,8 @@ export default function ApprovePage() {
   return (
     <Shell>
       <p className="font-bold text-dark mb-2 break-words">{preview.headline}</p>
-      <p className="text-sm text-muted">Project</p>
-      <p className="font-mono text-dark mb-4 break-all">{preview.project_code}</p>
+      <p className="text-sm text-dark">Project</p>
+      <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code}>{preview.project_code}</p>
       <pre data-testid="approve-sql" className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark whitespace-pre-wrap break-words">
         {preview.sql}
       </pre>

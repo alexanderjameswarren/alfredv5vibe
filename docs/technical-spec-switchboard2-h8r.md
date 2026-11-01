@@ -24,7 +24,7 @@ Plan: run tag `switchboard2-h8r-s1-q7m3`; decisions: `-s2-n4vd` and `-s3-w8ke`.
 5. **Every run is logged.** Each SQL write, read query, Salesforce read, git action and deploy gets a `switchboard_runs` row.
 6. **Every prompt declares its scope.** Each prompt carries a scope block, and the plan guard enforces it (§6.2).
 7. **Clicks.** An action runs without a click only if it touches nothing but its own thread's worktree and claimed files (§11.1). Anything that touches main always needs a click and is never automatic. Every click page leads with one plain line in capitals saying what happens (§8.1).
-8. **Alfred's address is a setting.** The extension and the panel recognise an Alfred link by its path (`/send/<run tag>`, and Phase 2's approval paths) on any host in a list kept in Switchboard's settings, never in code. Today the list is `alfredv5vibe.vercel.app`. A move to another domain adds a host, and old hosts stay listed so old links keep working. The cli-workflow skill writes links from one base-address line.
+8. **Alfred's address is a setting.** The extension and the panel recognise an Alfred link by its path (`/send/<run tag>`, and Phase 2's approval paths) on any host in a list kept in Switchboard's settings, never in code. Today the list is `alfredv5vibe.vercel.app`. A move to another domain adds a host, and old hosts stay listed so old links keep working. The manifest names no Alfred host: Alex allows the listed hosts once, from "Allow Alfred's sites" on the toolbar icon's right-click menu, and the icon says so while one isn't allowed. The cli-workflow skill writes links from one base-address line.
 
 ## 3. Phase order and dependencies
 
@@ -313,7 +313,7 @@ Tiles are designed for at most 6 projects, not 9.
 ### 8.1 Queue, links and click pages
 
 **Tables.**
-- `switchboard_actions`: one queue for every kind of action (`sql`, `git`, `sf_deploy`, `sf_test`, `sf_read_prod_data`, `docs`). Columns: `id`, `kind`, `project_code`, `chat_url`, `payload`, `fingerprint` (sha256 of the normalised payload), `status`, `link_hash`, `link_expires_at`, `link_used_at`, `created_by`, `needs_click`, `headline`.
+- `switchboard_actions`: one queue for every kind of action (`sql`, `git`, `sf_deploy`, `sf_test`, `sf_read_prod_data`, `docs`). Columns: `id`, `kind`, `project_code`, `payload`, `fingerprint` (sha256 of the normalised payload), `status`, `link_hash`, `link_expires_at`, `link_used_at`, `created_by`, `needs_click`, `headline`.
 - `switchboard_runs`: one row per dry run or real run. Columns: `action_id`, `mode`, `summary`, `result`, `result_pruned_at`, `started_at`, `finished_at`.
 
 Both tables have row-level security: Alex's user only. Neither gets any anon grant.
@@ -322,14 +322,10 @@ Both tables have row-level security: Alex's user only. Neither gets any anon gra
 1. **Queue.** The CLI queues SQL with its own key, which can only insert `kind = 'sql'` rows.
 2. **Review.** Claude reviews the SQL in the chat.
 3. **Issue.** Claude calls `issue_switchboard_link(action_id)`. It returns a URL with a random token, stores only the token's hash, binds the link to the fingerprint, and expires it in 30 minutes. The URL's base address is a server setting, never code. The extension and the panel recognise it by path on the hosts in the same list as the Send links (§2, rule 8).
-4. **Click.** Alex clicks in the same chat tab, and the extension checks two things:
-   - the tab's address equals `chat_url`. Switchboard records that address when it maps the run tag to the chat.
-   - as a second check, the tab's title contains the project code.
-
-   If either check fails, nothing runs.
+4. **Click.** Alex clicks in the chat tab. The extension remembers that tab for the link's token, and the link opens as usual. A link opened elsewhere, such as on the phone, has no remembered tab: the result then goes to the one chat whose latest reply issued the project's run tag, or else the one whose title contains the project code, and two matches post nothing. `chat_url` is dropped: the extension can't write it, and Alex's login plus the single-use link are what keep the SQL safe.
 5. **Approve page.** It requires Alex's Alfred login. It shows the headline, the SQL, and a **Dry run** button. A dry run runs the SQL in a transaction, reports what would change ("deletes 3 rows from wb_rules"), and rolls back. **Approve** runs it for real.
 6. **Consume.** The link is single-use, consumed with an atomic `update ... where link_used_at is null and fingerprint = $1`.
-7. **Result.** The extension posts `sql <run id>` into the same tab once the chat is idle. Claude fetches the result with `get_switchboard_run`. Approving from the phone just opens the Alfred page.
+7. **Result.** The extension reads the run id and project from the page's data attributes (`data-switchboard-run-id`, `data-switchboard-project`) and posts `sql <run id>` into the remembered tab once the chat is idle. Claude fetches the result with `get_switchboard_run`. Approving from the phone just opens the Alfred page.
 
 **Headlines.** Every click page leads with one plain line in capitals, saying what happens. The headline is built by the server from the action's kind and payload, never written by Claude. Examples:
 - `THIS CHANGES THE LIVE ALFRED DATABASE: DELETES ROWS FROM WB_RULES`
@@ -482,7 +478,7 @@ Each tile gets a fixed port from `projects.json`. "Start" runs `npm start` in th
 |---|---|
 | Link leaked or replayed | single use, 30 minutes, token stored only as a hash, bound to the fingerprint, Alfred login required |
 | SQL changed after review | fingerprint check at consume time |
-| Wrong chat | `chat_url` match, then a title check |
+| Wrong chat | The tab the link was clicked in, else one matching chat (§8.1) |
 | A step does more than declared | the plan guard (§6.2), plus the scope-versus-changes section in the report |
 | Claude loosens its own limits | the installed copy and config are protected; `sb` mutations are blocked |
 | Click page misleads | the headline is written by the server from the payload, never by Claude |

@@ -43,8 +43,8 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 2 | 2.4 | Runner function and CLI queue | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_consume_link`, `db:deploy` | done (s28-w2bv, s28b-k5fd, s28c-n8jx): deployed, verify_jwt off, `/queue` smoke-tested; run routes first exercised at 2.6 | 2026-10-31 |
 | 2 | 2.4b | `deployTargets` skips flag values and stops at redirects | — | done (s29-c6mt) | 2026-10-31 |
 | 2 | 2.5 | MCP tools: issue a link, get a run | `db:fn:switchboard_issue_link`, `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` | deployed (s30-p4zr), CONFORMANT (97 tables); neither tool has run live yet: first calls from claude.ai | 2026-11-01 |
-| 2 | 2.6 | Approve page | — | built (s31-v8ke), tests pass; end-to-end test against the live runner pending; run id is `data-switchboard-run-id`, real runs only | 2026-11-01 |
-| 2 | 2.7 | Extension: approval link and result | — | todo | |
+| 2 | 2.6 | Approve page | — | done (s31-v8ke): end-to-end on the live app. Claude read action 26f0cc8f-6ef0-4f14-81da-a915ad086e5b and issued the link (second link refused); Alex dry-ran and approved; run b9a740a5-53e3-409f-a503-122ec57e310a succeeded with one row; reload showed "already been used"; get_switchboard_run by run id shows succeeded. Run id is `data-switchboard-run-id`, real runs only | 2026-11-01 |
+| 2 | 2.7 | Extension: approval link and result | — | built (s32-j3ya, s32b-q6hu), tests pass; end-to-end test pending. Alex dropped `chat_url` from the spec; the clicked tab gets the result, hosts are allowed at run time (1.2.1) | 2026-11-01 |
 | 2 | 2.8 | Panel read endpoint | `db:table:switchboard_actions`, `db:table:inbox`, `db:table:project_plans`, `db:table:portfolio_plans`, `db:table:portfolio_lanes`, `db:table:portfolio_slices` (all read), `db:deploy` | todo | |
 | 2 | 2.9 | Panel: Waiting on SQL, Report unread, lane order | — | todo | |
 | 2 | 2.10 | Read-only role and query function, with secret-column grants | `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read), `db:fn:register_table`, `db:fn:set_read_settings` | todo | |
@@ -248,7 +248,7 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: nothing
 - SQL: none
 
-**2.7, extension: approval link and result** (estimated run: 12m). Recognises `/approve/` on the listed hosts. It goes ahead only if the tab address equals `chat_url` and the title contains the project code. It reads the run id from the approve page's data attribute and posts `sql <run id>` into that tab once the chat is idle. Alex tests: approve from the right chat (posted); from another tab (refused).
+**2.7, extension: approval link and result** (estimated run: 12m). Recognises `/approve/` on the listed hosts and remembers the tab the link was clicked in. It reads the run id and project from the approve page's data attributes and posts `sql <run id>` into that tab once the chat is idle; a link opened elsewhere falls back to one matching chat. Alex tests: approve from the chat (posted there).
 - create: nothing
 - update: extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, extension/bridge.js, extension/claude-watch.js, extension/lib/config.js, tools/claude-sessions/bridge/host.mjs, tools/claude-sessions/bridge/host.test.mjs
 - delete: nothing
@@ -262,7 +262,7 @@ Every report ends with the next step's block, copied from here. The progress fil
 - deploy: switchboard-panel
 - SQL: none
 
-**2.9, panel: Waiting on SQL, Report unread, lane order** (estimated run: 8m). The panel polls the endpoint and caches the lanes; an unknown lane sorts last. Alex tests: a queued item shows tan; archiving the report clears orange; tiles follow his lanes.
+**2.9, panel: Waiting on SQL, Report unread, lane order** (estimated run: 8m). The panel polls the endpoint and caches the lanes; an unknown lane sorts last. Alex tests: a queued item shows tan; archiving the report clears orange; tiles follow his lanes. Also: a tap on a red latch tile (such as Outside scope) only clears the latch, even if a report is waiting underneath. In s32's session a tap on a red Outside scope tile typed "cli" instead.
 - create: nothing
 - update: tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/lib/status.ahk, tools/claude-sessions/test-status.ahk, tools/claude-sessions/smoke-test.ahk, tools/claude-sessions/INTERFACES.md
 - delete: nothing
@@ -315,7 +315,7 @@ Database items per step are in the table at the top. Report unread and lane orde
 
 - **s28, on the runner (Alex approved):** one run at a time with several queued; a script's outer begin and commit dropped, other transaction control refused; one command per send; `/preview`; an index on a table the same script creates is not slow; run routes open to any origin, with access by JWT. Smoke-test action 26f0cc8f-6ef0-4f14-81da-a915ad086e5b (`select 1`) stays queued; nothing runs it without a link. `scripts/sql-queue.mjs` uses `process.exitCode`, because `process.exit` straight after an HTTPS fetch exits 127 on Windows; a plain-HTTP test does not reproduce that, so it was checked by hand over HTTPS.
 - **s27, the `.clip` gap closed:** `foreignPath` no longer exempts `.clip/` in another checkout, so the claims guard refuses main's. A sibling worktree's was already refused there, because its path is not exempt from main's root. The plan guard now uses `foreignPath` for edits and shell writes and refuses "writes into another checkout". `.git/` and the other exempt folders in main stay as they were. Other threads get this once they sync.
-- **s26b, on the 2.3 schema (Alex approved):** read-only grants on `switchboard_actions` and `switchboard_runs`; a trigger that fixes payload, fingerprint, kind and headline; no audit on `switchboard_runs`, so results do not outlive the prune; `link_hash` a secret column. The numbered file is `189_switchboard_queue.sql`, the name in Alex's scope, not the `189_queue.sql` that `number-migration` suggested. Open for 2.7: nothing writes `chat_url` yet.
+- **s26b, on the 2.3 schema (Alex approved):** read-only grants on `switchboard_actions` and `switchboard_runs`; a trigger that fixes payload, fingerprint, kind and headline; no audit on `switchboard_runs`, so results do not outlive the prune; `link_hash` a secret column. The numbered file is `189_switchboard_queue.sql`, the name in Alex's scope, not the `189_queue.sql` that `number-migration` suggested. Decided in s32b: nothing writes `chat_url`; the column stays, empty and unused, since this step has no SQL.
 - **s25, on the Phase 2 plan (Alex):**
   - **Row-level security:** Claude's read-only queries run through a guarded function that runs as `claude_reader` and answers only for Alex's user. Step 2.10 starts with a small test of this before the real work.
   - **Secret columns, approved:** blocked for `claude_reader` with column-level grants built from `platform_read_settings()`, plus a helper that re-applies them when the list changes. This touches the platform layer, and Alex has approved that.
@@ -610,3 +610,5 @@ Database items per step are in the table at the top. Report unread and lane orde
 | s29 (2.4b) | 0m39s (estimate 4m) |
 | s30 (2.5) | 3m15s (estimate 8m) |
 | s31 (2.6) | 1m58s (estimate 10m) |
+| s32 (2.7) | 3m15s (estimate 12m) |
+| s32b (2.7) | 4m05s (estimate 10m) |
