@@ -442,6 +442,12 @@ function installContextMenu() {
         id: "clip-full-page",
         title: "Clip full page (shows Chrome's debugging bar)",
         contexts: ["action"],
+      }, () => { void chrome.runtime.lastError; });
+      // bridge.js answers this one: Chrome only lets it ask for sites during a click.
+      chrome.contextMenus.create({
+        id: "allow-alfred-sites",
+        title: "Allow Alfred's sites",
+        contexts: ["action"],
       }, () => { void chrome.runtime.lastError; done(); });
     });
   }));

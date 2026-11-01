@@ -1,9 +1,10 @@
 // Run: node extension/lib/bridge-core.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
-  buildChatsMessage, buildTabsMessage, checkPrompt, cleanHosts, debounce, focusResult, isHostMissing, nextDelay, normaliseUrl,
-  pickTab, projectOfTag, promptFrame, sendTagOf,
+  approveTokenOf, approveWatcher, buildChatsMessage, buildTabsMessage, checkPrompt, chatForProject, chatForRun, cleanHosts, cleanRun, debounce, focusResult,
+  GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, isHostMissing, nextDelay, normaliseUrl, pickTab, projectOfTag, promptFrame, sendTagOf,
 } from "./bridge-core.js";
 import "../claude-watch.js";
 
@@ -238,6 +239,169 @@ test("send link: a listed link's click is stopped before navigation; others are 
   };
   assert.deepEqual(fire(listed), { prevented: true, seen: ["sb-h8r-s13-q2vx"] });
   assert.deepEqual(fire(unlisted), { prevented: false, seen: [] });
+});
+
+const RUN = "b9a740a5-53e3-409f-a503-122ec57e310a";
+
+test("approve page: https, a listed host, /approve/<token>", () => {
+  const hosts = ["alfredv5vibe.vercel.app"];
+  assert.equal(isApprovePage("https://alfredv5vibe.vercel.app/approve/abc123", hosts), true);
+  assert.equal(isApprovePage("https://alfredv5vibe.vercel.app/approve/abc123?code=x", hosts), true);
+  assert.equal(isApprovePage("https://evil.example/approve/abc123", hosts), false);
+  assert.equal(isApprovePage("http://alfredv5vibe.vercel.app/approve/abc123", hosts), false);
+  assert.equal(isApprovePage("https://alfredv5vibe.vercel.app/approve/", hosts), false);
+  assert.equal(isApprovePage("https://alfredv5vibe.vercel.app/send/abc123", hosts), false);
+  assert.equal(isApprovePage("nope", hosts), false);
+});
+
+test("approve link: the token, by the same rule in the bridge and the watcher", () => {
+  const hosts = ["alfredv5vibe.vercel.app"];
+  const { approveTokenOf: watchTokenOf } = globalThis.__alfredWatchCore;
+  const cases = [
+    ["https://alfredv5vibe.vercel.app/approve/abc123", "abc123"],
+    ["https://ALFREDV5VIBE.vercel.app/approve/abc123/?code=x#y", "abc123"],
+    ["https://evil.example/approve/abc123", null],
+    ["http://alfredv5vibe.vercel.app/approve/abc123", null],
+    ["https://alfredv5vibe.vercel.app/approve/", null],
+    ["https://alfredv5vibe.vercel.app/send/abc123", null],
+    ["nope", null],
+  ];
+  for (const [href, want] of cases) {
+    assert.equal(approveTokenOf(href, hosts), want, href);
+    assert.equal(watchTokenOf(href, hosts), want, `watcher: ${href}`);
+  }
+});
+
+test("approve link: a click is noted and still opens normally", async (t) => {
+  const { onApproveClick } = globalThis.__alfredWatchCore;
+  const w = await dom(t, `<a id="a" href="https://alfredv5vibe.vercel.app/approve/abc123">Approve</a><a id="b" href="https://evil.example/approve/abc123">No</a>`);
+  if (!w) return;
+  const seen = [];
+  w.document.addEventListener("click", (e) => onApproveClick(e, ["alfredv5vibe.vercel.app"], (href) => seen.push(href)), true);
+  for (const id of ["a", "b"]) {
+    const ev = new w.MouseEvent("click", { bubbles: true, cancelable: true });
+    w.document.getElementById(id).dispatchEvent(ev);
+    assert.equal(ev.defaultPrevented, false);
+  }
+  assert.deepEqual(seen, ["https://alfredv5vibe.vercel.app/approve/abc123"]);
+});
+
+test("chatForRun: the clicked tab wins while it shows the same chat; else the matching", () => {
+  const clicked = { tabId: 7, url: "https://claude.ai/chat/one", title: "Untitled", issuedTag: null };
+  const titled = { tabId: 8, url: "https://claude.ai/chat/two", title: "switchboard2-h8r - Claude", issuedTag: null };
+  const from = { tabId: 7, url: "https://claude.ai/chat/one" };
+  assert.equal(chatForRun([clicked, titled], { project: "switchboard2-h8r", from }).chat.tabId, 7);
+  // Two title matches would post nothing, but a click still knows its tab.
+  const twin = { ...titled, tabId: 9 };
+  assert.equal(chatForRun([clicked, titled, twin], { project: "switchboard2-h8r", from }).chat.tabId, 7);
+  // No click (the phone), the tab gone, or the tab moved to another chat: the matching.
+  assert.equal(chatForRun([clicked, titled], { project: "switchboard2-h8r" }).chat.tabId, 8);
+  assert.equal(chatForRun([titled], { project: "switchboard2-h8r", from }).chat.tabId, 8);
+  const moved = { ...clicked, url: "https://claude.ai/chat/other" };
+  assert.equal(chatForRun([moved, titled], { project: "switchboard2-h8r", from }).chat.tabId, 8);
+});
+
+test("host access: origins from the list, and a notice only when one is missing", () => {
+  assert.deepEqual(hostOrigins(["alfredv5vibe.vercel.app", "alfred.example:8443"]), ["https://alfredv5vibe.vercel.app/*", "https://alfred.example/*"]);
+  assert.equal(grantNotice([]), null);
+  const notice = grantNotice(["alfredv5vibe.vercel.app"]);
+  assert.equal(notice.badge, GRANT_BADGE);
+  assert.match(notice.title, /alfredv5vibe\.vercel\.app/);
+  assert.match(notice.title, /right-click/i);
+});
+
+test("manifest: no Alfred host in the code, asked for at run time", () => {
+  const m = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
+  assert.equal(m.version, "1.2.1");
+  assert.equal(m.host_permissions.some((h) => /vercel\.app/.test(h)), false);
+  assert.deepEqual(m.optional_host_permissions, ["https://*/*"]);
+});
+
+test("cleanRun: a UUID and a project code, or null", () => {
+  assert.deepEqual(cleanRun({ runId: RUN, project: "switchboard2-h8r", extra: 1 }), { runId: RUN, project: "switchboard2-h8r" });
+  assert.equal(cleanRun({ runId: "x", project: "p" }), null);
+  assert.equal(cleanRun({ runId: RUN, project: "Bad Project" }), null);
+  assert.equal(cleanRun(null), null);
+});
+
+test("chatForProject: issued tag first, then title; two matches is none", () => {
+  const a = { tabId: 1, title: "switchboard2-h8r review - Claude", issuedTag: null };
+  const b = { tabId: 2, title: "Untitled - Claude", issuedTag: "switchboard2-h8r-s9-abcd" };
+  const other = { tabId: 3, title: "Taxes - Claude", issuedTag: "wb-x1y-s1-aaaa" };
+  assert.equal(chatForProject([a, other], "switchboard2-h8r").chat.tabId, 1);
+  assert.equal(chatForProject([a, b, other], "switchboard2-h8r").chat.tabId, 2);
+  assert.equal(chatForProject([other], "switchboard2-h8r").chat, null);
+  assert.match(chatForProject([other], "switchboard2-h8r").why, /no open chat/);
+  const twin = { tabId: 4, title: "switchboard2-h8r again - Claude", issuedTag: null };
+  assert.equal(chatForProject([a, twin], "switchboard2-h8r").chat, null);
+  assert.match(chatForProject([a, twin], "switchboard2-h8r").why, /2 chats/);
+  // A longer code is another project.
+  assert.equal(chatForProject([{ tabId: 5, title: "switchboard2-h8rx - Claude", issuedTag: null }], "switchboard2-h8r").chat, null);
+});
+
+async function dom(t, html) {
+  let JSDOM;
+  try {
+    ({ JSDOM } = await import("jsdom"));
+  } catch {
+    t.skip("jsdom not installed");
+    return null;
+  }
+  return new JSDOM(`<body>${html}</body>`).window;
+}
+
+const APPROVE_HTML = `<p>Project</p><p>wrong-label</p><p data-switchboard-project="switchboard2-h8r">shown</p><div id="r"></div>`;
+
+test("approve watcher: a dry run sends nothing; a real run sends its id once", async (t) => {
+  const w = await dom(t, APPROVE_HTML);
+  if (!w) return;
+  const sent = [];
+  const scope = { document: w.document, MutationObserver: w.MutationObserver, chrome: { runtime: { sendMessage: async (m) => sent.push(m) } } };
+  const run = new Function(...Object.keys(scope), `return (${approveWatcher.toString()})();`);
+  run(...Object.values(scope));
+  w.document.getElementById("r").innerHTML = "<p>Dry run, rolled back</p>";
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(sent, []);
+  w.document.getElementById("r").setAttribute("data-switchboard-run-id", RUN);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(sent, [{ type: "approve-run", runId: RUN, project: "switchboard2-h8r" }]);
+  w.document.getElementById("r").innerHTML = "<p>again</p>";
+  await new Promise((r) => setTimeout(r, 20));
+  run(...Object.values(scope));
+  assert.equal(sent.length, 1);
+});
+
+function composerPage(w, { box = "", stop = false, onSend = () => {} } = {}) {
+  const d = w.document;
+  d.body.innerHTML = `<div contenteditable="true" role="textbox">${box}</div>` +
+    (stop ? `<button aria-label="Stop"></button>` : `<button aria-label="Send"></button>`);
+  d.querySelector('button[aria-label="Send"]')?.addEventListener("click", onSend);
+  const typed = [];
+  d.execCommand = (_c, _u, text) => { typed.push(text); return true; };
+  return { document: d, typed };
+}
+
+test("postLine: types and sends only into an idle, empty chat", async (t) => {
+  const { postLine } = globalThis.__alfredWatchCore;
+  const w = await dom(t, "");
+  if (!w) return;
+  let clicks = 0;
+  const idle = composerPage(w, { onSend: () => clicks++ });
+  // jsdom has no innerText.
+  idle.document.querySelector("[contenteditable]").innerText = "";
+  assert.equal(await postLine(idle.document, `sql ${RUN}`), "sent");
+  assert.deepEqual(idle.typed, [`sql ${RUN}`]);
+  assert.equal(clicks, 1);
+
+  const writing = composerPage(w, { stop: true });
+  writing.document.querySelector("[contenteditable]").innerText = "";
+  assert.equal(await postLine(writing.document, "sql x"), "busy");
+  assert.deepEqual(writing.typed, []);
+
+  const draft = composerPage(w, { box: "half a thought" });
+  draft.document.querySelector("[contenteditable]").innerText = "half a thought";
+  assert.equal(await postLine(draft.document, "sql x"), "busy");
+  assert.deepEqual(draft.typed, []);
 });
 
 test("watcher: chat pages only", () => {

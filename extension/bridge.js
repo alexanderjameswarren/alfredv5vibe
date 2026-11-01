@@ -13,7 +13,8 @@
 
 import {
   HOST_NAME, HEARTBEAT_MS, DEBOUNCE_MS, buildTabsMessage, buildChatsMessage, nextDelay, isHostMissing, debounce,
-  pickTab, focusResult, checkPrompt, cleanHosts, promptFrame, sendTagOf,
+  normaliseUrl, pickTab, focusResult, checkPrompt, cleanHosts, promptFrame, sendTagOf,
+  approveTokenOf, approveWatcher, chatForRun, cleanRun, GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, RUN_POST_MS,
 } from "./lib/bridge-core.js";
 
 let port = null;
@@ -67,6 +68,7 @@ function onWatchReport(msg, sender) {
       });
     }
     if (port) scheduleTabs();
+    postRuns();
   } catch (e) {
     quiet(e);
   }
@@ -147,6 +149,128 @@ async function onSendTab(tab, url) {
   }
 }
 
+// Reading an approval page needs its host allowed at run time, from a click (spec §2, rule 8).
+// The click is the "Allow Alfred's sites" item service-worker.js puts on the toolbar icon.
+const allowed = (host) => chrome.permissions.contains({ origins: hostOrigins([host]) });
+
+async function showGrant() {
+  try {
+    const missing = [];
+    for (const h of linkHosts) if (!(await allowed(h))) missing.push(h);
+    const notice = grantNotice(missing);
+    const badge = await chrome.action.getBadgeText({});
+    // Never over the clipper's own badge; the next heartbeat tries again.
+    if (notice && badge === "") {
+      console.info("[Alfred bridge]", notice.title);
+      await chrome.action.setBadgeBackgroundColor({ color: "#d97706" });
+      await chrome.action.setBadgeText({ text: notice.badge });
+      await chrome.action.setTitle({ title: notice.title });
+    }
+    if (!notice && badge === GRANT_BADGE) {
+      await chrome.action.setBadgeText({ text: "" });
+      await chrome.action.setTitle({ title: chrome.runtime.getManifest().action.default_title });
+    }
+  } catch (e) {
+    quiet(e);
+  }
+}
+
+function grantSay(text) {
+  console.info("[Alfred bridge]", text);
+  chrome.action.setTitle({ title: `Alfred's Clipboard: ${text}` }).catch(quiet);
+}
+
+// No await before the request: Chrome only allows it during the click.
+function grantHosts() {
+  if (!linkHosts.length) return grantSay("no site list from the panel yet, so nothing to allow. Is the Switchboard panel installed?");
+  chrome.permissions.request({ origins: hostOrigins(linkHosts) }).then(
+    (granted) => { if (!granted) grantSay("the sites were not allowed."); showGrant(); },
+    (e) => grantSay(`Chrome refused to ask: ${e?.message ?? e}`),
+  );
+}
+
+// The approval result (spec 8.1): an approval page on a listed host reports its run id,
+// and "sql <run id>" goes to the tab its link was clicked in, once that chat is idle.
+const seenRuns = new Set();
+let waitingRuns = [];   // { runId, project, from, at }
+let posting = false;
+const clickedChats = new Map();   // approval token -> { tabId, url, at }
+
+// A watcher saw an approval link clicked. The link opens as usual.
+function onApproveClick(msg, sender) {
+  try {
+    const tabId = sender?.tab?.id;
+    const url = normaliseUrl(sender?.tab?.url);
+    if (sender?.id !== chrome.runtime.id || !Number.isInteger(tabId) || !url.startsWith("https://claude.ai/")) return;
+    const token = approveTokenOf(msg.href, linkHosts);
+    if (!token) return;
+    // Links last 30 minutes; these are only kept a little longer.
+    for (const [t, c] of clickedChats) if (Date.now() - c.at > 2 * 30 * 60 * 1000) clickedChats.delete(t);
+    clickedChats.set(token, { tabId, url, at: Date.now() });
+  } catch (e) {
+    quiet(e);
+  }
+}
+
+async function watchApprovePage(tabId, url) {
+  try {
+    if (!isApprovePage(url, linkHosts)) return;
+    if (await allowed(new URL(url).host)) {
+      await chrome.scripting.executeScript({ target: { tabId }, func: approveWatcher });
+      return;
+    }
+    const notice = grantNotice([new URL(url).host]);
+    console.info("[Alfred bridge]", notice.title);
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: "#d97706" });
+    await chrome.action.setBadgeText({ tabId, text: notice.badge });
+    await chrome.action.setTitle({ tabId, title: notice.title });
+  } catch (e) {
+    quiet(e);
+  }
+}
+
+function onApproveRun(msg, sender) {
+  try {
+    const token = sender?.id === chrome.runtime.id ? approveTokenOf(sender?.url, linkHosts) : null;
+    if (!token) return;
+    const run = cleanRun(msg);
+    if (!run || seenRuns.has(run.runId)) return;
+    seenRuns.add(run.runId);
+    waitingRuns.push({ ...run, from: clickedChats.get(token), at: Date.now() });
+    clickedChats.delete(token);
+    postRuns();
+  } catch (e) {
+    quiet(e);
+  }
+}
+
+async function postRuns() {
+  if (posting || !waitingRuns.length) return;
+  posting = true;
+  try {
+    const [tabs, windows] = await Promise.all([chrome.tabs.query({}), chrome.windows.getAll()]);
+    const { chats } = buildChatsMessage(tabs, windows, reports, viewedAt);
+    for (const run of [...waitingRuns]) {
+      const { chat, why } = chatForRun(chats, run);
+      const late = Date.now() - run.at > RUN_POST_MS;
+      if (late) {
+        console.info("[Alfred bridge] sql result not posted:", run.runId, why ?? "the chat never went idle");
+        waitingRuns = waitingRuns.filter((r) => r !== run);
+      }
+      if (late || !chat || chat.state !== "finished" || chat.composerEmpty !== true) continue;
+      // Typing into the box needs its tab showing, as Send cli does.
+      await chrome.tabs.update(chat.tabId, { active: true });
+      await chrome.windows.update(chat.windowId, { focused: true });
+      const answer = await chrome.tabs.sendMessage(chat.tabId, { type: "post-line", text: `sql ${run.runId}` }).catch(() => null);
+      if (answer?.did === "sent" || answer?.did === "typed") waitingRuns = waitingRuns.filter((r) => r !== run);
+    }
+  } catch (e) {
+    quiet(e);
+  } finally {
+    posting = false;
+  }
+}
+
 function onCommand(cmd) {
   if (cmd.action === "focus" || cmd.action === "sendcli") return focusTab(cmd);
   try {
@@ -185,6 +309,7 @@ function connect() {
         sendTabs();
         injectWatchers();
         broadcastHosts();
+        showGrant();
       }
       if (msg?.type === "command" && typeof msg.id === "string") onCommand(msg);
     });
@@ -210,17 +335,22 @@ try {
       chrome.tabs.sendMessage(tabId, { type: "watch-recheck" }).catch(() => {});
     }
     if (port && change.url) onSendTab(tab, change.url);
+    if (port && change.status === "complete") watchApprovePage(tabId, tab.url);
   });
   chrome.tabs.onCreated?.addListener((tab) => { if (port) onSendTab(tab, tab.pendingUrl ?? tab.url); });
   // Returns false: any reply is sent at once, so Chrome holds no channel open (as service-worker.js does).
   chrome.runtime.onMessage?.addListener((msg, sender, reply) => {
     if (msg?.type === "chat-state") onWatchReport(msg, sender);
     if (msg?.type === "send-prompt") onSendPrompt(msg, sender);
+    if (msg?.type === "approve-click") onApproveClick(msg, sender);
+    if (msg?.type === "approve-run") onApproveRun(msg, sender);
     if (msg?.type === "link-hosts?") reply({ hosts: linkHosts });
     return false;
   });
+  chrome.contextMenus?.onClicked.addListener((info) => { if (info.menuItemId === "allow-alfred-sites") grantHosts(); });
+  chrome.permissions?.onRemoved.addListener(showGrant);
   // An open native port keeps the worker alive, so this keeps running while connected.
-  setInterval(() => { if (port) sendTabs(); }, HEARTBEAT_MS);
+  setInterval(() => { if (port) sendTabs(), postRuns(), showGrant(); }, HEARTBEAT_MS);
   connect();
 } catch (e) {
   quiet(e);

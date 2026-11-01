@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Alfred's Clipboard",
-  "version": "1.1.0",
+  "version": "1.2.1",
   "description": "Save this page's text, links and a full-page screenshot into Alfred.",
   "permissions": [
     "activeTab",
@@ -15,6 +15,9 @@
   "host_permissions": [
     "https://zuqjyfqnvhddnchhpbcz.supabase.co/*",
     "https://claude.ai/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
   ],
   "content_scripts": [
     {
