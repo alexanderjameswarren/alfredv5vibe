@@ -5,8 +5,9 @@
 //
 //   get_switchboard_run     tier 1  an action (with its full SQL) and a run
 //   issue_switchboard_link  tier 2  issue the approval link for the SQL Claude reviewed
+//   get_sql_read            tier 1  one read-only query, as claude_reader (§8.2)
 //
-// Database access ONLY through ctx.db.
+// Database access ONLY through ctx.db, except get_sql_read's query itself: see readerSeam.
 // ============================================================================
 
 import { defineTool } from "../platform.ts";
@@ -80,5 +81,113 @@ export const issueSwitchboardLinkTool = defineTool({
       throw dbError(tool, "issuing the link", error);
     }
     return data;
+  },
+});
+
+// ---------------------------------------------------------------------------
+// get_sql_read
+// ---------------------------------------------------------------------------
+
+const MAX_SQL = 20000;
+const MAX_ROWS = 1000;
+const BUDGETS = [
+  { limit: 20, seconds: 600, words: "10 minutes" },
+  { limit: 200, seconds: 86400, words: "day" },
+];
+const ROLLBACK = Symbol("rollback");
+
+type Tx = { unsafe(text: string, params?: unknown[], options?: unknown): PromiseLike<unknown> & { cursor(size: number): AsyncIterable<unknown[]> } };
+type Reader = { begin(fn: (tx: Tx) => Promise<unknown>): Promise<unknown>; end(options?: unknown): Promise<unknown> };
+
+// The one exception to "database access only through ctx.db": the query goes through claude_reader's own login, which
+// can reach nothing else, and never through Alex's token. Swappable for the tests, and imported only when used,
+// since node can't load npm: specifiers.
+export const readerSeam = {
+  url: (): string => (globalThis as { Deno?: { env: { get(k: string): string | undefined } } }).Deno?.env.get("SWITCHBOARD_READER_DB_URL") ?? "",
+  connect: async (url: string): Promise<Reader> => {
+    const { default: postgres } = await import("npm:postgres@3.4.5");
+    return postgres(url, { prepare: false, max: 1, idle_timeout: 5, connect_timeout: 10 }) as unknown as Reader;
+  },
+};
+
+/** An error's words for Claude and the log: a driver's error can quote the address it was given. */
+const cleanError = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/postgres(ql)?:\/\/\S+/gi, "[connection string]");
+
+/** One statement, read only, limited, always rolled back. The extended protocol refuses a second statement. */
+async function runReadOnly(text: string) {
+  const out = { rows: [] as unknown[], truncated: false, error: null as string | null };
+  const url = readerSeam.url();
+  if (!url) return { ...out, error: "SWITCHBOARD_READER_DB_URL is not set." };
+  let sql: Reader | null = null;
+  try {
+    sql = await readerSeam.connect(url);
+    await sql.begin(async (tx) => {
+      await tx.unsafe("set transaction read only");
+      await tx.unsafe("set local statement_timeout = '10s'");
+      await tx.unsafe("set local lock_timeout = '1s'");
+      for await (const batch of tx.unsafe(text, [], { simple: false }).cursor(MAX_ROWS + 1)) {
+        out.truncated = batch.length > MAX_ROWS;
+        out.rows = batch.slice(0, MAX_ROWS);
+        break;
+      }
+      throw ROLLBACK;
+    });
+  } catch (e) {
+    if (e !== ROLLBACK) {
+      out.rows = [];
+      out.truncated = false;
+      out.error = cleanError(e);
+    }
+  } finally {
+    try { await sql?.end({ timeout: 2 }); } catch { /* the answer is already in hand */ }
+  }
+  return out;
+}
+
+export const getSqlReadTool = defineTool({
+  name: "get_sql_read",
+  tier: 1,
+  tables: { reads: ["*", "switchboard_settings", "switchboard_read_log"], writes: ["switchboard_read_log"] },
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "get_sql_read";
+    const given = typeof args.sql === "string" ? args.sql : String(args.sql ?? "");
+    const log = async (row: { ok: boolean; row_count: number | null; truncated: boolean; error: string | null; took_ms: number }) => {
+      const { error } = await ctx.db.from("switchboard_read_log").insert({ query_text: given.slice(0, MAX_SQL), ...row });
+      return error ? error.message ?? "the log write failed" : null;
+    };
+    const refuse = async (error: Error) => {
+      await log({ ok: false, row_count: null, truncated: false, error: error.message, took_ms: 0 });
+      return error;
+    };
+
+    if (typeof args.sql !== "string" || !args.sql.trim() || args.sql.length > MAX_SQL) {
+      throw await refuse(fail(tool, `\`sql\` must be one statement of at most ${MAX_SQL} characters.`));
+    }
+
+    // Both checks fail closed: a guard that can't be read stops the query.
+    const { data: settings, error: settingsError } = await ctx.db.from("switchboard_settings").select("reads_enabled").maybeSingle();
+    if (settingsError) throw await refuse(dbError(tool, "reading the kill switch", settingsError));
+    if (!settings) throw await refuse(fail(tool, "refused: no settings row, so the kill switch can't be read."));
+    if (!(settings as { reads_enabled: boolean }).reads_enabled) {
+      throw await refuse(fail(tool, "refused: read-only queries are switched off (switchboard_settings.reads_enabled)."));
+    }
+
+    // Counted from the log, refused calls included. platform_check_call_budget counts every tool's calls, not these,
+    // and it adds to the budget defineTool already spends on this call.
+    for (const b of BUDGETS) {
+      const since = new Date(Date.now() - b.seconds * 1000).toISOString();
+      const { count, error } = await ctx.db.from("switchboard_read_log").select("id", { count: "exact", head: true }).gte("created_at", since);
+      if (error) throw await refuse(dbError(tool, "reading the read budget", error));
+      if ((count ?? 0) >= b.limit) {
+        throw await refuse(fail(tool, `READ BUDGET EXCEEDED: ${count} calls in the last ${b.words} (limit ${b.limit}). Do NOT retry. Stop and report to the user.`));
+      }
+    }
+
+    const started = Date.now();
+    const { rows, truncated, error } = await runReadOnly(args.sql);
+    const logError = await log({
+      ok: error === null, row_count: error === null ? rows.length : null, truncated, error, took_ms: Date.now() - started,
+    });
+    return { ok: error === null, rows, count: rows.length, truncated, error, ...(logError ? { log_error: logError } : {}) };
   },
 });

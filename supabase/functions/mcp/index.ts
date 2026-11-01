@@ -76,7 +76,7 @@ import {
   updateReminderTool,
 } from "../_shared/tools/reminders.ts";
 import { createArnoldPlanTool, getArnoldPlanTool, getArnoldProgressTool } from "../_shared/tools/arnold.ts";
-import { getSwitchboardRunTool, issueSwitchboardLinkTool } from "../_shared/tools/switchboard.ts";
+import { getSqlReadTool, getSwitchboardRunTool, issueSwitchboardLinkTool } from "../_shared/tools/switchboard.ts";
 import {
   getClaudeNotificationSettingsTool,
   getClaudeNotificationsTool,
@@ -3107,6 +3107,20 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(issueSwitchboardLinkTool, args, token),
+  );
+
+  server.registerTool(
+    "get_sql_read",
+    {
+      title: "Get SQL Read",
+      description:
+        "Run one read-only SQL statement on Alfred's database, as the claude_reader role. It sees only Alex's rows in the public tables with a user_id, and never a secret column, so name your columns: select * is refused on a table with one. Other schemas are refused. Limits: one statement, 1000 rows, 10 seconds, always rolled back. " +
+        "Returns { ok, rows, count, truncated, error }. ok false with error is Postgres's refusal or a failed connection: read it and fix the query. A throw means the kill switch or the budget (20 calls per 10 minutes, 200 per day) stopped it. Every call is logged, with no rows, in switchboard_read_log. Tier 1.",
+      inputSchema: {
+        sql: z.string().describe("One SQL statement."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getSqlReadTool, args, token),
   );
 
   // --- Shared Claude notification log (docs/arnold_v1-technical-spec.md §3.5, §5) — any app, not Arnold only ---

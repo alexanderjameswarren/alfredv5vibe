@@ -342,7 +342,7 @@ test("the tool count is 72 after the job-search tools", () => {
   // Arnold V1 Step 8, +2.
   const EXPECTED_ADDED_ARNOLD_8 = ["get_claude_notification_settings", "update_claude_notification_settings"];
   // Switchboard 2.5, +2.
-  const EXPECTED_ADDED_SWITCHBOARD_25 = ["get_switchboard_run", "issue_switchboard_link"];
+  const EXPECTED_ADDED_SWITCHBOARD_25 = ["get_switchboard_run", "issue_switchboard_link", "get_sql_read"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
@@ -352,8 +352,8 @@ test("the tool count is 72 after the job-search tools", () => {
                       ...EXPECTED_ADDED_ARNOLD_5, ...EXPECTED_ADDED_ARNOLD_8, ...EXPECTED_ADDED_SWITCHBOARD_25]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 182,
-    `expected 182 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 183,
+    `expected 183 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
