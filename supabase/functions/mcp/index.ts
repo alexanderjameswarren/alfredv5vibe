@@ -76,6 +76,7 @@ import {
   updateReminderTool,
 } from "../_shared/tools/reminders.ts";
 import { createArnoldPlanTool, getArnoldPlanTool, getArnoldProgressTool } from "../_shared/tools/arnold.ts";
+import { getSwitchboardRunTool, issueSwitchboardLinkTool } from "../_shared/tools/switchboard.ts";
 import {
   getClaudeNotificationSettingsTool,
   getClaudeNotificationsTool,
@@ -3075,6 +3076,37 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(getArnoldProgressTool, args, token),
+  );
+
+  // --- Switchboard: the SQL approval queue (docs/technical-spec-switchboard2-h8r.md §8.1) ---
+  server.registerTool(
+    "get_switchboard_run",
+    {
+      title: "Get Switchboard Run",
+      description:
+        "One action in the Switchboard approval queue and one of its runs. Pass exactly one id. With action_id: the action and its latest run (null if it has never run); use this to review queued SQL before issuing a link. With run_id (the id in a chat message \"sql <run id>\"): that run and its action. " +
+        "Returns { action, run }. action: id, kind, project_code, status (queued | link_issued | consumed | succeeded | failed | cancelled), headline, fingerprint, payload (for kind sql, the whole SQL in payload.sql, never cut), chat_url, needs_click, link_expires_at, link_used_at, created_by, created_at, updated_at. run: id, action_id, mode (dry_run | real), summary, result (null once pruned after 30 days), result_pruned_at, started_at, finished_at. Tier 1.",
+      inputSchema: {
+        action_id: z.string().optional().describe("UUID of the action."),
+        run_id: z.string().optional().describe("UUID of the run."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getSwitchboardRunTool, args, token),
+  );
+
+  server.registerTool(
+    "issue_switchboard_link",
+    {
+      title: "Issue Switchboard Link",
+      description:
+        "Issue the single-use approval link for a queued action, after reviewing its SQL with get_switchboard_run. Pass the fingerprint you reviewed: a different one is refused and no link is made. The link lasts 30 minutes, and Alex clicks it to approve; nothing runs until then. " +
+        "One live link at a time across all actions: a second is refused until the first is used or expires. An action already consumed is refused; queue it again. Returns { action_id, url, expires_at, headline }. The url appears only here; the database keeps its hash. Tier 2.",
+      inputSchema: {
+        action_id: z.string().describe("UUID of the action."),
+        fingerprint: z.string().describe("The action's fingerprint as get_switchboard_run showed it."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(issueSwitchboardLinkTool, args, token),
   );
 
   // --- Shared Claude notification log (docs/arnold_v1-technical-spec.md §3.5, §5) — any app, not Arnold only ---
