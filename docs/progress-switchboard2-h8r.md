@@ -43,7 +43,7 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 2 | 2.4 | Runner function and CLI queue | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_consume_link`, `db:deploy` | done (s28-w2bv, s28b-k5fd, s28c-n8jx): deployed, verify_jwt off, `/queue` smoke-tested; run routes first exercised at 2.6 | 2026-10-31 |
 | 2 | 2.4b | `deployTargets` skips flag values and stops at redirects | — | done (s29-c6mt) | 2026-10-31 |
 | 2 | 2.5 | MCP tools: issue a link, get a run | `db:fn:switchboard_issue_link`, `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` | deployed (s30-p4zr), CONFORMANT (97 tables); neither tool has run live yet: first calls from claude.ai | 2026-11-01 |
-| 2 | 2.6 | Approve page | — | todo | |
+| 2 | 2.6 | Approve page | — | built (s31-v8ke), tests pass; end-to-end test against the live runner pending; run id is `data-switchboard-run-id`, real runs only | 2026-11-01 |
 | 2 | 2.7 | Extension: approval link and result | — | todo | |
 | 2 | 2.8 | Panel read endpoint | `db:table:switchboard_actions`, `db:table:inbox`, `db:table:project_plans`, `db:table:portfolio_plans`, `db:table:portfolio_lanes`, `db:table:portfolio_slices` (all read), `db:deploy` | todo | |
 | 2 | 2.9 | Panel: Waiting on SQL, Report unread, lane order | — | todo | |
@@ -609,3 +609,4 @@ Database items per step are in the table at the top. Report unread and lane orde
 | s28c (2.4, deploy and smoke) | deploy not timed; 1m00s measured after it (estimate 4m) |
 | s29 (2.4b) | 0m39s (estimate 4m) |
 | s30 (2.5) | 3m15s (estimate 8m) |
+| s31 (2.6) | 1m58s (estimate 10m) |
