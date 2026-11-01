@@ -23,9 +23,14 @@ export const OVERDUE_GRACE_DAYS = 7;
 export const BURN_MONTHS = 3;
 
 // wb_rule_health_all (the Phase 3 step 10 migration). Help: rule_health.*.
-// never_fires (A54, A55): flagged once quiet for more than NEVER_FIRES_FACTOR times the expected interval
-// and more than NEVER_FIRES_FLOOR_DAYS; the interval falls back to the annual or quarterly notes days,
+// never_fires (A54, A55, P4-D1): flagged once quiet for more than NEVER_FIRES_FACTOR times the expected interval
+// and more than NEVER_FIRES_FLOOR_DAYS; the interval is the most common gap between linked charges (at least
+// NEVER_FIRES_MIN_CHARGES of them; up to NEVER_FIRES_WEEK_GAP_DAYS is a week, up to
+// NEVER_FIRES_TWO_WEEK_GAP_DAYS two weeks), falling back to the annual or quarterly notes days,
 // then NEVER_FIRES_DEFAULT_DAYS. All are the params row of wb_rule_health_all.
+export const NEVER_FIRES_MIN_CHARGES = 3;
+export const NEVER_FIRES_WEEK_GAP_DAYS = 10;
+export const NEVER_FIRES_TWO_WEEK_GAP_DAYS = 17;
 export const NEVER_FIRES_FACTOR = 1.5;
 export const NEVER_FIRES_FLOOR_DAYS = 30;
 export const NEVER_FIRES_DEFAULT_DAYS = 30;

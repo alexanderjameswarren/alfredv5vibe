@@ -1,4 +1,4 @@
--- schema snapshot 2026-10-31 11:26, through migration 189 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-01 07:21, through migration 190 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -16135,7 +16135,10 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health_all" WITH ("security_invoker"='t
                     30 AS "floor_days",
                     30 AS "default_days",
                     91 AS "quarter_days",
-                    365 AS "annual_days"
+                    365 AS "annual_days",
+                    3 AS "min_charges",
+                    10 AS "week_gap_days",
+                    17 AS "two_week_gap_days"
                 ), "rule_merchant" AS (
                  SELECT "r"."id",
                     "r"."user_id",
@@ -16168,7 +16171,24 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health_all" WITH ("security_invoker"='t
                      JOIN "public"."wb_transactions" "x" ON ((("r"."id" = ANY ("x"."matched_rule_ids")) AND (NOT "x"."pending"))))
                 ), "rule_interval" AS (
                  SELECT "r"."id" AS "rule_id",
-                    (COALESCE((( SELECT "min"(
+                    (COALESCE((( SELECT "b"."days"
+                           FROM ( SELECT
+CASE
+ WHEN ("g"."gap" <= "p"."week_gap_days") THEN (7)::numeric
+ WHEN ("g"."gap" <= "p"."two_week_gap_days") THEN (14)::numeric
+ ELSE (GREATEST("round"((("g"."gap")::numeric / 30.4)), (1)::numeric) * 30.4)
+END AS "days",
+                                    "count"(*) OVER () AS "n_gaps"
+                                   FROM ( SELECT ("dd"."d" - "lag"("dd"."d") OVER (ORDER BY "dd"."d")) AS "gap"
+   FROM ( SELECT DISTINCT ((COALESCE("x"."posted_at", "x"."transacted_at") AT TIME ZONE 'America/Los_Angeles'::"text"))::"date" AS "d"
+     FROM ("public"."wb_transactions" "x"
+       JOIN "public"."wb_subscriptions" "s" ON (("s"."id" = "x"."subscription_id")))
+    WHERE (("x"."merchant_id" = "r"."merchant_id") AND (NOT "x"."pending") AND ("x"."kind" = 'spend'::"text") AND ("s"."status" <> 'cancelled'::"text"))) "dd") "g"
+                                  WHERE ("g"."gap" IS NOT NULL)) "b"
+                          WHERE (("b"."n_gaps" + 1) >= "p"."min_charges")
+                          GROUP BY "b"."days"
+                          ORDER BY ("count"(*)) DESC, "b"."days" DESC
+                         LIMIT 1))::double precision, (( SELECT "min"(
                                 CASE
                                     WHEN ("s"."interval_unit" = 'month'::"text") THEN (("s"."interval_count")::numeric * 30.4)
                                     ELSE (("s"."interval_count" * 7))::numeric
@@ -16375,7 +16395,7 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health_all" WITH ("security_invoker"='t
 ALTER VIEW "public"."wb_rule_health_all" OWNER TO "postgres";
 
 
-COMMENT ON VIEW "public"."wb_rule_health_all" IS 'App: Warren Buffet. Every rule-health finding (see wb_rule_health) with subject_id (the rule, else the merchant) and its acknowledgement: acknowledged is true while n has not grown past acked_n, with ack_reason and acked_at. never_fires (A16, A54, A55): an active rule quiet for more than both 1.5 times its expected interval and 30 days, counted from its last match or, when it never matched, from its creation; the interval is the merchant''s most frequent subscription interval, else the median gap between its matches, else 365 or 91 days when its notes say annual or quarterly, else 30. detail gives the date and the interval ("expected about every day" or "every N days"). often_overridden counts tag swaps and removals, kind changes, re-splits, and a project the rule set that was changed or removed by hand; detail reads "tag swapped on 2, removed on 2 (of 5)". security_invoker, so wb_ RLS applies.';
+COMMENT ON VIEW "public"."wb_rule_health_all" IS 'App: Warren Buffet. Every rule-health finding (see wb_rule_health) with subject_id (the rule, else the merchant) and its acknowledgement: acknowledged is true while n has not grown past acked_n, with ack_reason and acked_at. never_fires (A16, A54, A55, P4-D1): an active rule quiet for more than both 1.5 times its expected interval and 30 days, counted from its last match or, when it never matched, from its creation; the interval is the most common gap between the merchant''s linked charges (up to 10 days counts as a week, up to 17 as two weeks, longer rounds to whole months, a tie goes to the longer), and with fewer than 3 linked charges the merchant''s shortest subscription interval, else the median gap between its matches, else 365 or 91 days when its notes say annual or quarterly, else 30. detail gives the date and the interval ("expected about every day" or "every N days"). often_overridden counts tag swaps and removals, kind changes, re-splits, and a project the rule set that was changed or removed by hand; detail reads "tag swapped on 2, removed on 2 (of 5)". security_invoker, so wb_ RLS applies.';
 
 
 
@@ -16395,7 +16415,7 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health" WITH ("security_invoker"='true'
 ALTER VIEW "public"."wb_rule_health" OWNER TO "postgres";
 
 
-COMMENT ON VIEW "public"."wb_rule_health" IS 'App: Warren Buffet. One row per finding not acknowledged (finding, rule_id, rule_name, merchant_id, merchant_name, n, of_n, detail): never_fires (quiet for more than both 1.5 times the rule''s expected interval and 30 days, A54, A55), too_broad (merchant-level: 3+ distinct normalized payees on a merchant with a rule), often_overridden (n of of_n hits beaten by hand, at least 2 and 25%, a changed project included), duplicate_rules, rule_missing, merchant_no_category. An acknowledged finding (wb_rule_health_acks) is hidden until its n grows past the acknowledged n; wb_rule_health_all has them all. Read by get_wb_rule_health, wb_action_items and the weekly cleanup task, which proposes fixes and never writes them. security_invoker, so wb_ RLS applies.';
+COMMENT ON VIEW "public"."wb_rule_health" IS 'App: Warren Buffet. One row per finding not acknowledged (finding, rule_id, rule_name, merchant_id, merchant_name, n, of_n, detail): never_fires (quiet for more than both 1.5 times the rule''s expected interval and 30 days, A54, A55, P4-D1), too_broad (merchant-level: 3+ distinct normalized payees on a merchant with a rule), often_overridden (n of of_n hits beaten by hand, at least 2 and 25%, a changed project included), duplicate_rules, rule_missing, merchant_no_category. An acknowledged finding (wb_rule_health_acks) is hidden until its n grows past the acknowledged n; wb_rule_health_all has them all. Read by get_wb_rule_health, wb_action_items and the weekly cleanup task, which proposes fixes and never writes them. security_invoker, so wb_ RLS applies.';
 
 
 

@@ -55,6 +55,7 @@ test("numbers in the wording match the code", () => {
   says("overview.sync_status", `for ${STALE_ACCOUNT_DAYS} days or more`);
   says("rule_health.never_fires", `more than ${N.NEVER_FIRES_FACTOR} times how often they should match and more than ${N.NEVER_FIRES_FLOOR_DAYS} days`);
   says("rule_health.never_fires", `else ${N.NEVER_FIRES_ANNUAL_DAYS} days when its notes say annual or yearly and ${N.NEVER_FIRES_QUARTER_DAYS} when they say quarterly, else ${N.NEVER_FIRES_DEFAULT_DAYS} days`);
+  says("rule_health.never_fires", `once there are ${N.NEVER_FIRES_MIN_CHARGES} or more: gaps up to ${N.NEVER_FIRES_WEEK_GAP_DAYS} days count as a week, up to ${N.NEVER_FIRES_TWO_WEEK_GAP_DAYS} days as two weeks`);
   says("rule_health.too_broad", `${N.TOO_BROAD_PAYEES} or more different payees`);
   says("rule_health.often_overridden", `at least ${N.OVERRIDDEN_MIN} of its matches and at least a quarter`);
   expect(N.OVERRIDDEN_SHARE_DIVISOR).toBe(4); // "a quarter"
@@ -114,6 +115,8 @@ test("the JS mirrors match the SQL that really runs", () => {
   expect(num(health, /([\d.]+)::numeric as factor, (\d+) as floor_days, (\d+) as default_days, (\d+) as quarter_days, (\d+) as annual_days/))
     .toEqual([N.NEVER_FIRES_FACTOR, N.NEVER_FIRES_FLOOR_DAYS, N.NEVER_FIRES_DEFAULT_DAYS, N.NEVER_FIRES_QUARTER_DAYS,
               N.NEVER_FIRES_ANNUAL_DAYS]);
+  expect(num(health, /(\d+) as min_charges, (\d+) as week_gap_days, (\d+) as two_week_gap_days/))
+    .toEqual([N.NEVER_FIRES_MIN_CHARGES, N.NEVER_FIRES_WEEK_GAP_DAYS, N.NEVER_FIRES_TWO_WEEK_GAP_DAYS]);
   expect(health).toMatch(/> greatest\(ceil\(p\.factor \* ri\.days\)::int, p\.floor_days\)/);
   expect(num(health, /cardinality\(mp\.payees\) >= (\d+)/)).toEqual([N.TOO_BROAD_PAYEES]);
   expect(num(health, /o\.n >= (\d+) and o\.n \* (\d+) >= o\.of_n/)).toEqual([N.OVERRIDDEN_MIN, N.OVERRIDDEN_SHARE_DIVISOR]);
