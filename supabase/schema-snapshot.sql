@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-01 07:21, through migration 190 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-01 11:53, through migration 191 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -6953,6 +6953,7 @@ begin
   -- note (the transaction page's own fields). A refund turns a flag info but never clears it alone. A
   -- refund is a refund-kind credit of the same amount on the same card, on or after the fee: never a
   -- paired transfer or a payment, and each credit refunds one fee at most (paired in date order).
+  -- Imported history is left out of both sides, so it cannot shift that pairing (P4-D4).
   v_flags := (
     with fees as (
       select x.id, x.account_id, x.amount, x.description, x.clean_description, x.notes, x.reviewed, c.d,
@@ -6963,6 +6964,7 @@ begin
       cross join lateral (select (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date as d) c
       where a.role in ('credit_card', 'emergency_credit')
         and not x.pending and x.amount < 0
+        and x.source = 'sync'
         and c.d between v_today - c_flag_days and v_today
         and concat_ws(' ', x.description, x.payee) ~* '(interest charge|finance charge|late fee|late payment|annual fee|over ?limit fee|returned payment)'
     ),
@@ -6972,6 +6974,7 @@ begin
       from public.wb_transactions r
       cross join lateral (select (coalesce(r.posted_at, r.transacted_at) at time zone 'America/Los_Angeles')::date as d) c
       where not r.pending and r.amount > 0
+        and r.source = 'sync'
         and r.transfer_pair_id is null
         and coalesce(r.kind, '') = 'refund'
         and concat_ws(' ', r.description, r.payee) !~* c_payment_words
@@ -7371,7 +7374,7 @@ $_$;
 ALTER FUNCTION "public"."wb_action_items"("p_days" integer, "p_big_amount" numeric, "p_big_days" integer, "p_today" "date") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."wb_action_items"("p_days" integer, "p_big_amount" numeric, "p_big_days" integer, "p_today" "date") IS 'Warren Buffet: the money to-do list, one JSON object (spec A49 to A53, A57, A58). Sections: flags (card interest and fees in the last 90 days, red until the charge is reviewed with a note (shown as note), when it clears; a refund-kind credit of the same amount on that card, used once and never a transfer or a payment, turns it info with refund (amount, on, link) but does not clear it; and a card bill past due and unpaid, which is then left out of card_bills), reconcile (review queue counts by reason), overdue (wb_planned_unmatched past the match window, and subscriptions more than 7 days late), coming_up (planned items less what is covered, A45, never a one-off at stage paid, and subscriptions, in the next p_days; dates past due but not yet overdue come first, with late true and amber; big true for money out over p_big_amount), big_bites (payments out of more than p_big_amount in the next p_big_days, what-ifs included and marked, no paid one-offs), card_bills (from statement_close_day, payment_due_day and autopay: the balance on the last close day less card payments since, refunds not counted; a card with no days set asks for them), needs_attention (sync problems, stale or missing balances, subscriptions to review or confirm, accounts with no role, rule health), money_intentions and money_inbox (Alfred records in the Money context, as RLS allows; a title longer than 120 characters is cut, and a title that stops mid-line is kept, both ending with an ellipsis), below_floor (when the projection goes below the safety floor in the next 30 days, window_days: first_below_on, the "by" date, and closing_then; low_30d_on and low_30d_balance, the lowest day in those 30 days; shortfall_30d, the amount to move from the reserve, floor less that low; path, the starting balance, every dated event and a weekly burn row up to the low day, each with the projected balance after it and below when it is under the floor; causes, the path''s payments out and its burn; first_below_on and shortfall_30d are null when the 30 days stay above the floor), and cash_flow (money in less money out: last_30_actual from settled spending-cash and card rows, leaving out paired transfers and transfers received on a card; next_30_projected, the projection''s change over the next 30 days, today included; typical_month, wb_true_cost.net_monthly; runway_months, the reserve over a monthly shortfall, null when typical_month is not negative). Every row has type, severity (red, amber, info), title, todo, amount, on and a link (link_kind, link_id). Security invoker; read by the app and get_wb_action_items.';
+COMMENT ON FUNCTION "public"."wb_action_items"("p_days" integer, "p_big_amount" numeric, "p_big_days" integer, "p_today" "date") IS 'Warren Buffet: the money to-do list, one JSON object (spec A49 to A53, A57, A58). Sections: flags (card interest and fees in the last 90 days, synced rows only (P4-D4), red until the charge is reviewed with a note (shown as note), when it clears; a synced refund-kind credit of the same amount on that card, used once and never a transfer or a payment, turns it info with refund (amount, on, link) but does not clear it; and a card bill past due and unpaid, which is then left out of card_bills), reconcile (review queue counts by reason), overdue (wb_planned_unmatched past the match window, and subscriptions more than 7 days late), coming_up (planned items less what is covered, A45, never a one-off at stage paid, and subscriptions, in the next p_days; dates past due but not yet overdue come first, with late true and amber; big true for money out over p_big_amount), big_bites (payments out of more than p_big_amount in the next p_big_days, what-ifs included and marked, no paid one-offs), card_bills (from statement_close_day, payment_due_day and autopay: the balance on the last close day less card payments since, refunds not counted; a card with no days set asks for them), needs_attention (sync problems, stale or missing balances, subscriptions to review or confirm, accounts with no role, rule health), money_intentions and money_inbox (Alfred records in the Money context, as RLS allows; a title longer than 120 characters is cut, and a title that stops mid-line is kept, both ending with an ellipsis), below_floor (when the projection goes below the safety floor in the next 30 days, window_days: first_below_on, the "by" date, and closing_then; low_30d_on and low_30d_balance, the lowest day in those 30 days; shortfall_30d, the amount to move from the reserve, floor less that low; path, the starting balance, every dated event and a weekly burn row up to the low day, each with the projected balance after it and below when it is under the floor; causes, the path''s payments out and its burn; first_below_on and shortfall_30d are null when the 30 days stay above the floor), and cash_flow (money in less money out: last_30_actual from settled spending-cash and card rows, leaving out paired transfers and transfers received on a card; next_30_projected, the projection''s change over the next 30 days, today included; typical_month, wb_true_cost.net_monthly; runway_months, the reserve over a monthly shortfall, null when typical_month is not negative). Every row has type, severity (red, amber, info), title, todo, amount, on and a link (link_kind, link_id). Security invoker; read by the app and get_wb_action_items.';
 
 
 
@@ -8665,7 +8668,7 @@ CREATE OR REPLACE FUNCTION "public"."wb_planned_start_from_history"("p_merchant_
   w as (select coalesce((select min(b.month) from t, public.wb_burn_rate_on(t.d) b), t.d) as first_day, t.d from t)
   select min(c.d)
   from w
-  join public.wb_transactions x on x.merchant_id = p_merchant_id and not x.pending
+  join public.wb_transactions x on x.merchant_id = p_merchant_id and not x.pending and x.source = 'sync'
   cross join lateral (select (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date as d) c
   join public.wb_splits s on s.transaction_id = x.id
   where p_merchant_id is not null
@@ -8682,7 +8685,7 @@ $$;
 ALTER FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric, "p_today" "date") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric, "p_today" "date") IS 'Warren Buffet: the date of the earliest posted payment at the merchant, with the amount''s sign and within the tolerance, from the first burn month (wb_burn_rate_on) to p_today, leaving out splits already fully confirmed against other planned items. Null when there is none, or no merchant. Used as the first due date of a new repeating item, so every payment the burn rate counts is matched (A34). Security invoker.';
+COMMENT ON FUNCTION "public"."wb_planned_start_from_history"("p_merchant_id" "uuid", "p_amount" numeric, "p_amount_tolerance" numeric, "p_today" "date") IS 'Warren Buffet: the date of the earliest posted, synced payment at the merchant (imported history is left out, P4-D4), with the amount''s sign and within the tolerance, from the first burn month (wb_burn_rate_on) to p_today, leaving out splits already fully confirmed against other planned items. Null when there is none, or no merchant. Used as the first due date of a new repeating item, so every payment the burn rate counts is matched (A34). Security invoker.';
 
 
 
@@ -9638,6 +9641,7 @@ begin
   from (select (coalesce(x.posted_at, x.transacted_at) at time zone 'America/Los_Angeles')::date as d
         from public.wb_transactions x
         where not x.pending
+          and x.source = 'sync'
           and (p_transaction_ids is null or x.id = any (p_transaction_ids))) t;
   -- Nothing to pair, but suggestions in scope that no longer fit must still go.
   if v_from is null then
@@ -9665,6 +9669,7 @@ begin
   join public.wb_planned_items pi on pi.id = o.planned_item_id
   join public.wb_transactions x
     on not x.pending
+   and x.source = 'sync'
    and (x.merchant_id = pi.merchant_id
         or (pi.merchant_id is null
             and x.transfer_pair_id is null
@@ -9738,7 +9743,7 @@ $$;
 ALTER FUNCTION "public"."wb_suggest_planned_matches"("p_transaction_ids" "uuid"[], "p_planned_item_ids" "uuid"[]) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."wb_suggest_planned_matches"("p_transaction_ids" "uuid"[], "p_planned_item_ids" "uuid"[]) IS 'Warren Buffet: suggests planned matches for the given transactions and/or planned items (null = all). A posted split qualifies for a planned item''s due date when it has the same sign, its amount is within the item''s amount_tolerance (exact when 0) and its date within match_window_days, and it is at the item''s merchant; for an item with no merchant, any payment qualifies that has no confirmed match and is not a transfer between our own accounts (transfer_pair_id set), and payments with no merchant are preferred (A51). Drafts, cancelled and paid one-offs never qualify. A pair already suggested, confirmed or rejected is not suggested again; an occurrence already covered by confirmed matches (within its amount_tolerance, wb_planned_left), a split already fully confirmed, or either one already holding a suggestion, gets none; otherwise the preferred payment and then the closest date wins, one per occurrence, and one per split, where an item at the payment''s merchant comes first. amount_applied is the smaller of the two amounts. Suggestions in scope that no longer qualify are deleted. Called by wb_process_transactions and after planned-item writes. Security invoker. Returns suggested and removed counts.';
+COMMENT ON FUNCTION "public"."wb_suggest_planned_matches"("p_transaction_ids" "uuid"[], "p_planned_item_ids" "uuid"[]) IS 'Warren Buffet: suggests planned matches for the given transactions and/or planned items (null = all). Imported history is never suggested (P4-D4). A posted split qualifies for a planned item''s due date when it has the same sign, its amount is within the item''s amount_tolerance (exact when 0) and its date within match_window_days, and it is at the item''s merchant; for an item with no merchant, any payment qualifies that has no confirmed match and is not a transfer between our own accounts (transfer_pair_id set), and payments with no merchant are preferred (A51). Drafts, cancelled and paid one-offs never qualify. A pair already suggested, confirmed or rejected is not suggested again; an occurrence already covered by confirmed matches (within its amount_tolerance, wb_planned_left), a split already fully confirmed, or either one already holding a suggestion, gets none; otherwise the preferred payment and then the closest date wins, one per occurrence, and one per split, where an item at the payment''s merchant comes first. amount_applied is the smaller of the two amounts. Suggestions in scope that no longer qualify are deleted. Called by wb_process_transactions and after planned-item writes. Security invoker. Returns suggested and removed counts.';
 
 
 
@@ -14951,6 +14956,7 @@ CREATE TABLE IF NOT EXISTS "public"."wb_accounts" (
     "statement_close_day" integer,
     "payment_due_day" integer,
     "autopay" "text",
+    "history_from" "date",
     CONSTRAINT "wb_accounts_active_window_check" CHECK ((("active_from" IS NULL) OR ("active_until" IS NULL) OR ("active_from" <= "active_until"))),
     CONSTRAINT "wb_accounts_autopay_check" CHECK ((("autopay" IS NULL) OR ("autopay" = ANY (ARRAY['none'::"text", 'minimum'::"text", 'full'::"text"])))),
     CONSTRAINT "wb_accounts_external_id_check" CHECK ((("source" = 'simplefin'::"text") = ("external_id" IS NOT NULL))),
@@ -14999,6 +15005,10 @@ COMMENT ON COLUMN "public"."wb_accounts"."payment_due_day" IS 'Credit cards: the
 
 
 COMMENT ON COLUMN "public"."wb_accounts"."autopay" IS 'Credit cards: none, minimum or full: what the bank pays automatically on the due day. Null until set.';
+
+
+
+COMMENT ON COLUMN "public"."wb_accounts"."history_from" IS 'The account''s earliest imported date (P4-D2). Null when no history was imported.';
 
 
 
@@ -15125,10 +15135,12 @@ CREATE TABLE IF NOT EXISTS "public"."wb_transactions" (
     "notes" "text",
     "subscription_id" "uuid",
     "subscription_source" "text",
+    "source" "text" DEFAULT 'sync'::"text" NOT NULL,
     CONSTRAINT "wb_transactions_kind_check" CHECK ((("kind" IS NULL) OR ("kind" = ANY (ARRAY['spend'::"text", 'income'::"text", 'transfer'::"text", 'refund'::"text", 'investment'::"text", 'interest'::"text", 'fee'::"text"])))),
     CONSTRAINT "wb_transactions_kind_source_check" CHECK ((("kind_source" IS NULL) OR ("kind_source" = ANY (ARRAY['default'::"text", 'rule'::"text", 'claude'::"text", 'manual'::"text"])))),
     CONSTRAINT "wb_transactions_merchant_source_check" CHECK ((("merchant_source" IS NULL) OR ("merchant_source" = ANY (ARRAY['default'::"text", 'rule'::"text", 'claude'::"text", 'manual'::"text"])))),
     CONSTRAINT "wb_transactions_not_own_pair" CHECK ((("transfer_pair_id" IS NULL) OR ("transfer_pair_id" <> "id"))),
+    CONSTRAINT "wb_transactions_source_check" CHECK (("source" = ANY (ARRAY['sync'::"text", 'history_import'::"text"]))),
     CONSTRAINT "wb_transactions_subscription_source_check" CHECK ((("subscription_source" IS NULL) OR ("subscription_source" = ANY (ARRAY['default'::"text", 'claude'::"text", 'manual'::"text"]))))
 );
 
@@ -15185,6 +15197,10 @@ COMMENT ON COLUMN "public"."wb_transactions"."notes" IS 'Free-text note on the t
 
 
 COMMENT ON COLUMN "public"."wb_transactions"."subscription_source" IS 'default = linked by processing or detection; claude or manual = set by hand (wb_link_subscription), never changed by processing, including a hand unlink (subscription_id null).';
+
+
+
+COMMENT ON COLUMN "public"."wb_transactions"."source" IS 'sync = from SimpleFIN; history_import = from a history file (P4-D4), kept out of review, fee flags, planned matching and three rule-health findings.';
 
 
 
@@ -15908,6 +15924,7 @@ CREATE OR REPLACE VIEW "public"."wb_review_queue" WITH ("security_invoker"='true
            FROM (("public"."wb_transactions" "x"
              JOIN "public"."wb_accounts" "a" ON (("a"."id" = "x"."account_id")))
              LEFT JOIN "public"."wb_merchants" "m" ON (("m"."id" = "x"."merchant_id")))
+          WHERE ("x"."source" = 'sync'::"text")
         ), "reasons" AS (
          SELECT "b_1"."transaction_id",
             'no_kind'::"text" AS "reason",
@@ -15965,7 +15982,7 @@ CREATE OR REPLACE VIEW "public"."wb_review_queue" WITH ("security_invoker"='true
              CROSS JOIN LATERAL ( SELECT "x"."id",
                     "x"."reviewed"
                    FROM "public"."wb_transactions" "x"
-                  WHERE (("x"."subscription_id" = "s"."id") AND (NOT "x"."pending"))
+                  WHERE (("x"."subscription_id" = "s"."id") AND (NOT "x"."pending") AND ("x"."source" = 'sync'::"text"))
                   ORDER BY COALESCE("x"."posted_at", "x"."transacted_at") DESC, "x"."id" DESC
                  LIMIT 1) "lc")
           WHERE (("s"."status" = 'watching'::"text") AND (NOT COALESCE("m"."not_subscription", false)) AND (NOT "lc"."reviewed"))
@@ -16019,7 +16036,7 @@ CREATE OR REPLACE VIEW "public"."wb_review_queue" WITH ("security_invoker"='true
 ALTER VIEW "public"."wb_review_queue" OWNER TO "postgres";
 
 
-COMMENT ON VIEW "public"."wb_review_queue" IS 'App: Warren Buffet. One row per transaction and reason: no_kind, missing_required_tag (detail = group), transfer_candidate, split_mismatch, price_change (detail = subscription and expected price; active subscriptions, cleared by recording the new price or marking reviewed), new_recurring (detail = subscription; the newest charge of a watching subscription while it is unreviewed: "Keep watching" marks it reviewed, the next charge brings it back; confirming or dismissing ends it) and planned_match (one row per suggested planned match, detail = planned item and due date; planned_match_id and the planned_* and match_amount columns describe it; confirming or rejecting ends it). Tag, transfer and price reasons cover posted, unreviewed rows only; split_mismatch and planned_match show even when reviewed. security_invoker, so wb_ RLS applies.';
+COMMENT ON VIEW "public"."wb_review_queue" IS 'App: Warren Buffet. One row per synced transaction and reason (imported history never appears, P4-D4): no_kind, missing_required_tag (detail = group), transfer_candidate, split_mismatch, price_change (detail = subscription and expected price; active subscriptions, cleared by recording the new price or marking reviewed), new_recurring (detail = subscription; the newest synced charge of a watching subscription while it is unreviewed: "Keep watching" marks it reviewed, the next charge brings it back; confirming or dismissing ends it) and planned_match (one row per suggested planned match, detail = planned item and due date; planned_match_id and the planned_* and match_amount columns describe it; confirming or rejecting ends it). Tag, transfer and price reasons cover posted, unreviewed rows only; split_mismatch and planned_match show even when reviewed. security_invoker, so wb_ RLS applies.';
 
 
 
@@ -16166,6 +16183,7 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health_all" WITH ("security_invoker"='t
                     "x"."id" AS "transaction_id",
                     "x"."kind",
                     "x"."kind_source",
+                    "x"."source",
                     ((COALESCE("x"."posted_at", "x"."transacted_at") AT TIME ZONE 'America/Los_Angeles'::"text"))::"date" AS "d"
                    FROM ("rule_merchant" "r"
                      JOIN "public"."wb_transactions" "x" ON ((("r"."id" = ANY ("x"."matched_rule_ids")) AND (NOT "x"."pending"))))
@@ -16227,11 +16245,12 @@ END AS "days",
                           WHERE (("s"."transaction_id" = "h"."transaction_id") AND ("s"."project_source" = ANY (ARRAY['claude'::"text", 'manual'::"text"])) AND ("s"."project_id" IS DISTINCT FROM "r"."set_project_id"))))) AS "project_changed"
                    FROM ("hits" "h"
                      JOIN "rule_merchant" "r" ON (("r"."id" = "h"."rule_id")))
+                  WHERE ("h"."source" = 'sync'::"text")
                 ), "payee_keys" AS (
                  SELECT "x"."merchant_id",
                     NULLIF("btrim"("regexp_replace"("regexp_replace"("split_part"("lower"(COALESCE(NULLIF("btrim"("x"."payee"), ''::"text"), "x"."clean_description", ''::"text")), '*'::"text", 1), '[0-9]'::"text", ''::"text", 'g'::"text"), '\s+'::"text", ' '::"text", 'g'::"text")), ''::"text") AS "payee"
                    FROM "public"."wb_transactions" "x"
-                  WHERE (("x"."merchant_id" IS NOT NULL) AND (NOT "x"."pending"))
+                  WHERE (("x"."merchant_id" IS NOT NULL) AND (NOT "x"."pending") AND ("x"."source" = 'sync'::"text"))
                 ), "merchant_payees" AS (
                  SELECT "k"."merchant_id",
                     ("count"(*))::integer AS "n_txns",
@@ -16314,7 +16333,7 @@ END AS "days",
              JOIN LATERAL ( SELECT ("count"(*) FILTER (WHERE ("ov"."tag_swap" OR "ov"."tag_removed" OR "ov"."kind_changed" OR "ov"."re_split" OR "ov"."project_changed")))::integer AS "n",
                     (( SELECT "count"(*) AS "count"
                            FROM "hits" "h"
-                          WHERE ("h"."rule_id" = "r"."id")))::integer AS "of_n",
+                          WHERE (("h"."rule_id" = "r"."id") AND ("h"."source" = 'sync'::"text"))))::integer AS "of_n",
                     ("count"(*) FILTER (WHERE "ov"."tag_swap"))::integer AS "swaps",
                     ("count"(*) FILTER (WHERE "ov"."tag_removed"))::integer AS "removals",
                     ("count"(*) FILTER (WHERE "ov"."kind_changed"))::integer AS "kinds",
@@ -16372,7 +16391,7 @@ END AS "days",
                              JOIN "public"."wb_tag_groups" "g" ON (("g"."id" = "st"."group_id")))
                           WHERE (("s"."transaction_id" = "x"."id") AND ("g"."name" = 'Category'::"text"))))) AS "any_category"
                    FROM "public"."wb_transactions" "x"
-                  WHERE (("x"."merchant_id" = "m"."id") AND (NOT "x"."pending") AND ("x"."kind" = ANY (ARRAY['spend'::"text", 'refund'::"text", 'fee'::"text"])))) "c" ON (true))
+                  WHERE (("x"."merchant_id" = "m"."id") AND (NOT "x"."pending") AND ("x"."kind" = ANY (ARRAY['spend'::"text", 'refund'::"text", 'fee'::"text"])) AND ("x"."source" = 'sync'::"text"))) "c" ON (true))
           WHERE (("c"."n" > 0) AND (NOT COALESCE("c"."any_category", false)))
         )
  SELECT "f"."finding",
@@ -16395,7 +16414,7 @@ END AS "days",
 ALTER VIEW "public"."wb_rule_health_all" OWNER TO "postgres";
 
 
-COMMENT ON VIEW "public"."wb_rule_health_all" IS 'App: Warren Buffet. Every rule-health finding (see wb_rule_health) with subject_id (the rule, else the merchant) and its acknowledgement: acknowledged is true while n has not grown past acked_n, with ack_reason and acked_at. never_fires (A16, A54, A55, P4-D1): an active rule quiet for more than both 1.5 times its expected interval and 30 days, counted from its last match or, when it never matched, from its creation; the interval is the most common gap between the merchant''s linked charges (up to 10 days counts as a week, up to 17 as two weeks, longer rounds to whole months, a tie goes to the longer), and with fewer than 3 linked charges the merchant''s shortest subscription interval, else the median gap between its matches, else 365 or 91 days when its notes say annual or quarterly, else 30. detail gives the date and the interval ("expected about every day" or "every N days"). often_overridden counts tag swaps and removals, kind changes, re-splits, and a project the rule set that was changed or removed by hand; detail reads "tag swapped on 2, removed on 2 (of 5)". security_invoker, so wb_ RLS applies.';
+COMMENT ON VIEW "public"."wb_rule_health_all" IS 'App: Warren Buffet. Every rule-health finding (see wb_rule_health) with subject_id (the rule, else the merchant) and its acknowledgement: acknowledged is true while n has not grown past acked_n, with ack_reason and acked_at. never_fires (A16, A54, A55, P4-D1): an active rule quiet for more than both 1.5 times its expected interval and 30 days, counted from its last match or, when it never matched, from its creation; the interval is the most common gap between the merchant''s linked charges (up to 10 days counts as a week, up to 17 as two weeks, longer rounds to whole months, a tie goes to the longer), and with fewer than 3 linked charges the merchant''s shortest subscription interval, else the median gap between its matches, else 365 or 91 days when its notes say annual or quarterly, else 30. detail gives the date and the interval ("expected about every day" or "every N days"). often_overridden counts tag swaps and removals, kind changes, re-splits, and a project the rule set that was changed or removed by hand; detail reads "tag swapped on 2, removed on 2 (of 5)". Imported history is left out of too_broad, often_overridden and merchant_no_category, and counts for the interval (P4-D4). security_invoker, so wb_ RLS applies.';
 
 
 
@@ -16415,7 +16434,7 @@ CREATE OR REPLACE VIEW "public"."wb_rule_health" WITH ("security_invoker"='true'
 ALTER VIEW "public"."wb_rule_health" OWNER TO "postgres";
 
 
-COMMENT ON VIEW "public"."wb_rule_health" IS 'App: Warren Buffet. One row per finding not acknowledged (finding, rule_id, rule_name, merchant_id, merchant_name, n, of_n, detail): never_fires (quiet for more than both 1.5 times the rule''s expected interval and 30 days, A54, A55, P4-D1), too_broad (merchant-level: 3+ distinct normalized payees on a merchant with a rule), often_overridden (n of of_n hits beaten by hand, at least 2 and 25%, a changed project included), duplicate_rules, rule_missing, merchant_no_category. An acknowledged finding (wb_rule_health_acks) is hidden until its n grows past the acknowledged n; wb_rule_health_all has them all. Read by get_wb_rule_health, wb_action_items and the weekly cleanup task, which proposes fixes and never writes them. security_invoker, so wb_ RLS applies.';
+COMMENT ON VIEW "public"."wb_rule_health" IS 'App: Warren Buffet. One row per finding not acknowledged (finding, rule_id, rule_name, merchant_id, merchant_name, n, of_n, detail): never_fires (quiet for more than both 1.5 times the rule''s expected interval and 30 days, A54, A55, P4-D1), too_broad (merchant-level: 3+ distinct normalized payees on a merchant with a rule), often_overridden (n of of_n hits beaten by hand, at least 2 and 25%, a changed project included), duplicate_rules, rule_missing, merchant_no_category. too_broad, often_overridden and merchant_no_category read synced rows only (P4-D4). An acknowledged finding (wb_rule_health_acks) is hidden until its n grows past the acknowledged n; wb_rule_health_all has them all. Read by get_wb_rule_health, wb_action_items and the weekly cleanup task, which proposes fixes and never writes them. security_invoker, so wb_ RLS applies.';
 
 
 
@@ -16638,7 +16657,7 @@ CREATE OR REPLACE VIEW "public"."wb_transaction_list" WITH ("security_invoker"='
     (( SELECT "count"(*) AS "count"
            FROM "public"."wb_splits" "s"
           WHERE ("s"."transaction_id" = "x"."id")))::integer AS "split_count",
-    ((("x"."kind" IS NULL) OR ((NOT "x"."pending") AND (NOT "x"."reviewed") AND "x"."transfer_candidate" AND ("x"."transfer_pair_id" IS NULL)) OR ((NOT "x"."pending") AND (NOT "x"."reviewed") AND (EXISTS ( SELECT 1
+    ((("x"."source" = 'sync'::"text") AND (("x"."kind" IS NULL) OR ((NOT "x"."pending") AND (NOT "x"."reviewed") AND "x"."transfer_candidate" AND ("x"."transfer_pair_id" IS NULL)) OR ((NOT "x"."pending") AND (NOT "x"."reviewed") AND (EXISTS ( SELECT 1
            FROM ("public"."wb_tag_groups" "g"
              JOIN "public"."wb_splits" "s" ON (("s"."transaction_id" = "x"."id")))
           WHERE (("x"."kind" = ANY ("g"."required_for_kinds")) AND (NOT (EXISTS ( SELECT 1
@@ -16649,11 +16668,11 @@ CREATE OR REPLACE VIEW "public"."wb_transaction_list" WITH ("security_invoker"='
            FROM "public"."wb_merchants" "sm"
           WHERE ("sm"."id" = "sub"."merchant_id")), false)) AND ("x"."id" = ( SELECT "y"."id"
            FROM "public"."wb_transactions" "y"
-          WHERE (("y"."subscription_id" = "sub"."id") AND (NOT "y"."pending"))
+          WHERE (("y"."subscription_id" = "sub"."id") AND (NOT "y"."pending") AND ("y"."source" = 'sync'::"text"))
           ORDER BY COALESCE("y"."posted_at", "y"."transacted_at") DESC, "y"."id" DESC
          LIMIT 1))) OR (EXISTS ( SELECT 1
            FROM "public"."wb_planned_matches" "pm"
-          WHERE (("pm"."transaction_id" = "x"."id") AND ("pm"."status" = 'suggested'::"text"))))) IS TRUE) AS "needs_review",
+          WHERE (("pm"."transaction_id" = "x"."id") AND ("pm"."status" = 'suggested'::"text")))))) IS TRUE) AS "needs_review",
     COALESCE(( SELECT "jsonb_agg"("jsonb_build_object"('tag_id', "e"."tag_id", 'tag_name', "tg"."name", 'rule_id', "e"."rule_id", 'source', "e"."source", 'removed_at', "e"."created_at") ORDER BY "tg"."name") AS "jsonb_agg"
            FROM ("public"."wb_tag_exclusions" "e"
              JOIN "public"."wb_tags" "tg" ON (("tg"."id" = "e"."tag_id")))
@@ -16665,7 +16684,8 @@ CREATE OR REPLACE VIEW "public"."wb_transaction_list" WITH ("security_invoker"='
     COALESCE(( SELECT "array_agg"(DISTINCT "p"."name" ORDER BY "p"."name") AS "array_agg"
            FROM ("public"."wb_splits" "s"
              JOIN "public"."wb_projects" "p" ON (("p"."id" = "s"."project_id")))
-          WHERE ("s"."transaction_id" = "x"."id")), '{}'::"text"[]) AS "project_names"
+          WHERE ("s"."transaction_id" = "x"."id")), '{}'::"text"[]) AS "project_names",
+    "x"."source"
    FROM ((("public"."wb_transactions" "x"
      JOIN "public"."wb_accounts" "a" ON (("a"."id" = "x"."account_id")))
      LEFT JOIN "public"."wb_merchants" "m" ON (("m"."id" = "x"."merchant_id")))
@@ -16675,7 +16695,7 @@ CREATE OR REPLACE VIEW "public"."wb_transaction_list" WITH ("security_invoker"='
 ALTER VIEW "public"."wb_transaction_list" OWNER TO "postgres";
 
 
-COMMENT ON VIEW "public"."wb_transaction_list" IS 'App: Warren Buffet. Transactions with account label, merchant name, tag_names (text[], filter with overlaps), split_count, needs_review (true when the row is in wb_review_queue, including a suggested planned match), excluded_tags (tags removed by hand, which no rule puts back: tag_id, tag_name, rule_id, source, removed_at), notes, the linked subscription (subscription_id, subscription_source, subscription_name), and project_names (text[], the projects on any of its splits). No raw jsonb. security_invoker, so wb_ RLS applies.';
+COMMENT ON VIEW "public"."wb_transaction_list" IS 'App: Warren Buffet. Transactions with account label, merchant name, tag_names (text[], filter with overlaps), split_count, needs_review (true when the row is in wb_review_queue, including a suggested planned match; always false for imported history), excluded_tags (tags removed by hand, which no rule puts back: tag_id, tag_name, rule_id, source, removed_at), notes, the linked subscription (subscription_id, subscription_source, subscription_name), project_names (text[], the projects on any of its splits), and source (sync or history_import). No raw jsonb. security_invoker, so wb_ RLS applies.';
 
 
 

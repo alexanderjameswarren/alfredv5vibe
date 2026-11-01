@@ -74,6 +74,13 @@ test("numbers in the wording match the code", () => {
   says("overview.red_flags", `last ${N.FLAG_DAYS} days`);
 });
 
+test("help says imported history is left out", () => {
+  for (const key of ["transactions.needs_review", "overview.red_flags", "rule_health.too_broad",
+    "rule_health.often_overridden", "rule_health.merchant_no_category"]) {
+    says(key, "Imported history is left out.");
+  }
+});
+
 test("the yearly and weekly conversions are what monthlyEquivalent does", () => {
   expect(monthlyEquivalent({ current_price: 120, interval_count: 12, interval_unit: "month" })).toBe(120 / MONTHS_PER_YEAR);
   expect(monthlyEquivalent({ current_price: 12, interval_count: 1, interval_unit: "week" })).toBe((12 * WEEKS_PER_YEAR) / MONTHS_PER_YEAR);

@@ -146,7 +146,7 @@ export const HELP = {
     title: "Needs review",
     what: "Transactions that are in the Review tab for any reason.",
     included: "The same rules as Review: not processed, needs a category, looks like a transfer, splits don't add up, price changed, looks like a subscription.",
-    leftOut: "Anything marked reviewed, except splits that don't add up.",
+    leftOut: "Anything marked reviewed, except splits that don't add up. Imported history is left out.",
     todo: "Work through them in the Review tab.",
   },
   "transaction.kind": {
@@ -360,7 +360,7 @@ export const HELP = {
     title: "Red flags",
     what: "Card fees and interest charged on your cards and credit lines, and card bills past their due date.",
     included: "Fees and interest from the last 90 days. A fee turns green when a refund of the same amount comes back on the same card afterwards: a credit marked as a refund, not a payment or a move between your own accounts, and each refund counts for one fee only.",
-    leftOut: "Fees older than 90 days, and a fee once it is marked Reviewed with a note saying how it was handled.",
+    leftOut: "Fees older than 90 days, and a fee once it is marked Reviewed with a note saying how it was handled. Imported history is left out.",
     todo: "Call about the fee, then open it, tick Reviewed and add a note. A past-due bill clears once the payment posts.",
   },
   "overview.todo": {
@@ -452,7 +452,7 @@ export const HELP = {
     title: "Too broad",
     what: "A merchant with a rule whose charges come from several different payees, which may be different shops.",
     included: "Merchants with 3 or more different payees, after ignoring digits and anything after a \"*\".",
-    leftOut: "Merchants with no rule.",
+    leftOut: "Merchants with no rule. Imported history is left out.",
     todo: "Split the merchant, or acknowledge it if the payees really are one business.",
   },
   "rule_health.often_overridden": {
@@ -460,7 +460,7 @@ export const HELP = {
     title: "Often overridden",
     what: "A rule that people keep correcting by hand.",
     included: "A rule corrected on at least 2 of its matches and at least a quarter of them: a tag swapped or removed, a kind changed, a re-split, or a project the rule set changed or removed.",
-    leftOut: "Corrections to things the rule never set.",
+    leftOut: "Corrections to things the rule never set. Imported history is left out.",
     todo: "Change what the rule sets, or acknowledge it if the corrections are one-offs.",
   },
   "rule_health.duplicate_rules": {
@@ -484,7 +484,7 @@ export const HELP = {
     title: "Merchant with no category",
     what: "A merchant whose spending never has a Category.",
     included: "Merchants with settled spending, fees or refunds, none of it with a Category.",
-    leftOut: "Income and transfers.",
+    leftOut: "Income and transfers. Imported history is left out.",
     todo: "Add a rule that sets the category.",
   },
 };
