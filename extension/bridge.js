@@ -14,7 +14,7 @@
 import {
   HOST_NAME, HEARTBEAT_MS, DEBOUNCE_MS, buildTabsMessage, buildChatsMessage, nextDelay, isHostMissing, debounce,
   normaliseUrl, pickTab, focusResult, checkPrompt, cleanHosts, promptFrame, sendTagOf,
-  approveBanner, approveTokenOf, approveWatcher, chatForRun, cleanRun, closesApproveTab, GRANT_BADGE, grantNotice, hostOrigins, isApprovePage,
+  approveStatus, approveTokenOf, approveWatcher, chatForRun, cleanRun, closesApproveTab, GRANT_BADGE, grantNotice, hostOrigins, isApprovePage,
   postProblem, pruneApprovals,
 } from "./lib/bridge-core.js";
 
@@ -288,7 +288,7 @@ async function sayAboutRun(run, text) {
   console.info("[Alfred bridge]", run.runId, text);
   const page = Number.isInteger(run.approveTabId) ? await chrome.tabs.get(run.approveTabId).catch(() => null) : null;
   const shown = isApprovePage(page?.url, approvals.hosts) &&
-    await chrome.scripting.executeScript({ target: { tabId: page.id }, func: approveBanner, args: [text, run.runId] }).then(() => true, () => false);
+    await chrome.scripting.executeScript({ target: { tabId: page.id }, func: approveStatus, args: [text, run.runId] }).then((r) => r?.[0]?.result === true, () => false);
   if (shown) return;
   await chrome.action.setBadgeBackgroundColor({ color: "#d97706" });
   await chrome.action.setBadgeText({ text: POST_BADGE });
