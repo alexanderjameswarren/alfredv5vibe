@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-01 11:53, through migration 191 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-01 12:10, through migration 192 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -100,6 +100,69 @@ VERIFY WITH: select platform.check_conformance();  -- tables: platform.conforman
 Run check_platform_conformance as the final step of every migration block.
 
 When you mention any Alfred, SAM, Ken, DJ or Warren Buffet record, link it as https://alfredv5vibe.vercel.app/<id> using its id, instead of describing where to find it.';
+
+
+
+CREATE OR REPLACE FUNCTION "platform"."apply_reader_access"("p_table" "regclass") RETURNS "text"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'pg_catalog', 'pg_temp'
+    AS $$
+declare
+  c_alex constant text := '26f0707f-b586-4a3e-841c-8c313d6ab1e5';
+  v_schema   text;
+  v_name     text;
+  v_kind     char;
+  v_uid_type text;
+  v_settings jsonb;
+  v_cols     text;
+begin
+  select n.nspname, c.relname, c.relkind
+    into v_schema, v_name, v_kind
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+   where c.oid = p_table;
+  if v_schema is null then
+    raise exception 'apply_reader_access: could not resolve %', p_table;
+  end if;
+
+  -- From nothing each time, so a column that turned secret or a table that turned hidden loses access.
+  -- Revoking on the table takes its column grants with it.
+  execute format('revoke all on %I.%I from claude_reader', v_schema, v_name);
+  if v_kind in ('r', 'p') then
+    execute format('drop policy if exists claude_reader_read on %I.%I', v_schema, v_name);
+  else
+    return 'left out: not a table (a view or similar)';
+  end if;
+  if v_schema <> 'public' then
+    return 'left out: not in public';
+  end if;
+
+  select a.atttypid::regtype::text into v_uid_type
+    from pg_attribute a
+   where a.attrelid = p_table and a.attname = 'user_id' and a.attnum > 0 and not a.attisdropped;
+  if v_uid_type is null then
+    return 'left out: no user_id column';
+  end if;
+
+  v_settings := public.platform_read_settings(v_name);
+  if jsonb_array_length(v_settings) = 0 then
+    return 'left out: hidden from MCP reads';
+  end if;
+  select string_agg(format('%I', col ->> 'name'), ', ') into v_cols
+    from jsonb_array_elements(v_settings -> 0 -> 'columns') col;
+
+  execute format('grant select (%s) on %I.%I to claude_reader', v_cols, v_schema, v_name);
+  execute format('create policy claude_reader_read on %I.%I for select to claude_reader using (user_id = %L::%s)',
+                 v_schema, v_name, c_alex, v_uid_type);
+  return 'covered';
+end;
+$$;
+
+
+ALTER FUNCTION "platform"."apply_reader_access"("p_table" "regclass") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "platform"."apply_reader_access"("p_table" "regclass") IS 'Switchboard: gives claude_reader one table''s readable columns and a rule naming Alex''s id, or takes them away. Called by register_table and set_read_settings. Returns "covered" or "left out: why".';
 
 
 
@@ -617,6 +680,9 @@ begin
     secret_columns   = coalesce(p_secret_columns, platform.registry.secret_columns),
     cleared_columns  = coalesce(p_cleared_columns, platform.registry.cleared_columns);
 
+  -- (f) What Claude's read-only queries may see of it.
+  perform platform.apply_reader_access(p_table);
+
   return format('registered %s (policy=%s, audited=%s, exempt=%s, granted authenticated + service_role, anon stripped, mcp_read=%s)',
                 v_full, p_policy_mode, p_audited, p_exempt,
                 (select mcp_read from platform.registry where table_name = v_full));
@@ -724,6 +790,8 @@ begin
          secret_columns  = coalesce(p_secret_columns, secret_columns),
          cleared_columns = coalesce(p_cleared_columns, cleared_columns)
    where table_name = v_full;
+
+  perform platform.apply_reader_access(p_table);
 
   return format('read settings for %s: %s', v_full,
     (select format('mcp_read=%s secret=%s cleared=%s', mcp_read, secret_columns, cleared_columns)
@@ -14830,6 +14898,62 @@ COMMENT ON COLUMN "public"."switchboard_actions"."updated_at" IS 'Last change. S
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."switchboard_read_log" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "query_text" "text" NOT NULL,
+    "ok" boolean NOT NULL,
+    "row_count" integer,
+    "truncated" boolean DEFAULT false NOT NULL,
+    "error" "text",
+    "took_ms" integer,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."switchboard_read_log" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."switchboard_read_log" IS 'SWITCHBOARD. One row per read-only query Claude ran: what it asked and how it went, never the rows it got. Written by get_sql_read; append-only, so authenticated can read and add but not change or remove. Spec: docs/technical-spec-switchboard2-h8r.md 8.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_read_log"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_read_log"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_read_log"."query_text" IS 'The statement as Claude sent it.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_read_log"."ok" IS 'False when Postgres refused it or it timed out.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_read_log"."row_count" IS 'Rows returned, after the cap. Null when it failed.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_read_log"."truncated" IS 'True when the 1000-row cap cut the answer.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_read_log"."error" IS 'Postgres''s message when it failed.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_read_log"."took_ms" IS 'How long it took.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_read_log"."created_at" IS 'When it ran.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."switchboard_runs" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -17341,6 +17465,11 @@ ALTER TABLE ONLY "public"."switchboard_actions"
 
 
 
+ALTER TABLE ONLY "public"."switchboard_read_log"
+    ADD CONSTRAINT "switchboard_read_log_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."switchboard_runs"
     ADD CONSTRAINT "switchboard_runs_pkey" PRIMARY KEY ("id");
 
@@ -19712,6 +19841,11 @@ ALTER TABLE ONLY "public"."switchboard_actions"
 
 
 
+ALTER TABLE ONLY "public"."switchboard_read_log"
+    ADD CONSTRAINT "switchboard_read_log_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
 ALTER TABLE ONLY "public"."switchboard_runs"
     ADD CONSTRAINT "switchboard_runs_action_id_fkey" FOREIGN KEY ("action_id") REFERENCES "public"."switchboard_actions"("id");
 
@@ -20196,6 +20330,358 @@ ALTER TABLE "public"."claude_notifications" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "claude_notifications_owner_access" ON "public"."claude_notifications" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."activity" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."app_profiles" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."arnold_goals" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."arnold_plans" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."claim_blocks" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."claude_notification_settings" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."claude_notifications" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."clips" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."contexts" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."dj_album_tracks" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."dj_albums" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."dj_artist_tags" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."dj_artists" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."dj_concerts" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."dj_feedback" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."dj_known_disagreements" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."dj_playlists" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."dj_plays" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."dj_tracks" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."dj_venues" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."drive_mix_servings" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."drive_mix_songs" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."email_capture_senders" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."events" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."executions" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."finish_summaries" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."group_types" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."inbox" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."intents" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."item_collections" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."item_groups" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."items" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."job_applications" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."ken_areas" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."ken_attempts" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."ken_items" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."ken_misconceptions" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."notes" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."notification_steps" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."overwatch_notes" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."overwatch_plans" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."overwatch_seen_releases" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."overwatch_watch" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."platform_inventory" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."platform_open_work" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."platform_runs" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."platform_schedules" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."portfolio_lanes" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."portfolio_plans" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."portfolio_slices" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."portfolios" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."process_friction" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."project_estimates" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."project_links" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."project_plans" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."push_subscriptions" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."reminders" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."sam_goals" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."sam_passes" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."sam_practice_plan_items" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."sam_practice_plan_songs" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."sam_practice_plans" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."sam_sessions" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."sam_snippets" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."sam_songs" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."switchboard_actions" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."switchboard_read_log" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."switchboard_runs" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."switchboard_settings" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_accounts" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_balance_snapshots" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_holding_snapshots" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_merchants" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_planned_items" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_planned_matches" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_planned_skips" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_projects" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_rule_health_acks" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_rules" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_settings" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_split_tags" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_splits" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_subscription_prices" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_subscriptions" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_tag_exclusions" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_tag_groups" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_tags" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_transactions" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
 
 
 
@@ -20729,6 +21215,13 @@ CREATE POLICY "switchboard_actions_owner_access" ON "public"."switchboard_action
 
 
 
+ALTER TABLE "public"."switchboard_read_log" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "switchboard_read_log_owner_access" ON "public"."switchboard_read_log" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
 ALTER TABLE "public"."switchboard_runs" ENABLE ROW LEVEL SECURITY;
 
 
@@ -20956,6 +21449,11 @@ GRANT USAGE ON SCHEMA "public" TO "postgres";
 GRANT USAGE ON SCHEMA "public" TO "anon";
 GRANT USAGE ON SCHEMA "public" TO "authenticated";
 GRANT USAGE ON SCHEMA "public" TO "service_role";
+GRANT USAGE ON SCHEMA "public" TO "claude_reader";
+
+
+
+REVOKE ALL ON FUNCTION "platform"."apply_reader_access"("p_table" "regclass") FROM PUBLIC;
 
 
 
@@ -21098,6 +21596,54 @@ GRANT ALL ON TABLE "public"."reminders" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."reminders" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."reminders" TO "claude_reader";
+
+
+
+GRANT SELECT("text") ON TABLE "public"."reminders" TO "claude_reader";
+
+
+
+GRANT SELECT("due_at") ON TABLE "public"."reminders" TO "claude_reader";
+
+
+
+GRANT SELECT("state") ON TABLE "public"."reminders" TO "claude_reader";
+
+
+
+GRANT SELECT("cancel_reason") ON TABLE "public"."reminders" TO "claude_reader";
+
+
+
+GRANT SELECT("sent_at") ON TABLE "public"."reminders" TO "claude_reader";
+
+
+
+GRANT SELECT("inbox_id") ON TABLE "public"."reminders" TO "claude_reader";
+
+
+
+GRANT SELECT("intent_id") ON TABLE "public"."reminders" TO "claude_reader";
+
+
+
+GRANT SELECT("created_by") ON TABLE "public"."reminders" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."reminders" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."reminders" TO "claude_reader";
+
+
+
 REVOKE ALL ON FUNCTION "public"."create_reminder"("p_text" "text", "p_due_at" timestamp with time zone, "p_inbox_id" "text", "p_intent_id" "text", "p_created_by" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."create_reminder"("p_text" "text", "p_due_at" timestamp with time zone, "p_inbox_id" "text", "p_intent_id" "text", "p_created_by" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."create_reminder"("p_text" "text", "p_due_at" timestamp with time zone, "p_inbox_id" "text", "p_intent_id" "text", "p_created_by" "text") TO "service_role";
@@ -21166,6 +21712,62 @@ GRANT ALL ON FUNCTION "public"."drive_mix_songs_set_artist_key"() TO "service_ro
 
 GRANT ALL ON TABLE "public"."drive_mix_songs" TO "authenticated";
 GRANT ALL ON TABLE "public"."drive_mix_songs" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("video_id") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("artist") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("artist_key") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("decade") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("genre") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("retired_reason") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("added_at") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("thumbs") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("thumbs_at") ON TABLE "public"."drive_mix_songs" TO "claude_reader";
 
 
 
@@ -21247,6 +21849,82 @@ GRANT ALL ON FUNCTION "public"."ken_record_attempts"("p_attempts" "jsonb") TO "s
 
 GRANT ALL ON TABLE "public"."ken_items" TO "authenticated";
 GRANT ALL ON TABLE "public"."ken_items" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("area_id") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("subtopic") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("tags") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("mode") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("accuracy") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("volatility") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("prompt") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("ground_truth") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("verified_at") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("tricky_fragments") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("mastery") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("priority") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("superseded_by") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("last_seen") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."ken_items" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."ken_items" TO "claude_reader";
 
 
 
@@ -21885,6 +22563,66 @@ GRANT ALL ON TABLE "public"."activity" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("occurred_at") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("app_id") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("group_id") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("target_type") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("target_id") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("summary") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("source_ref") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("tags") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."activity" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."allowed_emails" TO "authenticated";
 GRANT ALL ON TABLE "public"."allowed_emails" TO "service_role";
 
@@ -21892,6 +22630,42 @@ GRANT ALL ON TABLE "public"."allowed_emails" TO "service_role";
 
 GRANT ALL ON TABLE "public"."app_profiles" TO "authenticated";
 GRANT ALL ON TABLE "public"."app_profiles" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."app_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."app_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("app_id") ON TABLE "public"."app_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("activity_recipe") ON TABLE "public"."app_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("rhythm_days") ON TABLE "public"."app_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("current_state") ON TABLE "public"."app_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("current_state_updated_at") ON TABLE "public"."app_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."app_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."app_profiles" TO "claude_reader";
 
 
 
@@ -21905,8 +22679,132 @@ GRANT ALL ON TABLE "public"."arnold_goals" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("plan_id") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("position") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("goal_key") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("label") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("intent_id") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("measure") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("target") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("period") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("usual_days") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("pace_checkpoints") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."arnold_goals" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."arnold_plans" TO "authenticated";
 GRANT ALL ON TABLE "public"."arnold_plans" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("starts_on") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("ended_at") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("supersedes_plan_id") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("focus") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("change_summary") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("internal_notes") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("review_instructions") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("nudge_instructions") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("voice_notes") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("review_cadence_days") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("notification_settings") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("prompt_templates") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."arnold_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."arnold_plans" TO "claude_reader";
 
 
 
@@ -21915,8 +22813,88 @@ GRANT ALL ON TABLE "public"."claim_blocks" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."claim_blocks" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."claim_blocks" TO "claude_reader";
+
+
+
+GRANT SELECT("waiter_code") ON TABLE "public"."claim_blocks" TO "claude_reader";
+
+
+
+GRANT SELECT("holder_code") ON TABLE "public"."claim_blocks" TO "claude_reader";
+
+
+
+GRANT SELECT("item") ON TABLE "public"."claim_blocks" TO "claude_reader";
+
+
+
+GRANT SELECT("run_tag") ON TABLE "public"."claim_blocks" TO "claude_reader";
+
+
+
+GRANT SELECT("blocked_at") ON TABLE "public"."claim_blocks" TO "claude_reader";
+
+
+
+GRANT SELECT("last_seen_at") ON TABLE "public"."claim_blocks" TO "claude_reader";
+
+
+
+GRANT SELECT("repeat_count") ON TABLE "public"."claim_blocks" TO "claude_reader";
+
+
+
+GRANT SELECT("cleared_at") ON TABLE "public"."claim_blocks" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."claim_blocks" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."claude_notification_settings" TO "authenticated";
 GRANT ALL ON TABLE "public"."claude_notification_settings" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."claude_notification_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."claude_notification_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("window_start") ON TABLE "public"."claude_notification_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("window_end") ON TABLE "public"."claude_notification_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("max_per_hour") ON TABLE "public"."claude_notification_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("max_per_day") ON TABLE "public"."claude_notification_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("apps") ON TABLE "public"."claude_notification_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."claude_notification_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."claude_notification_settings" TO "claude_reader";
 
 
 
@@ -21925,8 +22903,148 @@ GRANT ALL ON TABLE "public"."claude_notifications" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("app") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("job") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("channel") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("body") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("link") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("local_date") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("dedupe_key") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("delivery_status") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("delivery_detail") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."claude_notifications" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."clips" TO "authenticated";
 GRANT ALL ON TABLE "public"."clips" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("url") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("page_text") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("text_truncated") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("links") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("slice_paths") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("slice_count") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("screenshot_truncated") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("page_width") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("page_height") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("inbox_id") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("captured_at") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("links_truncated") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("run_tag") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("repo") ON TABLE "public"."clips" TO "claude_reader";
+
+
+
+GRANT SELECT("branch") ON TABLE "public"."clips" TO "claude_reader";
 
 
 
@@ -21945,8 +23063,100 @@ GRANT ALL ON TABLE "public"."contexts" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("description") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("keywords") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("shared") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("pinned") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("archived") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("default_collection_id") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("app_id") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("default_group_type_id") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
+GRANT SELECT("archived_at") ON TABLE "public"."contexts" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."dj_album_tracks" TO "authenticated";
 GRANT ALL ON TABLE "public"."dj_album_tracks" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."dj_album_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."dj_album_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("album_id") ON TABLE "public"."dj_album_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("video_id") ON TABLE "public"."dj_album_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."dj_album_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("artist") ON TABLE "public"."dj_album_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("duration_seconds") ON TABLE "public"."dj_album_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("position") ON TABLE "public"."dj_album_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."dj_album_tracks" TO "claude_reader";
 
 
 
@@ -21955,8 +23165,92 @@ GRANT ALL ON TABLE "public"."dj_albums" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."dj_albums" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."dj_albums" TO "claude_reader";
+
+
+
+GRANT SELECT("artist_id") ON TABLE "public"."dj_albums" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."dj_albums" TO "claude_reader";
+
+
+
+GRANT SELECT("yt_album_id") ON TABLE "public"."dj_albums" TO "claude_reader";
+
+
+
+GRANT SELECT("release_year") ON TABLE "public"."dj_albums" TO "claude_reader";
+
+
+
+GRANT SELECT("tags") ON TABLE "public"."dj_albums" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."dj_albums" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."dj_albums" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."dj_albums" TO "claude_reader";
+
+
+
+GRANT SELECT("artist") ON TABLE "public"."dj_albums" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_on") ON TABLE "public"."dj_albums" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."dj_artist_tags" TO "authenticated";
 GRANT ALL ON TABLE "public"."dj_artist_tags" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."dj_artist_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."dj_artist_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("artist") ON TABLE "public"."dj_artist_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("tag") ON TABLE "public"."dj_artist_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("note") ON TABLE "public"."dj_artist_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."dj_artist_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."dj_artist_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."dj_artist_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("decided_at") ON TABLE "public"."dj_artist_tags" TO "claude_reader";
 
 
 
@@ -21965,8 +23259,88 @@ GRANT ALL ON TABLE "public"."dj_artists" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."dj_artists" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."dj_artists" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."dj_artists" TO "claude_reader";
+
+
+
+GRANT SELECT("mbid") ON TABLE "public"."dj_artists" TO "claude_reader";
+
+
+
+GRANT SELECT("yt_channel_id") ON TABLE "public"."dj_artists" TO "claude_reader";
+
+
+
+GRANT SELECT("tags") ON TABLE "public"."dj_artists" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."dj_artists" TO "claude_reader";
+
+
+
+GRANT SELECT("last_explored_at") ON TABLE "public"."dj_artists" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."dj_artists" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."dj_concerts" TO "authenticated";
 GRANT ALL ON TABLE "public"."dj_concerts" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."dj_concerts" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."dj_concerts" TO "claude_reader";
+
+
+
+GRANT SELECT("artist_id") ON TABLE "public"."dj_concerts" TO "claude_reader";
+
+
+
+GRANT SELECT("venue_id") ON TABLE "public"."dj_concerts" TO "claude_reader";
+
+
+
+GRANT SELECT("tour_name") ON TABLE "public"."dj_concerts" TO "claude_reader";
+
+
+
+GRANT SELECT("starts_on") ON TABLE "public"."dj_concerts" TO "claude_reader";
+
+
+
+GRANT SELECT("ends_on") ON TABLE "public"."dj_concerts" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."dj_concerts" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."dj_concerts" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."dj_concerts" TO "claude_reader";
+
+
+
+GRANT SELECT("reviewed_on") ON TABLE "public"."dj_concerts" TO "claude_reader";
 
 
 
@@ -21975,8 +23349,92 @@ GRANT ALL ON TABLE "public"."dj_feedback" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."dj_feedback" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."dj_feedback" TO "claude_reader";
+
+
+
+GRANT SELECT("artist_id") ON TABLE "public"."dj_feedback" TO "claude_reader";
+
+
+
+GRANT SELECT("concert_id") ON TABLE "public"."dj_feedback" TO "claude_reader";
+
+
+
+GRANT SELECT("album_id") ON TABLE "public"."dj_feedback" TO "claude_reader";
+
+
+
+GRANT SELECT("track_id") ON TABLE "public"."dj_feedback" TO "claude_reader";
+
+
+
+GRANT SELECT("venue_id") ON TABLE "public"."dj_feedback" TO "claude_reader";
+
+
+
+GRANT SELECT("sentiment") ON TABLE "public"."dj_feedback" TO "claude_reader";
+
+
+
+GRANT SELECT("note") ON TABLE "public"."dj_feedback" TO "claude_reader";
+
+
+
+GRANT SELECT("occurred_on") ON TABLE "public"."dj_feedback" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."dj_feedback" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."dj_feedback" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."dj_known_disagreements" TO "authenticated";
 GRANT ALL ON TABLE "public"."dj_known_disagreements" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."dj_known_disagreements" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."dj_known_disagreements" TO "claude_reader";
+
+
+
+GRANT SELECT("video_id") ON TABLE "public"."dj_known_disagreements" TO "claude_reader";
+
+
+
+GRANT SELECT("stored_artist") ON TABLE "public"."dj_known_disagreements" TO "claude_reader";
+
+
+
+GRANT SELECT("submitted_artist") ON TABLE "public"."dj_known_disagreements" TO "claude_reader";
+
+
+
+GRANT SELECT("reason") ON TABLE "public"."dj_known_disagreements" TO "claude_reader";
+
+
+
+GRANT SELECT("decided_at") ON TABLE "public"."dj_known_disagreements" TO "claude_reader";
+
+
+
+GRANT SELECT("decided_by") ON TABLE "public"."dj_known_disagreements" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."dj_known_disagreements" TO "claude_reader";
 
 
 
@@ -21990,8 +23448,84 @@ GRANT ALL ON TABLE "public"."dj_playlists" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."dj_playlists" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."dj_playlists" TO "claude_reader";
+
+
+
+GRANT SELECT("yt_playlist_id") ON TABLE "public"."dj_playlists" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."dj_playlists" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."dj_playlists" TO "claude_reader";
+
+
+
+GRANT SELECT("concert_id") ON TABLE "public"."dj_playlists" TO "claude_reader";
+
+
+
+GRANT SELECT("description") ON TABLE "public"."dj_playlists" TO "claude_reader";
+
+
+
+GRANT SELECT("cram_cap") ON TABLE "public"."dj_playlists" TO "claude_reader";
+
+
+
+GRANT SELECT("last_synced_at") ON TABLE "public"."dj_playlists" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."dj_playlists" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."dj_plays" TO "authenticated";
 GRANT ALL ON TABLE "public"."dj_plays" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."dj_plays" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."dj_plays" TO "claude_reader";
+
+
+
+GRANT SELECT("track_id") ON TABLE "public"."dj_plays" TO "claude_reader";
+
+
+
+GRANT SELECT("played_on") ON TABLE "public"."dj_plays" TO "claude_reader";
+
+
+
+GRANT SELECT("precision") ON TABLE "public"."dj_plays" TO "claude_reader";
+
+
+
+GRANT SELECT("played_bucket") ON TABLE "public"."dj_plays" TO "claude_reader";
+
+
+
+GRANT SELECT("occurrence") ON TABLE "public"."dj_plays" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."dj_plays" TO "claude_reader";
+
+
+
+GRANT SELECT("observed_at") ON TABLE "public"."dj_plays" TO "claude_reader";
 
 
 
@@ -22000,8 +23534,76 @@ GRANT ALL ON TABLE "public"."dj_tracks" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."dj_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."dj_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("video_id") ON TABLE "public"."dj_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."dj_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("artist") ON TABLE "public"."dj_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("album") ON TABLE "public"."dj_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("duration_seconds") ON TABLE "public"."dj_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("match_key") ON TABLE "public"."dj_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("canonical_track_id") ON TABLE "public"."dj_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("tags") ON TABLE "public"."dj_tracks" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."dj_tracks" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."dj_venues" TO "authenticated";
 GRANT ALL ON TABLE "public"."dj_venues" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."dj_venues" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."dj_venues" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."dj_venues" TO "claude_reader";
+
+
+
+GRANT SELECT("city") ON TABLE "public"."dj_venues" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."dj_venues" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."dj_venues" TO "claude_reader";
 
 
 
@@ -22010,8 +23612,72 @@ GRANT ALL ON TABLE "public"."drive_mix_servings" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."drive_mix_servings" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."drive_mix_servings" TO "claude_reader";
+
+
+
+GRANT SELECT("served_on") ON TABLE "public"."drive_mix_servings" TO "claude_reader";
+
+
+
+GRANT SELECT("position") ON TABLE "public"."drive_mix_servings" TO "claude_reader";
+
+
+
+GRANT SELECT("song_id") ON TABLE "public"."drive_mix_servings" TO "claude_reader";
+
+
+
+GRANT SELECT("video_id") ON TABLE "public"."drive_mix_servings" TO "claude_reader";
+
+
+
+GRANT SELECT("recorded_at") ON TABLE "public"."drive_mix_servings" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."email_capture_senders" TO "authenticated";
 GRANT ALL ON TABLE "public"."email_capture_senders" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."email_capture_senders" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."email_capture_senders" TO "claude_reader";
+
+
+
+GRANT SELECT("email") ON TABLE "public"."email_capture_senders" TO "claude_reader";
+
+
+
+GRANT SELECT("safe_sender") ON TABLE "public"."email_capture_senders" TO "claude_reader";
+
+
+
+GRANT SELECT("approved_forwarder") ON TABLE "public"."email_capture_senders" TO "claude_reader";
+
+
+
+GRANT SELECT("label") ON TABLE "public"."email_capture_senders" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."email_capture_senders" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."email_capture_senders" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."email_capture_senders" TO "claude_reader";
 
 
 
@@ -22020,8 +23686,144 @@ GRANT ALL ON TABLE "public"."events" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("intent_id") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("time") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("item_ids") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("archived") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("text") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("collection_id") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("source_inbox_id") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("group_id") ON TABLE "public"."events" TO "claude_reader";
+
+
+
+GRANT SELECT("archived_at") ON TABLE "public"."events" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."executions" TO "authenticated";
 GRANT ALL ON TABLE "public"."executions" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("event_id") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("intent_id") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("item_ids") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("outcome") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("progress") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("elements") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("collection_id") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("completed_item_ids") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("started_at") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("closed_at") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("prior_event_date") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("prior_intent_status") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("group_id") ON TABLE "public"."executions" TO "claude_reader";
+
+
+
+GRANT SELECT("parent_execution_id") ON TABLE "public"."executions" TO "claude_reader";
 
 
 
@@ -22030,8 +23832,108 @@ GRANT ALL ON TABLE "public"."finish_summaries" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("project_code") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("branch") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("merge_commit") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("finished_at") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("diff_stat") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("migrations") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("tools") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("skills") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("functions") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("task_prompts") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("paths") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("reviewed_at") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("reviewed_by_run") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."finish_summaries" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."group_types" TO "authenticated";
 GRANT ALL ON TABLE "public"."group_types" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."group_types" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."group_types" TO "claude_reader";
+
+
+
+GRANT SELECT("label_singular") ON TABLE "public"."group_types" TO "claude_reader";
+
+
+
+GRANT SELECT("label_plural") ON TABLE "public"."group_types" TO "claude_reader";
+
+
+
+GRANT SELECT("icon") ON TABLE "public"."group_types" TO "claude_reader";
+
+
+
+GRANT SELECT("execution_mode") ON TABLE "public"."group_types" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."group_types" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."group_types" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."group_types" TO "claude_reader";
 
 
 
@@ -22040,13 +23942,281 @@ GRANT ALL ON TABLE "public"."inbox" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("archived") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("captured_text") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_context_id") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggest_item") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_item_text") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_item_description") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_item_elements") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggest_intent") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_intent_text") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_intent_recurrence") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggest_event") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_event_date") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_item_id") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_collection_id") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("source_type") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("source_metadata") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("ai_status") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("ai_confidence") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("ai_reasoning") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("triaged_at") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_tags") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("archive_reason") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_intent_description") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_status") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("source_app") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("outcome") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("archived_at") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_group_id") ON TABLE "public"."inbox" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."intents" TO "authenticated";
 GRANT ALL ON TABLE "public"."intents" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("text") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("is_intention") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("archived") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("item_id") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("collection_id") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("recurrence_config") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("target_start_date") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("end_date") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("tags") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("source_inbox_id") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("description") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("status_changed_at") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("last_completed_at") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("closed_reason") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("status_written_at") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("group_id") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
+GRANT SELECT("archived_at") ON TABLE "public"."intents" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."item_collections" TO "authenticated";
 GRANT ALL ON TABLE "public"."item_collections" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."item_collections" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."item_collections" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."item_collections" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."item_collections" TO "claude_reader";
+
+
+
+GRANT SELECT("shared") ON TABLE "public"."item_collections" TO "claude_reader";
+
+
+
+GRANT SELECT("is_capture_target") ON TABLE "public"."item_collections" TO "claude_reader";
+
+
+
+GRANT SELECT("items") ON TABLE "public"."item_collections" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."item_collections" TO "claude_reader";
+
+
+
+GRANT SELECT("pinned") ON TABLE "public"."item_collections" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."item_collections" TO "claude_reader";
+
+
+
+GRANT SELECT("archived") ON TABLE "public"."item_collections" TO "claude_reader";
+
+
+
+GRANT SELECT("archived_at") ON TABLE "public"."item_collections" TO "claude_reader";
 
 
 
@@ -22060,8 +24230,148 @@ GRANT ALL ON TABLE "public"."item_groups" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("group_type_id") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("description") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("status_changed_at") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("status_written_at") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("closed_reason") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("last_completed_at") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("pinned") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("archived") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("archived_at") ON TABLE "public"."item_groups" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."items" TO "authenticated";
 GRANT ALL ON TABLE "public"."items" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("description") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("elements") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("is_capture_target") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("archived") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("tags") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("source_inbox_id") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("status_changed_at") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("is_reference") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("last_completed_at") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("closed_reason") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("status_written_at") ON TABLE "public"."items" TO "claude_reader";
+
+
+
+GRANT SELECT("archived_at") ON TABLE "public"."items" TO "claude_reader";
 
 
 
@@ -22070,8 +24380,108 @@ GRANT ALL ON TABLE "public"."job_applications" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("applied_on") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("org") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("role") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("fit") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("effort") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("deadline") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("next_action") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("next_action_due") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("posting_url") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("duplicate_of") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT("source_inbox_id") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."ken_areas" TO "authenticated";
 GRANT ALL ON TABLE "public"."ken_areas" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."ken_areas" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."ken_areas" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."ken_areas" TO "claude_reader";
+
+
+
+GRANT SELECT("description") ON TABLE "public"."ken_areas" TO "claude_reader";
+
+
+
+GRANT SELECT("source_ref") ON TABLE "public"."ken_areas" TO "claude_reader";
+
+
+
+GRANT SELECT("priority") ON TABLE "public"."ken_areas" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."ken_areas" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."ken_areas" TO "claude_reader";
 
 
 
@@ -22080,8 +24490,72 @@ GRANT ALL ON TABLE "public"."ken_attempts" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."ken_attempts" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."ken_attempts" TO "claude_reader";
+
+
+
+GRANT SELECT("item_id") ON TABLE "public"."ken_attempts" TO "claude_reader";
+
+
+
+GRANT SELECT("result") ON TABLE "public"."ken_attempts" TO "claude_reader";
+
+
+
+GRANT SELECT("user_answer") ON TABLE "public"."ken_attempts" TO "claude_reader";
+
+
+
+GRANT SELECT("ken_assessment") ON TABLE "public"."ken_attempts" TO "claude_reader";
+
+
+
+GRANT SELECT("asked_at") ON TABLE "public"."ken_attempts" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."ken_misconceptions" TO "authenticated";
 GRANT ALL ON TABLE "public"."ken_misconceptions" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."ken_misconceptions" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."ken_misconceptions" TO "claude_reader";
+
+
+
+GRANT SELECT("item_id") ON TABLE "public"."ken_misconceptions" TO "claude_reader";
+
+
+
+GRANT SELECT("related_item_id") ON TABLE "public"."ken_misconceptions" TO "claude_reader";
+
+
+
+GRANT SELECT("subtopic") ON TABLE "public"."ken_misconceptions" TO "claude_reader";
+
+
+
+GRANT SELECT("note") ON TABLE "public"."ken_misconceptions" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."ken_misconceptions" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."ken_misconceptions" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."ken_misconceptions" TO "claude_reader";
 
 
 
@@ -22090,8 +24564,88 @@ GRANT ALL ON TABLE "public"."notes" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."notes" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."notes" TO "claude_reader";
+
+
+
+GRANT SELECT("target_type") ON TABLE "public"."notes" TO "claude_reader";
+
+
+
+GRANT SELECT("target_id") ON TABLE "public"."notes" TO "claude_reader";
+
+
+
+GRANT SELECT("body") ON TABLE "public"."notes" TO "claude_reader";
+
+
+
+GRANT SELECT("execution_id") ON TABLE "public"."notes" TO "claude_reader";
+
+
+
+GRANT SELECT("applied_at") ON TABLE "public"."notes" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."notes" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."notes" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."notification_steps" TO "authenticated";
 GRANT ALL ON TABLE "public"."notification_steps" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."notification_steps" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."notification_steps" TO "claude_reader";
+
+
+
+GRANT SELECT("execution_id") ON TABLE "public"."notification_steps" TO "claude_reader";
+
+
+
+GRANT SELECT("seq") ON TABLE "public"."notification_steps" TO "claude_reader";
+
+
+
+GRANT SELECT("text") ON TABLE "public"."notification_steps" TO "claude_reader";
+
+
+
+GRANT SELECT("offset_minutes") ON TABLE "public"."notification_steps" TO "claude_reader";
+
+
+
+GRANT SELECT("due_at") ON TABLE "public"."notification_steps" TO "claude_reader";
+
+
+
+GRANT SELECT("state") ON TABLE "public"."notification_steps" TO "claude_reader";
+
+
+
+GRANT SELECT("sent_at") ON TABLE "public"."notification_steps" TO "claude_reader";
+
+
+
+GRANT SELECT("completed_at") ON TABLE "public"."notification_steps" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."notification_steps" TO "claude_reader";
 
 
 
@@ -22105,8 +24659,80 @@ GRANT ALL ON TABLE "public"."overwatch_notes" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."overwatch_notes" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."overwatch_notes" TO "claude_reader";
+
+
+
+GRANT SELECT("period") ON TABLE "public"."overwatch_notes" TO "claude_reader";
+
+
+
+GRANT SELECT("for_date") ON TABLE "public"."overwatch_notes" TO "claude_reader";
+
+
+
+GRANT SELECT("body") ON TABLE "public"."overwatch_notes" TO "claude_reader";
+
+
+
+GRANT SELECT("flags") ON TABLE "public"."overwatch_notes" TO "claude_reader";
+
+
+
+GRANT SELECT("plan_id") ON TABLE "public"."overwatch_notes" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."overwatch_notes" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."overwatch_plans" TO "authenticated";
 GRANT ALL ON TABLE "public"."overwatch_plans" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."overwatch_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."overwatch_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("active") ON TABLE "public"."overwatch_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("instructions") ON TABLE "public"."overwatch_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("settings") ON TABLE "public"."overwatch_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("checks_next_run") ON TABLE "public"."overwatch_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("written_by") ON TABLE "public"."overwatch_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("reason") ON TABLE "public"."overwatch_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("supersedes_id") ON TABLE "public"."overwatch_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."overwatch_plans" TO "claude_reader";
 
 
 
@@ -22115,8 +24741,80 @@ GRANT ALL ON TABLE "public"."overwatch_seen_releases" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."overwatch_seen_releases" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."overwatch_seen_releases" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."overwatch_seen_releases" TO "claude_reader";
+
+
+
+GRANT SELECT("entry_key") ON TABLE "public"."overwatch_seen_releases" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."overwatch_seen_releases" TO "claude_reader";
+
+
+
+GRANT SELECT("summary") ON TABLE "public"."overwatch_seen_releases" TO "claude_reader";
+
+
+
+GRANT SELECT("first_seen_at") ON TABLE "public"."overwatch_seen_releases" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."overwatch_watch" TO "authenticated";
 GRANT ALL ON TABLE "public"."overwatch_watch" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."overwatch_watch" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."overwatch_watch" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."overwatch_watch" TO "claude_reader";
+
+
+
+GRANT SELECT("text") ON TABLE "public"."overwatch_watch" TO "claude_reader";
+
+
+
+GRANT SELECT("app_id") ON TABLE "public"."overwatch_watch" TO "claude_reader";
+
+
+
+GRANT SELECT("group_id") ON TABLE "public"."overwatch_watch" TO "claude_reader";
+
+
+
+GRANT SELECT("starts_on") ON TABLE "public"."overwatch_watch" TO "claude_reader";
+
+
+
+GRANT SELECT("ends_on") ON TABLE "public"."overwatch_watch" TO "claude_reader";
+
+
+
+GRANT SELECT("created_by") ON TABLE "public"."overwatch_watch" TO "claude_reader";
+
+
+
+GRANT SELECT("expiry_noted_at") ON TABLE "public"."overwatch_watch" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."overwatch_watch" TO "claude_reader";
 
 
 
@@ -22125,8 +24823,92 @@ GRANT ALL ON TABLE "public"."platform_inventory" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
+GRANT SELECT("app_id") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
+GRANT SELECT("reads") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
+GRANT SELECT("writes") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
+GRANT SELECT("reads_any") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
+GRANT SELECT("location") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
+GRANT SELECT("fingerprint") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
+GRANT SELECT("last_changed_project") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
+GRANT SELECT("details") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
+GRANT SELECT("seen_at") ON TABLE "public"."platform_inventory" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."platform_open_work" TO "authenticated";
 GRANT ALL ON TABLE "public"."platform_open_work" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."platform_open_work" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."platform_open_work" TO "claude_reader";
+
+
+
+GRANT SELECT("file") ON TABLE "public"."platform_open_work" TO "claude_reader";
+
+
+
+GRANT SELECT("line") ON TABLE "public"."platform_open_work" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."platform_open_work" TO "claude_reader";
+
+
+
+GRANT SELECT("text") ON TABLE "public"."platform_open_work" TO "claude_reader";
+
+
+
+GRANT SELECT("project_code") ON TABLE "public"."platform_open_work" TO "claude_reader";
+
+
+
+GRANT SELECT("seen_at") ON TABLE "public"."platform_open_work" TO "claude_reader";
 
 
 
@@ -22135,8 +24917,112 @@ GRANT ALL ON TABLE "public"."platform_runs" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("app") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("job") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("executor") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("host") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("started_at") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("finished_at") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("covered_from") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("covered_to") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("details") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("error_message") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("notified_at") ON TABLE "public"."platform_runs" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."platform_schedules" TO "authenticated";
 GRANT ALL ON TABLE "public"."platform_schedules" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("app") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("job") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("executor") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("cadence") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("day_of_week") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("expected_by") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("grace_hours") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("enabled") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."platform_schedules" TO "claude_reader";
 
 
 
@@ -22145,8 +25031,80 @@ GRANT ALL ON TABLE "public"."portfolio_lanes" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."portfolio_lanes" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."portfolio_lanes" TO "claude_reader";
+
+
+
+GRANT SELECT("plan_id") ON TABLE "public"."portfolio_lanes" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."portfolio_lanes" TO "claude_reader";
+
+
+
+GRANT SELECT("position") ON TABLE "public"."portfolio_lanes" TO "claude_reader";
+
+
+
+GRANT SELECT("note") ON TABLE "public"."portfolio_lanes" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."portfolio_lanes" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."portfolio_plans" TO "authenticated";
 GRANT ALL ON TABLE "public"."portfolio_plans" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."portfolio_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."portfolio_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("portfolio_id") ON TABLE "public"."portfolio_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("active") ON TABLE "public"."portfolio_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("theory") ON TABLE "public"."portfolio_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("notes_for_next_review") ON TABLE "public"."portfolio_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("review_by") ON TABLE "public"."portfolio_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("reason") ON TABLE "public"."portfolio_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("written_by") ON TABLE "public"."portfolio_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("supersedes_id") ON TABLE "public"."portfolio_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."portfolio_plans" TO "claude_reader";
 
 
 
@@ -22155,8 +25113,88 @@ GRANT ALL ON TABLE "public"."portfolio_slices" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."portfolio_slices" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."portfolio_slices" TO "claude_reader";
+
+
+
+GRANT SELECT("plan_id") ON TABLE "public"."portfolio_slices" TO "claude_reader";
+
+
+
+GRANT SELECT("lane_id") ON TABLE "public"."portfolio_slices" TO "claude_reader";
+
+
+
+GRANT SELECT("position") ON TABLE "public"."portfolio_slices" TO "claude_reader";
+
+
+
+GRANT SELECT("group_id") ON TABLE "public"."portfolio_slices" TO "claude_reader";
+
+
+
+GRANT SELECT("phases") ON TABLE "public"."portfolio_slices" TO "claude_reader";
+
+
+
+GRANT SELECT("why") ON TABLE "public"."portfolio_slices" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."portfolio_slices" TO "claude_reader";
+
+
+
+GRANT SELECT("paused_reason") ON TABLE "public"."portfolio_slices" TO "claude_reader";
+
+
+
+GRANT SELECT("status_changed_at") ON TABLE "public"."portfolio_slices" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."portfolio_slices" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."portfolios" TO "authenticated";
 GRANT ALL ON TABLE "public"."portfolios" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."portfolios" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."portfolios" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."portfolios" TO "claude_reader";
+
+
+
+GRANT SELECT("context_ids") ON TABLE "public"."portfolios" TO "claude_reader";
+
+
+
+GRANT SELECT("position") ON TABLE "public"."portfolios" TO "claude_reader";
+
+
+
+GRANT SELECT("archived") ON TABLE "public"."portfolios" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."portfolios" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."portfolios" TO "claude_reader";
 
 
 
@@ -22165,8 +25203,100 @@ GRANT ALL ON TABLE "public"."process_friction" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT SELECT("occurred_at") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT SELECT("what_happened") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT SELECT("process") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT SELECT("project_code") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT SELECT("suggested_fix") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT SELECT("pattern_id") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT SELECT("resolved_by") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT SELECT("resolved_at") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT SELECT("wont_fix_reason") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."project_estimates" TO "authenticated";
 GRANT ALL ON TABLE "public"."project_estimates" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."project_estimates" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."project_estimates" TO "claude_reader";
+
+
+
+GRANT SELECT("group_id") ON TABLE "public"."project_estimates" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."project_estimates" TO "claude_reader";
+
+
+
+GRANT SELECT("estimate") ON TABLE "public"."project_estimates" TO "claude_reader";
+
+
+
+GRANT SELECT("cli_estimate") ON TABLE "public"."project_estimates" TO "claude_reader";
+
+
+
+GRANT SELECT("steps_added") ON TABLE "public"."project_estimates" TO "claude_reader";
+
+
+
+GRANT SELECT("at_step") ON TABLE "public"."project_estimates" TO "claude_reader";
+
+
+
+GRANT SELECT("reason") ON TABLE "public"."project_estimates" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."project_estimates" TO "claude_reader";
 
 
 
@@ -22175,8 +25305,96 @@ GRANT ALL ON TABLE "public"."project_links" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."project_links" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."project_links" TO "claude_reader";
+
+
+
+GRANT SELECT("from_group_id") ON TABLE "public"."project_links" TO "claude_reader";
+
+
+
+GRANT SELECT("to_group_id") ON TABLE "public"."project_links" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."project_links" TO "claude_reader";
+
+
+
+GRANT SELECT("note") ON TABLE "public"."project_links" TO "claude_reader";
+
+
+
+GRANT SELECT("created_by") ON TABLE "public"."project_links" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."project_links" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."project_plans" TO "authenticated";
 GRANT ALL ON TABLE "public"."project_plans" TO "service_role";
+
+
+
+GRANT SELECT("group_id") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("project_code") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("target_date") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("effort_estimate") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("where_now") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("next_step") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("waiting_on") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("waiting_on_kind") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("waiting_on_group_id") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("hurdle_kind") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("status_written_at") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."project_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."project_plans" TO "claude_reader";
 
 
 
@@ -22185,8 +25403,68 @@ GRANT ALL ON TABLE "public"."push_subscriptions" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."push_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."push_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("user_agent") ON TABLE "public"."push_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."push_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("last_used_at") ON TABLE "public"."push_subscriptions" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."sam_goals" TO "authenticated";
 GRANT ALL ON TABLE "public"."sam_goals" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."sam_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."sam_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."sam_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."sam_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."sam_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("song_id") ON TABLE "public"."sam_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."sam_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("completed_at") ON TABLE "public"."sam_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."sam_goals" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."sam_goals" TO "claude_reader";
 
 
 
@@ -22195,8 +25473,156 @@ GRANT ALL ON TABLE "public"."sam_passes" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("song_id") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("snippet_id") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("session_id") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("bpm") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("completed_at") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("playback_speed") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("effective_bpm") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("hits") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("misses") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("notes_played") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("hand_mode") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("accuracy_percent") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("plan_id") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("plan_item_id") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("warmup_rung") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
+GRANT SELECT("warmup_target_percent") ON TABLE "public"."sam_passes" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."sam_practice_plan_items" TO "authenticated";
 GRANT ALL ON TABLE "public"."sam_practice_plan_items" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("plan_id") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("plan_song_id") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("song_id") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("snippet_id") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("position") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("is_free_play") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("target_bpm") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("target_playback_speed") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("target_effective_bpm") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("target_passes") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("accuracy_target") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("instruction") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("warmup_ladder") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("goal_is_warmup") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
+
+
+
+GRANT SELECT("consecutive") ON TABLE "public"."sam_practice_plan_items" TO "claude_reader";
 
 
 
@@ -22205,8 +25631,92 @@ GRANT ALL ON TABLE "public"."sam_practice_plan_songs" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."sam_practice_plan_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."sam_practice_plan_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("plan_id") ON TABLE "public"."sam_practice_plan_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("song_id") ON TABLE "public"."sam_practice_plan_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("position") ON TABLE "public"."sam_practice_plan_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("song_note") ON TABLE "public"."sam_practice_plan_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("internal_notes") ON TABLE "public"."sam_practice_plan_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."sam_practice_plan_songs" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."sam_practice_plans" TO "authenticated";
 GRANT ALL ON TABLE "public"."sam_practice_plans" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("starts_on") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("ended_at") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("supersedes_plan_id") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("day_note") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("internal_notes") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("review_instructions") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("review_note") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("review_noted_at") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."sam_practice_plans" TO "claude_reader";
 
 
 
@@ -22220,8 +25730,116 @@ GRANT ALL ON TABLE "public"."sam_sessions" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."sam_sessions" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."sam_sessions" TO "claude_reader";
+
+
+
+GRANT SELECT("song_id") ON TABLE "public"."sam_sessions" TO "claude_reader";
+
+
+
+GRANT SELECT("snippet_id") ON TABLE "public"."sam_sessions" TO "claude_reader";
+
+
+
+GRANT SELECT("started_at") ON TABLE "public"."sam_sessions" TO "claude_reader";
+
+
+
+GRANT SELECT("ended_at") ON TABLE "public"."sam_sessions" TO "claude_reader";
+
+
+
+GRANT SELECT("settings") ON TABLE "public"."sam_sessions" TO "claude_reader";
+
+
+
+GRANT SELECT("summary") ON TABLE "public"."sam_sessions" TO "claude_reader";
+
+
+
+GRANT SELECT("events") ON TABLE "public"."sam_sessions" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."sam_sessions" TO "claude_reader";
+
+
+
+GRANT SELECT("plan_id") ON TABLE "public"."sam_sessions" TO "claude_reader";
+
+
+
+GRANT SELECT("plan_item_id") ON TABLE "public"."sam_sessions" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."sam_snippets" TO "authenticated";
 GRANT ALL ON TABLE "public"."sam_snippets" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("song_id") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("start_measure") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("end_measure") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("rest_measures") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("settings") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("tags") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("archived") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("warmup_ladder") ON TABLE "public"."sam_snippets" TO "claude_reader";
+
+
+
+GRANT SELECT("archived_at") ON TABLE "public"."sam_snippets" TO "claude_reader";
 
 
 
@@ -22250,8 +25868,237 @@ GRANT ALL ON TABLE "public"."sam_songs" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("artist") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("source_file") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("key_signature") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("time_signature") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("default_bpm") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("measures") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("archived") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("default_timing_window_ms") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("default_chord_ms") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("default_measure_width") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("audio_file_path") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("measures_compiled_at") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("measures_edited_at") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("playback_speed") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("song_type") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("parent_song_id") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("difficulty_tier") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("generation_notes") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("source_xml_path") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("show_imported_fingerings") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("goal_bpm") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("goal_playback_speed") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("goal_effective_bpm") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("goal_set_at") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("warmup_ladder") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT SELECT("archived_at") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
 GRANT SELECT,REFERENCES,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."switchboard_actions" TO "authenticated";
 GRANT ALL ON TABLE "public"."switchboard_actions" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("project_code") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("chat_url") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("payload") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("fingerprint") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("link_expires_at") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("link_used_at") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("created_by") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("needs_click") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("headline") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT SELECT,INSERT,REFERENCES,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."switchboard_read_log" TO "authenticated";
+GRANT ALL ON TABLE "public"."switchboard_read_log" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."switchboard_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."switchboard_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("query_text") ON TABLE "public"."switchboard_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("ok") ON TABLE "public"."switchboard_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("row_count") ON TABLE "public"."switchboard_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("truncated") ON TABLE "public"."switchboard_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("error") ON TABLE "public"."switchboard_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("took_ms") ON TABLE "public"."switchboard_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."switchboard_read_log" TO "claude_reader";
 
 
 
@@ -22260,8 +26107,68 @@ GRANT ALL ON TABLE "public"."switchboard_runs" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."switchboard_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."switchboard_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("action_id") ON TABLE "public"."switchboard_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("mode") ON TABLE "public"."switchboard_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("summary") ON TABLE "public"."switchboard_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("result") ON TABLE "public"."switchboard_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("result_pruned_at") ON TABLE "public"."switchboard_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("started_at") ON TABLE "public"."switchboard_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("finished_at") ON TABLE "public"."switchboard_runs" TO "claude_reader";
+
+
+
 GRANT SELECT,REFERENCES,TRIGGER,TRUNCATE,MAINTAIN,UPDATE ON TABLE "public"."switchboard_settings" TO "authenticated";
 GRANT ALL ON TABLE "public"."switchboard_settings" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."switchboard_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."switchboard_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("reads_enabled") ON TABLE "public"."switchboard_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("link_base_url") ON TABLE "public"."switchboard_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."switchboard_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."switchboard_settings" TO "claude_reader";
 
 
 
@@ -22270,8 +26177,164 @@ GRANT ALL ON TABLE "public"."wb_accounts" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("external_id") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("institution") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("display_name") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("last4") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("owner") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("role") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("currency") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("credit_limit") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("reward_unit") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("reward_value_per_unit") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("expires_on") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("active_from") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("active_until") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("is_hidden") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("last_synced_at") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("statement_close_day") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("payment_due_day") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("autopay") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
+GRANT SELECT("history_from") ON TABLE "public"."wb_accounts" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."wb_balance_snapshots" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_balance_snapshots" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_balance_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_balance_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_balance_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("account_id") ON TABLE "public"."wb_balance_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("as_of") ON TABLE "public"."wb_balance_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("balance") ON TABLE "public"."wb_balance_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("available_balance") ON TABLE "public"."wb_balance_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("reported_at") ON TABLE "public"."wb_balance_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."wb_balance_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_balance_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_balance_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_balance_snapshots" TO "claude_reader";
 
 
 
@@ -22290,6 +26353,130 @@ GRANT ALL ON TABLE "public"."wb_transactions" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("account_id") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("external_id") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("posted_at") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("transacted_at") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("amount") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("description") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("payee") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("memo") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("mcc") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("pending") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("raw") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("first_seen_at") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("last_seen_at") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("clean_description") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("merchant_id") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("merchant_source") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("kind_source") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("transfer_pair_id") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("transfer_candidate") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("matched_rule_ids") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("reviewed") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("processed_at") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("subscription_id") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("subscription_source") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."wb_transactions" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."wb_cash_flow_monthly" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_cash_flow_monthly" TO "service_role";
 
@@ -22300,8 +26487,104 @@ GRANT ALL ON TABLE "public"."wb_holding_snapshots" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("account_id") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("as_of") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("external_id") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("symbol") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("description") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("shares") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("market_value") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("cost_basis") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("purchase_price") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("currency") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_holding_snapshots" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."wb_merchants" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_merchants" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_merchants" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_merchants" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_merchants" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."wb_merchants" TO "claude_reader";
+
+
+
+GRANT SELECT("match_patterns") ON TABLE "public"."wb_merchants" TO "claude_reader";
+
+
+
+GRANT SELECT("default_kind") ON TABLE "public"."wb_merchants" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_merchants" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_merchants" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_merchants" TO "claude_reader";
+
+
+
+GRANT SELECT("not_subscription") ON TABLE "public"."wb_merchants" TO "claude_reader";
 
 
 
@@ -22315,8 +26598,144 @@ GRANT ALL ON TABLE "public"."wb_planned_items" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("project_id") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("counterparty") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("merchant_id") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("amount") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("due_on") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("interval_count") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("interval_unit") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("ends_on") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("stage") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("is_draft") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("tax_year") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("amount_tolerance") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("match_window_days") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_planned_items" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."wb_planned_matches" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_planned_matches" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("planned_item_id") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("split_id") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("transaction_id") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("occurrence_on") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("amount_applied") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("decided_at") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_planned_matches" TO "claude_reader";
 
 
 
@@ -22325,8 +26744,84 @@ GRANT ALL ON TABLE "public"."wb_planned_skips" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."wb_planned_skips" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_planned_skips" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_planned_skips" TO "claude_reader";
+
+
+
+GRANT SELECT("planned_item_id") ON TABLE "public"."wb_planned_skips" TO "claude_reader";
+
+
+
+GRANT SELECT("occurrence_on") ON TABLE "public"."wb_planned_skips" TO "claude_reader";
+
+
+
+GRANT SELECT("reason") ON TABLE "public"."wb_planned_skips" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_planned_skips" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_planned_skips" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."wb_projects" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_projects" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_projects" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_projects" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_projects" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."wb_projects" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."wb_projects" TO "claude_reader";
+
+
+
+GRANT SELECT("budget") ON TABLE "public"."wb_projects" TO "claude_reader";
+
+
+
+GRANT SELECT("starts_on") ON TABLE "public"."wb_projects" TO "claude_reader";
+
+
+
+GRANT SELECT("ends_on") ON TABLE "public"."wb_projects" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_projects" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_projects" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_projects" TO "claude_reader";
 
 
 
@@ -22340,8 +26835,92 @@ GRANT ALL ON TABLE "public"."wb_settings" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."wb_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("safety_floor") ON TABLE "public"."wb_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("horizon_months") ON TABLE "public"."wb_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_settings" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_settings" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."wb_splits" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_splits" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_splits" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_splits" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_splits" TO "claude_reader";
+
+
+
+GRANT SELECT("transaction_id") ON TABLE "public"."wb_splits" TO "claude_reader";
+
+
+
+GRANT SELECT("amount") ON TABLE "public"."wb_splits" TO "claude_reader";
+
+
+
+GRANT SELECT("description") ON TABLE "public"."wb_splits" TO "claude_reader";
+
+
+
+GRANT SELECT("tax_year") ON TABLE "public"."wb_splits" TO "claude_reader";
+
+
+
+GRANT SELECT("position") ON TABLE "public"."wb_splits" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_splits" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_splits" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_splits" TO "claude_reader";
+
+
+
+GRANT SELECT("project_id") ON TABLE "public"."wb_splits" TO "claude_reader";
+
+
+
+GRANT SELECT("project_source") ON TABLE "public"."wb_splits" TO "claude_reader";
 
 
 
@@ -22355,8 +26934,144 @@ GRANT ALL ON TABLE "public"."wb_split_tags" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."wb_split_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_split_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_split_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("split_id") ON TABLE "public"."wb_split_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("tag_id") ON TABLE "public"."wb_split_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("group_id") ON TABLE "public"."wb_split_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("group_exclusive") ON TABLE "public"."wb_split_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."wb_split_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("rule_id") ON TABLE "public"."wb_split_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_split_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("replaced_rule_id") ON TABLE "public"."wb_split_tags" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."wb_subscriptions" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_subscriptions" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("plan") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("merchant_id") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("billed_through_id") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("bundle_id") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("cadence") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("expected_amount") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("amount_tolerance") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("term_end_date") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("auto_renew") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("review_date") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("last_charged_on") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("next_expected_on") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("owner") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("interval_count") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
+
+
+
+GRANT SELECT("interval_unit") ON TABLE "public"."wb_subscriptions" TO "claude_reader";
 
 
 
@@ -22365,8 +27080,92 @@ GRANT ALL ON TABLE "public"."wb_tag_groups" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."wb_tag_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_tag_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_tag_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."wb_tag_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("exclusive") ON TABLE "public"."wb_tag_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("required_for_kinds") ON TABLE "public"."wb_tag_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("sort_order") ON TABLE "public"."wb_tag_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_tag_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_tag_groups" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_tag_groups" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."wb_tags" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_tags" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("group_id") ON TABLE "public"."wb_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("parent_id") ON TABLE "public"."wb_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."wb_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("is_active") ON TABLE "public"."wb_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("sort_order") ON TABLE "public"."wb_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_tags" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_tags" TO "claude_reader";
 
 
 
@@ -22380,13 +27179,165 @@ GRANT ALL ON TABLE "public"."wb_rule_health_acks" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."wb_rule_health_acks" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_rule_health_acks" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_rule_health_acks" TO "claude_reader";
+
+
+
+GRANT SELECT("finding") ON TABLE "public"."wb_rule_health_acks" TO "claude_reader";
+
+
+
+GRANT SELECT("subject_id") ON TABLE "public"."wb_rule_health_acks" TO "claude_reader";
+
+
+
+GRANT SELECT("acked_n") ON TABLE "public"."wb_rule_health_acks" TO "claude_reader";
+
+
+
+GRANT SELECT("reason") ON TABLE "public"."wb_rule_health_acks" TO "claude_reader";
+
+
+
+GRANT SELECT("acked_by") ON TABLE "public"."wb_rule_health_acks" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_rule_health_acks" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_rule_health_acks" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."wb_rules" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_rules" TO "service_role";
 
 
 
+GRANT SELECT("id") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("priority") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("active") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("match") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("set_kind") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("set_merchant_id") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("add_tag_ids") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("created_by") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("hit_count") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("last_hit_at") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("created_from_transaction_id") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
+GRANT SELECT("set_project_id") ON TABLE "public"."wb_rules" TO "claude_reader";
+
+
+
 GRANT ALL ON TABLE "public"."wb_tag_exclusions" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_tag_exclusions" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_tag_exclusions" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_tag_exclusions" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_tag_exclusions" TO "claude_reader";
+
+
+
+GRANT SELECT("transaction_id") ON TABLE "public"."wb_tag_exclusions" TO "claude_reader";
+
+
+
+GRANT SELECT("tag_id") ON TABLE "public"."wb_tag_exclusions" TO "claude_reader";
+
+
+
+GRANT SELECT("rule_id") ON TABLE "public"."wb_tag_exclusions" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."wb_tag_exclusions" TO "claude_reader";
+
+
+
+GRANT SELECT("removed_by") ON TABLE "public"."wb_tag_exclusions" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_tag_exclusions" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_tag_exclusions" TO "claude_reader";
 
 
 
@@ -22412,6 +27363,46 @@ GRANT ALL ON TABLE "public"."wb_subscription_outflows" TO "service_role";
 
 GRANT ALL ON TABLE "public"."wb_subscription_prices" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_subscription_prices" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_subscription_prices" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_subscription_prices" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_subscription_prices" TO "claude_reader";
+
+
+
+GRANT SELECT("subscription_id") ON TABLE "public"."wb_subscription_prices" TO "claude_reader";
+
+
+
+GRANT SELECT("effective_on") ON TABLE "public"."wb_subscription_prices" TO "claude_reader";
+
+
+
+GRANT SELECT("amount") ON TABLE "public"."wb_subscription_prices" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."wb_subscription_prices" TO "claude_reader";
+
+
+
+GRANT SELECT("transaction_id") ON TABLE "public"."wb_subscription_prices" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_subscription_prices" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_subscription_prices" TO "claude_reader";
 
 
 

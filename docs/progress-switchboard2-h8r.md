@@ -51,8 +51,10 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 2 | 2.7e | Posting guards, matching Send cli | — | done (s36-r4vh), extension 1.2.4: with a screenshot in the chat's box, Approve ran run 5596a17d-fdc3-4892-9cc4-8859dd2e813e (succeeded); nothing was sent, the chat wasn't touched, the tab stayed open with the line, Copy and the banner; after the box was cleared, Try again posted "sql 5596a17d-..." and the tab closed | 2026-11-01 |
 | 2 | 2.7f | The approve page looks and behaves like the rest of Alfred | — | done (s37-w6fa), extension 1.2.5: Alex checkpointed and tested; the page matches Alfred, the message and Try again sit inside the card, Copy works, and Try again posted run d3b5b803-a007-40fa-986c-220f4e501ee0 (succeeded) and closed the tab | 2026-11-01 |
 | 2 | 2.9 | Panel: Waiting on SQL, Report unread, lane order, tap rules | — | done (s38-d4ms): Alex checkpointed and restarted the panel; the switchboard2 tile showed tan "Waiting on SQL"; lanes ran gmail capture, switchboard2, arnold v1, warren buffet p4, then the rest; approving ran run 014ef9a9-c2d1-4fbb-92de-0dbcb7b0a6a7 (succeeded), which posted back by itself. The orange and red tap rules are not yet seen live | 2026-11-01 |
-| 2 | 2.9b | Send to CLI link shows Sending, Sent or Not sent | — | built (s39-g8pt), extension 1.2.6, tests pass; not yet seen live | |
-| 2 | 2.10 | Read-only role and query function, with secret-column grants | `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read), `db:fn:register_table`, `db:fn:set_read_settings` | todo | |
+| 2 | 2.9c | Tile order and grid size; Send link's plain words | — | todo | |
+| 2 | 2.9b | Send to CLI link shows Sending, Sent or Not sent | — | done (s39-g8pt, s40-n3hy), extension 1.2.6: built and checkpointed; Alex reloaded the extension and restarted the panel. Live test: s40's own Send link; host.log shows the prompt written at 19:19:36 UTC and "delivery switchboard2-h8r-s40-n3hy: sent" at 19:19:38, and the prompt arrived. The link's on-page words are for Alex to confirm | 2026-11-01 |
+| 2 | 2.10 | Read-only role and query function, with secret-column grants | `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read), `db:fn:register_table`, `db:fn:set_read_settings` | part 1, the spike. First run (s40-n3hy; run 5e3d1548-64c3-445c-a6c7-8db3f6f5d11a, action dd1c9102-be92-4cb1-a8c1-6dec633ed622) stopped in setup: "create the query function: 0A000 parameter "transaction_read_only" cannot be set locally in functions"; rolled_back true. Every earlier stage worked through the runner: create role claude_reader, grant it to current_user, usage on public and auth, execute on auth.uid(). Second design (s40b-v2rk), run a992aa41-766e-45cd-95a9-e99ea2531d5e: passed 32 of 35. The 3 failures were the predicted ones: the role raised back to postgres from inside a query and reached auth.users; claims forged to see another user's row. Alex decided: claude_reader gets its own login; every read rule names Alex's id directly, not auth.uid(); one rule per table. Part 2 (s41-c5nb, s41b-y8dt, s41c-q3zf): migration 192 ran through the queue: dry run 2ac65ed1-6e5b-4f63-ba10-047397ba7ccd matched the real run 6f31c9ae-150c-4ce8-a72e-29ed687411c8 (action 9edf0f5c-cee3-48c1-863c-5c754d068de1). 88 tables covered; 11 left out, all "no user_id column" (apps, allowed_emails, sam_song_lyrics, sam_song_scores, collection_items, sam_song_measures, dj_playlist_tracks, item_group_members, sam_session_events, sam_song_fingerings, collection_item_removals); CONFORMANT, 98 tables. Possible later step: a read rule for those 11 through the parent row's owner. `2_verify_reads.sql` queued, not yet run; password being set by Alex | |
+| 2 | 2.7g | Approve page: counts, expected counts, Don't run, Copy details, test kind | — | todo | |
 | 2 | 2.11 | MCP read-only query tool, `get_sql_read` | `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget`, `db:deploy` | todo | |
 | 2 | 2.12 | Skill rule and Phase 2 checklist | — | todo | |
 | 3 | 3.1-3.18 | The move, settings, `sb` commands, Salesforce guard, deploy wrapper, PII hold: spec §9 | — | todo | |
@@ -311,6 +313,20 @@ Also in 2.9b (noted in s38): the "Claude is still writing" reason says "wait unt
 - deploy: nothing
 - SQL: none
 
+**2.9c, tile order and grid size; Send link's plain words** (added in s41b; estimated run: 12m). The main checkout's tile always first, then lane_order, then everything else. Up to 6 tiles at today's size in 3×2; 7 or more at the previous smaller size in 3×3, so 9 fit before scrolling; text stays readable at the smaller size. Waiting on SQL (tan) stays the top priority as today, with one change: tan shows only when the CLI is not running. While the CLI runs, the tile stays running green, even if an action was queued during the run; tan appears once the run ends. The Send to CLI link's "Sending…" and "Sent ✓" lose their link styling: plain text, not clickable-looking. Alex tests: tile order with main bound and free; 6 and 7 tiles; a sent link's look. The link's words are the extension's, so its files are in this block.
+- create: nothing
+- update: tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/lib/status.ahk, tools/claude-sessions/ui/switchboard.html, tools/claude-sessions/test-status.ahk, tools/claude-sessions/smoke-test.ahk, tools/claude-sessions/INTERFACES.md, extension/claude-watch.js, extension/lib/bridge-core.test.mjs, extension/manifest.json
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**2.7g, approve page: counts, expected counts, Don't run, Copy details, test kind** (added in s41; estimated run: 20m; a runner deploy). Per-statement counts shown after the dry run. The CLI states expected counts when queueing, and the runner blocks Approve on a mismatch, showing expected and actual. A Don't run button with an optional one-line reason posts "sql <dry-run id> cancelled" with the same guards and closes the tab on success. Copy details beside any error. A "test" kind of action only runs undone, never offers Approve, shows its result and posts back.
+- create: nothing
+- update: supabase/functions/switchboard-runner/index.ts, supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs, scripts/sql-queue.mjs, scripts/lib/sql-queue.mjs, scripts/lib/sql-queue.test.mjs, src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, extension/bridge.js, extension/claude-watch.js, extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, extension/manifest.json
+- delete: nothing
+- deploy: switchboard-runner
+- SQL: none
+
 **2.10, read-only role and query function** (database step; estimated run: 12m). Starts with a small test of the guarded function: it runs as `claude_reader` and answers only for Alex's user. Only then the real work: `switchboard_read_log`, `switchboard_readonly_query` (read-only, one statement, 1000 rows, 10s timeout, 1s lock wait), and column-level grants built from `platform_read_settings()`, with a helper that re-applies them when the list changes. The kill switch is `switchboard_settings.reads_enabled`. Alex tests: a write, two statements, a secret column and a slow query are each refused; rows are capped; another user's rows never appear.
 - create: supabase/migrations/_pending_switchboard2-h8r_reads.sql, supabase/tests/switchboard2-h8r/2_verify_reads.sql
 - update: nothing
@@ -344,14 +360,14 @@ Database items per step are in the table at the top. Report unread and lane orde
 |---|---|---|
 | 0 | Fixes, boundaries, plan guard | 8 |
 | 1 | Send link, fallback page, skill rule, tile states, estimates, layout | 10 |
-| 2 | SQL queue, read-only queries (2.2-2.12, 2.3b, 2.4b, 2.7c to 2.7f and 2.9b, after the 2.1 plan) | 18 |
+| 2 | SQL queue, read-only queries (2.2-2.12, 2.3b, 2.4b, 2.7c to 2.7g, 2.9b and 2.9c, after the 2.1 plan) | 20 |
 | 3 | Multi-repo and clients | 18 |
 | 4 | Salesforce reads | 5 |
 | 5 | Git and Salesforce by link | 6 |
 | 6 | Spec files, archiving | 2 |
 | 7 | npm start per tile | 2 |
 | 8 | Remote devices | 4 |
-| | **total** | **73** |
+| | **total** | **75** |
 
 ## Decisions
 
@@ -662,3 +678,8 @@ Database items per step are in the table at the top. Report unread and lane orde
 | s37 (2.7f) | 2m00s (estimate 10m) |
 | s38 (2.9) | 9m12s (estimate 12m) |
 | s39 (2.9b) | 4m08s (estimate 12m) |
+| s40 (2.10 spike) | 3m09s (estimate 8m) |
+| s40b (2.10 spike, second design) | 58s (estimate 8m) |
+| s41 (2.10 part 2, stopped) | 3m17s (estimate 15m) |
+| s41b (2.10 part 2) | start not measured; finished 11:53:50 (estimate 5m) |
+| s41c (2.10 part 2, test and password) | 1m09s (estimate 5m) |
