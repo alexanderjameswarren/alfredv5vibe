@@ -41,7 +41,7 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 2 | 2.3 | Queue schema | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:switchboard_settings`, `db:fn:switchboard_issue_link`, `db:fn:switchboard_consume_link` | done (s26-r7kd, s26b-t3wn): migration 189 run by Alex; all 40 verify checks passed; CONFORMANT (97 tables); checkpointed | 2026-10-31 |
 | 2 | 2.3b | `.clip` exemption only inside a thread's own checkout; plan guard refuses other checkouts | — | done (s27-h9qp) | 2026-10-31 |
 | 2 | 2.4 | Runner function and CLI queue | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_consume_link`, `db:deploy` | done (s28-w2bv, s28b-k5fd, s28c-n8jx): deployed, verify_jwt off, `/queue` smoke-tested; run routes first exercised at 2.6 | 2026-10-31 |
-| 2 | 2.4b | `deployTargets` skips flag values and stops at redirects | — | todo | |
+| 2 | 2.4b | `deployTargets` skips flag values and stops at redirects | — | done (s29-c6mt) | 2026-10-31 |
 | 2 | 2.5 | MCP tools: issue a link, get a run | `db:fn:switchboard_issue_link`, `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` | todo | |
 | 2 | 2.6 | Approve page | — | todo | |
 | 2 | 2.7 | Extension: approval link and result | — | todo | |
@@ -607,3 +607,4 @@ Database items per step are in the table at the top. Report unread and lane orde
 | s28 (2.4, code) | 5m24s (estimate 15m) |
 | s28b (2.4, stopped at the block) | 0m45s (estimate 6m) |
 | s28c (2.4, deploy and smoke) | deploy not timed; 1m00s measured after it (estimate 4m) |
+| s29 (2.4b) | 0m39s (estimate 4m) |

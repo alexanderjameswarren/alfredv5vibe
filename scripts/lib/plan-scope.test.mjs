@@ -68,6 +68,32 @@ test("deleteParts finds rm, del, Remove-Item and git rm", () => {
   assert.deepEqual(ps.deleteParts("npm run build"), []);
 });
 
+test("deployTargets: flag values and what follows the command are not functions", () => {
+  const cases = {
+    "npx supabase functions deploy switchboard-runner --project-ref zuqjyfqnvhddnchhpbcz 2>&1 | tail -12": ["switchboard-runner"],
+    "supabase functions deploy x --project-ref=abc": ["x"],
+    "supabase functions deploy --project-ref abc x": ["x"],
+    "supabase functions deploy x --import-map a.json --workdir w": ["x"],
+    "supabase functions deploy x > out.txt": ["x"],
+    "supabase functions deploy x >out.txt y": ["x"],
+    "supabase functions deploy x 2>/dev/null": ["x"],
+    "supabase functions deploy x | tail": ["x"],
+    "supabase functions deploy x && echo y": ["x"],
+    "supabase functions deploy x; echo y": ["x"],
+    "supabase functions deploy x y": ["x", "y"],
+    "supabase functions deploy x --project-ref abc y 2>&1": ["x", "y"],
+    "npx supabase functions deploy switchboard-runner": ["switchboard-runner"],
+    "supabase functions deploy --project-ref abc": ["(all functions)"],
+    "supabase functions deploy 2>&1": ["(all functions)"],
+    // A flag it does not know takes no value, so the next word still counts: refused rather than missed.
+    "supabase functions deploy x --new-flag y": ["x", "y"],
+  };
+  for (const [command, want] of Object.entries(cases)) assert.deepEqual(ps.deployTargets(command), want, command);
+  const r = { run_tag: "t", found: true, scope: { deploy: ["x"] } };
+  assert.equal(ps.judgeDeploy(r, "supabase functions deploy x --project-ref abc 2>&1 | tail"), null);
+  assert.match(ps.judgeDeploy(r, "supabase functions deploy x y"), /undeclared deploy: y/);
+});
+
 test("deployTargets and judgeDeploy", () => {
   assert.deepEqual(ps.deployTargets("npx supabase functions deploy mcp --no-verify-jwt"), ["mcp"]);
   assert.deepEqual(ps.deployTargets("supabase functions deploy"), ["(all functions)"]);
