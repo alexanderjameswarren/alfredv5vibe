@@ -15,7 +15,7 @@ import {
   HOST_NAME, HEARTBEAT_MS, DEBOUNCE_MS, buildTabsMessage, buildChatsMessage, nextDelay, isHostMissing, debounce,
   normaliseUrl, pickTab, focusResult, checkPrompt, cleanHosts, promptFrame, sendTagOf,
   approveBanner, approveTokenOf, approveWatcher, chatForRun, cleanRun, closesApproveTab, GRANT_BADGE, grantNotice, hostOrigins, isApprovePage,
-  postProblem, pruneApprovals, RUN_POST_MS,
+  postProblem, pruneApprovals,
 } from "./lib/bridge-core.js";
 
 let port = null;
@@ -288,7 +288,7 @@ async function sayAboutRun(run, text) {
   console.info("[Alfred bridge]", run.runId, text);
   const page = Number.isInteger(run.approveTabId) ? await chrome.tabs.get(run.approveTabId).catch(() => null) : null;
   const shown = isApprovePage(page?.url, approvals.hosts) &&
-    await chrome.scripting.executeScript({ target: { tabId: page.id }, func: approveBanner, args: [text] }).then(() => true, () => false);
+    await chrome.scripting.executeScript({ target: { tabId: page.id }, func: approveBanner, args: [text, run.runId] }).then(() => true, () => false);
   if (shown) return;
   await chrome.action.setBadgeBackgroundColor({ color: "#d97706" });
   await chrome.action.setBadgeText({ text: POST_BADGE });
@@ -303,48 +303,62 @@ async function clearPostBadge() {
 
 const dropRun = (run) => { approvals.runs = approvals.runs.filter((r) => r !== run); return saveApprovals(); };
 
+// The watcher's answer on the live page. A tab with no watcher, after a reload, gets one first.
+async function askChat(tabId) {
+  const ask = () => chrome.tabs.sendMessage(tabId, { type: "post-check" }).then((a) => a?.did, () => null);
+  const did = await ask();
+  if (did) return did;
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["claude-watch.js"] }).catch(quiet);
+  return ask();
+}
+
+// Try again on the approval page: the same guards, once more.
+async function onApproveRetry(msg, sender) {
+  try {
+    await approvalsReady;
+    if (sender?.id !== chrome.runtime.id || !isApprovePage(sender?.url, approvals.hosts)) return;
+    const run = approvals.runs.find((r) => r.runId === msg.runId);
+    if (!run) return;
+    run.stopped = false;
+    run.note = null;
+    await saveApprovals();
+    postRuns();
+  } catch (e) {
+    quiet(e);
+  }
+}
+
 async function postRuns() {
   if (posting) return;
   posting = true;
   try {
     await approvalsReady;
-    if (!approvals.runs.length) return;
+    // One try each. A run that couldn't go waits for Try again: posting by itself later could land
+    // while Alex is mid-message, or after he has pasted the line himself.
+    const runs = approvals.runs.filter((r) => !r.stopped);
+    if (!runs.length) return;
     const [tabs, windows] = await Promise.all([chrome.tabs.query({}), chrome.windows.getAll()]);
     const { chats } = buildChatsMessage(tabs, windows, reports, viewedAt);
-    for (const run of [...approvals.runs]) {
+    for (const run of runs) {
       const line = `sql ${run.runId}`;
       const { chat, why } = chatForRun(chats, run);
-      const problem = postProblem(chat, why);
-      if (Date.now() - run.at > RUN_POST_MS) {
-        await sayAboutRun(run, `Not posted to the chat after 10 minutes: ${problem ?? "the chat kept refusing it"}. Paste this into the chat yourself: ${line}`);
-        await dropRun(run);
-        continue;
+      // Asked of the live page before anything moves, so a busy chat isn't even brought forward.
+      let did = chat ? await askChat(chat.tabId) : null;
+      if (!postProblem(chat, why, did)) {
+        // Typing into the box needs its tab showing, as Send cli does.
+        await chrome.tabs.update(chat.tabId, { active: true });
+        await chrome.windows.update(chat.windowId, { focused: true });
+        did = (await chrome.tabs.sendMessage(chat.tabId, { type: "post-line", text: line }).catch(() => null))?.did;
       }
-      if (problem) {
-        // A worker that restarted has no reports until a watcher starts afresh. Spaced out,
-        // because a new watcher's report calls this again, and a page may really be unknown.
-        if (chat?.state === "unknown" && Date.now() - (run.nudgedAt ?? 0) > HEARTBEAT_MS) {
-          run.nudgedAt = Date.now();
-          chrome.scripting.executeScript({ target: { tabId: chat.tabId }, files: ["claude-watch.js"] }).catch(quiet);
-        }
-        await sayAboutRun(run, `Waiting to post "${line}" to the chat: ${problem}. It will go by itself once that clears.`);
-        continue;
-      }
-      // Typing into the box needs its tab showing, as Send cli does.
-      await chrome.tabs.update(chat.tabId, { active: true });
-      await chrome.windows.update(chat.windowId, { focused: true });
-      const answer = await chrome.tabs.sendMessage(chat.tabId, { type: "post-line", text: line }).catch(() => null);
-      if (answer?.did === "sent") {
+      if (did === "sent") {
         await dropRun(run);
         await clearPostBadge();
         // Alex may have closed it already; then there is nothing to do.
         const page = Number.isInteger(run.approveTabId) ? await chrome.tabs.get(run.approveTabId).catch(() => null) : null;
-        if (closesApproveTab(answer.did, page?.url, approvals.hosts)) await chrome.tabs.remove(run.approveTabId).catch(quiet);
-      } else if (answer?.did === "typed") {
-        await dropRun(run);
-        await sayAboutRun(run, `"${line}" is typed in the chat, but its Send button didn't respond. Press Send there.`);
+        if (closesApproveTab(did, page?.url, approvals.hosts)) await chrome.tabs.remove(run.approveTabId).catch(quiet);
       } else {
-        await sayAboutRun(run, `Waiting to post "${line}" to the chat: ${answer ? "the chat became busy" : "the chat tab didn't answer"}. It will try again.`);
+        run.stopped = true;
+        await sayAboutRun(run, `Not posted, and the chat wasn't touched: ${postProblem(chat, why, did) ?? "the post wasn't confirmed"}. Copy the line above, or clear that and try again.`);
       }
     }
   } catch (e) {
@@ -433,6 +447,7 @@ try {
     if (msg?.type === "send-prompt") onSendPrompt(msg, sender);
     if (msg?.type === "approve-click") onApproveClick(msg, sender);
     if (msg?.type === "approve-run") onApproveRun(msg, sender);
+    if (msg?.type === "approve-retry") onApproveRetry(msg, sender);
     if (msg?.type === "link-hosts?") {
       approvalsReady.then(() => reply({ hosts: linkHosts, approveHosts: approvals.hosts }));
       return true;

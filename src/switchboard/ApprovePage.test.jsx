@@ -99,7 +99,12 @@ test('Approve sends the fingerprint, shows the result and puts the run id on the
   const { container } = open();
   fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
   expect(await screen.findByText(/done it/)).toBeInTheDocument();
-  expect(screen.getByText('Done, you can close this tab.')).toBeInTheDocument();
+  expect(screen.getByText('sql run9')).toBeInTheDocument();
+  expect(screen.getByText('Paste this into the Claude chat, then close this tab.')).toBeInTheDocument();
+  Object.assign(navigator, { clipboard: { writeText: jest.fn().mockResolvedValue() } });
+  fireEvent.click(screen.getByRole('button', { name: /^copy$/i }));
+  expect(navigator.clipboard.writeText).toHaveBeenCalledWith('sql run9');
+  expect(await screen.findByRole('button', { name: /^copied$/i })).toBeInTheDocument();
   expect(screen.getByText(/CONFORMANT/)).toBeInTheDocument();
   expect(container.querySelector('[data-switchboard-run-id]').getAttribute('data-switchboard-run-id')).toBe('run9');
   expect(JSON.parse(called('approve')[0][1].body)).toEqual({ token: 'tok1', fingerprint: 'fp1' });
@@ -112,7 +117,8 @@ test('a real run that fails still shows its run id, and cannot be approved again
   const { container } = open();
   fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
   expect(await screen.findByText(/failed at statement 1: boom/)).toBeInTheDocument();
-  expect(screen.queryByText(/you can close this tab/i)).not.toBeInTheDocument();
+  // Claude still needs to hear about a failure.
+  expect(screen.getByText('sql run9')).toBeInTheDocument();
   expect(container.querySelector('[data-switchboard-run-id]').getAttribute('data-switchboard-run-id')).toBe('run9');
   expect(screen.queryByRole('button', { name: /^approve/i })).not.toBeInTheDocument();
 });

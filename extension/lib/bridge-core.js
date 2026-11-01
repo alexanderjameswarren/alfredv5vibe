@@ -139,7 +139,6 @@ export function promptFrame(id, tag, prompt, error) {
 
 const RUN_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PROJECT_SHAPE = /^[a-z0-9_-]{1,40}$/;
-export const RUN_POST_MS = 10 * 60 * 1000;
 
 /**
  * The token of an approval link: https, a host exactly in `hosts`, path /approve/<token>.
@@ -205,13 +204,15 @@ export function chatForRun(chats, run) {
   return clicked ? { chat: clicked, why: null } : chatForProject(chats, run.project);
 }
 
-/** Why "sql <run id>" can't go into this chat yet, in plain words, or null when it can. */
-export function postProblem(chat, why) {
+/** Why "sql <run id>" didn't go into this chat, in plain words, or null. `did`: the watcher's answer. */
+export function postProblem(chat, why, did) {
   if (!chat) return why ?? "no open chat was found";
-  if (chat.state === "unknown") return "the extension can't read that chat's state";
-  if (chat.state !== "finished") return "Claude is still writing in that chat";
-  if (chat.composerEmpty !== true) return "that chat's message box has text in it, or can't be read";
-  return null;
+  if (did === "clear" || did === "sent") return null;
+  if (did === "writing") return "Claude is still writing in that chat";
+  if (did === "box") return "that chat's message box isn't empty: it has text, an image, a file or something else waiting to send";
+  if (did === "unknown") return "the extension can't read that chat's page";
+  if (did === "unsent") return "that chat's Send button didn't take it, so the line was taken back out";
+  return "that chat's tab didn't answer";
 }
 
 const CLICK_KEEP_MS = 60 * 60 * 1000;
@@ -224,13 +225,13 @@ export function pruneApprovals(state, now = Date.now()) {
   return {
     hosts: Array.isArray(state?.hosts) ? state.hosts : [],
     clicks: fresh(isMap(state?.clicks) ? state.clicks : {}, CLICK_KEEP_MS, now),
-    runs: Array.isArray(state?.runs) ? state.runs : [],
+    runs: (Array.isArray(state?.runs) ? state.runs : []).filter((r) => now - r.at <= SEEN_KEEP_MS),
     seen: fresh(isMap(state?.seen) ? state.seen : {}, SEEN_KEEP_MS, now),
   };
 }
 
-/** Injected into the approval page: one banner saying why the chat didn't get the result. Stands alone. */
-export function approveBanner(text) {
+/** Injected into the approval page: one banner saying why the chat didn't get the result, with Try again. Stands alone. */
+export function approveBanner(text, runId) {
   let el = document.querySelector("[data-alfred-post-note]");
   if (!el) {
     el = document.createElement("div");
@@ -238,7 +239,15 @@ export function approveBanner(text) {
     el.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:2147483647;padding:12px 16px;background:#fff;color:#111;border-top:2px solid #d97706;font:14px/1.4 sans-serif;";
     document.body.append(el);
   }
-  el.textContent = text;
+  el.textContent = `${text} `;
+  const again = document.createElement("button");
+  again.textContent = "Try again";
+  again.style.cssText = "margin-left:8px;padding:6px 12px;border:1px solid #111;border-radius:6px;background:#fff;color:#111;font:inherit;cursor:pointer;";
+  again.addEventListener("click", () => {
+    el.textContent = "Trying again…";
+    chrome.runtime.sendMessage({ type: "approve-retry", runId }).catch(() => {});
+  });
+  el.append(again);
 }
 
 /**
