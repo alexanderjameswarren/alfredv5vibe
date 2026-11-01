@@ -443,7 +443,7 @@ export const HELP = {
     reserved: true,
     title: "Never fires",
     what: "A rule that has stopped matching, or has not matched since it was made.",
-    included: "Active rules quiet for more than 1.5 times how often they should match and more than 30 days, counted from the last match, or from when the rule was made if it has never matched. How often comes from the merchant's subscription, else the usual gap between the rule's matches, else 365 days when its notes say annual or yearly and 91 when they say quarterly, else 30 days.",
+    included: "Active rules quiet for more than 1.5 times how often they should match and more than 30 days, counted from the last match, or from when the rule was made if it has never matched. How often is the most common gap between the merchant's linked charges, once there are 3 or more: gaps up to 10 days count as a week, up to 17 days as two weeks, longer ones round to whole months, and a tie goes to the longer gap. With fewer, it comes from the merchant's shortest subscription interval, else the usual gap between the rule's matches, else 365 days when its notes say annual or yearly and 91 when they say quarterly, else 30 days.",
     leftOut: "Rules that are switched off, and rules still inside that time.",
     todo: "Check whether the merchant now shows up under another name, then widen the rule or delete it. Acknowledge it if it waits for a rare charge.",
   },
