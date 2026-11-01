@@ -145,15 +145,28 @@ export function deleteParts(command, shell = "bash") {
   return splitCommand(command, shell, { pipes: true }).filter((p) => !READS_ONLY.test(p) && DELETE_WORD.test(p));
 }
 
+// `supabase functions deploy` flags that take a value. An unlisted flag takes none, so the word after it still counts
+// as a function: a new flag gets a needless refusal, never a missed deploy.
+const FUNCTION_DEPLOY_VALUE_FLAGS = new Set([
+  "--project-ref", "--import-map", "--workdir", "--profile", "--network-id", "--dns-resolver", "--output", "-o", "--jobs", "-j",
+]);
+
 /**
  * What a deploy command deploys, as scope names, or null if it is not a deploy:
  * Supabase function names, "db push", or `sf:<metadata or source dir>`.
  */
 export function deployTargets(command) {
+  // The regex below already stops at ; & | and a newline; the loop stops at a redirect.
   const c = String(command);
   const fn = /\bsupabase\s+functions\s+deploy\b([^;&|\n]*)/.exec(c);
   if (fn) {
-    const names = fn[1].trim().split(/\s+/).filter((w) => w && !w.startsWith("-"));
+    const names = [];
+    const words = fn[1].trim().split(/\s+/).filter(Boolean);
+    for (let i = 0; i < words.length; i++) {
+      if (/^(\d*|&)[<>]/.test(words[i])) break;
+      if (FUNCTION_DEPLOY_VALUE_FLAGS.has(words[i])) i++;
+      else if (!words[i].startsWith("-")) names.push(words[i]);
+    }
     return names.length ? names : ["(all functions)"];
   }
   if (/\bsupabase\s+db\s+push\b/.test(c)) return ["db push"];
