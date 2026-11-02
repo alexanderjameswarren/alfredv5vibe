@@ -2,6 +2,8 @@
 
 Project code: `warren_buffet_p4-r6d`. Progress: [progress-warren_buffet_p4-r6d.md](progress-warren_buffet_p4-r6d.md).
 
+**Status: finished 2026-11-02.** Results and open follow-ups are in the progress file.
+
 ## Privacy rule
 
 The history files are real bank, card and Amazon data in the **main checkout's** `tools/warren-buffet/history/`, ignored only through `.git/info/exclude`.
@@ -114,6 +116,8 @@ Alex approved this in Step 8f. It is numbered after P4-D9 but follows on from P4
 After the Wells Fargo and CNB import, Claude in chat does a one-time review scan and a fee and interest scan, and compares the burn rate over the current window with a 12-month window. The scans produce a summary only: nothing is added to the queue or To do. Burn-rate windows are compared with read-only SQL. No code beyond P4-D6.
 
 The burn-rate window is the 3 full Pacific calendar months before today's month (`wb_burn_rate_on`, migration 137). Imported rows fall outside the live window, so the import does not move today's burn rate.
+
+**Decided in Step 9: keep the 3-month window.**
 
 ### P4-D9: where imported rows reach on purpose
 Imported rows are allowed to reach three things:
