@@ -191,9 +191,13 @@ const RUNNING_KEEP_MS = 10 * 60 * 1000;
  * Each chat with what its approval is doing: approveState "running" (approved, or a test that runs on open) or
  * "notposted" (the result line couldn't go in), and approveStateKind. Null for neither.
  * A run's line still waiting to post counts as running. A mark older than any run could last is ignored.
+ * A link whose run has finished stops counting as live, matched by its tab, kind and expiry: its reply stays the
+ * latest until the result line starts a new turn. A later link has a later expiry, so it still shows.
  */
 export function withApprovalStates(chats, approvals, now = Date.now()) {
-  const out = chats.map((c) => ({ ...c, approveState: null, approveStateKind: null }));
+  const spent = Object.values(approvals.spent ?? {});
+  const isSpent = (c) => spent.some((s) => s.tabId === c.tabId && s.url === c.url && s.kind === c.approveKind && s.exp === c.approveExp);
+  const out = chats.map((c) => ({ ...c, ...(isSpent(c) ? { approveKind: null, approveExp: null } : {}), approveState: null, approveStateKind: null }));
   const mark = (chat, state, kind) => {
     const c = chat && out.find((o) => o.tabId === chat.tabId);
     if (c) c.approveState = state, c.approveStateKind = APPROVE_KINDS.includes(kind) ? kind : "sql";
@@ -307,6 +311,7 @@ export function pruneApprovals(state, now = Date.now()) {
   return {
     hosts: Array.isArray(state?.hosts) ? state.hosts : [],
     clicks: fresh(isMap(state?.clicks) ? state.clicks : {}, CLICK_KEEP_MS, now),
+    spent: fresh(isMap(state?.spent) ? state.spent : {}, CLICK_KEEP_MS, now),
     runs: (Array.isArray(state?.runs) ? state.runs : []).filter((r) => now - r.at <= SEEN_KEEP_MS),
     seen: fresh(isMap(state?.seen) ? state.seen : {}, SEEN_KEEP_MS, now),
   };
