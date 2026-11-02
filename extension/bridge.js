@@ -247,7 +247,7 @@ async function onApproveClick(msg, sender) {
     const token = approveTokenOf(msg.href, approvals.hosts);
     if (!token) return;
     const key = await tokenKey(token);
-    approvals.clicks[key] = { tabId, url, at: Date.now(), kind: approveLinkInfo(msg.href).kind };
+    approvals.clicks[key] = { tabId, url, at: Date.now(), ...approveLinkInfo(msg.href) };
     await saveApprovals();
   } catch (e) {
     quiet(e);
@@ -319,6 +319,8 @@ async function onApproveRun(msg, sender) {
     const key = await tokenKey(token);
     approvals.seen[run.runId] = Date.now();
     approvals.runs.push({ ...run, from: approvals.clicks[key], approveTabId: sender.tab?.id, at: Date.now() });
+    // Its run has finished, so this link never counts as live again, whatever the post does.
+    if (approvals.clicks[key]) approvals.spent[key] = { ...approvals.clicks[key], at: Date.now() };
     delete approvals.clicks[key];
     await saveApprovals();
     postRuns();

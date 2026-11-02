@@ -444,6 +444,31 @@ test("approval states: running while approved or waiting to post, notposted when
   assert.deepEqual(state({ clicks: { k: { ...from, kind: undefined, runningAt: NOW } }, runs: [] }), ["running", "sql"], "an old click is SQL");
 });
 
+test("a link whose run has finished isn't live, before the new turn; an unapproved or later one is", () => {
+  const chat = { tabId: 7, url: "https://claude.ai/chat/one", title: "x", issuedTag: null, state: "finished", approveKind: "sql", approveExp: 2000 };
+  const link = { tabId: 7, url: chat.url, kind: "sql", exp: 2000 };
+  const seen = (a, c = chat) => { const [o] = withApprovalStates([c], { clicks: {}, runs: [], ...a }); return [o.approveKind, o.approveExp, o.approveState]; };
+  // Clicked, not approved: still Alex's move.
+  assert.deepEqual(seen({ clicks: { k: { ...link, at: 1 } } }), ["sql", 2000, null]);
+  // The run finished and its line is waiting to post, or has posted and the tab has closed.
+  assert.deepEqual(seen({ spent: { k: link }, runs: [{ project: "p", from: link }] }), [null, null, "running"]);
+  assert.deepEqual(seen({ spent: { k: link } }), [null, null, null]);
+  // No click here: a link used from another device stays until it expires.
+  assert.deepEqual(seen({}), ["sql", 2000, null]);
+  // The next link in that chat, the same link in another chat.
+  assert.deepEqual(seen({ spent: { k: link } }, { ...chat, approveExp: 3000 }), ["sql", 3000, null]);
+  assert.deepEqual(seen({ spent: { k: link } }, { ...chat, tabId: 8 }), ["sql", 2000, null]);
+  // A link from before migration 196 matches on no expiry.
+  assert.deepEqual(seen({ spent: { k: { ...link, exp: null } } }, { ...chat, approveExp: null }), [null, null, null]);
+});
+
+test("approvals: a spent link is kept as long as a click, then dropped", () => {
+  const now = 10 * 24 * 3600 * 1000;
+  const out = pruneApprovals({ spent: { old: { at: now - 3700 * 1000 }, fresh: { at: now - 60 * 1000 } } }, now);
+  assert.deepEqual(Object.keys(out.spent), ["fresh"]);
+  assert.deepEqual(pruneApprovals(undefined, now).spent, {});
+});
+
 test("a new turn dismisses a stopped run; a chat already writing doesn't", () => {
   const run = () => ({ stopped: true, from: { tabId: 7 } });
   const a = { runs: [run()] };
@@ -520,8 +545,8 @@ test("approvals: old clicks and seen runs are dropped; waiting runs stay", () =>
   assert.equal(out.runs.length, 1);
   assert.deepEqual(out.hosts, ["a.b"]);
   // Anything stored wrongly, or nothing stored, reads as empty.
-  assert.deepEqual(pruneApprovals(undefined, now), { hosts: [], clicks: {}, runs: [], seen: {} });
-  assert.deepEqual(pruneApprovals({ hosts: 1, clicks: null, runs: "x", seen: 2 }, now), { hosts: [], clicks: {}, runs: [], seen: {} });
+  assert.deepEqual(pruneApprovals(undefined, now), { hosts: [], clicks: {}, spent: {}, runs: [], seen: {} });
+  assert.deepEqual(pruneApprovals({ hosts: 1, clicks: null, spent: 3, runs: "x", seen: 2 }, now), { hosts: [], clicks: {}, spent: {}, runs: [], seen: {} });
 });
 
 const STATUS_HTML = `<div data-switchboard-status hidden><p data-switchboard-status-text></p><button data-switchboard-retry>Try again</button></div>`;
@@ -576,7 +601,7 @@ test("host access: origins from the list, and a notice only when one is missing"
 
 test("manifest: no Alfred host in the code, asked for at run time", () => {
   const m = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
-  assert.equal(m.version, "1.2.9");
+  assert.equal(m.version, "1.2.10");
   assert.equal(m.host_permissions.some((h) => /vercel\.app/.test(h)), false);
   assert.deepEqual(m.optional_host_permissions, ["https://*/*"]);
 });
