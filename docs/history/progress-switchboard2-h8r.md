@@ -3,7 +3,7 @@
 Project code: `switchboard2-h8r`
 Spec: `docs/technical-spec-switchboard2-h8r.md`
 
-Status: Phase 0 complete (0.8, s12-w4tc). Phase 1: 1.1 to 1.3 done.
+Status: Phases 0, 1 and 2 complete (Phase 2 at s47-x4fu). Phase 3 not started.
 
 Rule: one step at a time. The CLI finishes a step, records it here, reports, and stops for Alex.
 
@@ -51,12 +51,12 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 2 | 2.7e | Posting guards, matching Send cli | — | done (s36-r4vh), extension 1.2.4: with a screenshot in the chat's box, Approve ran run 5596a17d-fdc3-4892-9cc4-8859dd2e813e (succeeded); nothing was sent, the chat wasn't touched, the tab stayed open with the line, Copy and the banner; after the box was cleared, Try again posted "sql 5596a17d-..." and the tab closed | 2026-11-01 |
 | 2 | 2.7f | The approve page looks and behaves like the rest of Alfred | — | done (s37-w6fa), extension 1.2.5: Alex checkpointed and tested; the page matches Alfred, the message and Try again sit inside the card, Copy works, and Try again posted run d3b5b803-a007-40fa-986c-220f4e501ee0 (succeeded) and closed the tab | 2026-11-01 |
 | 2 | 2.9 | Panel: Waiting on SQL, Report unread, lane order, tap rules | — | done (s38-d4ms): Alex checkpointed and restarted the panel; the switchboard2 tile showed tan "Waiting on SQL"; lanes ran gmail capture, switchboard2, arnold v1, warren buffet p4, then the rest; approving ran run 014ef9a9-c2d1-4fbb-92de-0dbcb7b0a6a7 (succeeded), which posted back by itself. The orange and red tap rules are not yet seen live | 2026-11-01 |
-| 2 | 2.9c | Tile order and grid size; Send link's plain words | — | done (s44-a9rj), extension 1.2.8: Alex checkpointed, restarted the panel and reloaded the extension. Open: at 3×2, a two-line name with "Both working" and an estimate cuts the name; Alex decides after seeing it live | 2026-11-02 |
+| 2 | 2.9c | Tile order and grid size; Send link's plain words | — | done (s44-a9rj), extension 1.2.8: Alex checkpointed, restarted the panel and reloaded the extension. Decided (s46): 3×2 keeps long names as they are, so a two-line name with "Both working" and an estimate stays cut | 2026-11-02 |
 | 2 | 2.9b | Send to CLI link shows Sending, Sent or Not sent | — | done (s39-g8pt, s40-n3hy), extension 1.2.6: built and checkpointed; Alex reloaded the extension and restarted the panel. Live test: s40's own Send link; host.log shows the prompt written at 19:19:36 UTC and "delivery switchboard2-h8r-s40-n3hy: sent" at 19:19:38, and the prompt arrived. The link's on-page words are for Alex to confirm | 2026-11-01 |
 | 2 | 2.10 | Read-only role and query function, with secret-column grants | `db:table:switchboard_read_log`, `db:table:switchboard_settings`, `db:fn:switchboard_readonly_query`, `db:fn:check_call_budget` (read), `db:fn:register_table`, `db:fn:set_read_settings` | part 1, the spike. First run (s40-n3hy; run 5e3d1548-64c3-445c-a6c7-8db3f6f5d11a, action dd1c9102-be92-4cb1-a8c1-6dec633ed622) stopped in setup: "create the query function: 0A000 parameter "transaction_read_only" cannot be set locally in functions"; rolled_back true. Every earlier stage worked through the runner: create role claude_reader, grant it to current_user, usage on public and auth, execute on auth.uid(). Second design (s40b-v2rk), run a992aa41-766e-45cd-95a9-e99ea2531d5e: passed 32 of 35. The 3 failures were the predicted ones: the role raised back to postgres from inside a query and reached auth.users; claims forged to see another user's row. Alex decided: claude_reader gets its own login; every read rule names Alex's id directly, not auth.uid(); one rule per table. Part 2 (s41-c5nb, s41b-y8dt, s41c-q3zf): migration 192 ran through the queue: dry run 2ac65ed1-6e5b-4f63-ba10-047397ba7ccd matched the real run 6f31c9ae-150c-4ce8-a72e-29ed687411c8 (action 9edf0f5c-cee3-48c1-863c-5c754d068de1). 88 tables covered; 11 left out, all "no user_id column" (apps, allowed_emails, sam_song_lyrics, sam_song_scores, collection_items, sam_song_measures, dj_playlist_tracks, item_group_members, sam_session_events, sam_song_fingerings, collection_item_removals); CONFORMANT, 98 tables. Possible later step: a read rule for those 11 through the parent row's owner. Done: verify test run e7814f53-e6c9-4781-91b1-6dedfe566515 passed 35 of 36; the failure was no_schema_but_public: claude_reader has usage on schema net (pg_net). Alex set the password from a pre-hashed SCRAM value and stored SWITCHBOARD_READER_DB_URL; a real login printed "logged in as: claude_reader", "raising to postgres refused: permission denied to set role "postgres"", "auth.users refused: permission denied for schema auth". Alex checkpointed 2.10 | 2026-11-01 |
 | 2 | 2.7g | Approve page: counts, expected counts, Don't run, Copy details, test kind | `db:deploy` | done (s43-t5vb), extension 1.2.7: Alex checkpointed and reloaded the extension. Wrong-count action d181d1d8-cc08-414b-baab-ceae90316b00: dry run da8de2a9-1f5e-40d0-a801-b1875d81cbe8 showed "2 rows, expected 5" with statement 3 in bold, Approve disabled; Copy details worked; Don't run with reason "count test" posted "sql da8de2a9-... cancelled: count test", closed the tab, and the action shows cancelled with the reason saved. Test action 93e2101d-f8ef-4bc4-8cb9-534870adff97 ran once by itself, no Approve, rows_seen 2, posted "sql e14cf128-13b3-4e41-96bf-843c92446d64". A test action's "done" is status `succeeded` or `failed` | 2026-11-02 |
 | 2 | 2.11 | MCP read-only query tool, `get_sql_read` | `db:deploy` | deployed (s42-m7wq, s42b-h6kx), CONFORMANT (98 tables). Live checks from claude.ai: the limits held (one statement, read-only writes refused, 10s timeout, auth and secret column refused, 1000-row cap, log correct). But net is open: the schema grants usage to PUBLIC, anon and authenticated; both net tables grant all privileges to PUBLIC; all 12 net functions run for PUBLIC (no ACL); all granted by supabase_admin. claude_reader read net._http_response (360 rows). net.http_get was stopped only by read-only. No public function calls net.http_* (only extensions.grant_pg_net_access). Alex decided: a plan guard in get_sql_read (built in s42b; not yet seen live) and an undone test of revoking net (`3_net_revoke_test.sql`, queued as 9a59549f-20a0-4694-85f7-ca1c977146c7). The budget counts from `switchboard_read_log`, not `check_call_budget`, which counts every tool's calls. Done (s43-t5vb): the guard passed live (net._http_response, net.http_get, information_schema and query_to_xml refused; switchboard_actions and pg_class allowed). The revoke test (run 7b666e1a-bd11-4b76-8981-1ad775329f43) ran all 18 statements with no effect: every role's net access was the same before and after, because supabase_admin made the grants. Two cron jobs use net (notify-dispatch-every-minute, wb-sync-daily), both as postgres. Decision: net stays open at source; get_sql_read's plan guard plus read-only are the protection | 2026-11-02 |
-| 2 | 2.12 | Skill rule and Phase 2 checklist | — | written (s45-e2lc): CLAUDE.md, the skill (version 2026-11-02), spec §7 and the checklist below. Open: the skill's first real use from claude.ai | |
+| 2 | 2.12 | Skill rule and Phase 2 checklist | — | done (s45-e2lc, s47-x4fu): CLAUDE.md, the skill (version 2026-11-02), spec §7 and the checklist below. The skill's flow was used live end to end on the kill switch actions | 2026-11-02 |
 | 3 | 3.1-3.18 | The move, settings, `sb` commands, Salesforce guard, deploy wrapper, PII hold: spec §9 | — | todo | |
 | 4 | 4.1-4.5 | Salesforce reads: spec §10 | the Phase 2 tables, re-claimed | todo | |
 | 5 | 5.1-5.6 | Git and Salesforce actions by link: spec §11 | `db:table:switchboard_actions` | todo | |
@@ -617,13 +617,13 @@ Database items per step are in the table at the top. Report unread and lane orde
 - Auto-posting "cli" into the chat: parked as a separate idea.
 - `claude_reader` token deny list: drafted at the migration step.
 - Read rules for the 11 child tables with no `user_id` (2.10): through the parent row's owner. Until then `get_sql_read` can't read them.
-- The 3×2 fit question (2.9c): Alex decides after seeing it live.
+- The faint "Send to CLI" subtitle on the /send fallback page.
 
 ## Test checklist
 
 - [x] Phase 0: each of the 9 fixes has a failing test first, then passes. The plan guard refuses an undeclared create, delete, deploy and SQL table. Both suites green.
-- [ ] Phase 1: a Send link sends only to its project's window and never to the active one. A duplicate, a stale reply's link, and a send while Running are each refused. On a phone the link opens the Alfred page. Each tile state shows; Your turn flashes; Outside scope stays red until tapped.
-- [ ] Phase 2, not yet complete: the open items are the unticked lines below.
+- [x] Phase 1: a Send link sends only to its project's window and never to the active one. A duplicate, a stale reply's link, and a send while Running are each refused. On a phone the link opens the Alfred page. Each tile state shows; Your turn flashes; Outside scope stays red until tapped.
+- [x] Phase 2: done (s47-x4fu). Evidence and what's left to watch are below.
 
 ### Phase 2 checklist
 
@@ -645,23 +645,24 @@ Seen live, with evidence:
 - [x] `get_sql_read` limits (2.11): one statement, writes refused, 10s timeout, auth and secret column refused, 1000-row cap, log correct.
 - [x] Plan guard (2.11): net._http_response, net.http_get, information_schema and query_to_xml refused; switchboard_actions and pg_class allowed.
 - [x] Net decision (2.11): revoke test run 7b666e1a-bd11-4b76-8981-1ad775329f43 had no effect; net stays open at source.
+- [x] An expired link (s46): the revoke-test link expired overnight and was reissued (action 9a59549f-20a0-4694-85f7-ca1c977146c7).
+- [x] Send link look (2.9c): "Sending…" and "Sent ✓" showed as plain text live.
+- [x] Main stays upper left (2.9c).
+- [x] `supabase/functions/mcp/tables.test.mjs` passes after `gitsync` (s46): 1 pass, 0 fail.
+- [x] The kill switch blocks reads (2.11): action A bd90245f-439a-45ca-920c-e7cb38ab4647 (run aad0fe02-4581-4bb5-9d82-12f7a31e1a12) set reads_enabled false; `get_sql_read` was refused with "read-only queries are switched off"; action B 9a16582d-e86c-42c9-9173-b3c18460cb12 (run 75b69631-6321-4945-846a-828d41bcc907) set it back; a read then returned reads_enabled true.
+- [x] The skill's flow, live end to end (2.12): action id, review, link, `sql <run id>`, read back.
 
-Tested only in code, not seen live:
+Accepted by Alex as tested in code, not seen live:
 
-- [ ] SQL for the editor is refused at the queue. Runner tests.
-- [ ] A link fails after 30 minutes. Runner tests cover it; the verify script checks only the 30-minute stamp.
-- [ ] Changed SQL is refused at Approve. Runner tests, and `wrong_fingerprint_refused` in `1_verify_queue.sql`.
-- [ ] Orange clears on archive, and the orange and red tap rules (2.9). Panel tests only.
-- [ ] 21st read in 10 minutes refused, and the kill switch blocks reads (2.11). Tool tests only; the live checks recorded don't name them.
+- [x] SQL for the editor is refused at the queue. Runner tests.
+- [x] Changed SQL is refused at Approve. Runner tests, and `wrong_fingerprint_refused` in `1_verify_queue.sql`.
+- [x] Orange clears on archive, and the orange and red tap rules (2.9). Panel tests only.
+- [x] The 21st read in 10 minutes refused (2.11). Unit tests only, by decision.
 
-Waiting on Alex:
+To watch in normal use, not blocking (2.9c): 7 tiles at 3×3; an action queued during a run goes green, then tan; a Send link's Not sent button.
 
-- [ ] 2.9c live: main first with and without a bound project; 6 and 7 tiles; an action queued during a run goes green, then tan; a Send link's Sent and Not sent looks.
-- [ ] 2.12 live: the updated skill used from claude.ai, from an action id through to `sql <run id>`.
+Carried, not decided:
 
-Open in the code:
-
-- [ ] `supabase/functions/mcp/tables.test.mjs` fails in this worktree ("every defineTool declares real tables"). It needs the snapshot refreshed through `gitsync`; to be rerun after that.
 - [ ] `node --test "scripts/lib/*.test.mjs"`: the 3 known failures ("xargs rm", "copy over an unclaimed file", "leaves no trace"). s45: 374 pass, 3 fail. App suite: 3190 pass, 0 fail.
 
 Dropped: "fails in the wrong tab". `chat_url` left the spec at 2.7, and Alex's login plus the single-use link keep the SQL safe.
@@ -736,3 +737,5 @@ Parked: see "Deferred and parked" above.
 | s43 (2.7g) | 11m (estimate 20m) |
 | s44 (2.9c) | 6m (estimate 12m) |
 | s45 (2.12) | 4m (estimate 10m) |
+| s46 (kill switch queued) | 1m (estimate 5m) |
+| s47 (Phase 2 done) | 1m (estimate 3m) |
