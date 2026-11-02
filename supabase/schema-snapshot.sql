@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-02 08:10, through migration 194 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-02 11:56, through migration 195 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -8614,6 +8614,29 @@ COMMENT ON FUNCTION "public"."wb_order_matches_check"() IS 'Warren Buffet: refus
 
 
 
+CREATE OR REPLACE FUNCTION "public"."wb_order_split_state"("p_transaction_id" "uuid") RETURNS "jsonb"
+    LANGUAGE "sql" STABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+  select coalesce(jsonb_agg(x.v order by x.a, x.t), '[]'::jsonb)
+  from (
+    select s.amount as a,
+           coalesce((select string_agg(st.tag_id::text, ',' order by st.tag_id) from public.wb_split_tags st where st.split_id = s.id), '') as t,
+           jsonb_build_object('amount', s.amount,
+             'tags', coalesce((select jsonb_agg(st.tag_id order by st.tag_id) from public.wb_split_tags st where st.split_id = s.id), '[]'::jsonb)) as v
+    from public.wb_splits s
+    where s.transaction_id = p_transaction_id
+  ) x;
+$$;
+
+
+ALTER FUNCTION "public"."wb_order_split_state"("p_transaction_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."wb_order_split_state"("p_transaction_id" "uuid") IS 'Warren Buffet: one transaction''s splits (amounts and tags) in a stable order, so wb_split_order_charges can tell whether anyone changed them.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."wb_pair_decision"("p_forward" integer, "p_reverse" integer) RETURNS "text"
     LANGUAGE "sql" IMMUTABLE
     SET "search_path" TO 'public', 'pg_temp'
@@ -8815,6 +8838,7 @@ declare
   v_match      record;
   v_split      uuid;
   v_nsplits    int;
+  v_from_order boolean;
   v_matched    uuid[];
   v_sub        uuid;
   v_nsubs      int;
@@ -8967,18 +8991,19 @@ begin
 
     -- 5. Rules: posted rows only. Rule tags are replaced; claude/manual tags stay,
     --    and a tag removed by hand (wb_tag_exclusions) is never put back.
+    --    Order-made splits (P4-D10) keep their tags and project; rules still count as matched.
     v_matched := '{}';
     v_project := null;
     if not t.pending then
       v_posted := v_posted || t.id;
-      select count(*)::int, (array_agg(s.id order by s.position, s.id))[1]
-      into v_nsplits, v_split
+      select count(*)::int, (array_agg(s.id order by s.position, s.id))[1], coalesce(bool_or(s.from_order), false)
+      into v_nsplits, v_split, v_from_order
       from public.wb_splits s
       where s.transaction_id = t.id;
 
       delete from public.wb_split_tags st
       using public.wb_splits s
-      where st.split_id = s.id and s.transaction_id = t.id and st.source = 'rule';
+      where st.split_id = s.id and s.transaction_id = t.id and st.source = 'rule' and not v_from_order;
 
       select x.kind, x.kind_source, x.merchant_id, x.merchant_source, x.transfer_pair_id, x.clean_description
       into cur
@@ -9013,7 +9038,7 @@ begin
         end if;
 
         -- Tags only on a single-split transaction; multi-split ones are left to people.
-        if v_nsplits = 1 then
+        if v_nsplits = 1 and not v_from_order then
           for v_tag in
             select tg.id, tg.group_id, g.exclusive
             from unnest(r.add_tag_ids) with ordinality as x(tag_id, ord)
@@ -9037,7 +9062,7 @@ begin
 
       -- 5c. Project, on a single-split transaction only. A project set or removed
       --     by hand or by Claude stays; a rule's project goes when no rule sets one.
-      if v_nsplits = 1 then
+      if v_nsplits = 1 and not v_from_order then
         select s.project_source into v_psource from public.wb_splits s where s.id = v_split;
         if coalesce(v_psource, 'rule') = 'rule' then
           update public.wb_splits
@@ -9398,6 +9423,44 @@ $$;
 ALTER FUNCTION "public"."wb_rules_check_tags"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."wb_set_order_item_tags"("p_tag_id" "uuid", "p_item_ids" "uuid"[] DEFAULT NULL::"uuid"[], "p_asin" "text" DEFAULT NULL::"text", "p_site" "text" DEFAULT NULL::"text", "p_source" "text" DEFAULT 'claude'::"text") RETURNS "jsonb"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  n int;
+begin
+  if p_source is null or p_source not in ('claude', 'manual') then
+    raise exception 'wb_set_order_item_tags: source must be claude or manual' using errcode = '22023';
+  end if;
+  if num_nonnulls(p_item_ids, p_asin, p_site) <> 1 then
+    raise exception 'wb_set_order_item_tags: pass exactly one of item ids, an ASIN or a site' using errcode = '22023';
+  end if;
+  if not exists (
+    select 1 from public.wb_tags t join public.wb_tag_groups g on g.id = t.group_id
+    where t.id = p_tag_id and t.is_active and g.name = 'Category'
+  ) then
+    raise exception 'wb_set_order_item_tags: the tag must be an active tag in the Category group' using errcode = '23514';
+  end if;
+
+  update public.wb_order_items i
+  set tag_id = p_tag_id, tag_source = p_source
+  where (p_item_ids is not null and i.id = any (p_item_ids))
+     or (p_asin is not null and i.asin = p_asin)
+     or (p_site is not null and i.site = p_site and i.tag_id is null);
+  get diagnostics n = row_count;
+  return jsonb_build_object('updated', n);
+end;
+$$;
+
+
+ALTER FUNCTION "public"."wb_set_order_item_tags"("p_tag_id" "uuid", "p_item_ids" "uuid"[], "p_asin" "text", "p_site" "text", "p_source" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."wb_set_order_item_tags"("p_tag_id" "uuid", "p_item_ids" "uuid"[], "p_asin" "text", "p_site" "text", "p_source" "text") IS 'Warren Buffet: sets the Category tag on items by ids, on every row of one ASIN, or on every untagged item of one site. It does not change any charge; run wb_split_order_charges for that.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."wb_set_transfer_pair"("p_id" "uuid", "p_pair_with" "uuid", "p_source" "text" DEFAULT 'claude'::"text") RETURNS "jsonb"
     LANGUAGE "plpgsql"
     SET "search_path" TO 'public', 'pg_temp'
@@ -9456,6 +9519,183 @@ ALTER FUNCTION "public"."wb_set_transfer_pair"("p_id" "uuid", "p_pair_with" "uui
 
 
 COMMENT ON FUNCTION "public"."wb_set_transfer_pair"("p_id" "uuid", "p_pair_with" "uuid", "p_source" "text") IS 'Warren Buffet: pair two transactions as a transfer (different accounts, opposite signs), or with p_pair_with null unpair one and its partner. Both rows get kind_source claude or manual, so processing never re-pairs or unpairs them.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."wb_split_order_charges"("p_transaction_ids" "uuid"[] DEFAULT NULL::"uuid"[]) RETURNS "jsonb"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  m            record;
+  v_unsorted   uuid;
+  v_category   uuid;
+  v_amount     numeric;
+  v_order      numeric;
+  v_cents      bigint;
+  v_old        uuid[];
+  v_tags       uuid[];
+  v_shares     bigint[];
+  v_keep       jsonb;
+  v_same       boolean;
+  v_split      uuid;
+  i            int;
+  n_split      int := 0;
+  n_unchanged  int := 0;
+  v_hand_split uuid[] := '{}';
+  v_hand_tag   uuid[] := '{}';
+  v_linked     uuid[] := '{}';
+  v_changed    uuid[] := '{}';
+  v_failed     uuid[] := '{}';
+begin
+  select t.id, g.id into v_unsorted, v_category
+  from public.wb_tags t join public.wb_tag_groups g on g.id = t.group_id
+  where t.name = 'Amazon (unsorted)' and g.name = 'Category';
+  if v_unsorted is null then
+    raise exception 'wb_split_order_charges: the tag Amazon (unsorted) was not found in the Category group' using errcode = '23503';
+  end if;
+
+  for m in
+    select x.id as match_id, x.order_id, x.transaction_id, x.split_state
+    from public.wb_order_matches x
+    where p_transaction_ids is null or x.transaction_id = any (p_transaction_ids)
+    order by x.transaction_id
+  loop
+    begin
+      select t.amount into v_amount from public.wb_transactions t where t.id = m.transaction_id for update;
+      select o.amount into v_order from public.wb_orders o where o.id = m.order_id;
+      if v_amount is distinct from -v_order then
+        v_changed := v_changed || m.transaction_id;
+        continue;
+      end if;
+
+      -- Ours, but changed since: it now belongs to whoever changed it.
+      if m.split_state is not null and m.split_state <> public.wb_order_split_state(m.transaction_id) then
+        update public.wb_splits set from_order = false where transaction_id = m.transaction_id;
+        update public.wb_order_matches set split_state = null where id = m.match_id;
+        v_hand_split := v_hand_split || m.transaction_id;
+        continue;
+      end if;
+
+      select array_agg(s.id order by s.position, s.created_at, s.id) into v_old
+      from public.wb_splits s where s.transaction_id = m.transaction_id;
+
+      if m.split_state is null then
+        if cardinality(v_old) > 1 then
+          v_hand_split := v_hand_split || m.transaction_id;
+          continue;
+        end if;
+        if exists (
+          select 1 from public.wb_split_tags st
+          where st.split_id = any (v_old) and st.group_id = v_category
+            and st.source in ('claude', 'manual') and st.tag_id <> v_unsorted
+        ) then
+          v_hand_tag := v_hand_tag || m.transaction_id;
+          continue;
+        end if;
+      end if;
+
+      if exists (select 1 from public.wb_splits s where s.id = any (v_old) and s.project_id is not null)
+         or exists (select 1 from public.wb_planned_matches p where p.transaction_id = m.transaction_id) then
+        v_linked := v_linked || m.transaction_id;
+        continue;
+      end if;
+
+      -- The shares, in cents. Untagged lines go to Amazon (unsorted).
+      v_cents := round(abs(v_amount) * 100)::bigint;
+      with g as (
+        select coalesce(it.tag_id, v_unsorted) as tag_id, sum(it.line_amount) as w
+        from public.wb_order_items it
+        where it.order_id = m.order_id
+        group by 1
+        having sum(it.line_amount) > 0
+      ), a as (
+        select g.tag_id, v_cents * g.w / sum(g.w) over () as exact from g
+      ), r as (
+        select a.tag_id, floor(a.exact)::bigint as base,
+               row_number() over (order by a.exact - floor(a.exact) desc, a.exact desc, a.tag_id) as rn,
+               sum(floor(a.exact)) over () as based
+        from a
+      ), f as (
+        select r.tag_id, r.base + case when r.rn <= v_cents - r.based then 1 else 0 end as share from r
+      )
+      select array_agg(f.tag_id order by f.share desc, f.tag_id), array_agg(f.share::bigint order by f.share desc, f.tag_id)
+      into v_tags, v_shares
+      from f where f.share > 0;
+      if v_tags is null then
+        v_tags := array[v_unsorted];
+        v_shares := array[v_cents];
+      end if;
+
+      -- Already like this: write nothing.
+      select count(*) = cardinality(v_tags) and coalesce(bool_and(c.ok), false) into v_same
+      from (
+        select s.amount = -(v_shares[u.ord]::numeric / 100) as ok
+        from unnest(v_tags) with ordinality as u(tag_id, ord)
+        join public.wb_split_tags st on st.tag_id = u.tag_id and st.split_id = any (v_old) and st.group_id = v_category
+        join public.wb_splits s on s.id = st.split_id
+      ) c;
+      if v_same and cardinality(v_old) = cardinality(v_tags) then
+        n_unchanged := n_unchanged + 1;
+        continue;
+      end if;
+
+      -- Tags outside Category (Who, Tax, Label) stay on every part.
+      select coalesce(jsonb_agg(to_jsonb(k)), '[]'::jsonb) into v_keep
+      from (
+        select distinct on (st.tag_id) st.tag_id, st.source, st.rule_id, st.replaced_rule_id
+        from public.wb_split_tags st
+        where st.split_id = any (v_old) and st.group_id <> v_category
+        order by st.tag_id
+      ) k;
+
+      delete from public.wb_split_tags st where st.split_id = any (v_old);
+
+      for i in 1 .. cardinality(v_tags) loop
+        if i <= cardinality(v_old) then
+          v_split := v_old[i];
+          update public.wb_splits
+          set amount = -(v_shares[i]::numeric / 100), position = i - 1, from_order = true
+          where id = v_split;
+        else
+          insert into public.wb_splits (transaction_id, amount, position, from_order)
+          values (m.transaction_id, -(v_shares[i]::numeric / 100), i - 1, true)
+          returning id into v_split;
+        end if;
+        insert into public.wb_split_tags (split_id, tag_id, source) values (v_split, v_tags[i], 'claude');
+        insert into public.wb_split_tags (split_id, tag_id, source, rule_id, replaced_rule_id)
+        select v_split, (j ->> 'tag_id')::uuid, j ->> 'source', (j ->> 'rule_id')::uuid, (j ->> 'replaced_rule_id')::uuid
+        from jsonb_array_elements(v_keep) j;
+      end loop;
+      if cardinality(v_old) > cardinality(v_tags) then
+        delete from public.wb_splits where id = any (v_old[cardinality(v_tags) + 1:]);
+      end if;
+
+      update public.wb_order_matches
+      set split_state = public.wb_order_split_state(m.transaction_id)
+      where id = m.match_id;
+      n_split := n_split + 1;
+    exception when others then
+      v_failed := v_failed || m.transaction_id;
+    end;
+  end loop;
+
+  return jsonb_build_object(
+    'split', n_split,
+    'unchanged', n_unchanged,
+    'skipped_hand_split', to_jsonb(v_hand_split),
+    'skipped_hand_tagged', to_jsonb(v_hand_tag),
+    'skipped_project_or_planned_match', to_jsonb(v_linked),
+    'skipped_amount_changed', to_jsonb(v_changed),
+    'failed', to_jsonb(v_failed));
+end;
+$$;
+
+
+ALTER FUNCTION "public"."wb_split_order_charges"("p_transaction_ids" "uuid"[]) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."wb_split_order_charges"("p_transaction_ids" "uuid"[]) IS 'Warren Buffet: splits each matched Amazon charge (or only the given ones) by its items'' categories, one split per category, summing exactly to the charge; untagged lines go on Amazon (unsorted). Safe to rerun: it rebuilds only splits it made and has not seen changed. It skips and reports charges split or categorised by hand, charges with a project or planned match, and charges whose amount changed.';
 
 
 
@@ -15534,10 +15774,12 @@ CREATE TABLE IF NOT EXISTS "public"."wb_order_items" (
     "buyer" "text",
     "tag_id" "uuid",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "tag_source" "text",
     CONSTRAINT "wb_order_items_amounts_check" CHECK ((("unit_amount" >= (0)::numeric) AND ("line_amount" >= (0)::numeric))),
     CONSTRAINT "wb_order_items_quantity_check" CHECK (("quantity" >= 0)),
     CONSTRAINT "wb_order_items_refund_check" CHECK (((("refunded_amount" IS NULL) AND ("refund_date" IS NULL)) OR (("refunded_amount" IS NOT NULL) AND ("refunded_amount" > (0)::numeric) AND ("refund_date" IS NOT NULL)))),
-    CONSTRAINT "wb_order_items_site_check" CHECK (("site" = ANY (ARRAY['amazon'::"text", 'wholefoods'::"text"])))
+    CONSTRAINT "wb_order_items_site_check" CHECK (("site" = ANY (ARRAY['amazon'::"text", 'wholefoods'::"text"]))),
+    CONSTRAINT "wb_order_items_tag_source_check" CHECK (((("tag_id" IS NULL) AND ("tag_source" IS NULL)) OR (("tag_id" IS NOT NULL) AND ("tag_source" IS NOT NULL) AND ("tag_source" = ANY (ARRAY['claude'::"text", 'manual'::"text"])))))
 );
 
 
@@ -15576,6 +15818,10 @@ COMMENT ON COLUMN "public"."wb_order_items"."tag_id" IS 'The item''s category, s
 
 
 
+COMMENT ON COLUMN "public"."wb_order_items"."tag_source" IS 'Who set the category: claude or manual. Empty until it is set.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."wb_order_matches" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -15584,6 +15830,7 @@ CREATE TABLE IF NOT EXISTS "public"."wb_order_matches" (
     "transaction_id" "uuid" NOT NULL,
     "days_apart" integer NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "split_state" "jsonb",
     CONSTRAINT "wb_order_matches_days_check" CHECK ((("days_apart" >= 0) AND ("days_apart" <= 3)))
 );
 
@@ -15596,6 +15843,10 @@ COMMENT ON TABLE "public"."wb_order_matches" IS 'App: Warren Buffet. An Amazon s
 
 
 COMMENT ON COLUMN "public"."wb_order_matches"."days_apart" IS 'Charge date minus ship date, Pacific.';
+
+
+
+COMMENT ON COLUMN "public"."wb_order_matches"."split_state" IS 'The charge''s splits as wb_split_order_charges left them. If they differ next run, someone changed them by hand and the charge is left alone.';
 
 
 
@@ -15931,6 +16182,7 @@ CREATE TABLE IF NOT EXISTS "public"."wb_splits" (
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "project_id" "uuid",
     "project_source" "text",
+    "from_order" boolean DEFAULT false NOT NULL,
     CONSTRAINT "wb_splits_project_source_check" CHECK (((("project_source" IS NULL) OR ("project_source" = ANY (ARRAY['rule'::"text", 'claude'::"text", 'manual'::"text"]))) AND (("project_id" IS NULL) OR ("project_source" IS NOT NULL)))),
     CONSTRAINT "wb_splits_tax_year_check" CHECK ((("tax_year" IS NULL) OR (("tax_year" >= 2000) AND ("tax_year" <= 2100))))
 );
@@ -15952,6 +16204,10 @@ COMMENT ON COLUMN "public"."wb_splits"."project_id" IS 'Optional project this pa
 
 
 COMMENT ON COLUMN "public"."wb_splits"."project_source" IS 'Who set project_id: rule, claude or manual. claude and manual are never changed by processing; a null project_id with source claude or manual is a project removed by hand, which no rule puts back. A project written with no source counts as manual (trigger).';
+
+
+
+COMMENT ON COLUMN "public"."wb_splits"."from_order" IS 'True when wb_split_order_charges made this split from order detail. Tag rules and wb_process_transactions leave these alone (P4-D10).';
 
 
 
@@ -22700,6 +22956,12 @@ GRANT ALL ON FUNCTION "public"."wb_order_matches_check"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."wb_order_split_state"("p_transaction_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."wb_order_split_state"("p_transaction_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."wb_order_split_state"("p_transaction_id" "uuid") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."wb_pair_decision"("p_forward" integer, "p_reverse" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_pair_decision"("p_forward" integer, "p_reverse" integer) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_pair_decision"("p_forward" integer, "p_reverse" integer) TO "service_role";
@@ -22772,9 +23034,21 @@ GRANT ALL ON FUNCTION "public"."wb_rules_check_tags"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."wb_set_order_item_tags"("p_tag_id" "uuid", "p_item_ids" "uuid"[], "p_asin" "text", "p_site" "text", "p_source" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."wb_set_order_item_tags"("p_tag_id" "uuid", "p_item_ids" "uuid"[], "p_asin" "text", "p_site" "text", "p_source" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."wb_set_order_item_tags"("p_tag_id" "uuid", "p_item_ids" "uuid"[], "p_asin" "text", "p_site" "text", "p_source" "text") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."wb_set_transfer_pair"("p_id" "uuid", "p_pair_with" "uuid", "p_source" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_set_transfer_pair"("p_id" "uuid", "p_pair_with" "uuid", "p_source" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_set_transfer_pair"("p_id" "uuid", "p_pair_with" "uuid", "p_source" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."wb_split_order_charges"("p_transaction_ids" "uuid"[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."wb_split_order_charges"("p_transaction_ids" "uuid"[]) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."wb_split_order_charges"("p_transaction_ids" "uuid"[]) TO "service_role";
 
 
 

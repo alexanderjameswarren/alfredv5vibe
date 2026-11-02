@@ -100,6 +100,16 @@ The goal is spending categories, not reconciliation. Amazon orders hold food, cl
 - **The match rule is also held in the database:** a trigger refuses a match unless it is an Amazon shipment above zero, the charge is exactly its amount, and `days_apart` is the real gap. Leaving both charges unmatched when two claim one shipment is the writer's rule.
 - **Read tool:** `get_wb_order_items`, searching by product name words, site and date range.
 
+### P4-D10: item tags and splitting Amazon charges
+Alex approved this in Step 8f. It is numbered after P4-D9 but follows on from P4-D7.
+
+- **Item tags:** `set_wb_order_item_tags` sets a Category tag, active tags only: by item ids, by ASIN (every row of that product), or for every untagged item of one site. Source is `claude` or `manual`. Claude tags in chat and may create a new Category tag when nothing fits; never force a poor fit.
+- **Whole Foods** items default to Groceries through the bulk option. They are never split.
+- **Splitting:** `wb_split_order_charges`, run by `split_wb_order_charges`, gives each matched Amazon charge one split per category. Each `line_amount` already holds that line's tax, shipping and discounts, so spreading by it spreads them in proportion; largest remainder makes the splits sum exactly to the charge. Untagged lines stay on Amazon (unsorted), and unmatched charges are untouched.
+- **Marking:** `wb_splits.from_order`. Tag rules and `wb_process_transactions` never overwrite or rebuild these. Their tags have source `claude`, since the tag source list has no order value. Tags from other groups (Who, Tax, Label) stay on every part.
+- **Reruns:** `wb_order_matches.split_state` records the splits as last left. If they differ on the next run, someone changed them, so the charge is left alone and stops counting as an order split.
+- **Left alone and reported:** charges already split by hand or by Claude; single-split charges with a hand or Claude Category other than Amazon (unsorted); charges with any project or planned match, which are skipped rather than carried through a resplit; charges whose amount changed.
+
 ### P4-D8: chat review
 After the Wells Fargo and CNB import, Claude in chat does a one-time review scan and a fee and interest scan, and compares the burn rate over the current window with a 12-month window. The scans produce a summary only: nothing is added to the queue or To do. Burn-rate windows are compared with read-only SQL. No code beyond P4-D6.
 

@@ -135,15 +135,53 @@ Scope:
 - deploy: none
 - SQL: wb_orders, wb_order_items, wb_order_matches, wb_transactions, wb_accounts
 
-### Step 8f: split matched charges by item category (was 8c)
-After Claude has given the items categories in chat.
+Status: done. Alex ran the write and checkpoint: 508 shipments, 2924 items, 233 matches, 14 refunds placed.
 
-Scope, provisional until the write's counts are back:
-- create: tools/warren-buffet/import/
-- update: docs/technical-spec-warren_buffet_p4-r6d.md
+### Step 8f: item tags and splitting Amazon charges (P4-D10)
+Status: stopped at a plan guard block; the SQL is not written. Written: `set_wb_order_item_tags`, `split_wb_order_charges` with tests, registration, help line, P4-D10. Refused: the `_pending_` migration, because its draft used a temporary table not in the SQL list. Also out of scope, so not tried: the `wb_process_transactions` change, whose body updates `wb_rules`; the test script, whose fixtures insert into `wb_accounts` and `wb_orders`; and deleting the `_pending_` file. No `db:` items claimed, nothing numbered, no SQL run. The tools call functions that don't exist yet, so they can't deploy until the migration has run.
+
+### Step 8g: the split migration and test
+Database: `db:table:wb_order_items`, `wb_order_matches`, `wb_transactions`, `wb_splits`, `wb_split_tags`, `wb_tags`, `wb_rules`, `wb_accounts`, `wb_orders`, `db:fn:wb_process_transactions`, `wb_set_order_item_tags`, `wb_order_split_state`, `wb_split_order_charges`, all claimed.
+
+Status: `195_item_splits.sql` and `4_item_splits_tests.sql` written, `_pending_` deleted. Waiting on Alex to run them and the regression scripts. Neither has run against a database. `wb_process_transactions` differs from the live one only in the `from_order` guards and one comment, checked by diff against main's snapshot.
+
+The project skip is tested with a real project id inside the rolled-back transaction; a planned match reads the same condition but isn't exercised, since `wb_projects` and `wb_planned_matches` fixtures aren't in scope. Two charges claiming one shipment stays a writer rule.
+
+Alex ran both: `195_item_splits.sql` is live (conformant true, failures []), and `4_item_splits_tests.sql` passed (ALL PASSED, rolled back, rows_left_behind 0).
+
+### Step 8h: queue the regression scripts
+Database: none claimed here; the Step 8g `db:` claims are still held, waiting on Checkpoint.
+
+Status: all eight queued with `--test`; none refused and none has run. Queued is not a pass. Action ids, in order:
+- `115_wb_phase2_tag_exclusions_tests.sql`: 7faa5955-075b-47db-a943-54fd12d39b24
+- `118_wb_phase2_step6_tests.sql`: de79131f-0943-42c6-9907-7091043343ee
+- `121_wb_phase2_step7_tests.sql`: fabd8f7d-cd56-4637-9725-eccf59319c99
+- `123_wb_phase2_step7d_tests.sql`: 3f4c956c-fe08-4692-8ddb-fed98b4cc365
+- `125_wb_phase2_step8_tests.sql`: 8c0f1091-04b5-4c18-8eeb-d06536d16c10
+- `128_wb_phase2_step10_rule_health_tests.sql`: a0b3c308-83b3-4ea1-a9aa-ca367d1fbb88
+- `132_wb_phase2_step10_acks_tests.sql`: c9a3378b-551d-4dc3-a17f-f5d3c77bb605
+- `136_wb_phase3_step4_tests.sql`: d8386489-34f3-483e-b0ec-d5e9fabf5b4e
+
+These scripts end in a deliberate error carrying their result, so the runner may record a passing script as a failed run. Read the error text: a pass reads `WB TEST RESULT (rolled back): {"all_passed": true, ...`.
+
+### Step 8i: deploy mcp, tag in chat, run the splits (proposed, was 8h)
+Deploy needs `db:deploy` and a `gitsync` first; `index.ts` already holds the two tools.
+
+Scope:
+- create: none
+- update: none
 - delete: none
+- deploy: mcp
+- SQL: none
+
+### Earlier scope proposed for Step 8g
+
+Scope:
+- create: supabase/migrations/, supabase/tests/warren_buffet_p4/
+- update: none
+- delete: supabase/migrations/_pending_warren_buffet_p4-r6d_item_splits.sql
 - deploy: none
-- SQL: wb_splits, wb_order_items, wb_order_matches, wb_transactions, wb_tags
+- SQL: wb_order_items, wb_order_matches, wb_transactions, wb_splits, wb_split_tags, wb_tags, wb_process_transactions, wb_rules, wb_accounts, wb_orders
 
 ### Step 9: review and Finish
 Database: none.

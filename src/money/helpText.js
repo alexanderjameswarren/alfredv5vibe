@@ -173,7 +173,7 @@ export const HELP = {
   "transaction.splits": {
     title: "Splits",
     what: "One charge divided into parts, such as pet food and clothes, each with its own category.",
-    included: "Every part; together they must add up to the charge.",
+    included: "Every part; together they must add up to the charge. Amazon charges can be split by what was in the shipment.",
     leftOut: "Rules only tag transactions with a single part. Split ones are left to you.",
     todo: "\"Split\" or \"Edit parts\" to change the parts or their categories.",
   },

@@ -212,6 +212,7 @@ import {
   upsertWbPlannedItemTool,
   upsertWbProjectTool,
 } from "../_shared/tools/warren-buffet-p3.ts";
+import { setWbOrderItemTagsTool, splitWbOrderChargesTool } from "../_shared/tools/warren-buffet-p4.ts";
 import {
   getDriveMixSongsTool,
   createDriveMixSongsTool,
@@ -3964,6 +3965,36 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(getWbOrderItemsTool, args, token),
+  );
+
+  server.registerTool(
+    "set_wb_order_item_tags",
+    {
+      title: "Set Amazon and Whole Foods Item Categories",
+      description:
+        "Set the Category tag on order items, in one of three ways: chosen items, every row of one product, or every untagged item of one site. Only active tags from the Category group are accepted; if nothing fits, create a new Category tag first rather than force a poor fit. Whole Foods items default to Groceries through untagged_site. This changes no charge: run split_wb_order_charges afterwards. Returns how many items changed. Tier 2.",
+      inputSchema: {
+        tag_id: z.string().describe("The Category tag to set (get_wb_tags, field id)."),
+        item_ids: z.array(z.string()).optional().describe("These items, up to 100 (get_wb_order_items, field id)."),
+        asin: z.string().optional().describe("Every row of this product at once, including rows already tagged."),
+        untagged_site: z.enum(["amazon", "wholefoods"]).optional().describe("Every item of this store that has no category yet. Items already tagged stay."),
+        source: z.enum(["claude", "manual"]).optional().describe("Who decided: claude, the default, or manual when Alex chose it."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(setWbOrderItemTagsTool, args, token),
+  );
+
+  server.registerTool(
+    "split_wb_order_charges",
+    {
+      title: "Split Amazon Charges by Order Items",
+      description:
+        "Split each matched Amazon charge by its items' categories: one split per category, with tax, shipping and discounts spread in proportion so the splits sum exactly to the charge. Untagged items stay on Amazon (unsorted); unmatched charges and Whole Foods are untouched. Safe to rerun after tags change: it rebuilds only the splits it made. Returns counts split and unchanged, and transaction ids it skipped: split by hand or by Claude, categorised by hand, with a project or planned match, or whose amount changed, plus any that failed. Tier 2.",
+      inputSchema: {
+        transaction_ids: z.array(z.string()).optional().describe("Only these charges, up to 50. Default every matched charge."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(splitWbOrderChargesTool, args, token),
   );
 
   server.registerTool(

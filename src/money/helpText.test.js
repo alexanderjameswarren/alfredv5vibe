@@ -81,6 +81,10 @@ test("help says imported history is left out", () => {
   }
 });
 
+test("help says Amazon charges can be split", () => {
+  says("transaction.splits", "Amazon charges can be split by what was in the shipment.");
+});
+
 test("the yearly and weekly conversions are what monthlyEquivalent does", () => {
   expect(monthlyEquivalent({ current_price: 120, interval_count: 12, interval_unit: "month" })).toBe(120 / MONTHS_PER_YEAR);
   expect(monthlyEquivalent({ current_price: 12, interval_count: 1, interval_unit: "week" })).toBe((12 * WEEKS_PER_YEAR) / MONTHS_PER_YEAR);
