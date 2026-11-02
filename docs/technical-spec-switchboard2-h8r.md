@@ -2,7 +2,7 @@
 
 Project code: `switchboard2-h8r`
 Progress: `docs/progress-switchboard2-h8r.md`
-Plan: run tag `switchboard2-h8r-s1-q7m3`; decisions: `-s2-n4vd` and `-s3-w8ke`.
+Plan: run tag `switchboard2-h8r-s1-q7m3`; decisions: `-s2-n4vd` and `-s3-w8ke`. Phase 3 onward: `-s48-k3vq`; decisions: `-s49-p7wd`.
 
 ## 1. Goal and non-goals
 
@@ -17,7 +17,7 @@ Plan: run tag `switchboard2-h8r-s1-q7m3`; decisions: `-s2-n4vd` and `-s3-w8ke`.
 
 ## 2. Rules for every phase
 
-1. **One action at a time.** One approval link, then wait for its result, the same as CLI prompts.
+1. **One action at a time, per thread.** One approval link, then wait for its result, the same as CLI prompts. Different project codes may each have a live link at once (s49).
 2. **Deny by default.** An unlisted org, repo, setting or command runs nothing.
 3. **Only Alex changes the rules.** Claude sessions may not edit, or run commands that change, the org settings, the project list or the installed helper code (§5.4).
 4. **Client data stays out of Alfred.** It is a rule in CLI prompts, and `clip.mjs` enforces it (§9.8). In client repos, Apex test failures are summarised, never pasted. Salesforce full-data results pass through Supabase in transit only (§10), and the spec says so plainly.
@@ -28,14 +28,17 @@ Plan: run tag `switchboard2-h8r-s1-q7m3`; decisions: `-s2-n4vd` and `-s3-w8ke`.
 
 ## 3. Phase order and dependencies
 
+**Order of the remaining work (s48, s49).** First, the tile fixes (§7.2, §8.1). Then Phase 3. Then the git half of Phase 5. Then Phase 4. Then the Salesforce half of Phase 5. Then Phases 6 to 8. Alex has real client work waiting, so Phase 3 is ordered to reach a first client as early as its dependencies allow.
+
 | # | Phase | Built in | Depends on |
 |---|---|---|---|
 | 0 | Blocking fixes, module boundaries, plan guard | alfred-v5 | — |
 | 1 | Send to CLI, tile states, run estimates, six-tile layout | alfred-v5 | 0 |
 | 2 | SQL approval queue, and Claude's read-only Supabase queries | alfred-v5 | 0, 1 (posting back into the tab, and the tile states) |
 | 3 | Multi-repo and clients: the move, settings, client commands, Salesforce guard and sandbox deploys | Switchboard repo | 0-2 (it moves everything they built) |
-| 4 | Salesforce reads | Switchboard repo and alfred-v5 | 2 (queue), 3 (helper home, org settings) |
-| 5 | Git commands and Salesforce actions by link | Switchboard repo | 2 (queue and links), 3 (projects, orgs) |
+| 5, git | Git commands by link; the desktop helper arrives here | Switchboard repo and alfred-v5 | 2 (queue and links), 3 (projects) |
+| 4 | Salesforce reads | Switchboard repo and alfred-v5 | 2 (queue), 3 (org settings), 5 git (the helper) |
+| 5, Salesforce | Salesforce actions by link | Switchboard repo | 3 (orgs, wrapper), 5 git (the helper) |
 | 6 | Spec files written by link; docs archiving | both | 2, 3 |
 | 7 | npm start per tile | Switchboard repo | 3 (ports in `projects.json`) |
 | 8 | Remote devices | Switchboard repo | 5 (all approvals go through Alfred) |
@@ -55,15 +58,18 @@ The modules, each replaceable without rebuilding the others:
 | Bridge extension | `extension/bridge.js`, `claude-watch.js`, `lib/{bridge-core,page,plan,verify}.js` | `extension/` (its own Chrome extension) |
 | Clip push | `scripts/clip.mjs`, `scripts/lib/last-report.mjs` | `clip/` |
 | Send to CLI | none | `send/` (Phase 1, moved in Phase 3) |
-| Salesforce | none | `salesforce/` (guard rules, deploy wrapper, helper, org commands) |
+| Settings | none | `config/` (the loader for §5.1's files) |
+| `sb` commands | none | `sb/` |
+| Desktop helper | none | `helper/` (git actions; Salesforce actions and reads use it too) |
+| Salesforce | none | `salesforce/` (guard rules, deploy wrapper, read code, org commands) |
 
-Alfred keeps the clipper extension, the Supabase migrations and functions, and the approve page.
+Alfred keeps the clipper extension, the Supabase migrations and functions, and the approve page. `scripts/sql-queue.mjs` and its library stay in alfred-v5 too, since only Alfred has SQL to queue (s49). So do `schema-snapshot`, `inventory` and `prebuild`, which only alfred-v5 uses.
 
 **Alfred interfaces.** These are the only couplings, and each is documented in `INTERFACES.md`:
 
 1. **Clipboard push.** `CLIPBOARD_URL` plus `CLIPBOARD_SECRET`, and the `clip-capture` function.
 2. **Activity.** `overwatch-ingest` (session status and finish summaries).
-3. **Panel read** (Phase 2, `switchboard-panel`). The panel reads whether a report's inbox item is archived, which projects wait on SQL, and each project's lane, using a key that can only read those.
+3. **Panel read** (Phase 2, `switchboard-panel`). The panel reads whether a report's inbox item is archived and each project's lane, using a key that can only read those. Tan no longer comes from it (§8.1, s49).
 4. **Action queue** (Phase 2): the `switchboard-runner` function. The CLI uses a queue-only key; the desktop helper uses its own pickup key.
 5. **MCP tools** for Claude: issue a link, get a run's result, read-only query, and (Phase 4) Salesforce read.
 
@@ -75,7 +81,7 @@ Built in Phase 3, and needed by Phases 4 onward.
 
 ### 5.1 Install layout and project list
 
-**The source repo** is `C:\Users\Alex\projects\switchboard\`, a private git repo with its own claims file. Switchboard is developed with Claude in this repo, so the repo is not protected.
+**The source repo** is `C:\Users\Alex\projects\switchboard\`, a private git repo with its own claims file. Switchboard is developed with Claude in this repo, so the repo is not protected. Its project code is `switchboard_repo-k7m`, a code of its own: two windows under one code would make Send refuse. Work in it is done from a window opened on that repo, never from an alfred-v5 worktree. Prompts are pasted by hand there until the panel reads several repos (§9.3).
 
 **The installed copy** is `%LOCALAPPDATA%\Switchboard\`. `install.ps1`, run by Alex:
 - copies the code into the installed copy,
@@ -96,6 +102,7 @@ The guard protects the installed copy and its config, not the source repo.
   - a status (`open` or `closed`).
 - **`orgs.json`, the Salesforce org entries,** keyed by client and then by alias, with repo paths attached (§5.3).
 - **`repos.json`, the repo settings,** keyed by absolute repo path (§5.2).
+- **The panel's settings,** including the link host list (§7.1), move here from `%APPDATA%\claude-sessions\settings.ini`.
 
 **Folder layout:**
 - One folder per client: `C:\Users\Alex\projects\<client>\`.
@@ -107,7 +114,7 @@ The guard protects the installed copy and its config, not the source repo.
 
 ### 5.2 Repo settings (`repos.json`)
 
-`mainBranch`, `projectPrefix`, `deployCmd`, `testCmd`, `docsDir`, `finish` (`merge`, `pr`, or `local-commit`; the default is `pr` with a remote and `local-commit` without one), `kind` (`alfred` or `salesforce`), and `orgs` (a list of aliases).
+`mainBranch`, `projectPrefix`, `deployCmd`, `testCmd`, `docsDir`, `finish` (`merge`, `pr`, or `local-commit`; the default is `pr` with a remote and `local-commit` without one), `kind` (`alfred` or `salesforce`), `orgs` (a list of aliases), and three that make gitpush and gitnewtree work outside alfred-v5: `migrationsDir` (none turns off the migration checks), `snapshotCmd` (none turns off the schema snapshot) and `setupCmd` (what gitnewtree runs in a new worktree; alfred-v5's is `node scripts/prebuild.js`).
 
 ### 5.3 Org entries (`orgs.json`)
 
@@ -129,7 +136,7 @@ Each client entry also says whether it allows an integration user. Team IMPACT a
 
 | Command | What it does |
 |---|---|
-| `sb client start <client> [--org <nonprofit>] [--repo <url>] [--from-sandbox <alias>] [--project <code>]` | Creates the folder. Either clones the repo, or with no repo retrieves the code (`sf project generate manifest --from-org`, then `sf project retrieve start`). Runs `git init` when there is no repo. Writes `repos.json`, adds the project to `projects.json`, and runs `sf org login web --alias`. Then asks the setup questions for each org and writes the entry. |
+| `sb client start <client> [--org <nonprofit>] [--repo <url>] [--adopt <path>] [--from-sandbox <alias>] [--project <code>]` | Creates the folder. Either clones the repo, or with no repo retrieves the code (`sf project generate manifest --from-org`, then `sf project retrieve start`). Runs `git init` when there is no repo. `--adopt` takes a checkout that already exists instead, such as Team IMPACT's, and changes none of its files or branches. Writes `repos.json`, adds the project to `projects.json`, and runs `sf org login web --alias`. Then asks the setup questions for each org and writes the entry. |
 | `sb org add <alias> --client <c>` | Asks the same questions for one more org and logs it in. |
 | `sb org set <alias> [--level L] [--sandboxes all\|a,b] [--production on\|off] [--production-full-data on\|off] [--login integration\|admin] [--cli-deploy on\|off] [--contract-ok on\|off] [--type T] [--shared on\|off]` | Changes an entry. Shows a before-and-after diff and asks for a typed yes. |
 | `sb org show [<alias>\|--client <c>]` | Read-only. |
@@ -237,7 +244,7 @@ The `sendprompt` command path is removed in 1.2.
 
 ### 7.2 Tile states
 
-Each project tile shows one of five states. The colours keep the meanings of today's tiles where they match.
+Each project tile shows one of these states. The colours keep the meanings of today's tiles where they match.
 
 | State | When | Colour (light) | Text |
 |---|---|---|---|
@@ -245,14 +252,23 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 | Send cli | The CLI is idle and a report is waiting for Claude: until its inbox item is archived, by `switchboard-panel`'s word. Without a fresh read, a report pushed after the chat last changed. A tap types "cli". The label says what the tap does (briefly "Report ready" in 1.6; restored in s23). | orange `#F57C00` | `#1A1200` |
 | Prompt ready | A chat reply carries a run tag the CLI has not received. Display only: sending is the reply's link (§7.1), so nothing is pasted (was "Prompt to paste", and "Paste prompt" before that; renamed in s23c). | purple `#7E57C2` | white |
 | Your turn | The CLI is idle, its report is handled, and Claude has finished a reply: Alex's move. It flashes. While Claude writes, the tile is green "Claude writing". | yellow `#FBC02D` (unchanged) | `#1A1600` |
-| Waiting on SQL | A queued SQL item for this project awaits a click, and its CLI is not running. An item queued during a run leaves the tile running green; tan appears when the run ends (2.9c). | Alfred light tan `#E4D2C3` (`--secondary`) | `#2A2520` |
+| SQL ready, Git ready, Deploy ready | The chat's latest finished reply holds a live approval link (see below). Replaces "Waiting on SQL" (s49). | Alfred light tan `#E4D2C3` (`--secondary`) | `#2A2520` |
+| SQL running, Git running, Deploy running | Alex approved and the action is running. | the short green `#C5E1A5` / `#AED581` | `#111111` |
 
-- **Precedence:** Waiting on SQL (only while the CLI isn't running), then Prompt ready, then Send cli, then Running, then Your turn.
-- **Unchanged:** red (Approve, Wrong window, Check CLI) keeps priority over all five, and the free, closed and paused states stay as they are.
+- **Precedence:** the reds; then, while the chat has finished and the CLI is idle, the Running and Ready pair above; then Prompt ready, Send cli, Running, Claude writing, Your turn.
+- **An approval link, by what is in the chat (s49).** The chat alone decides. The database never delays tan, and a queued action shows nothing. The steps match the Send link:
+  1. **Live link in the chat's latest finished reply:** tan, "SQL ready", "Git ready" or "Deploy ready". The kind and expiry travel in the link, written by the server (§8.1). Past its expiry, the link no longer counts.
+  2. **Clicked:** the link's text in the chat changes to "Sending…", then "Sent ✓" once the approve page has opened. The tile stays tan, because Approve is still Alex's move.
+  3. **Approved and running:** light green, "SQL running", "Git running" or "Deploy running". The tile stays that colour and never flashes.
+  4. **Result posted and Claude answering:** the usual green "Claude writing", at once, since a post starts a new turn.
+  5. **The page can't post the result into the chat:** red, "SQL not posted", "Git not posted" or "Deploy not posted", until the line is posted or the tile is tapped.
+- **A link used from another device** isn't seen by the chat, so that tile stays tan until the link expires, at most 30 minutes (accepted in s49).
+- **Unchanged:** red (Approve, Wrong window, Check CLI) keeps priority over all of these, and the free, closed and paused states stay as they are.
 - **Outside scope (red, new).** When the plan guard refuses an action, the tile turns red "Outside scope" and stays red until tapped, like "Already pasted". Without it the refusal shows only inside the CLI's reply, which Alex does not read. The plan guard writes a latched `outside_scope` field (the refused path or deploy target) into the session status; it survives the Stop hook's rewrite to waiting, and a tap clears it. It ranks with the other reds.
 - **Dark mode:** each colour gets a dark-theme variant in `switchboard.html`.
 - **Report unread (built in 2.8 and 2.9).** Orange clears only when the report's Alfred inbox item is archived, however it was fetched. The panel reads this from `switchboard-panel` every 15 seconds, and a read older than 5 minutes isn't believed.
 - **Talking (dropped).** Step 1.6 briefly replaced Your turn with a slate blue "Talking" that did not flash. It lost the "Claude is waiting on you" alert, so s19c restored Your turn.
+- **A closed chat gives way (s49).** A saved chat link whose tab is gone gives way to the open chat that issued the project's newest run tag, so a later chat under the same code joins the CLI's tile rather than showing as a tile of its own. A stale chat list changes nothing, and with no such chat the saved link stays.
 
 ### 7.3 Panel items
 
@@ -322,14 +338,15 @@ Both tables have row-level security: Alex's user only. Neither gets any anon gra
 **Flow.**
 1. **Queue.** The CLI queues SQL with its own key, which can only insert `kind = 'sql'` rows. `--describe` is required: one plain sentence saying what the SQL does, stored as `payload.description`, which never changes after insert. `--expect` is required when there are inserts, updates or deletes: one value for each, in order, either a row count or `unknown`, stored as `payload.expected`. Schema changes need none. A do block has no count to give, so what it changes inside isn't compared. `--test` stores `payload.test` and takes no `--expect`.
 2. **Review.** Claude reviews the SQL in the chat.
-3. **Issue.** Claude calls `issue_switchboard_link(action_id)`. It returns a URL with a random token, stores only the token's hash, binds the link to the fingerprint, and expires it in 30 minutes. The URL's base address is a server setting, never code. The extension and the panel recognise it by path on the hosts in the same list as the Send links (§2, rule 8).
+3. **Issue.** Claude calls `issue_switchboard_link(action_id)`. It returns a URL with a random token, stores only the token's hash, binds the link to the fingerprint, and expires it in 30 minutes. One link may be live per project code; another project's live link doesn't stop it (s49). The URL's base address is a server setting, never code. The URL ends `?kind=<kind>&exp=<unix seconds>`, written by the server, so the chat alone can tell the tile what the link is and when it ends (§7.2). The token alone proves anything; these two only drive the display. The extension and the panel recognise it by path on the hosts in the same list as the Send links (§2, rule 8).
 4. **Click.** Alex clicks in the chat tab. The extension remembers that tab for the link's token, and the link opens as usual. A link opened elsewhere, such as on the phone, has no remembered tab: the result then goes to the one chat whose latest reply issued the project's run tag, or else the one whose title contains the project code, and two matches post nothing. `chat_url` is dropped: the extension can't write it, and Alex's login plus the single-use link are what keep the SQL safe.
 5. **Approve page.** It requires Alex's Alfred login. It shows the headline, the description, then the SQL, and runs the dry run by itself when it opens. A dry run runs the SQL in a transaction, reports what would change ("deletes 3 rows from wb_rules"), lists the rows per statement, and rolls back. **Approve** runs it for real; every action needs a dry run, selects included, and it's the latest dry run that must be clean. If a count differs from `--expect`, that dry run isn't clean: Approve is disabled and the page shows expected against actual. The real run isn't compared, because it has already committed; a difference there is only reported.
    - **Don't run** takes an optional one-line reason, spends the link, marks the action `cancelled` and notes the reason on the latest dry run.
    - **Copy details** sits beside any error or mismatch and copies the action id, the dry-run id, the problem and the counts.
    - **A test action** (`--test`) runs once by itself, undone, shows its result and never offers Approve; the runner refuses Approve too. Its run is a `dry_run` row, and the action ends `succeeded` or `failed`, spending the link. A busy runner leaves the link usable.
+   - **While a real or test run is under way,** the page says so in a data attribute for the extension (`data-switchboard-running`, with the kind), which drives the tile's "SQL running" (§7.2).
 6. **Consume.** The link is single-use, consumed with an atomic `update ... where link_used_at is null and fingerprint = $1`.
-7. **Result.** The extension reads the run id and project from the page's data attributes (`data-switchboard-run-id`, `data-switchboard-project`), which appear only once an action has finished. It posts `sql <run id>` for a real run or a test, or `sql <dry-run id> cancelled: <reason>` for Don't run, into the remembered tab, but only if that chat is idle and its message box is empty. It closes the approve tab only after a confirmed post. It makes one try and doesn't wait: if it can't post, the line stays on the approve page to copy, with Copy, the reason and Try again; with that tab gone, the toolbar icon says why. Clicked tabs and waiting runs are stored, so an extension reload or a worker restart loses neither. On the phone, the page shows the line to paste. Claude fetches the result with `get_switchboard_run`.
+7. **Result.** The extension reads the run id and project from the page's data attributes (`data-switchboard-run-id`, `data-switchboard-project`), which appear only once an action has finished. It posts `sql <run id>` for a real run or a test, or `sql <dry-run id> cancelled: <reason>` for Don't run, into the remembered tab, but only if that chat is idle and its message box is empty. It closes the approve tab only after a confirmed post. It makes one try and doesn't wait: if it can't post, the line stays on the approve page to copy, with Copy, the reason and Try again, and the tile goes red (§7.2); with that tab gone, the toolbar icon says why. Clicked tabs and waiting runs are stored, so an extension reload or a worker restart loses neither. On the phone, the page shows the line to paste. Claude fetches the result with `get_switchboard_run`.
 
 **Headlines.** Every click page leads with one plain line in capitals, saying what happens. The headline is built by the server from the action's kind and payload, never written by Claude. Examples:
 - `THIS CHANGES THE LIVE ALFRED DATABASE: DELETES ROWS FROM WB_RULES`
@@ -337,7 +354,7 @@ Both tables have row-level security: Alex's user only. Neither gets any anon gra
 - `THIS PUSHES TO MAIN AND MAKES IT LIVE IN PRODUCTION`
 - `THIS DEPLOYS TO SANDBOX ACME-UAT AND DELETES FIELD Account.Old__c`
 
-**Decided in s25.** The run id travels on the approve page as a data attribute, and the extension reads it there to post `sql <run id>`. `switchboard_issue_link` allows one live link at a time. Only the runner executes queued SQL, and only with a valid JWT and approval link.
+**Decided in s25.** The run id travels on the approve page as a data attribute, and the extension reads it there to post `sql <run id>`. `switchboard_issue_link` allows one live link at a time (per project code since s49; it was per user). Only the runner executes queued SQL, and only with a valid JWT and approval link.
 
 **Runner.** `switchboard-runner` connects with `SUPABASE_DB_URL` and is the only code that does.
 - **Up front, it flags:**
@@ -348,7 +365,7 @@ Both tables have row-level security: Alex's user only. Neither gets any anon gra
 - **Every approved write** runs in one transaction, then runs `check_platform_conformance` and records the run in `switchboard_runs`. Nothing is written to Supabase's own migration history table. Migration files stay in git.
 - **Pruning:** a pg_cron job clears `result` after 30 days; the run rows stay.
 
-**Panel.** A project with a waiting SQL item shows Waiting on SQL (§7.2). The panel learns this, Report unread and each project's lane from `switchboard-panel`, a separate read-only function with its own key (interface 3).
+**Panel.** A live link in the chat shows "SQL ready" (§7.2), from what the chat reports, not from this table. The panel learns Report unread and each project's lane from `switchboard-panel`, a separate read-only function with its own key (interface 3). `waiting_on_alex` stays in its reply, unread by the panel since s49, until a later deploy of that function removes it.
 
 ### 8.2 Claude's read-only Supabase queries
 
@@ -364,13 +381,14 @@ MCP tool `get_sql_read(sql)` (decided in s25; the house prefixes rule out `switc
 
 ## 9. Phase 3 — multi-repo and clients (the move)
 
-1. **Switchboard repo and install** (§5.1). Moves everything in §4, including the Phase 1 and 2 work, with history kept (Alex chooses `git subtree split` or a copy). alfred-v5 keeps working throughout: old `scripts/*.mjs` paths become one-line shims that call the installed copy, until the cutover step deletes them.
+1. **Switchboard repo and install** (§5.1). Moves everything in §4, including the Phase 1 and 2 work, by a plain copy (decided in s49): the first commit names the alfred-v5 commit it came from, and the old history stays readable in alfred-v5. A seed script, an approved exception to the Edit and Write rule, does the copy and the path and import changes; Alex runs it and commits. alfred-v5 keeps working throughout: old `scripts/*.mjs` paths become one-line shims that call the installed copy, until the cutover step deletes them.
 2. **User-level hooks.** Registered in `~/.claude/settings.json`; they do nothing in a repo with no `repos.json` entry. The project hooks in `.claude/settings.local.json` are removed in the same step. `CLAUDE.md` and the claude.ai cli-workflow skill change the same day.
-3. **Repo settings and project list** (§5.2), read by every command; the project code finds the folder. The prompt check uses `projects.json` to know which window owns which code.
+3. **Repo settings and project list** (§5.2), read by every command; the project code finds the folder. The prompt check uses `projects.json` to know which window owns which code. The panel reads its repos from the same list, which is what lets Send and the tiles reach a client window.
 4. **`sb` commands** (§5.4) and their protection (§5.5).
 5. **Finish modes.** `pr` pushes the branch and runs `gh pr create`; `local-commit` commits only; `merge` is the alfred-v5 behaviour today.
 6. **Salesforce guard,** in every window:
    - **Blocked:** `sf data *`, `sf apex run` (anonymous Apex), `sf api request *`, `sf apex tail log`, legacy `sfdx force:data:*` and `force:apex:execute`, and any command whose target org is production.
+   - **Blocked, not by a command:** every Salesforce MCP tool, whatever its toolset. A repo whose `.mcp.json` names an org is refused until the entry is removed. Team IMPACT's committed `.mcp.json` gives any session in that folder the `data` and `users` tools on production, which a shell-only guard would never see (found in s48).
    - **Production is decided by asking Salesforce:** `sf org display --json` must return `isSandbox: true`, and the `orgId` must match an entry listed for this repo. The result is cached for 10 minutes per alias. The alias name is never trusted.
    - **Sandbox deploys and tests** run only through the deploy wrapper (§9.7). A bare `sf project deploy` or `sf apex run test` is blocked.
 7. **Sandbox deploy wrapper** (`sb deploy <alias>`, `sb test <alias>`):
@@ -411,7 +429,7 @@ MCP tool `get_sql_read(sql)` (decided in s25; the house prefixes rule out `switc
 
 **Route.**
 1. Claude calls `sf_read`, which queues a `switchboard_actions` row.
-2. The desktop helper, `salesforce/helper`, polls with its pickup key and runs the query.
+2. The desktop helper polls with its pickup key and runs the query, using the read code in `salesforce/helper`. The helper itself arrives with git by link (§11).
 3. It posts the result back, and Claude fetches it.
 
 The helper is the only route.
@@ -439,18 +457,20 @@ The helper is the only route.
 
 ## 11. Phase 5 — git commands and Salesforce actions by link
 
+Built in two parts: the git half straight after Phase 3, and the Salesforce half after Phase 4 (s48).
+
 ### 11.1 Click rules
 
 | Action | Click | Why |
 |---|---|---|
-| `gitcom` | no | Its own worktree, claimed files only |
-| `gitsync` | no | Its own worktree only |
+| `gitcom` | yes for the first two weeks; then no, and only when claude.ai issued it | Its own worktree, claimed files only |
+| `gitsync` | yes for the first two weeks; then no, and only when claude.ai issued it | Its own worktree only |
 | `sb deploy`, `sb test` (no-click tier, `cliMayDeploy` on) | no | Its own claimed files, one sandbox, under the lock |
 | `sb deploy` (click tier, or `cliMayDeploy` off) | yes, with a warning | Shared or risky metadata |
 | `gitpush` Push, Checkpoint, Finish | yes, always | Touches main; never automatic |
 | `gitnewtree` | yes | Creates a worktree from `origin/main` |
 
-A no-click action is still issued by Claude one at a time, and logged. It simply runs when the helper picks it up.
+The two weeks (decided in s49) count from the day git links first go live. **The CLI never runs a git command that changes state,** with or without a click. A no-click action is still issued by Claude one at a time, and logged. It simply runs when the helper picks it up.
 
 ### 11.2 The allowlist
 
@@ -461,7 +481,7 @@ A no-click action is still issued by Claude one at a time, and logged. It simply
 - Known traps, for example Finish while that worktree's window is open.
 - Anything on production.
 
-The helper runs approved actions in a visible terminal.
+The helper runs approved actions in a visible terminal. The click is the yes: a command run by link never stops to ask a question. Where it would have asked, it refuses and says why.
 
 ## 12. Phase 6 — spec files and archiving
 
@@ -490,6 +510,7 @@ Each tile gets a fixed port from `projects.json`. "Start" runs `npm start` in th
 | Claude loosens its own limits | the installed copy and config are protected; `sb` mutations are blocked |
 | Click page misleads | the headline is written by the server from the payload, never by Claude |
 | Salesforce writes | GET-only helper, CLI guard, no data commands |
+| Salesforce MCP server in a client repo | every Salesforce MCP tool blocked; a repo whose `.mcp.json` names an org is refused (§9.6) |
 | Shared sandbox clobbered | own-files manifest, sandbox lock, retrieve and compare |
 | Production | `isSandbox` from Salesforce, never from the alias; no production deploys at all |
 | Client data in Alfred | PII hold; Apex failures summarised; full data encrypted, in transit only, deleted on fetch |
@@ -498,6 +519,5 @@ Each tile gets a fixed port from `projects.json`. "Start" runs `npm start` in th
 ## 16. Open questions
 
 - **The token deny list for `claude_reader`.** It is drafted from the schema at the migration step, and Alex reviews it.
-- **Moving history.** Alex chooses `subtree split` or a plain copy at the Phase 3 move.
 - **Sandbox type from `/limits`** is a heuristic. Salesforce gives the exact licence type only from production (`SandboxInfo`), and production is never queried. The fallback is the stricter tier.
 - **SQL-table detection** in the plan guard is a regex over the SQL file. A table named only inside dynamic SQL (`execute format(...)`) is not seen, and the runner's dry-run summary is the backstop.

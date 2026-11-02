@@ -719,6 +719,13 @@ Refresh()
 Expect("rebind pairs with the chat that issued the tag", ms.chatLink, "https://claude.ai/chat/untitled")
 Expect("tag-learned link saved for the new code", IniRead(SETTINGS_INI, "chatlinkcode", "main", ""), "next-q2z")
 Expect("paired chat has no tile of its own", TileOf("chat:5").Count, 0)
+
+; --- the saved chat is closed: a chat that issued a newer tag takes over -------------
+WriteChats("https://claude.ai/chat/later|finished|1|next-q2z-s2-cd34|1|6|")
+FileOpen(BRIDGE_DIR "\tabs.json", "w", "UTF-8-RAW").Write('{"at":"' IsoAgo(0) '","tabs":[{"tabId":6,"url":"https://claude.ai/chat/later","title":"Claude"}]}')
+Refresh()
+Expect("closed chat gives way", ms.chatLink, "https://claude.ai/chat/later")
+Expect("later chat has no tile of its own", TileOf("chat:6").Count, 0)
 FileDelete(BRIDGE_DIR "\chats.json")
 FileDelete(BRIDGE_DIR "\tabs.json")
 try FileDelete(BINDING_FILE)

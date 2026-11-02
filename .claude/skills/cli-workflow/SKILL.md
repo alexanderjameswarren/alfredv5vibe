@@ -5,7 +5,7 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
-Skill version: 2026-11-02
+Skill version: 2026-11-02b
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -866,9 +866,11 @@ deliberate final error. The rules are in alfred-v5's `CLAUDE.md`.
 2. Review the full SQL against the description and the expected counts. If they
    disagree, stop and say so; there is no link.
 3. Call `issue_switchboard_link` with the fingerprint you reviewed. One link is live
-   at a time, and it lasts 30 minutes, so issue it when he can click.
-4. In chat, show the headline, the description and the approve link. Only that link:
-   never a link to the action as an Alfred record.
+   at a time per thread (project code), and it lasts 30 minutes, so issue it when he
+   can click.
+4. In chat, show the headline, the description and the approve link, with its URL
+   whole: the `kind` and `exp` on the end drive his tile. Only that link: never a
+   link to the action as an Alfred record.
 5. **For anything where the dry run must be checked first** (platform changes,
    coverage lists), tell him to open the link and wait for the dry run before
    approving. The page runs it by itself.

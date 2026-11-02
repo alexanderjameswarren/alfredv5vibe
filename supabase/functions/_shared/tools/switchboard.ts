@@ -18,7 +18,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ACTION_COLUMNS = "id, kind, project_code, status, headline, fingerprint, payload, chat_url, needs_click, " +
   "link_expires_at, link_used_at, created_by, created_at, updated_at";
 const RUN_COLUMNS = "id, action_id, mode, summary, result, result_pruned_at, started_at, finished_at";
-// switchboard_issue_link's own refusals: no user, no such action, not issuable or another link live.
+// switchboard_issue_link's own refusals: no user, no such action, not issuable or another link live for the project.
 const REFUSALS = new Set(["28000", "P0002", "55000"]);
 
 function requireUuid(tool: string, name: string, v: unknown): string {

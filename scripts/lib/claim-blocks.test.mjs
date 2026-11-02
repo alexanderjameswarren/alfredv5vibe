@@ -49,6 +49,7 @@ function scratch() {
         reservations: [],
       }),
     );
+  const seedBlocks = (list) => writeFileSync(blocksFile, JSON.stringify({ blocks: list }));
   const blocks = () => (existsSync(blocksFile) ? JSON.parse(readFileSync(blocksFile, "utf8")).blocks : []);
   const cli = (cwd, ...args) => {
     const r = spawnSync(process.execPath, [CLI, ...args], { cwd, env, encoding: "utf8" });
@@ -73,7 +74,7 @@ function scratch() {
     assert.equal(r.status, 0);
     return r.stdout ? JSON.parse(r.stdout).hookSpecificOutput.additionalContext : "";
   };
-  return { main, wt, file, seed, blocks, cli, edit, notice, ctx: () => resolveRepo(main) };
+  return { main, wt, file, seed, seedBlocks, blocks, cli, edit, notice, ctx: () => resolveRepo(main) };
 }
 
 // Live threads write both real files at any time, so look only for this file's scratch owner.
@@ -84,14 +85,25 @@ test.after(() => {
 
 const shape = (b) => [b.waiter, b.item, b.holder, b.holder_item, b.via];
 
-test("check records a block without changing its output or exit", () => {
+test("check reports a conflict and records no block", () => {
   const s = scratch();
   s.seed(["main", "src/a.js"]);
   const r = s.cli(s.wt, "check", "src/a.js", "src/b.js");
   assert.equal(r.code, 1);
   assert.equal(r.out, "CONFLICT  src/a.js — main holds src/a.js\nfree      src/b.js\n\n1 conflict. Stop and ask Alex — do not edit these.\n");
-  assert.deepEqual(s.blocks().map(shape), [["wtB", "src/a.js", "main", "src/a.js", "check"]]);
-  assert.equal(s.blocks()[0].holder_code, "main");
+  assert.deepEqual(s.blocks(), []);
+});
+
+test("an old check record goes on the next write; a claim record stays", () => {
+  const rec = (item, via) => ({ waiter: "wtB", item, holder: "main", holder_item: item, via, blocked_at: "2026-11-01T00:00:00.000Z" });
+  const old = [rec("src/a.js", "check"), rec("src/items/x.js", "claim")];
+  for (const write of [(s) => s.cli(s.wt, "claim", "src/b.js"), (s) => s.cli(s.wt, "claim", "src/held.js")]) {
+    const s = scratch();
+    s.seed(["main", "src/a.js"], ["main", "src/items/x.js"], ["main", "src/held.js"]);
+    s.seedBlocks(old);
+    write(s);
+    assert.deepEqual(s.blocks().filter((b) => b.item !== "src/held.js").map((b) => [b.item, b.via]), [["src/items/x.js", "claim"]]);
+  }
 });
 
 test("a refused claim records a block and claims nothing", () => {
@@ -102,12 +114,13 @@ test("a refused claim records a block and claims nothing", () => {
   assert.equal(r.code, 1);
   assert.equal(readFileSync(s.file, "utf8"), claimsBefore);
   assert.deepEqual(s.blocks().map(shape), [["wtB", "src/items/x.js", "main", "src/items/", "claim"]]);
+  assert.equal(s.blocks()[0].holder_code, "main");
 });
 
 test("a repeat keeps one record and its first time", () => {
   const s = scratch();
   s.seed(["main", "src/a.js"]);
-  s.cli(s.wt, "check", "src/a.js");
+  s.cli(s.wt, "claim", "src/a.js");
   const first = s.blocks()[0].blocked_at;
   s.cli(s.wt, "claim", "src/a.js");
   assert.equal(s.blocks().length, 1);

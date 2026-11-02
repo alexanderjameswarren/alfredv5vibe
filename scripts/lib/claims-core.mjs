@@ -918,9 +918,12 @@ const sameBlock = (a, b) =>
 /**
  * Add a record for each (path, holder claim), keeping the first `blocked_at`.
  * Pure: returns the new list. `hits` is [{ item, holders: [claim, …] }].
+ * An old record from a check goes, unless this write hits the same block for real.
  */
 export function addBlocks(blocks, { waiter, hits, via, runTag = null, codeOf = (o) => o, now = new Date() }) {
-  const out = blocks.slice();
+  const hitAgain = (b) =>
+    b.waiter === waiter && hits.some((h) => fold(h.item) === fold(b.item) && h.holders.some((c) => c.owner === b.holder));
+  const out = blocks.filter((b) => b.via !== "check" || hitAgain(b));
   const stamp = now.toISOString();
   for (const { item, holders } of hits) {
     for (const c of holders) {
@@ -984,11 +987,11 @@ export function queueBlockEvents(ctx, before, after, now = new Date()) {
   }
 }
 
-/** Inside the lock: drop dead records, and a finished waiter's own. Writes only on change. */
+/** Inside the lock: drop dead records, a finished waiter's own, and old ones from a check. Writes only on change. */
 export function pruneBlocksLocked(ctx, state, finishedWaiter = null) {
   if (!ctx.blocksFile) return;
   const before = readBlocks(ctx.blocksFile);
-  const after = liveBlocks(before, state).filter((b) => b.waiter !== finishedWaiter);
+  const after = liveBlocks(before, state).filter((b) => b.waiter !== finishedWaiter && b.via !== "check");
   if (after.length !== before.length) {
     writeBlocks(ctx.blocksFile, after);
     queueBlockEvents(ctx, before, after);
@@ -996,8 +999,8 @@ export function pruneBlocksLocked(ctx, state, finishedWaiter = null) {
 }
 
 /**
- * Record blocks under the lock. Best-effort by design: the callers are `check`
- * and the guard, whose output and decision must not change, so this never throws.
+ * Record blocks under the lock. Best-effort by design: the caller is the guard,
+ * whose decision must not change, so this never throws.
  */
 export function recordBlocks(ctx, args, { timeoutMs } = {}) {
   try {

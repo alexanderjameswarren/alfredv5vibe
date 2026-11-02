@@ -61,7 +61,6 @@ import {
   queueBlockEvents,
   readBlocks,
   readState,
-  recordBlocks,
   resolveRepo,
   staleDbClaims,
   withLock,
@@ -285,24 +284,19 @@ function cmdUnbind(ctx, items) {
   return 0;
 }
 
-function cmdCheck(ctx, items, flags = {}) {
+function cmdCheck(ctx, items) {
   if (!items.length) fail("check needs at least one item", 2);
   const state = readState(ctx.file);
   let conflicts = 0;
-  const hits = [];
 
   for (const item of items) {
-    const { status, line, hit } = describe(item, ctx.owner, state);
-    if (status === "conflict") {
-      conflicts += 1;
-      hits.push(hit);
-    }
+    const { status, line } = describe(item, ctx.owner, state);
+    if (status === "conflict") conflicts += 1;
     console.log(line);
   }
 
   if (conflicts) {
-    // Silent and best-effort: check's output and exit code stay exactly as they were.
-    recordBlocks(ctx, { waiter: ctx.owner, hits, via: "check", runTag: flags.runTag ?? null });
+    // A check is only a question, so it records no block: planning must not tell a holder anyone waits.
     console.log(
       `\n${conflicts} conflict${conflicts === 1 ? "" : "s"}. Stop and ask Alex — do not edit these.`,
     );
@@ -651,8 +645,9 @@ as long as you have the file open.
 The one exception is yield: when another thread is waiting on a file this thread
 holds by name (not through a folder) and has not changed at all — no difference
 from main, nothing staged, uncommitted or untracked — yield releases that one
-claim. It refuses otherwise. A refused check or claim is recorded as a block in
-<git common dir>/alfred-claim-blocks.json, which is how the holder finds out.
+claim. It refuses otherwise. A refused claim or edit is recorded as a block in
+<git common dir>/alfred-claim-blocks.json, which is how the holder finds out. A
+check records nothing.
 
 Database claims (db:table, db:fn, db:deploy) are the exception, and they are
 short-lived: claim them at the step that deploys, and gitpush Checkpoint releases

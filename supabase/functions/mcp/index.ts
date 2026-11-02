@@ -3102,7 +3102,7 @@ export function createMcpServer(token: string) {
       title: "Issue Switchboard Link",
       description:
         "Issue the single-use approval link for a queued action, after reviewing its SQL with get_switchboard_run. Pass the fingerprint you reviewed: a different one is refused and no link is made. The link lasts 30 minutes, and Alex clicks it to approve; nothing runs until then. " +
-        "One live link at a time across all actions: a second is refused until the first is used or expires. An action already consumed is refused; queue it again. Returns { action_id, url, expires_at, headline }. The url appears only here; the database keeps its hash. Tier 2.",
+        "One live link at a time per project code: a second for that project is refused until the first is used or expires; another project's link doesn't stop it. An action already consumed is refused; queue it again. Returns { action_id, url, expires_at, headline }. Give the url whole: its kind and exp tell Alex's tile what the link is. The url appears only here; the database keeps its hash. Tier 2.",
       inputSchema: {
         action_id: z.string().describe("UUID of the action."),
         fingerprint: z.string().describe("The action's fingerprint as get_switchboard_run showed it."),
