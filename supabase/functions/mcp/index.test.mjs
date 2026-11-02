@@ -355,9 +355,12 @@ test("the tool count is 72 after the job-search tools", () => {
   const orderItems = registered.find((r) => r.name === "get_wb_order_items");
   assert.ok(orderItems, "missing get_wb_order_items");
   assert.match(orderItems.cfg.description, /Refunds are included where they could be tied to an item/);
-  // 2026-11-02, +1 for Warren Buffet Phase 4 Step 8b: Amazon and Whole Foods items.
-  assert.equal(registered.length, 184,
-    `expected 184 registered tools, found ${registered.length}: ` +
+  for (const name of ["set_wb_order_item_tags", "split_wb_order_charges"]) {
+    assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
+  }
+  // 2026-11-02, +1 for Warren Buffet Phase 4 Step 8b: Amazon and Whole Foods items. +2 for Step 8f: item tags and splits.
+  assert.equal(registered.length, 186,
+    `expected 186 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
