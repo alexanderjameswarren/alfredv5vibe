@@ -3,7 +3,7 @@
 Project code: `switchboard2-h8r`
 Spec: `docs/technical-spec-switchboard2-h8r.md`
 
-Status: Phases 0, 1 and 2 complete (Phase 2 at s47-x4fu). Phase 3 not started.
+Status: Phases 0, 1 and 2 complete (Phase 2 at s47-x4fu). Phase 3 planned (s48, s49). Next: s50, the first of the tile fixes.
 
 Rule: one step at a time. The CLI finishes a step, records it here, reports, and stops for Alex.
 
@@ -57,9 +57,18 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 2 | 2.7g | Approve page: counts, expected counts, Don't run, Copy details, test kind | `db:deploy` | done (s43-t5vb), extension 1.2.7: Alex checkpointed and reloaded the extension. Wrong-count action d181d1d8-cc08-414b-baab-ceae90316b00: dry run da8de2a9-1f5e-40d0-a801-b1875d81cbe8 showed "2 rows, expected 5" with statement 3 in bold, Approve disabled; Copy details worked; Don't run with reason "count test" posted "sql da8de2a9-... cancelled: count test", closed the tab, and the action shows cancelled with the reason saved. Test action 93e2101d-f8ef-4bc4-8cb9-534870adff97 ran once by itself, no Approve, rows_seen 2, posted "sql e14cf128-13b3-4e41-96bf-843c92446d64". A test action's "done" is status `succeeded` or `failed` | 2026-11-02 |
 | 2 | 2.11 | MCP read-only query tool, `get_sql_read` | `db:deploy` | deployed (s42-m7wq, s42b-h6kx), CONFORMANT (98 tables). Live checks from claude.ai: the limits held (one statement, read-only writes refused, 10s timeout, auth and secret column refused, 1000-row cap, log correct). But net is open: the schema grants usage to PUBLIC, anon and authenticated; both net tables grant all privileges to PUBLIC; all 12 net functions run for PUBLIC (no ACL); all granted by supabase_admin. claude_reader read net._http_response (360 rows). net.http_get was stopped only by read-only. No public function calls net.http_* (only extensions.grant_pg_net_access). Alex decided: a plan guard in get_sql_read (built in s42b; not yet seen live) and an undone test of revoking net (`3_net_revoke_test.sql`, queued as 9a59549f-20a0-4694-85f7-ca1c977146c7). The budget counts from `switchboard_read_log`, not `check_call_budget`, which counts every tool's calls. Done (s43-t5vb): the guard passed live (net._http_response, net.http_get, information_schema and query_to_xml refused; switchboard_actions and pg_class allowed). The revoke test (run 7b666e1a-bd11-4b76-8981-1ad775329f43) ran all 18 statements with no effect: every role's net access was the same before and after, because supabase_admin made the grants. Two cron jobs use net (notify-dispatch-every-minute, wb-sync-daily), both as postgres. Decision: net stays open at source; get_sql_read's plan guard plus read-only are the protection | 2026-11-02 |
 | 2 | 2.12 | Skill rule and Phase 2 checklist | — | done (s45-e2lc, s47-x4fu): CLAUDE.md, the skill (version 2026-11-02), spec §7 and the checklist below. The skill's flow was used live end to end on the kill switch actions | 2026-11-02 |
-| 3 | 3.1-3.18 | The move, settings, `sb` commands, Salesforce guard, deploy wrapper, PII hold: spec §9 | — | todo | |
-| 4 | 4.1-4.5 | Salesforce reads: spec §10 | the Phase 2 tables, re-claimed | todo | |
-| 5 | 5.1-5.6 | Git and Salesforce actions by link: spec §11 | `db:table:switchboard_actions` | todo | |
+| — | s48 | Plan for the tile bug, the move, git by link, Salesforce reads and actions | — | done (s48-k3vq) | 2026-11-02 |
+| — | s49 | Docs back in `docs/`; plan and Alex's decisions written in; Part 1 re-planned | — | done (s49-p7wd) | 2026-11-02 |
+| tiles | s50 | A claims check records no block | — | done (s50-r4ty) | 2026-11-02 |
+| tiles | s51 | A closed chat's saved link gives way | — | done (s51-h2nz, s51b-w6jc): test-status, smoke and bridge host tests all pass. Alex restarts the panel to see it live | 2026-11-02 |
+| tiles | s52 | One live link per project code; kind and expiry in the link | see "Database items" below | done (s52-c8mu, s52b-n5ge, s52c-t9ka): migration 196, action 1fc1a816-31ee-491f-84b3-e0e7a06ac526, run 16d873c0-162c-4a99-b595-97bf33de0a00 succeeded, CONFORMANT (101 tables). Verify test, action 0f9726b6-c43d-48c4-ba47-27ef381558f2, run dccc75fe-d8ab-4848-a274-8300eb6305dd, passed 9 of 9. `mcp` deployed; CONFORMANT (101 tables) after it | 2026-11-02 |
+| tiles | s53 | Approval link states: extension and approve page | — | todo | |
+| tiles | s54 | Tile states from the chat | — | todo | |
+| tiles | s55 | Live test of the five states | — | todo | |
+| 3 | s56-s72 | The move: seed, install, settings, hooks, shims, `sb`, Salesforce guard, deploy wrapper, PII hold, finish modes, panel across repos, FIRST CLIENT at s70, extension split, cutover: spec §9 | — | todo | |
+| 5 git | s73-s78 | Every git command by link: spec §11 | see below | todo | |
+| 4 | s79-s83 | Salesforce reads: spec §10 | see below | todo | |
+| 5 SF | s84-s87 | Salesforce actions by link: spec §11 | see below | todo | |
 | 6-8 | | Spec §12-§14 | | todo | |
 
 ## Proposed scope per step (Phase 0)
@@ -354,6 +363,197 @@ Database items per step are in the table at the top. Report unread and lane orde
 - `claims.mjs check` on supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs and `db:deploy`: all free, no conflicts. Arnold's s24 conflict is clear. Nothing claimed.
 - Drift from the 2026-10-31 gitsync (db331fc to a7f0030, Arnold and Gmail capture): migrations 186-188 touch only `arnold_*` and `claude_notification*` objects, and platform.ts is unchanged. No Phase 2 table or function is touched, and no step needs re-planning. `mcp/index.ts` and its test gained Arnold's tools, so 2.5 builds on the new versions. The new tables are registered, so 2.10's grants cover them like any other.
 
+## Proposed scope per step (s50 onward)
+
+From the s48 plan and Alex's decisions in s49. A block leaves out any list that is nothing or none. Blocks from s56 to s72 and s74 to s87 name folders where the files don't exist yet; each is narrowed to real paths when its prompt is written.
+
+### Part 1, tile fixes, ahead of the move
+
+**s50, a claims check records no block** (estimated run: 6m). Decision D. `cmdCheck` stops calling `recordBlocks`; only a refused claim and the guard record one. Any `via: "check"` record left in the blocks file is dropped on read, so an old false block clears itself. The file was already empty at s49. The help text in `claims.mjs` stops saying a refused check is recorded. Alex tests: nothing by hand; `check` on a held file reports the conflict and exits 1, and `status` shows no block.
+- update: scripts/claims.mjs, scripts/lib/claims-core.mjs, scripts/lib/claim-blocks.test.mjs
+
+**s51, a closed chat's saved link gives way** (estimated run: 8m). Decision E. A pure function in status.ahk picks the link: the saved one while its tab is open; if the chat list is fresh and its tab is gone, the open chat that issued the project's newest run tag, by step number; otherwise the saved one. `LearnChatLink` uses it. Alex tests: close a project's chat, open a new one that issues a tag, and its tile joins the CLI's.
+- update: tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/lib/status.ahk, tools/claude-sessions/test-status.ahk, tools/claude-sessions/smoke-test.ahk
+
+**s52, one live link per project code; kind and expiry in the link** (database step; estimated run: 10m). Decision C, and what A and B need. `switchboard_issue_link` looks for a live link in the same `project_code` only, and appends `?kind=<kind>&exp=<unix seconds>` to the URL. The kinds shown are `sql`, `git` and `deploy` (for `sf_deploy` and `sf_test`). The tool's description and the skill's "One link is live" line say per project. If warren_buffet still holds `mcp/index.ts`, the migration goes first and the description waits. Alex tests: a second link in one project is refused; a link in another project is issued.
+- create: supabase/migrations/_pending_switchboard2-h8r_link_per_project.sql, supabase/migrations/196_link_per_project.sql, supabase/tests/switchboard2-h8r/4_verify_link_per_project.sql
+- update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, .claude/skills/cli-workflow/SKILL.md
+- delete: supabase/migrations/_pending_switchboard2-h8r_link_per_project.sql
+- deploy: mcp
+- SQL: switchboard_actions
+
+*A database step's block must list the numbered file and the `_pending_` delete, or the plan guard refuses them at the numbering (s52). s73 and s79 need the same when their prompts are written.*
+
+**s52c, deploy `mcp`** (estimated run: 3m; after migration 196 has run and its test has passed). Claim `db:deploy` at this step, deploy, run `check_platform_conformance`, then Alex checkpoints.
+- create: nothing
+- update: nothing
+- delete: nothing
+- deploy: mcp
+- SQL: none
+
+**s53, approval link states: extension and approve page** (estimated run: 12m). Decisions A and B. The watcher finds a live approval link in the latest finished reply, reading kind and expiry from the URL; a link with neither counts as `sql` with no expiry, so links already issued keep working. The bridge tracks each clicked link's state and drives its text, "Sending…" then "Sent ✓". The approve page gains `data-switchboard-running`, with the kind, while a real or test run is under way. The chat report and the host carry only `{kind, state}`, never the token. Manifest version bump. Alex tests: tile states come in s54; here, the link's words and the unit tests.
+- update: extension/claude-watch.js, extension/bridge.js, extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, extension/manifest.json, tools/claude-sessions/bridge/host.mjs, tools/claude-sessions/bridge/host.test.mjs, tools/claude-sessions/INTERFACES.md, src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx
+
+**s54, tile states from the chat** (estimated run: 10m). Decisions A and B. `ViewOf` takes the chat's approval state and shows tan "SQL ready", "Git ready" or "Deploy ready"; the short green "SQL running" and so on; and a red "SQL not posted" and so on, which a tap clears. The panel stops reading `waiting_on_alex`. `FocusTarget` sends a tap on a "… running" tile to the chat. The old "Waiting on SQL" label goes everywhere. Alex tests: the checks in `test-status.ahk`; live in s55.
+- update: tools/claude-sessions/lib/status.ahk, tools/claude-sessions/claude-sessions.ahk, tools/claude-sessions/ui/switchboard.html, tools/claude-sessions/test-status.ahk, tools/claude-sessions/smoke-test.ahk, tools/claude-sessions/README.md, tools/claude-sessions/INTERFACES.md
+
+**s55, live test of the five states** (estimated run: 5m). After Alex checkpoints s52 to s54, reloads the extension and restarts the panel. Queue a harmless action: orange, not tan. Claude issues a link: "SQL ready". Click: Sending, Sent. Approve: "SQL running". Result posted: "Claude writing", at once. Then a screenshot in the box: red "SQL not posted"; and a link left to expire: not tan. Git and Deploy labels are seen in tests only until their links exist. Fixes are named at the time in a follow-up prompt.
+- update: nothing
+
+### Part 2, the move
+
+Blocks are rooted in the new repo, `C:\Users\Alex\projects\switchboard\`, unless they say alfred-v5.
+
+**s56, seed script (alfred-v5 window)** (estimated run: 15m). The path map and import rewrite; dry run into the scratchpad, with tests run there. An approved exception to the Edit and Write rule (s49).
+- create: tools/switchboard-seed/seed.ps1, tools/switchboard-seed/path-map.json
+
+**s57, seed run and tests green** (estimated run: 10m). Alex runs the seed and commits; the first prompt in the new window.
+- update: test and import fixes; INTERFACES.md with version strings
+
+**s58, install.ps1** (estimated run: 10m). Copies code, puts commands on PATH. No hooks yet.
+- create: install.ps1
+
+**s59, config loader** (estimated run: 10m). `repos.json` and `projects.json`, read by every command; the project code finds the folder.
+- create: config/load.mjs and its test
+- update: claims/, git/, hooks/prompt-check.mjs
+
+**s60, user-level hooks** (estimated run: 12m). No-op outside listed repos; install.ps1 registers them.
+- update: hooks/, install.ps1, tests
+
+**s61, shims in alfred-v5 (alfred-v5 window)** (estimated run: 12m). Shims, project hooks removed, CLAUDE.md and the skill the same day. The Overwatch nightly counts thread should have finished or claimed before this.
+- update: scripts/claims.mjs, scripts/clip.mjs, scripts/git-commit-claimed.mjs, scripts/git-new-worktree.mjs, scripts/git-push-worktrees.mjs, scripts/git-sync.mjs, scripts/overwatch-post.mjs, .claude/settings.local.json, .claude/CLAUDE.md, .claude/skills/cli-workflow/SKILL.md
+- delete: .claude/hooks/, moved scripts/lib/ files
+
+**s62, `sb project`, `sb org`, protection** (estimated run: 15m). Spec §5.4 and §5.5.
+- create: sb/ and tests
+- update: hooks/claims-guard.mjs
+
+**s63, `sb client start` and `end`** (estimated run: 15m). With `--adopt <path>` for an existing repo; `.git/info/exclude`.
+- update: sb/
+
+**s64, Salesforce guard** (estimated run: 15m). Spec §9.6, including the block on Salesforce MCP tools and refusing a repo whose `.mcp.json` names an org.
+- create: salesforce/guard.mjs and its test, salesforce/RULES.md
+- update: hooks/, claims/shell-parse.mjs
+
+**s65, deploy wrapper: files, lock, tests** (estimated run: 15m). Spec §9.7.
+- create: salesforce/deploy.mjs and its test
+
+**s66, wrapper: compare and tiers** (estimated run: 15m). The click tier is refused until s85.
+- update: salesforce/deploy.mjs and its test
+
+**s67, PII hold** (estimated run: 8m). Spec §9.8.
+- update: clip/, tests
+
+**s68, finish modes, non-Alfred repos** (estimated run: 12m). `pr`, `local-commit`, and the migration and snapshot checks off where the repo has none.
+- update: git/, tests
+
+**s69, panel across repos** (estimated run: 15m). Paths from `projects.json`, so Send and the tiles reach client windows; the host list moves to `config\`. Prompts to the new repo stop being pasted by hand here (the s48 plan's s65).
+- update: panel/, the bridge host, tests
+
+**s70, FIRST CLIENT GATE** (estimated run: 10m, then Alex's setup). Alex runs `sb client start`; the Phase 3 checklist is tested on a Team IMPACT sandbox. Client work can start here.
+- update: fixes only, named at the time
+
+**s71, extension split** (estimated run: 12m). Switchboard's own Chrome extension with a fixed ID; the host manifest re-registered; the clipper stays in alfred-v5.
+- update: extension/, install.ps1 (new repo); extension/ (alfred-v5, bridge half deleted)
+
+**s72, cutover (alfred-v5 window)** (estimated run: 8m). Delete the shims and `tools/claude-sessions/`; Alex updates his profile.
+- update: .claude/CLAUDE.md, .claude/skills/cli-workflow/SKILL.md
+- delete: moved scripts, tools/claude-sessions/
+
+### Part 3, every git command by link
+
+The helper arrives here rather than with Phase 4. Every git link needs a click for the first two weeks (spec §11.1).
+
+**s73, queue changes** (database step; estimated run: 10m). `git` is already an allowed kind. Adds `needs_click` by action type and a pickup function.
+- create: supabase/migrations/_pending_switchboard2-h8r_git_actions.sql, supabase/tests/switchboard2-h8r/5_verify_git.sql
+- SQL: switchboard_actions, switchboard_runs
+
+**s74, runner: git actions and pickup key** (estimated run: 12m).
+- update: supabase/functions/switchboard-runner/index.ts, supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs
+- deploy: switchboard-runner
+
+**s75, helper and allowlist** (estimated run: 15m). Spec §11.2; a visible terminal; git commands refuse rather than ask when run by link.
+- create: helper/ and tests
+- update: git/
+
+**s76, MCP tool to queue a git action** (estimated run: 8m). Needs `mcp/index.ts`, held by warren_buffet at s48.
+- update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
+- deploy: mcp
+
+**s77, approve page and `git <id>` post** (estimated run: 10m). "Git ready" and "Git running" already exist from s54.
+- update: src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, extension/, panel/
+
+**s78, skill, CLAUDE.md, live test of all four** (estimated run: 8m).
+- update: .claude/CLAUDE.md, .claude/skills/cli-workflow/SKILL.md
+
+### Part 4, Salesforce reads
+
+**s79, schema and purge** (database step; estimated run: 10m). Encrypted result storage, `sf_reads_enabled`, a 10-minute purge.
+- create: supabase/migrations/_pending_switchboard2-h8r_sf_reads.sql, supabase/tests/switchboard2-h8r/6_verify_sf_reads.sql
+- SQL: switchboard_actions, switchboard_runs, switchboard_settings
+
+**s80, helper reads** (estimated run: 15m). GET only, the org check, level checks, `soql-parser-js`.
+- create: salesforce/helper/ and tests
+
+**s81, runner: results** (estimated run: 10m).
+- update: supabase/functions/switchboard-runner/index.ts, supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs
+- deploy: switchboard-runner
+
+**s82, `sf_read` tool** (estimated run: 8m).
+- update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
+- deploy: mcp
+
+**s83, live on the client sandbox** (estimated run: 6m). Results checked by Alex, not pasted.
+- update: fixes only
+
+### Part 5, Salesforce actions by link
+
+**s84, `sf_deploy` and `sf_test` actions** (estimated run: 12m). A migration if the allowlist needs one; helper; runner.
+- update: helper/, supabase/functions/switchboard-runner/index.ts, supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs
+- deploy: switchboard-runner
+
+**s85, click tier in the wrapper** (estimated run: 10m). Lifts s66's refusal.
+- update: salesforce/deploy.mjs and its test
+
+**s86, approve page warnings and skill** (estimated run: 8m).
+- update: src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, .claude/skills/cli-workflow/SKILL.md
+
+**s87, live test** (estimated run: 6m). No-click and click deploys on a sandbox; production refused.
+- update: fixes only
+
+### Database items (s50 onward)
+
+Each is claimed at its step, never before, and released by Checkpoint.
+
+| Step | Items |
+|---|---|
+| s52 | `db:fn:switchboard_issue_link`, `db:table:switchboard_actions`, `db:deploy` |
+| s73 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_issue_link` |
+| s74 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` |
+| s76 | `db:table:switchboard_actions`, `db:deploy` |
+| s79 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:switchboard_settings` |
+| s81, s82 | `db:table:switchboard_runs`, `db:deploy` |
+| s84 | `db:table:switchboard_actions`, `db:deploy` |
+
+`switchboard-panel` needs no deploy in Part 1: the chat decides tan, so its `waiting_on_alex` just goes unread. It is removed the next time that function is deployed.
+
+### First client: Team IMPACT (from s48)
+
+It already has a repo, a remote and an alias, and the spec says it allows an integration user. ActBlue needs a folder per nonprofit.
+
+**Until s70, don't open Claude in `C:\Users\Alex\projects\team-impact`.** Its committed `.mcp.json` gives any session there the Salesforce MCP server on `team-impact-prod`, with the `data` and `users` toolsets, and that org was connected at s48.
+
+Alex by hand:
+1. `sf org logout --target-org team-impact-prod` (recommended at s48; not confirmed done).
+2. Sort out the 17 uncommitted files on `feature/heat-map-proximity` before s70.
+3. Remove or empty the committed `.mcp.json`, and correct its CLAUDE.md deploy line.
+4. Install `gh`: it is not on this machine, and the `pr` finish needs it.
+5. Log `team-impact-sandbox` back in; its token had expired.
+6. Create the private GitHub repo, run the seed, and run `install.ps1` at s58 and s60.
+7. At s61, replace the PowerShell profile functions: they outrank PATH, and the file syncs to the Surface through OneDrive.
+
+Alex gives at s70: whether `github.com/alexanderjameswarren/teamimpact` is the client's real source and which branch is main; whether `TeamImpactHeatMap` is still needed; sandbox aliases, the type of each and whether they're shared; whether production is allowed and at what level; integration user or admin login per org; whether the contract allows client data to reach Claude; whether the CLI may deploy, per sandbox.
+
 ## Estimate
 
 | # | phase | steps |
@@ -361,15 +561,42 @@ Database items per step are in the table at the top. Report unread and lane orde
 | 0 | Fixes, boundaries, plan guard | 8 |
 | 1 | Send link, fallback page, skill rule, tile states, estimates, layout | 10 |
 | 2 | SQL queue, read-only queries (2.2-2.12, 2.3b, 2.4b, 2.7c to 2.7g, 2.9b and 2.9c, after the 2.1 plan) | 20 |
-| 3 | Multi-repo and clients | 18 |
-| 4 | Salesforce reads | 5 |
-| 5 | Git and Salesforce by link | 6 |
+| — | Plans, s48 and s49 | 2 |
+| — | Tile fixes (s50-s55) | 6 |
+| 3 | The move (s56-s72) | 17 |
+| 5 | Git by link (s73-s78) | 6 |
+| 4 | Salesforce reads (s79-s83) | 5 |
+| 5 | Salesforce actions by link (s84-s87) | 4 |
 | 6 | Spec files, archiving | 2 |
 | 7 | npm start per tile | 2 |
 | 8 | Remote devices | 4 |
-| | **total** | **75** |
+| | **total** | **86** |
+
+Run time from s49 to s87, by the estimates in the blocks:
+
+| part | steps | run time |
+|---|---|---|
+| s49 | 1 | 4m (the plan's figure) |
+| Tile fixes | 6 | 51m |
+| The move | 17 | 3h19m |
+| Git by link | 6 | 1h03m |
+| Salesforce reads | 5 | 49m |
+| Salesforce actions | 4 | 36m |
+| **total** | **39** | **6h42m** |
+
+s48 planned 35 steps and about 6h09m. Part 1 grew from 2 steps and 18m to 6 steps and 51m, so everything after it moved up by 4. Client work starts at s70.
 
 ## Decisions
+
+- **s49, on the s48 plan (Alex):**
+  - **Accepted as recommended:** a plain copy for the history; docs back in `docs/`; `switchboard_repo-k7m` as the new repo's code, with prompts pasted by hand until the panel reads several repos (s69, which s48 called s65); the seed by script, as an approved exception; `sql-queue` stays in alfred-v5.
+  - **Git clicks:** every git link needs a click for the first two weeks. After that gitcom and gitsync may run without a click only when claude.ai issues them. The CLI never runs them.
+  - **A, tan:** the chat alone decides. The database may only turn tan off for an expired link, never delay it. *Built with no database read at all:* the server writes the expiry into the link, so the chat knows it. The cost, accepted in spec §7.2: a link used from another device stays tan until it expires.
+  - **B, approval links behave like Send links,** for SQL, git and deploy alike: tan "SQL ready", "Git ready" or "Deploy ready"; Sending then Sent in the chat; light green "SQL running" and so on; the usual "Claude writing" when the result is posted; red when the page can't post. This replaces s48's "Waiting on you".
+  - **C, one live link per project code,** not per account. Spec rule 1 stays: one link at a time per thread.
+  - **D, a claims check records no block;** only a refused claim does. At s49 the blocks file was already empty, because the block goes once the holder lets go of the file. s50 removes the cause and drops any `via: "check"` record left over.
+  - **E, a saved chat link whose tab is gone** gives way to the open chat that issued the project's newest run tag.
+- **s48, found while planning:** the plan guard ignores paths outside its own repo, so new-repo work is done only from a window on that repo. Team IMPACT's committed `.mcp.json` reaches production through MCP, which a shell-only guard can't see; spec §9.6 now covers it.
 
 - **s28, on the runner (Alex approved):** one run at a time with several queued; a script's outer begin and commit dropped, other transaction control refused; one command per send; `/preview`; an index on a table the same script creates is not slow; run routes open to any origin, with access by JWT. Smoke-test action 26f0cc8f-6ef0-4f14-81da-a915ad086e5b (`select 1`) stays queued; nothing runs it without a link. `scripts/sql-queue.mjs` uses `process.exitCode`, because `process.exit` straight after an HTTPS fetch exits 127 on Windows; a plain-HTTP test does not reproduce that, so it was checked by hand over HTTPS.
 - **s27, the `.clip` gap closed:** `foreignPath` no longer exempts `.clip/` in another checkout, so the claims guard refuses main's. A sibling worktree's was already refused there, because its path is not exempt from main's root. The plan guard now uses `foreignPath` for edits and shell writes and refuses "writes into another checkout". `.git/` and the other exempt folders in main stay as they were. Other threads get this once they sync.
@@ -671,7 +898,8 @@ Parked: see "Deferred and parked" above.
 
 ### Later phases
 
-- [ ] Phase 3: alfred-v5 works through the shims before the cutover. `sf data query` and a production deploy are blocked. A deploy holds the sandbox lock and sends only claimed files. A screen-made change is caught by the compare.
+- [ ] Tile fixes: a queued action shows no tan; SQL ready, Sending, Sent, SQL running and Claude writing in order; red when the page can't post; an expired link isn't tan; a second link in one project refused, one in another project issued; a `check` records no block; a closed chat's tile re-pairs with the new chat.
+- [ ] Phase 3: alfred-v5 works through the shims before the cutover. `sf data query` and a production deploy are blocked, and so are Salesforce MCP tools. A deploy holds the sandbox lock and sends only claimed files. A screen-made change is caught by the compare.
 
 ## Timing log
 
@@ -739,3 +967,7 @@ Parked: see "Deferred and parked" above.
 | s45 (2.12) | 4m (estimate 10m) |
 | s46 (kill switch queued) | 1m (estimate 5m) |
 | s47 (Phase 2 done) | 1m (estimate 3m) |
+| s48 (Phase 3 plan) | 3m06s to the end of reading; writing not measured (estimate 8m) |
+| s49 (docs back, plan written) | 8m55s (estimate 8m) |
+| s50 (check records no block) | 1m43s (estimate 6m) |
+| s51 (closed chat's link, stopped at the block) | 1m26s (estimate 8m) |

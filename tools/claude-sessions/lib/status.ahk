@@ -157,6 +157,29 @@ FindChatLinkByTag(chats, runTag, project) {
     return fallback
 }
 
+; A run tag's step as text that sorts in step order: s9, s9b, s10.
+TagRank(tag) => RegExMatch(tag, "-s(\d+)([a-z]?)-[a-z0-9]{4}$", &m) ? Format("{:06}{}", m[1], m[2]) : ""
+
+; What replaces a saved chat link, or "" to keep it. Only with its tab closed and the chat
+; list fresh: the open chat that issued the project's newest tag, never one older than
+; the CLI's run tag. First in the list wins a tie.
+ChatLinkReplacing(saved, savedOpen, fresh, chats, runTag, project) {
+    if saved = "" || savedOpen || !fresh
+        return ""
+    best := ProjectOfTag(runTag) = project ? TagRank(runTag) : "", link := ""
+    for c in chats {
+        if !IsObject(c)
+            continue
+        url := NormaliseUrl(c.Get("url", "")), tag := c.Get("issuedTag", "")
+        if tag = "" || ProjectOfTag(tag) != project || !RegExMatch(url, "^https://claude\.ai/chat/\S+$")
+            continue
+        cmp := StrCompare(TagRank(tag), best)
+        if cmp > 0 || (cmp = 0 && link = "")
+            best := TagRank(tag), link := url
+    }
+    return link
+}
+
 ; Claude has issued a tag for this project that the CLI has not received.
 NewerTag(runTag, issuedTag, project) => issuedTag != "" && issuedTag != runTag && ProjectOfTag(issuedTag) = project
 

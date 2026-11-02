@@ -412,7 +412,7 @@ test("get: exactly one id, well formed, and found", async () => {
 });
 
 test("issue: a matching fingerprint calls switchboard_issue_link and returns its result", async () => {
-  const link = { action_id: ACTION_ID, url: "https://x/approve/t", expires_at: "2026-11-01T12:30:00Z", headline: "H" };
+  const link = { action_id: ACTION_ID, url: "https://x/approve/t?kind=sql&exp=1793536200", expires_at: "2026-11-01T12:30:00Z", headline: "H" };
   const db = fakeDb({ tables: { switchboard_actions: ok({ fingerprint: FP }) }, rpc: ok(link) });
   const out = await m.issueSwitchboardLinkTool.handler({ action_id: ACTION_ID, fingerprint: FP }, { db });
   assert.deepEqual(out, link);
@@ -438,7 +438,7 @@ test("issue: bad arguments and an unknown action make no link", async () => {
 test("issue: the database's refusal is a refusal, an outage is not", async () => {
   const issue = (rpc) => m.issueSwitchboardLinkTool.handler({ action_id: ACTION_ID, fingerprint: FP },
     { db: fakeDb({ tables: { switchboard_actions: ok({ fingerprint: FP }) }, rpc }) });
-  const live = "switchboard_issue_link: another link is live (action z). One at a time: wait until it is used or expires.";
+  const live = "switchboard_issue_link: another link is live for p-a1b (action z). One at a time per project: wait until it is used or expires.";
   await assert.rejects(issue({ data: null, error: { code: "55000", message: live } }),
     (e) => e.message.includes("refused") && e.message.includes("another link is live"));
   await assert.rejects(issue({ data: null, error: { code: "57014", message: "timeout" } }),
