@@ -4,9 +4,11 @@ Spec: [technical-spec-warren_buffet_p4-r6d.md](technical-spec-warren_buffet_p4-r
 
 `db:` items are claimed just in time at their step, after gitsync and a drift check, and released at Checkpoint.
 
+**Status: finished 2026-11-02. Every step is done.** Results are in Step 8j and Step 9; open follow-ups are at the end of Step 9. A status inside a step below is what was true when that step was written; a later step says how it closed.
+
 ## Steps
 
-### Step 2: spec, progress, claims. Done pending review
+### Step 2: spec, progress, claims. Done
 Database: none.
 
 19 files and folders claimed. `supabase/functions/mcp/index.ts` and `index.test.mjs` are not claimed; see Step 8.
@@ -53,7 +55,7 @@ Scope:
 - deploy: none
 - SQL: none
 
-Status: script and 13 tests written; tests pass. Waiting on Alex's dry run on the real files.
+Status: done; the real runs are in Step 6. Script and 13 tests written; tests pass.
 
 Choices: the script is Node, per the spec's import section. The dry run writes nothing anywhere, so the proof of a clean run is a code it prints, tied to the file bytes and cutoffs, which `--write --confirm <code>` recomputes. `--only` picks files, because after one file is imported a dry run of all files is no longer clean. The closed CNB account the rows name is the one ending 6900.
 
@@ -123,10 +125,10 @@ Expected from the real files: Amazon shipments 346, items 676; Whole Foods shipm
 
 Alex ran the checkpoint with `--release-db`: migrations, tool files, `mcp`, the history and Amazon reader files, spec and progress.
 
+Closed: the write ran in Step 8e.
+
 ### Step 8e: fix the writer's empty reply, then the real write (proposed as 8d2)
 Database: `db:table:wb_orders`, `db:table:wb_order_items`, `db:table:wb_order_matches`, `db:table:wb_transactions`, data only.
-
-Status: writer fixed, with a test whose fake database replies empty as PostgREST does. Waiting on Alex's dry run, write and check query.
 
 Scope:
 - create: none
@@ -135,24 +137,26 @@ Scope:
 - deploy: none
 - SQL: wb_orders, wb_order_items, wb_order_matches, wb_transactions, wb_accounts
 
-Status: done. Alex ran the write and checkpoint: 508 shipments, 2924 items, 233 matches, 14 refunds placed.
+Status: done. Writer fixed, with a test whose fake database replies empty as PostgREST does. Alex ran the write and checkpoint: 508 shipments, 2924 items, 233 matches, 14 refunds placed.
 
 ### Step 8f: item tags and splitting Amazon charges (P4-D10)
 Status: stopped at a plan guard block; the SQL is not written. Written: `set_wb_order_item_tags`, `split_wb_order_charges` with tests, registration, help line, P4-D10. Refused: the `_pending_` migration, because its draft used a temporary table not in the SQL list. Also out of scope, so not tried: the `wb_process_transactions` change, whose body updates `wb_rules`; the test script, whose fixtures insert into `wb_accounts` and `wb_orders`; and deleting the `_pending_` file. No `db:` items claimed, nothing numbered, no SQL run. The tools call functions that don't exist yet, so they can't deploy until the migration has run.
 
+Closed: the SQL was finished in Step 8g.
+
 ### Step 8g: the split migration and test
 Database: `db:table:wb_order_items`, `wb_order_matches`, `wb_transactions`, `wb_splits`, `wb_split_tags`, `wb_tags`, `wb_rules`, `wb_accounts`, `wb_orders`, `db:fn:wb_process_transactions`, `wb_set_order_item_tags`, `wb_order_split_state`, `wb_split_order_charges`, all claimed.
 
-Status: `195_item_splits.sql` and `4_item_splits_tests.sql` written, `_pending_` deleted. Waiting on Alex to run them and the regression scripts. Neither has run against a database. `wb_process_transactions` differs from the live one only in the `from_order` guards and one comment, checked by diff against main's snapshot.
+Status: done. `195_item_splits.sql` and `4_item_splits_tests.sql` written, `_pending_` deleted. `wb_process_transactions` differs from the live one only in the `from_order` guards and one comment, checked by diff against main's snapshot.
 
 The project skip is tested with a real project id inside the rolled-back transaction; a planned match reads the same condition but isn't exercised, since `wb_projects` and `wb_planned_matches` fixtures aren't in scope. Two charges claiming one shipment stays a writer rule.
 
 Alex ran both: `195_item_splits.sql` is live (conformant true, failures []), and `4_item_splits_tests.sql` passed (ALL PASSED, rolled back, rows_left_behind 0).
 
 ### Step 8h: queue the regression scripts
-Database: none claimed here; the Step 8g `db:` claims are still held, waiting on Checkpoint.
+Database: none claimed here; the Step 8g `db:` claims were still held, waiting on Checkpoint.
 
-Status: all eight queued with `--test`; none refused and none has run. Queued is not a pass. Action ids, in order:
+Status: done. All eight queued with `--test`; none refused. Action ids, in order:
 - `115_wb_phase2_tag_exclusions_tests.sql`: 7faa5955-075b-47db-a943-54fd12d39b24
 - `118_wb_phase2_step6_tests.sql`: de79131f-0943-42c6-9907-7091043343ee
 - `121_wb_phase2_step7_tests.sql`: fabd8f7d-cd56-4637-9725-eccf59319c99
@@ -162,29 +166,79 @@ Status: all eight queued with `--test`; none refused and none has run. Queued is
 - `132_wb_phase2_step10_acks_tests.sql`: c9a3378b-551d-4dc3-a17f-f5d3c77bb605
 - `136_wb_phase3_step4_tests.sql`: d8386489-34f3-483e-b0ec-d5e9fabf5b4e
 
-These scripts end in a deliberate error carrying their result, so the runner may record a passing script as a failed run. Read the error text: a pass reads `WB TEST RESULT (rolled back): {"all_passed": true, ...`.
+All eight passed per Alex: 184 checks, all_passed true each.
 
-### Step 8i: deploy mcp, tag in chat, run the splits (proposed, was 8h)
-Deploy needs `db:deploy` and a `gitsync` first; `index.ts` already holds the two tools.
+### Step 8i: confirm, release, deploy
+Status: done. The ten files reached main in dda30b1, merged by 5854c84. No `db:` claims were left to release. `mcp` deployed from this worktree, and the deploy claim is released. The CLI session could not confirm the two tools live; Step 8j used them in chat.
 
-Scope:
-- create: none
-- update: none
-- delete: none
-- deploy: mcp
-- SQL: none
+### Step 8j: tag in chat, run the splits
+Ran in chat with the two new tools. Nothing built or deployed.
 
-### Earlier scope proposed for Step 8g
+Status: done.
 
-Scope:
-- create: supabase/migrations/, supabase/tests/warren_buffet_p4/
-- update: none
-- delete: supabase/migrations/_pending_warren_buffet_p4-r6d_item_splits.sql
-- deploy: none
-- SQL: wb_order_items, wb_order_matches, wb_transactions, wb_splits, wb_split_tags, wb_tags, wb_process_transactions, wb_rules, wb_accounts, wb_orders
+All 2924 order items tagged, none left.
 
-### Step 9: review and Finish
+| Amazon (676) | Items |
+|---|---|
+| Groceries | 171 |
+| Household Goods | 145 |
+| Pet Food & Supplies | 80 |
+| Toiletries & Beauty | 53 |
+| Electronics & Computer Hardware | 46 |
+| Clothing | 44 |
+| Furnishings & Design | 18 |
+| Hobbies & Games | 17 |
+| Garden & Outdoor | 17 |
+| Supplements | 16 |
+| Hair & Grooming | 14 |
+| Holiday & Seasonal Decor | 12 |
+| Pharmacy | 10 |
+| Home Maintenance | 8 |
+| Fitness Gear | 7 |
+| Vision | 6 |
+| Gifts | 5 |
+| Office Supplies | 5 |
+| Car Accessories | 2 |
+
+| Whole Foods (2248) | Items |
+|---|---|
+| Groceries | 2232 |
+| Garden & Outdoor | 6 |
+| Hair & Grooming | 5 |
+| Household Goods | 3 |
+| Supplements | 2 |
+
+Nine new Category tags, by group:
+- Technology: Electronics & Computer Hardware
+- Fitness & Personal Care: Toiletries & Beauty, Fitness Gear
+- Home: Holiday & Seasonal Decor, Garden & Outdoor, Home Maintenance
+- Entertainment: Hobbies & Games
+- Transportation: Car Accessories
+- Shopping: Office Supplies
+
+Alex's decisions: cleaning supplies go to Household Goods, so Cleaning is only for the cleaning service. Items that read as baby goods but are for the dog go to Pet Food & Supplies.
+
+`split_wb_order_charges`: 233 charges split, 0 skipped, 0 failed. A check found 0 transactions whose splits don't sum to the charge.
+
+Lessons:
+- The split tool has no preview.
+- Amazon's department labels were unreliable, so tagging went by product name.
+- The read-only role can't see `wb_order_matches`.
+
+### Step 9: results, follow-ups, Finish
 Database: none.
+
+**Burn-rate comparison (P4-D8),** after the CNB fixes below: the 12-month median (Nov 2025 to Oct 2026) is about 1.3 times the 3-month window, and every month since June 2026 sits between about 0.8 and 1.4 times it. Decision: keep the 3-month window. Figures are in the chat, per the privacy rule.
+
+**Done in chat on CNB rows:**
+- Relabelled: five transfers to Wells Fargo paired, the CD paired as a transfer, the May payouts set as transfers, and six CD interest rows set as interest.
+- One CNB check put on the bathroom claim project and confirmed against its named record.
+
+**Open follow-ups:**
+- Elise's Amazon export: not imported; the buyer column holds the place.
+- Digital Content Orders: the later pass in P4-D7.
+- Delete the history files from `tools/` in the main checkout, per the privacy rule. An Alfred intention tracks this.
+- Order-item tools for the chat skill: `get_wb_order_items`, `set_wb_order_item_tags` and `split_wb_order_charges` aren't in it yet.
 
 ## Timing log
 
