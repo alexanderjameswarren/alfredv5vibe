@@ -31,21 +31,22 @@ entrypoint = "./functions/sam-song-scores/index.ts"
 
 [functions.email-capture]
 enabled = true
-# 🛑 JWT verification OFF. Called by Postmark's inbound webhook, which has no
-# user token and cannot present one — same situation as notify-dispatch below.
+# 🛑 JWT verification OFF. Called by the Gmail Apps Script in
+# alex.warren@secorus.com, which has no user token — same situation as
+# notify-dispatch below.
 #
-# The secret (email_capture-f4m): Postmark cannot send a custom header, so the
-# secret rides in the webhook URL as `?token=`, checked against the
-# EMAIL_CAPTURE_SECRET function secret before any work. Wrong or missing token
-# → 401; secret not set → 500. Both make Postmark retry, so mail is delayed, not
-# lost. FROM_ALLOWLIST and USER_MAPPINGS still apply behind it, as filters.
-# See docs/technical-spec-email-capture.md.
+# The secret (gmail_capture-h3w): the script sends an `x-capture-secret` header,
+# checked against the GMAIL_CAPTURE_SECRET function secret before any work. Wrong
+# or missing → 401; secret not set → 500. On either the script changes no labels
+# and retries next run, so mail is delayed, not lost. email_capture_senders and
+# USER_MAPPINGS apply behind it.
+# See docs/technical-spec-gmail-capture.md.
 #
 # ⚠️ ADDED 2026-09-21, and the reason matters. There was NO entry here at all,
 # while production ran with verify_jwt = false. The CLI defaults the flag to
 # TRUE when nothing declares it, so a bare `supabase functions deploy
-# email-capture` would have flipped it and silently 401'd every Postmark
-# webhook — email capture would have stopped, with no error anywhere visible.
+# email-capture` would have flipped it and silently 401'd every capture
+# request — email capture would have stopped, with no error anywhere visible.
 # It survived only because that deploy passed --no-verify-jwt by hand. This
 # entry is what makes the next deploy safe without anyone remembering.
 #

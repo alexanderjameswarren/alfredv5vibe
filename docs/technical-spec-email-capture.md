@@ -2,8 +2,13 @@
 
 Alfred record: intention mv46b90ch3dxe50ylsg.
 
-> **Being replaced (gmail_capture-h3w):** Postmark is giving way to a Gmail Apps
-> Script posting to this function. See docs/technical-spec-gmail-capture.md.
+> **Historical (gmail_capture-h3w, 2026-11-02):** Postmark is gone. Mail now comes
+> from a Gmail Apps Script; see docs/technical-spec-gmail-capture.md, which is the
+> live spec. The Postmark webhook, `?token=`, `EMAIL_CAPTURE_SECRET`, FROM_ALLOWLIST,
+> `decideCapture` and `checkAutoForward` described below were removed in function v31.
+> Still live from this document: "Captured text", USER_MAPPINGS, the unique index and
+> `original_message_id` from "Dedupe", and the notice cap and switch. Rows captured
+> before 2026-10-29 still carry Postmark ids in `messageId` or `postmark_message_id`.
 
 ## Flow
 
