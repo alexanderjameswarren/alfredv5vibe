@@ -6,13 +6,14 @@ the judgment**: what is worth a notification, its wording, its voice and its own
 names no app and holds no app's rules, so a new app takes part by being added to the shared
 settings, not by editing this file.
 
-- **Schedule:** hourly, **05:00 to 20:00 America/Los_Angeles**, on the hour. The shared settings'
+- **Schedule:** hourly, **05:00 to 19:00 America/Los_Angeles**, on the hour. The shared settings'
   window decides whether a run sends anything; a run outside it closes at once.
+  It stops at 19:00 because a 20:00 run would always stop as outside the window, which ends at 20:00.
 - **App / job:** `alfred` / `claude_hourly_notifications`, executor `claude`.
 - **Schedule row** (`platform_schedules` has only daily and weekly cadences, so the row checks that
   the first run of the day happened): `app: "alfred"`, `job: "claude_hourly_notifications"`,
   `executor: "claude"`, `cadence: "daily"`, `expected_by: "05:00"`, `grace_hours: 2`,
-  `notes: "Hourly 05:00-20:00 Pacific; this row only checks the day's first run."` Written in chat
+  `notes: "Hourly 05:00-19:00 Pacific; this row only checks the day's first run."` Written in chat
   with `create_platform_schedule`.
 - **Tools:** the **Alfred** connector only (mcp v180 or later: `get_claude_notification_settings`,
   `get_claude_notifications`, `send_alfred_push`, `get_inbox` with `source_app`, and each
@@ -39,7 +40,7 @@ settings, not by editing this file.
 1. **The shared settings row**, written in chat with `update_claude_notification_settings`. Each
    app listed needs `app`, `enabled`, `plan_tool` and `progress_tool`.
 2. **The schedule row** above, written in chat with `create_platform_schedule`.
-3. **The scheduled task in claude.ai:** hourly, **05:00 to 20:00, Pacific**, with the **Alfred**
+3. **The scheduled task in claude.ai:** hourly, **05:00 to 19:00, Pacific**, with the **Alfred**
    connector and no others, named "Claude hourly notifications", with everything below "THE PROMPT"
    line as its instructions.
 4. **Run it once by hand** (the task's "run now"). Check: a `platform_runs` row for `alfred` /
