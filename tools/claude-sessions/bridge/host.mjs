@@ -107,6 +107,7 @@ export function makeLogger(dir) {
 const int = (v) => (Number.isInteger(v) ? v : null);
 const bool = (v) => (typeof v === "boolean" ? v : null);
 const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : null);
+const APPROVE_KINDS = ["sql", "git", "deploy"];
 
 export function cleanTab(t = {}) {
   return {
@@ -122,8 +123,13 @@ export function cleanChat(c = {}) {
     state: ["responding", "finished", "unknown"].includes(c.state) ? c.state : "unknown",
     since: str(c.since, 40),
     issuedTag: typeof c.issuedTag === "string" && TAG_SHAPE.test(c.issuedTag) ? c.issuedTag : null,
+    lastTag: typeof c.lastTag === "string" && TAG_SHAPE.test(c.lastTag) ? c.lastTag : null,
     composerEmpty: bool(c.composerEmpty),
     viewedAt: str(c.viewedAt, 40),
+    approveKind: APPROVE_KINDS.includes(c.approveKind) ? c.approveKind : null,
+    approveExp: int(c.approveExp),
+    approveState: ["running", "notposted"].includes(c.approveState) ? c.approveState : null,
+    approveStateKind: APPROVE_KINDS.includes(c.approveStateKind) ? c.approveStateKind : null,
   };
 }
 

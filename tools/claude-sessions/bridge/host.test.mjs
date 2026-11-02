@@ -51,7 +51,15 @@ test("tabs and chats are written whole, stamped, and stripped to known fields", 
 
 test("a chat carries only its nine known fields", () => {
   assert.deepEqual(Object.keys(cleanChat({ latestFound: true, codeBlocks: 1, text: "x" })).sort(),
-    ["composerEmpty", "issuedTag", "since", "state", "tabId", "title", "url", "viewedAt", "windowId"]);
+    ["approveExp", "approveKind", "approveState", "approveStateKind", "composerEmpty", "issuedTag", "lastTag", "since", "state", "tabId", "title", "url", "viewedAt", "windowId"]);
+});
+
+test("a chat's approval fields and lastTag pass; anything else is dropped", () => {
+  const c = cleanChat({ lastTag: "proj-abc-s3-ab12", approveKind: "git", approveExp: 1793536200, approveState: "running", approveStateKind: "deploy", token: "secret" });
+  assert.deepEqual([c.lastTag, c.approveKind, c.approveExp, c.approveState, c.approveStateKind], ["proj-abc-s3-ab12", "git", 1793536200, "running", "deploy"]);
+  assert.equal("token" in c, false);
+  const bad = cleanChat({ lastTag: "not a tag", approveKind: "docs", approveExp: "soon", approveState: "done", approveStateKind: "x" });
+  assert.deepEqual([bad.lastTag, bad.approveKind, bad.approveExp, bad.approveState, bad.approveStateKind], [null, null, null, null, null]);
 });
 
 test("a chat's bad state is unknown and a non-tag is dropped", () => {

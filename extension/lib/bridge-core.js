@@ -72,7 +72,10 @@ export function buildChatsMessage(tabs = [], windows = [], reports = new Map(), 
       state: fresh ? r.state : "unknown",
       since: fresh ? r.since ?? null : null,
       issuedTag: fresh ? r.issuedTag ?? null : null,
+      lastTag: fresh ? r.lastTag ?? null : null,
       composerEmpty: fresh ? r.composerEmpty ?? null : null,
+      approveKind: fresh ? r.approveKind ?? null : null,
+      approveExp: fresh ? r.approveExp ?? null : null,
       viewedAt: viewing ? now.toISOString() : viewedAt.get(t.id) ?? null,
     });
   }
@@ -164,6 +167,55 @@ export function approveTokenOf(href, hosts) {
 
 export const isApprovePage = (href, hosts) => approveTokenOf(href, hosts) !== null;
 
+const APPROVE_KINDS = ["sql", "git", "deploy"];
+
+/**
+ * What an approval link's address says, for display only: { kind, exp }. A link from before migration 196 says
+ * neither: SQL, no expiry. claude-watch.js has a copy (it cannot import); the tests hold them equal.
+ */
+export function approveLinkInfo(href) {
+  let params;
+  try {
+    params = new URL(String(href)).searchParams;
+  } catch {
+    return { kind: "sql", exp: null };
+  }
+  const kind = params.get("kind");
+  const exp = params.get("exp");
+  return { kind: APPROVE_KINDS.includes(kind) ? kind : "sql", exp: /^\d{1,12}$/.test(exp ?? "") ? Number(exp) : null };
+}
+
+const RUNNING_KEEP_MS = 10 * 60 * 1000;
+
+/**
+ * Each chat with what its approval is doing: approveState "running" (approved, or a test that runs on open) or
+ * "notposted" (the result line couldn't go in), and approveStateKind. Null for neither.
+ * A run's line still waiting to post counts as running. A mark older than any run could last is ignored.
+ */
+export function withApprovalStates(chats, approvals, now = Date.now()) {
+  const out = chats.map((c) => ({ ...c, approveState: null, approveStateKind: null }));
+  const mark = (chat, state, kind) => {
+    const c = chat && out.find((o) => o.tabId === chat.tabId);
+    if (c) c.approveState = state, c.approveStateKind = APPROVE_KINDS.includes(kind) ? kind : "sql";
+  };
+  for (const click of Object.values(approvals.clicks ?? {})) {
+    if (click.runningAt && now - click.runningAt <= RUNNING_KEEP_MS) mark(chats.find((c) => c.tabId === click.tabId && c.url === click.url), "running", click.kind);
+  }
+  for (const run of approvals.runs ?? []) {
+    if (run.dismissed) continue;
+    mark(chatForRun(chats, run).chat, run.stopped ? "notposted" : "running", run.from?.kind ?? run.kind);
+  }
+  return out;
+}
+
+/** A chat went from finished to responding: its stopped runs stop showing red, and Try again still works. True if any did. */
+export function dismissNotPosted(approvals, tabId, before, after) {
+  if (before !== "finished" || after !== "responding") return false;
+  const runs = (approvals.runs ?? []).filter((r) => r.stopped && !r.dismissed && r.from?.tabId === tabId);
+  for (const r of runs) r.dismissed = true;
+  return runs.length > 0;
+}
+
 export const GRANT_BADGE = "SITE";
 
 /** The Chrome match patterns for listed hosts. A pattern needs no port to cover one. */
@@ -188,6 +240,7 @@ export const closesApproveTab = (did, tabUrl, hosts) => did === "sent" && isAppr
 export function cleanRun(msg) {
   if (!RUN_ID_SHAPE.test(msg?.runId ?? "") || !PROJECT_SHAPE.test(msg?.project ?? "")) return null;
   const run = { runId: msg.runId, project: msg.project };
+  if (APPROVE_KINDS.includes(msg.kind)) run.kind = msg.kind;
   if (!msg.cancelled) return run;
   const reason = msg.reason ?? "";
   if (typeof reason !== "string" || reason.length > 200 || /[\r\n]/.test(reason)) return null;
@@ -283,24 +336,32 @@ export function approveStatus(text, runId) {
 /**
  * Injected into the approval page by bridge.js, so it must stand alone. Waits for
  * the run id the page shows only once it's finished (a real run, a test, or Don't run),
- * and hands it over with the page's project code. A new injection replaces the last, which an extension reload left dead.
+ * and hands it over with the page's project code. It also says when a run starts and stops (data-switchboard-running).
+ * A new injection replaces the last, which an extension reload left dead.
  */
 export function approveWatcher() {
   document.__alfredApproveWatch?.disconnect?.();
+  let running = false;
   const check = () => {
+    const now = document.querySelector("[data-switchboard-running]") !== null;
+    if (now !== running) {
+      running = now;
+      chrome.runtime.sendMessage({ type: "approve-running", running: now }).catch(() => {});
+    }
     const mark = document.querySelector("[data-switchboard-run-id]");
     const runId = mark?.getAttribute("data-switchboard-run-id");
     if (!runId) return false;
     const project = document.querySelector("[data-switchboard-project]")?.getAttribute("data-switchboard-project");
     const cancelled = mark.hasAttribute("data-switchboard-cancelled")
       ? { cancelled: true, reason: mark.getAttribute("data-switchboard-reason") ?? "" } : {};
-    chrome.runtime.sendMessage({ type: "approve-run", runId, project, ...cancelled }).catch(() => {});
+    const kind = document.querySelector("[data-switchboard-kind]")?.getAttribute("data-switchboard-kind");
+    chrome.runtime.sendMessage({ type: "approve-run", runId, project, ...(kind ? { kind } : {}), ...cancelled }).catch(() => {});
     return true;
   };
   if (check()) return;
   const observer = new MutationObserver(() => { if (check()) observer.disconnect(); });
   document.__alfredApproveWatch = observer;
-  observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-switchboard-run-id"] });
+  observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-switchboard-run-id", "data-switchboard-running"] });
 }
 
 /** Next reconnect delay: 1 s, doubling, capped at 60 s. */
