@@ -121,7 +121,13 @@ The write is not run, and its sequence has not been given: `amazon_import.mjs` s
 
 Expected from the real files: Amazon shipments 346, items 676; Whole Foods shipments 162, items 2248; refunds 21, placed 14, not placed 7; charges 293. Matches are 233 minus any charges two claim on one shipment.
 
-### Step 8d2: fix the writer's empty reply, then the real write
+Alex ran the checkpoint with `--release-db`: migrations, tool files, `mcp`, the history and Amazon reader files, spec and progress.
+
+### Step 8e: fix the writer's empty reply, then the real write (proposed as 8d2)
+Database: `db:table:wb_orders`, `db:table:wb_order_items`, `db:table:wb_order_matches`, `db:table:wb_transactions`, data only.
+
+Status: writer fixed, with a test whose fake database replies empty as PostgREST does. Waiting on Alex's dry run, write and check query.
+
 Scope:
 - create: none
 - update: tools/warren-buffet/import/amazon_import.mjs, tools/warren-buffet/import/amazon_import.test.mjs
@@ -129,8 +135,15 @@ Scope:
 - deploy: none
 - SQL: wb_orders, wb_order_items, wb_order_matches, wb_transactions, wb_accounts
 
-### Step 8e: split matched charges by item category (was 8c)
+### Step 8f: split matched charges by item category (was 8c)
 After Claude has given the items categories in chat.
+
+Scope, provisional until the write's counts are back:
+- create: tools/warren-buffet/import/
+- update: docs/technical-spec-warren_buffet_p4-r6d.md
+- delete: none
+- deploy: none
+- SQL: wb_splits, wb_order_items, wb_order_matches, wb_transactions, wb_tags
 
 ### Step 9: review and Finish
 Database: none.
