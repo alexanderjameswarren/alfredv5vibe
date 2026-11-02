@@ -241,23 +241,23 @@ Each project tile shows one of five states. The colours keep the meanings of tod
 
 | State | When | Colour (light) | Text |
 |---|---|---|---|
-| Running | The CLI is working. It pales through three greens as the estimate runs out (§7.5). | greens `#43A047` / `#8BC34A` / `#C5E1A5`; `#C5E1A5` with no estimate | `#111111` |
-| Send cli | The CLI is idle and a report was pushed after the chat last changed. A tap types "cli". The label says what the tap does (briefly "Report ready" in 1.6; restored in s23). | orange `#F57C00` | `#1A1200` |
+| Running | The CLI is working. It pales along one blend as the estimate runs out (§7.5). | blend of `#43A047` into `#C5E1A5`; `#C5E1A5` with no estimate | `#111111` |
+| Send cli | The CLI is idle and a report is waiting for Claude: until its inbox item is archived, by `switchboard-panel`'s word. Without a fresh read, a report pushed after the chat last changed. A tap types "cli". The label says what the tap does (briefly "Report ready" in 1.6; restored in s23). | orange `#F57C00` | `#1A1200` |
 | Prompt ready | A chat reply carries a run tag the CLI has not received. Display only: sending is the reply's link (§7.1), so nothing is pasted (was "Prompt to paste", and "Paste prompt" before that; renamed in s23c). | purple `#7E57C2` | white |
 | Your turn | The CLI is idle, its report is handled, and Claude has finished a reply: Alex's move. It flashes. While Claude writes, the tile is green "Claude writing". | yellow `#FBC02D` (unchanged) | `#1A1600` |
-| Waiting on SQL | A queued SQL item for this project awaits a click (Phase 2). | Alfred light tan `#E4D2C3` (`--secondary`) | `#2A2520` |
+| Waiting on SQL | A queued SQL item for this project awaits a click, and its CLI is not running. An item queued during a run leaves the tile running green; tan appears when the run ends (2.9c). | Alfred light tan `#E4D2C3` (`--secondary`) | `#2A2520` |
 
-- **Precedence:** Waiting on SQL, then Prompt ready, then Send cli, then Running, then Your turn.
+- **Precedence:** Waiting on SQL (only while the CLI isn't running), then Prompt ready, then Send cli, then Running, then Your turn.
 - **Unchanged:** red (Approve, Wrong window, Check CLI) keeps priority over all five, and the free, closed and paused states stay as they are.
 - **Outside scope (red, new).** When the plan guard refuses an action, the tile turns red "Outside scope" and stays red until tapped, like "Already pasted". Without it the refusal shows only inside the CLI's reply, which Alex does not read. The plan guard writes a latched `outside_scope` field (the refused path or deploy target) into the session status; it survives the Stop hook's rewrite to waiting, and a tap clears it. It ranks with the other reds.
 - **Dark mode:** each colour gets a dark-theme variant in `switchboard.html`.
-- **Report unread (Phase 2).** Orange clearing only when the report's Alfred inbox item is archived, however it was fetched, needs interface 3 (§4): a Supabase function, its key and a deploy. Phase 2 builds those, so it moves there. The clip push already returns the inbox id, and `.clip/last-report.json` stores it. Until then orange is "Send cli" above.
+- **Report unread (built in 2.8 and 2.9).** Orange clears only when the report's Alfred inbox item is archived, however it was fetched. The panel reads this from `switchboard-panel` every 15 seconds, and a read older than 5 minutes isn't believed.
 - **Talking (dropped).** Step 1.6 briefly replaced Your turn with a slate blue "Talking" that did not flash. It lost the "Claude is waiting on you" alert, so s19c restored Your turn.
 
 ### 7.3 Panel items
 
 - Instant colour feedback when a Send link is clicked: green at once, red if the send is refused.
-- Tiles ordered by lane: Fast track, Main, Side road, Country road. **Not built (s23):** the panel has no lane data; the lane lives in Alfred's portfolio plan. It comes in Phase 2 from `switchboard-panel` (steps 2.8 and 2.9).
+- **Tile order:** the main checkout's tile is always first, even with a lane of its own. Then `lane_order` from `switchboard-panel` (2.8, 2.9), then everything else in today's order, so a colour change never moves a tile.
 - A finished run needs no new signal: Alex's existing sound hook (`Notification`) already plays one.
 
 ### 7.4 Estimated run duration
@@ -299,14 +299,15 @@ While Running, the tile stays green, because green means Claude is working, and 
 - **Setting.** `progressstrip` (1 or 0, default 1) in `[panel]` of the panel's settings.ini. "Progress strip" on the tray menu and on a tile's right-click menu (main screen mode, and the old panel) switches it at once, with no restart.
 - **Touch page only.** The old panel's buttons have no strip.
 
-### 7.7 Layout for six projects
+### 7.7 Layout
 
-Tiles are designed for at most 6 projects, not 9.
+Two sizes, chosen by the number of tiles, chats and orphans included (`TileRows`, sent to the page as `rows`).
 
-- **Grid.** The tile area is a 3 × 2 grid that fills the space between the top bar and the bottom of the window. Each row is (area height − one gap) ÷ 2, about 1.5 times today's 3 × 3 tiles.
-- **Larger type.** Name 39px and action 34px (×1.3). Meta 30px (×1.15), not 34px: at 34px the deadlock and padlock lines ("⇄ restructure p1", "restructure p1") would be cut off. The kind icons scale with the meta text, and the strip is 10px.
-- **A seventh project** goes on a second page, which the existing scroll-snap and arrows already handle. The down arrow shows "7+" (the number of the next page's first tile) instead of "N more".
-- **Fit tables.** The tile width is unchanged (3 columns, 260px inside), so only the type size matters. `TileTextWidth` keeps its 26px advance widths; `TileInfoWidth` scales the room by 26/30: 225 with no icon, 197 beside the padlock, 185 beside the terminal (was 260, 231, 219). Still fit: "⇄ restructure p1", "s11 · Blocking 1", and project names beside the padlock. No longer fit: "1 held · Blocking 1" (cut off with "…"), and a holder's git counts beside "s3 · Blocking 1" (dropped, as before when there is no room).
+- **Up to 6 tiles: 3 × 2.** The grid fills the space between the top bar and the bottom of the window; each row is (area height − one gap) ÷ 2. Name 39px and action 34px, meta 30px, not 34px: at 34px the deadlock and padlock lines ("⇄ restructure p1", "restructure p1") would be cut off. The kind icons scale with the meta text, and the strip is 10px.
+- **7 tiles or more: 3 × 3 (2.9c),** so 9 fit before scrolling. Name 30px, action 26px, meta 26px. The timer's own line break is dropped, and a tile whose action still takes two lines shows its name on one line, with "…".
+- **Open:** at 3 × 2, a two-line name with "Both working" and an estimate cuts the name. Alex decides after seeing it live.
+- **More tiles than fit** go on the next page, which scroll-snap and the arrows handle. The down arrow shows the number of the next page's first tile ("7+", or "10+" at 3 × 3) instead of "N more".
+- **Fit tables,** for the 30px meta line; at 26px there is more room, so they are on the safe side. The tile width is unchanged (3 columns, 260px inside), so only the type size matters. `TileTextWidth` keeps its 26px advance widths; `TileInfoWidth` scales the room by 26/30: 225 with no icon, 197 beside the padlock, 185 beside the terminal (was 260, 231, 219). Still fit: "⇄ restructure p1", "s11 · Blocking 1", and project names beside the padlock. No longer fit: "1 held · Blocking 1" (cut off with "…"), and a holder's git counts beside "s3 · Blocking 1" (dropped, as before when there is no room).
 
 ## 8. Phase 2 — SQL approval queue and read-only Supabase queries (in place, in alfred-v5)
 
