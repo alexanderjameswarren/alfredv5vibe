@@ -65,8 +65,9 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | tiles | s53 | Approval link states and `lastTag`: extension and approve page | — | built, unit tests pass (s53-v3ld), extension 1.2.9; seen live at s55 | 2026-11-02 |
 | tiles | s54 | Tile states from the chat; re-pairing on `lastTag` | — | built (s54-j6wp): test-status, smoke and bridge host tests all pass; seen live at s55 | 2026-11-02 |
 | tiles | s55 | Live test of the five states | — | done (s55-x2rf), with one bug fixed in s55b: live on extension 1.2.9, tan "SQL ready", the link's Sent, light green "SQL running", the result posted and "Claude writing"; with text in the box, red "SQL not posted", the page kept the line and Try again, a tap cleared to "Your turn", and Try again posted. Actions 96ad49f7-7ff4-43e3-bc5f-41569d935c26 and c0f0e983-d212-4067-a648-1ccf420feee6; runs 20b85a9b-2f51-4ec6-86e6-30aa576739b5 and 4bf80586-9033-4e8a-9511-99e35b4d32f3 | 2026-11-02 |
-| tiles | s55b | A link whose run has finished stops counting as live | — | built (s55b-m4zh), extension 1.2.10; retest is one more harmless select | 2026-11-02 |
-| 3 | s56-s72 | The move: seed, install, settings, hooks, shims, `sb`, Salesforce guard, deploy wrapper, PII hold, finish modes, panel across repos, FIRST CLIENT at s70, extension split, cutover: spec §9 | — | todo | |
+| tiles | s55b | A link whose run has finished stops counting as live | — | done (s55b-m4zh), extension 1.2.10, in main. No separate retest, by Alex's choice: the next real link will show it | 2026-11-02 |
+| 3 | s56 | Seed script and dry run | — | done (s56-g7tn, s56b-d5qv): the seed ran into the scratchpad, 78 files, 41 rewrites. Node tests there: 408 pass, 34 fail, all for s57 to fix; panel tests pass | 2026-11-02 |
+| 3 | s57-s72 | The move: seed, install, settings, hooks, shims, `sb`, Salesforce guard, deploy wrapper, PII hold, finish modes, panel across repos, FIRST CLIENT at s70, extension split, cutover: spec §9 | — | todo | |
 | 5 git | s73-s78 | Every git command by link: spec §11 | see below | todo | |
 | 4 | s79-s83 | Salesforce reads: spec §10 | see below | todo | |
 | 5 SF | s84-s87 | Salesforce actions by link: spec §11 | see below | todo | |
@@ -408,8 +409,8 @@ Blocks are rooted in the new repo, `C:\Users\Alex\projects\switchboard\`, unless
 **s56, seed script (alfred-v5 window)** (estimated run: 15m). The path map and import rewrite; dry run into the scratchpad, with tests run there. An approved exception to the Edit and Write rule (s49).
 - create: tools/switchboard-seed/seed.ps1, tools/switchboard-seed/path-map.json
 
-**s57, seed run and tests green** (estimated run: 10m). Alex runs the seed and commits; the first prompt in the new window.
-- update: test and import fixes; INTERFACES.md with version strings
+**s57, seed run and tests green** (estimated run: 15m). Alex runs the seed and commits; the first prompt in the new window. The dry run (s56b) showed what's to fix: the guard's and the claims parser's pinned `scripts/` paths (`isLoneScriptCommand` and the claims command parser in `claims/lib/claims-core.mjs`), and the test paths. It starts with a first claim, since a repo with no claims file blocks every write.
+- update: claims/lib/claims-core.mjs, claims/lib/claims-core.test.mjs, claims/lib/project-code.test.mjs, hooks/lib/hooks.test.mjs, overwatch/lib/overwatch-post.test.mjs, panel/INTERFACES.md with version strings
 
 **s58, install.ps1** (estimated run: 10m). Copies code, puts commands on PATH. No hooks yet.
 - create: install.ps1
@@ -421,7 +422,7 @@ Blocks are rooted in the new repo, `C:\Users\Alex\projects\switchboard\`, unless
 **s60, user-level hooks** (estimated run: 12m). No-op outside listed repos; install.ps1 registers them.
 - update: hooks/, install.ps1, tests
 
-**s61, shims in alfred-v5 (alfred-v5 window)** (estimated run: 12m). Shims, project hooks removed, CLAUDE.md and the skill the same day. The Overwatch nightly counts thread should have finished or claimed before this.
+**s61, shims in alfred-v5 (alfred-v5 window)** (estimated run: 12m). Shims, project hooks removed, CLAUDE.md and the skill the same day. The Overwatch nightly counts thread should have finished or claimed before this. `scripts/sql-queue.mjs` stays in alfred-v5 but imports `claims-core`, which moves, so it must import it from the installed copy.
 - update: scripts/claims.mjs, scripts/clip.mjs, scripts/git-commit-claimed.mjs, scripts/git-new-worktree.mjs, scripts/git-push-worktrees.mjs, scripts/git-sync.mjs, scripts/overwatch-post.mjs, .claude/settings.local.json, .claude/CLAUDE.md, .claude/skills/cli-workflow/SKILL.md
 - delete: .claude/hooks/, moved scripts/lib/ files
 
@@ -435,6 +436,8 @@ Blocks are rooted in the new repo, `C:\Users\Alex\projects\switchboard\`, unless
 **s64, Salesforce guard** (estimated run: 15m). Spec §9.6, including the block on Salesforce MCP tools and refusing a repo whose `.mcp.json` names an org.
 - create: salesforce/guard.mjs and its test, salesforce/RULES.md
 - update: hooks/, claims/shell-parse.mjs
+
+Also in s64, since it rewrites the shell parser's rules: fix the s51 guard false positive. A command starting with `cd` is judged whole, so an `rm` of a temp file flagged scripts the command only ran (`writeCheck` in `scripts/lib/claims-core.mjs`, the `afterCd` fallback). And its second form (s56): a command that writes anywhere has every repo path named in it treated as written, even with no `cd`. A `New-Item` in the scratchpad flagged a test pattern the same command only ran.
 
 **s65, deploy wrapper: files, lock, tests** (estimated run: 15m). Spec §9.7.
 - create: salesforce/deploy.mjs and its test
