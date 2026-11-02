@@ -358,9 +358,11 @@ test("the tool count is 72 after the job-search tools", () => {
   for (const name of ["set_wb_order_item_tags", "split_wb_order_charges"]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
+  assert.ok(registered.some((r) => r.name === "get_overwatch_nightly_counts"), "get_overwatch_nightly_counts is not registered");
   // 2026-11-02, +1 for Warren Buffet Phase 4 Step 8b: Amazon and Whole Foods items. +2 for Step 8f: item tags and splits.
-  assert.equal(registered.length, 186,
-    `expected 186 registered tools, found ${registered.length}: ` +
+  // +1 for nightly counts.
+  assert.equal(registered.length, 187,
+    `expected 187 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -686,7 +688,7 @@ test("Drive Mix schemas advertise exactly the args their handlers read, at the s
 
 test("Overwatch Steps 13 and 14 schemas advertise exactly the args their handlers read, at the spec's tiers", () => {
   const tiers = {};
-  for (const file of ["overwatch-activity.ts", "overwatch-projects.ts", "overwatch-plan.ts", "overwatch-inventory.ts"]) {
+  for (const file of ["overwatch-activity.ts", "overwatch-projects.ts", "overwatch-plan.ts", "overwatch-inventory.ts", "overwatch-nightly.ts"]) {
     let src = readFileSync(join(TOOLS, file), "utf-8");
     // planPatch reads the plan fields for update_project_plan; they are listed in PLAN_FIELDS.
     const planFields = [...(/const PLAN_FIELDS = \[([\s\S]*?)\]/.exec(src)?.[1] ?? "").matchAll(/"(\w+)"/g)].map((m) => m[1]);
@@ -720,6 +722,7 @@ test("Overwatch Steps 13 and 14 schemas advertise exactly the args their handler
     get_overwatch_notes: 1, create_overwatch_note: 2, get_claim_blocks: 1, update_app_profile: 2,
     record_seen_releases: 1, log_friction: 1, get_friction: 1, update_friction: 2,
     get_platform_inventory: 1, get_open_work: 1, get_finish_summaries: 1, mark_finish_summaries_reviewed: 2,
+    get_overwatch_nightly_counts: 1,
   });
 });
 

@@ -129,6 +129,7 @@ import {
   updateOverwatchChecksTool,
   updateOverwatchWatchTool,
 } from "../_shared/tools/overwatch-plan.ts";
+import { getOverwatchNightlyCountsTool } from "../_shared/tools/overwatch-nightly.ts";
 import {
   INVENTORY_KINDS,
   OPEN_WORK_KINDS,
@@ -3409,6 +3410,24 @@ export function createMcpServer(token: string) {
   });
 
   server.registerTool(
+    "get_overwatch_nightly_counts",
+    {
+      title: "Get Overwatch Nightly Counts",
+      description:
+        "Most of Overwatch's nightly counts as one JSON object, for the Overwatch nightly run: the active plan and checks " +
+        "due, prior runs, apps with last activity, yesterday's activity, quiet apps, projects (stalled, waiting_on_alex, " +
+        "overruns, over_limit, estimated_finish, scope_changes, empty_projects), inbox backlogs and routing, stopped " +
+        "schedules, orphan runs, claim blocks, watch items, inventory freshness, finish summaries and portfolio reviews. " +
+        "fading_candidates and deadline_candidates are candidates for Claude to judge. A count whose setting is missing " +
+        "is left out and named in settings_missing. Tier 1.",
+      inputSchema: {
+        as_of: z.string().optional().describe("Pin the clock, an ISO timestamp with offset. It does not rewind the data. Default now."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getOverwatchNightlyCountsTool, args, token),
+  );
+
+  server.registerTool(
     "get_overwatch_plan",
     {
       title: "Get Overwatch Plan",
@@ -3487,12 +3506,14 @@ export function createMcpServer(token: string) {
       title: "Create Overwatch Watch Item",
       description:
         "Add a dated adjustment: focus on something, ease_off something, or keep_an_eye_on something, from starts_on " +
-        "(default today) to ends_on. Point it at an app_id or group_id when it is about one. Tier 2.",
+        "(default today) to ends_on. Point it at an app_id, group_id or intent_id when it is about one. A current focus " +
+        "or keep_an_eye_on naming an intention or its group keeps that intention out of the nightly fading candidates. Tier 2.",
       inputSchema: {
         kind: owEnum(WATCH_KINDS).describe("focus, ease_off or keep_an_eye_on."),
         text: z.string().describe("What it is about, in plain words."),
         app_id: z.string().optional().describe("The app it is about, an id from get_apps."),
         group_id: z.string().optional().describe("The Project group it is about."),
+        intent_id: z.string().optional().describe("The one intention it names, an id from get_intents."),
         starts_on: z.string().optional().describe("First day, YYYY-MM-DD. Default today (Pacific)."),
         ends_on: z.string().describe("Last day, YYYY-MM-DD."),
         created_by: z.enum(["alex", "overwatch"]).optional().describe("Default alex."),
@@ -3506,13 +3527,14 @@ export function createMcpServer(token: string) {
     {
       title: "Update Overwatch Watch Item",
       description:
-        "Change one watch item by id: its text or dates; or expiry_noted: true once a note has mentioned that it " +
+        "Change one watch item by id: its text, dates or intent_id; or expiry_noted: true once a note has mentioned that it " +
         "expired, so it is said once. Tier 2.",
       inputSchema: {
         id: z.string().describe("The watch item's id."),
         text: z.string().optional().describe("New text."),
         starts_on: z.string().optional().describe("New first day, YYYY-MM-DD."),
         ends_on: z.string().optional().describe("New last day, YYYY-MM-DD."),
+        intent_id: z.string().nullable().optional().describe("The one intention it names; null clears it."),
         expiry_noted: z.boolean().optional().describe("true: the note has mentioned its expiry."),
       },
     },

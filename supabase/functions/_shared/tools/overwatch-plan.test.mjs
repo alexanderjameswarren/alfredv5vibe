@@ -9,7 +9,7 @@ const m = await loadTool("overwatch-plan.ts");
 const SETTINGS = [
   settingsFor("overwatch_plans", ["id", "user_id", "active", "instructions", "settings", "checks_next_run", "written_by",
     "reason", "supersedes_id", "created_at"]),
-  settingsFor("overwatch_watch", ["id", "user_id", "kind", "text", "app_id", "group_id", "starts_on", "ends_on",
+  settingsFor("overwatch_watch", ["id", "user_id", "kind", "text", "app_id", "group_id", "intent_id", "starts_on", "ends_on",
     "created_by", "expiry_noted_at", "created_at"]),
   settingsFor("overwatch_notes", ["id", "user_id", "period", "for_date", "body", "flags", "plan_id", "created_at"]),
   settingsFor("claim_blocks", ["id", "user_id", "waiter_code", "holder_code", "item", "run_tag", "blocked_at",
@@ -100,6 +100,31 @@ test("watch: current by default; create needs an end and keeps dates in order", 
   await assert.rejects(() => m.createOverwatchWatchTool.handler({ kind: "focus", text: "x", starts_on: "2026-11-02", ends_on: "2026-11-01" }, { db }),
     /before starts_on/);
   await assert.rejects(() => m.updateOverwatchWatchTool.handler({ id: "w1" }, { db }), /nothing to change/);
+});
+
+test("watch intent_id: get returns it, create saves it, update sets and clears it", async () => {
+  const read = fakeDb(() => ({ data: [{ id: "w1", intent_id: "i1" }], error: null, count: 1 }));
+  const got = await m.getOverwatchWatchTool.handler({}, { db: read });
+  assert.equal(got.data[0].intent_id, "i1");
+  assert.match(read.calls.find(([, k]) => k === "select")[2], /\bintent_id\b/);
+
+  const ins = fakeDb(() => ({ data: { id: "w1" }, error: null }));
+  await m.createOverwatchWatchTool.handler({ kind: "focus", text: "x", ends_on: "2099-01-01", intent_id: " i1 " }, { db: ins });
+  assert.equal(ins.calls.find(([, k]) => k === "insert")[2].intent_id, "i1");
+  assert.match(ins.calls.find(([, k]) => k === "select")[2], /\bintent_id\b/);
+  const none = fakeDb(() => ({ data: { id: "w1" }, error: null }));
+  await m.createOverwatchWatchTool.handler({ kind: "focus", text: "x", ends_on: "2099-01-01" }, { db: none });
+  assert.equal(none.calls.find(([, k]) => k === "insert")[2].intent_id, null);
+
+  const set = fakeDb(() => ({ data: { id: "w1" }, error: null }));
+  await m.updateOverwatchWatchTool.handler({ id: "w1", intent_id: "i2" }, { db: set });
+  assert.deepEqual(set.calls.find(([, k]) => k === "update")[2], { intent_id: "i2" });
+  const clear = fakeDb(() => ({ data: { id: "w1" }, error: null }));
+  await m.updateOverwatchWatchTool.handler({ id: "w1", intent_id: null }, { db: clear });
+  assert.deepEqual(clear.calls.find(([, k]) => k === "update")[2], { intent_id: null });
+
+  const db = fakeDb();
+  await assert.rejects(() => m.updateOverwatchWatchTool.handler({ id: "w1", intent_id: " " }, { db }), /intent_id must be non-empty/);
 });
 
 test("create_overwatch_note upserts the day's note with the active plan", async () => {
