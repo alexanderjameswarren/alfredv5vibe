@@ -34,7 +34,7 @@ const SKILL = /^skill:[a-z0-9_-]{1,60}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/i;
 
-const WATCH_COLUMNS = "id, kind, text, app_id, group_id, starts_on, ends_on, created_by, expiry_noted_at, created_at";
+const WATCH_COLUMNS = "id, kind, text, app_id, group_id, intent_id, starts_on, ends_on, created_by, expiry_noted_at, created_at";
 const NOTE_COLUMNS = "id, period, for_date, body, flags, plan_id, created_at";
 const PROFILE_COLUMNS = "id, app_id, activity_recipe, rhythm_days, current_state, current_state_updated_at, updated_at";
 const FRICTION_COLUMNS =
@@ -241,6 +241,7 @@ export const createOverwatchWatchTool = defineTool({
       text: text(T, "text", args.text, { required: true }),
       app_id: text(T, "app_id", args.app_id),
       group_id: text(T, "group_id", args.group_id),
+      intent_id: text(T, "intent_id", args.intent_id),
       starts_on: day(T, "starts_on", args.starts_on) ?? pacificToday(),
       ends_on: day(T, "ends_on", args.ends_on, { required: true }),
       created_by: given(args, "created_by") ? oneOf(T, "created_by", args.created_by, AUTHORS) : "alex",
@@ -263,11 +264,13 @@ export const updateOverwatchWatchTool = defineTool({
     if (given(args, "text")) patch.text = text(T, "text", args.text);
     if (given(args, "starts_on")) patch.starts_on = day(T, "starts_on", args.starts_on);
     if (given(args, "ends_on")) patch.ends_on = day(T, "ends_on", args.ends_on);
+    // Null clears it, so this one is "passed", not "given".
+    if (args.intent_id !== undefined) patch.intent_id = text(T, "intent_id", args.intent_id);
     if (given(args, "expiry_noted")) {
       if (args.expiry_noted !== true) throw new Error(`${T}: expiry_noted can only be true.`);
       patch.expiry_noted_at = new Date().toISOString();
     }
-    if (!Object.keys(patch).length) throw new Error(`${T}: nothing to change; pass text, starts_on, ends_on or expiry_noted.`);
+    if (!Object.keys(patch).length) throw new Error(`${T}: nothing to change; pass text, starts_on, ends_on, intent_id or expiry_noted.`);
     const { data, error } = await ctx.db.from("overwatch_watch").update(patch).eq("id", id).select(WATCH_COLUMNS).maybeSingle();
     if (error) throw new Error(describeDbError(T, error));
     if (!data) throw new Error(`${T}: no watch item ${id} that you can see. Nothing was changed.`);
