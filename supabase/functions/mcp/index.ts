@@ -206,6 +206,7 @@ import {
   setWbTransactionProjectTool,
   unconfirmWbPlannedMatchTool,
   getWbActionItemsTool,
+  getWbOrderItemsTool,
   updateWbPlannedMatchTool,
   updateWbSettingsTool,
   upsertWbPlannedItemTool,
@@ -3927,7 +3928,7 @@ export function createMcpServer(token: string) {
     {
       title: "Get Money Transactions",
       description:
-        "Bank transactions, newest first (pending ones without a posted date come first): amount, dates, the raw description and payee as SimpleFIN reported them, plus the Phase 2 fields: clean_description, merchant_name, kind (spend, income, transfer, refund, investment, interest, fee) with kind_source, transfer_pair_id, reviewed, tag_names, split_count, needs_review, excluded_tags (tags removed by hand or by Claude, which rules never put back), project_names (the projects on any of its parts) and the account_label. " +
+        "Bank transactions, newest first (pending ones without a posted date come first): amount, dates, the raw description and payee as SimpleFIN reported them, plus the Phase 2 fields: clean_description, merchant_name, kind (spend, income, transfer, refund, investment, interest, fee) with kind_source, transfer_pair_id, reviewed, tag_names, split_count, needs_review, excluded_tags (tags removed by hand or by Claude, which rules never put back), project_names (the projects on any of its parts), source (sync or history_import) and the account_label. " +
         WB_SIGN + "from/to filter the posted date in Pacific time, so a pending charge with no posted date only appears when no date range is given. Tier 1.",
       inputSchema: {
         account_id: z.string().optional().describe("Only this account (get_wb_accounts, field account_id)."),
@@ -3941,10 +3942,28 @@ export function createMcpServer(token: string) {
         merchant_id: z.string().optional().describe("Only this merchant (get_wb_merchants, field id)."),
         tag: z.union([z.string(), z.array(z.string())]).optional().describe("A tag name, or a list: rows carrying any of them."),
         needs_review: z.boolean().optional().describe("true = only rows in the review queue."),
+        source: z.enum(["sync", "history_import", "both"]).optional().describe("Where rows came from: sync = the live bank feed, history_import = bank history imported from files, from before the feed began. Default both."),
         limit: z.number().optional().describe("Max rows, default 20, cap 50."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(getWbTransactionsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_wb_order_items",
+    {
+      title: "Get Amazon and Whole Foods Items",
+      description:
+        "Items bought from Amazon and Whole Foods since September 2024, newest order first, for questions like when something was last bought or what it has cost over time. Each row has order_date, ship_date, product_name, department, quantity, unit_amount (price of one, before tax), line_amount (the line's total, with tax, shipping and discounts), refunded_amount and refund_date, site, tag_id (its category, once set) and matched_charge: the card charge for its shipment, with its signed amount and days_apart, or null. Amazon shipments match only when one charge is exactly the amount within 0 to 3 days; Whole Foods items are never matched. Item amounts are positive prices; a matched charge follows the sign rule. Refunds are included where they could be tied to an item; Amazon reports them per order, so some refunded items still show no refund. Digital orders are not here. Tier 1.",
+      inputSchema: {
+        search: z.string().optional().describe("Words to find in the product name, case-insensitive. Every word must appear, in any order."),
+        site: z.enum(["amazon", "wholefoods"]).optional().describe("Only this store. Default both."),
+        from: wbDate("Ordered on or after"),
+        to: wbDate("Ordered on or before"),
+        ...readOptions({}),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getWbOrderItemsTool, args, token),
   );
 
   server.registerTool(

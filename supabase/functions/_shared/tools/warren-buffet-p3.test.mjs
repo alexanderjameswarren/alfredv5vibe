@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadTool, WB_SETTINGS, withSettings } from "./test-platform.mjs";
+import { loadTool, settingsFor, WB_SETTINGS, withSettings } from "./test-platform.mjs";
 
 // The real platform.ts runs (test-platform.mjs); defineTool returns its options.
 const m = await loadTool("warren-buffet-p3.ts");
@@ -50,10 +50,44 @@ test("tiers", () => {
     get_wb_true_cost: 1, get_wb_cash_projection: 1, upsert_wb_project: 2, upsert_wb_planned_item: 2,
     create_wb_planned_match: 3, update_wb_planned_match: 2, set_wb_transaction_project: 2, update_wb_settings: 3,
     get_wb_project_summary: 1, get_wb_missed_dates: 1, mark_wb_missed_dates_not_needed: 2, unconfirm_wb_planned_match: 2,
-    get_wb_action_items: 1,
+    get_wb_action_items: 1, get_wb_order_items: 1,
   });
   assert.equal(typeof m.createWbPlannedMatchTool.propose, "function");
   assert.equal(typeof m.updateWbSettingsTool.propose, "function");
+});
+
+const ORDER_ITEM_SETTINGS = [settingsFor("wb_order_items", ["id", "user_id", "context_id", "order_id", "line_no", "site",
+  "asin", "product_name", "department", "quantity", "unit_amount", "line_amount", "order_date", "ship_date", "buyer",
+  "tag_id", "created_at"])];
+
+test("order items: filters, every word, no owner columns", async () => {
+  const db = withSettings(fakeDb(), ORDER_ITEM_SETTINGS);
+  await run(m.getWbOrderItemsTool, { search: "pinto  beans", site: "wholefoods", from: "2025-01-01", to: "2025-02-01" }, db);
+  assert.deepEqual(db.op("wb_order_items", "ilike"), [["ilike", "product_name", "%pinto%"], ["ilike", "product_name", "%beans%"]]);
+  assert.deepEqual(db.op("wb_order_items", "eq"), [["eq", "site", "wholefoods"]]);
+  assert.deepEqual(db.op("wb_order_items", "gte"), [["gte", "order_date", "2025-01-01"]]);
+  assert.deepEqual(db.op("wb_order_items", "lte"), [["lte", "order_date", "2025-02-01"]]);
+  const cols = db.op("wb_order_items", "select")[0][1];
+  assert.match(cols, /product_name/);
+  assert.ok(!/user_id|context_id/.test(cols));
+  assert.equal(writes(db).length, 0);
+  await assert.rejects(run(m.getWbOrderItemsTool, { site: "ebay" }, db), /site must be one of/);
+  await assert.rejects(run(m.getWbOrderItemsTool, { from: "2025-02-02", to: "2025-02-01" }, db), /is after/);
+});
+
+test("order items: the matched charge is attached, or null", async () => {
+  const items = [
+    { id: id(1), order_id: id(10), product_name: "ZZ thing", site: "amazon" },
+    { id: id(2), order_id: id(11), product_name: "ZZ beans", site: "wholefoods" },
+  ];
+  const db = withSettings(fakeDb((t) => {
+    if (t === "wb_order_items") return { data: items, error: null, count: 2 };
+    if (t === "wb_order_matches") return { data: [{ order_id: id(10), transaction_id: id(20), days_apart: 2 }], error: null };
+    return { data: [{ id: id(20), txn_date: "2025-01-03", amount: -1.5 }], error: null };
+  }), ORDER_ITEM_SETTINGS);
+  const res = await run(m.getWbOrderItemsTool, {}, db);
+  assert.deepEqual(res.data[0].matched_charge, { id: id(20), txn_date: "2025-01-03", amount: -1.5, days_apart: 2 });
+  assert.equal(res.data[1].matched_charge, null);
 });
 
 test("planned items: drafts marked, remaining from confirmed matches, bounded", async () => {
