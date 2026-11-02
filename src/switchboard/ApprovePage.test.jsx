@@ -40,6 +40,76 @@ beforeEach(() => {
   supabase.auth.getSession.mockResolvedValue({ data: { session: { access_token: 'jwt1' } } });
 });
 
+const openAt = (entry) =>
+  render(
+    <MemoryRouter initialEntries={[entry]}>
+      <Routes>
+        <Route path="/approve/:token" element={<ApprovePage />} />
+      </Routes>
+    </MemoryRouter>
+  );
+const runningMark = (c) => c.querySelector('[data-switchboard-running]');
+
+test('running shows only while an approved run is under way, with the link\'s kind', async () => {
+  let finish;
+  runner({ preview: reply(PREVIEW), 'dry-run': CLEAN, approve: () => new Promise((r) => { finish = r; }) });
+  const { container } = openAt('/approve/tok1?kind=git&exp=2000000000');
+  fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
+  await waitFor(() => expect(runningMark(container)).toHaveAttribute('data-switchboard-running', 'git'));
+  finish(await reply({ ok: true, run_id: DRY, summary: 'done' }));
+  await screen.findByText('Ran for real');
+  expect(runningMark(container)).toBeNull();
+  expect(container.querySelector('[data-switchboard-run-id]')).not.toBeNull();
+  expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'git');
+});
+
+test('a dry run is not running; a link with no kind is SQL', async () => {
+  let finish;
+  runner({ preview: reply(PREVIEW), 'dry-run': () => new Promise((r) => { finish = r; }) });
+  const { container } = open();
+  await screen.findByText(/running the dry run/i);
+  expect(runningMark(container)).toBeNull();
+  expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'sql');
+  finish(await CLEAN());
+  await screen.findByRole('button', { name: /^approve/i });
+  expect(runningMark(container)).toBeNull();
+});
+
+test('a test action is running from open, until its result', async () => {
+  let finish;
+  runner({ preview: reply({ ...PREVIEW, test: true }), 'dry-run': () => new Promise((r) => { finish = r; }) });
+  const { container } = open();
+  await screen.findByText(/running the test/i);
+  expect(runningMark(container)).toHaveAttribute('data-switchboard-running', 'sql');
+  finish(await reply({ ok: true, test: true, run_id: DRY, summary: 'passed' }));
+  await screen.findByText('Test run, undone');
+  expect(runningMark(container)).toBeNull();
+});
+
+test('a refused Approve stops running', async () => {
+  runner({ preview: reply(PREVIEW), 'dry-run': CLEAN, approve: reply({ ok: false, error: 'busy, try again' }, 409) });
+  const { container } = open();
+  fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
+  await screen.findByText(/busy, try again/);
+  expect(runningMark(container)).toBeNull();
+});
+
+test('every finished outcome keeps the place the extension reports a failed post in', async () => {
+  const cases = [
+    [{ preview: reply(PREVIEW), 'dry-run': CLEAN, approve: reply({ ok: true, run_id: DRY, summary: 'done' }) }, /^approve/i],
+    [{ preview: reply(PREVIEW), 'dry-run': CLEAN, cancel: reply({ cancelled: true, run_id: DRY, reason: '' }) }, /^don't run/i],
+  ];
+  for (const [routes, button] of cases) {
+    runner(routes);
+    const { container, unmount } = open();
+    fireEvent.click(await screen.findByRole('button', { name: button }));
+    await waitFor(() => expect(container.querySelector('[data-switchboard-run-id]')).not.toBeNull());
+    expect(container.querySelector('[data-switchboard-status]')).toHaveAttribute('hidden');
+    expect(container.querySelector('[data-switchboard-retry]')).not.toBeNull();
+    unmount();
+  }
+});
+
 test('signed out asks for login and calls nothing', async () => {
   supabase.auth.getSession.mockResolvedValue({ data: { session: null } });
   runner({});

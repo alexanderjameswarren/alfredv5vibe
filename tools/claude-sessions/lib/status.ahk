@@ -71,7 +71,7 @@ BlendHex(from, to, pct) {
 RunTint(p) {
     if p.color != "green"
         return p.color
-    if p.label = "Claude writing"
+    if p.label = "Claude writing" || p.label ~= " running$"
         return "greenshort"
     if !(p.label = "CLI working" || p.label = "Both working")
         return p.color
@@ -137,6 +137,12 @@ ProjectOfTag(tag) {
     return RegExMatch(tag, "^(.+)-s\d+[a-z]?-[a-z0-9]{4}$", &m) ? m[1] : ""
 }
 
+; The tag a chat is paired by: the newest anywhere in it. Before extension 1.2.9 only its latest reply's is known.
+ChatTag(c) {
+    tag := c.Get("lastTag", "")
+    return tag != "" ? tag : c.Get("issuedTag", "")
+}
+
 ; From chats.json, among chats whose issued tag belongs to `project`: the one that
 ; issued `runTag`, else the first; its address without query, or "". A new chat's
 ; title rarely carries the code, but the run tag it issued always does.
@@ -145,7 +151,7 @@ FindChatLinkByTag(chats, runTag, project) {
     for c in chats {
         if !IsObject(c)
             continue
-        url := NormaliseUrl(c.Get("url", "")), tag := c.Get("issuedTag", "")
+        url := NormaliseUrl(c.Get("url", "")), tag := ChatTag(c)
         ; The run tag can still be the old project's just after a rebind.
         if tag = "" || project = "" || ProjectOfTag(tag) != project || !RegExMatch(url, "^https://claude\.ai/chat/\S+$")
             continue
@@ -170,7 +176,7 @@ ChatLinkReplacing(saved, savedOpen, fresh, chats, runTag, project) {
     for c in chats {
         if !IsObject(c)
             continue
-        url := NormaliseUrl(c.Get("url", "")), tag := c.Get("issuedTag", "")
+        url := NormaliseUrl(c.Get("url", "")), tag := ChatTag(c)
         if tag = "" || ProjectOfTag(tag) != project || !RegExMatch(url, "^https://claude\.ai/chat/\S+$")
             continue
         cmp := StrCompare(TagRank(tag), best)
@@ -188,6 +194,14 @@ StepText(runTag, issuedTag, project) {
     s := StepOf(runTag)
     return NewerTag(runTag, issuedTag, project) ? (s = "" ? "?" : s) " -> " StepOf(issuedTag) : s
 }
+
+; "SQL ready", "Git running", "Deploy not posted": the first word, from a link's kind.
+ApproveWord(kind) => kind = "git" ? "Git" : kind = "deploy" ? "Deploy" : "SQL"
+
+; A chat's link kind, or "" once its expiry (unix seconds, or none) has passed.
+ApproveKindNow(kind, exp, nowSeconds) => kind != "" && IsNumber(exp) && exp <= nowSeconds ? "" : kind
+
+UnixSeconds(utcStamp) => DateDiff(utcStamp, "19700101000000", "Seconds")
 
 ; A session's colour and label (spec section 5). p: free, closed, paused, kind
 ; (the CLI: none, red, waiting, processing), runTag, reportTag, reportAt, chatState
@@ -207,6 +221,9 @@ ViewOf(p) {
         return {color: "red", label: p.HasOwnProp("event") && p.event = "duplicate run tag" ? "Already pasted" : "Wrong window"}
     if p.HasOwnProp("outsideScope") && p.outsideScope != ""   ; the plan guard refused something; a tap clears it
         return {color: "red", label: "Outside scope"}
+    approveState := p.HasOwnProp("approveState") ? p.approveState : ""
+    if approveState = "notposted"   ; the result line couldn't go in; a tap or a new turn in the chat clears it
+        return {color: "red", label: ApproveWord(p.approveStateKind) " not posted"}
     cliIdle := p.kind = "waiting"
     ; Reported: something was pushed after the last prompt Alex typed. A status file
     ; from before prompt_at existed falls back to matching the run tag.
@@ -215,11 +232,15 @@ ViewOf(p) {
         : p.runTag = "" || p.reportTag = p.runTag
     if cliIdle && !reported
         return {color: "red", label: "Check CLI"}
-    ; Spec 7.2 precedence: Waiting on SQL, Prompt ready, Send cli, Running, Your turn.
-    ; Tan only once the CLI has stopped: an action queued during a run shows when the run ends.
-    if cliIdle && p.HasOwnProp("sqlWaiting") && p.sqlWaiting
-        return {color: "tan", label: "Waiting on SQL"}
+    ; Spec 7.2 precedence: an approval link, Prompt ready, Send cli, Running, Your turn.
+    ; From the chat alone, only while the CLI is idle and the chat has finished, so writing beats tan.
     finished := p.chatState = "finished"
+    if cliIdle && finished {
+        if approveState = "running"
+            return {color: "green", label: ApproveWord(p.approveStateKind) " running"}
+        if p.HasOwnProp("approveKind") && p.approveKind != ""
+            return {color: "tan", label: ApproveWord(p.approveKind) " ready"}
+    }
     if finished && NewerTag(p.runTag, p.issuedTag, p.project)
         return {color: "purple", label: "Prompt ready"}
     ; A reply pushed with no run tag: answered, but not a step report.
@@ -257,7 +278,7 @@ PanelUrl(setting, clipboardUrl) {
     return clipboardUrl ~= "/clip-capture/?$" ? RegExReplace(clipboardUrl, "/clip-capture/?$", "/switchboard-panel") : ""
 }
 
-; A parsed reply as Map(project -> {unread, sql, lane}), lane 0 for none, or "" for a reply that isn't usable.
+; A parsed reply as Map(project -> {unread, lane}), lane 0 for none, or "" for a reply that isn't usable.
 PanelProjects(reply) {
     if !(reply is Map) || !reply.Get("ok", false) || !(reply.Get("projects", "") is Map)
         return ""
@@ -266,7 +287,7 @@ PanelProjects(reply) {
         if !(row is Map)
             continue
         lane := row.Get("lane_order", "")
-        out[code] := {unread: row.Get("report_unread", false) ? 1 : 0, sql: row.Get("waiting_on_alex", false) ? 1 : 0, lane: IsNumber(lane) ? lane : 0}
+        out[code] := {unread: row.Get("report_unread", false) ? 1 : 0, lane: IsNumber(lane) ? lane : 0}
     }
     return out
 }
@@ -275,7 +296,7 @@ PanelProjects(reply) {
 
 ; A red tile that only needs acknowledging: a tap clears it and does nothing else.
 ; Approve and Check CLI are not latches: they need VS Code.
-IsLatchTile(color, label) => color = "red" && label ~= "^(Wrong window|Already pasted|Outside scope|Not sent|Not delivered)"
+IsLatchTile(color, label) => color = "red" && label ~= "^(Wrong window|Already pasted|Outside scope|Not sent|Not delivered|(SQL|Git|Deploy) not posted)"
 
 ; What a tap on this colour means to Send cli: "send", "busy" (already going, ignored) or "".
 CliTapKind(color) => color = "orange" ? "send" : color = "paleorange" ? "busy" : ""
@@ -303,7 +324,7 @@ WindowCentre(x, y, w, h) => {x: x + w // 2, y: y + h // 2}
 
 ; Which window a click leaves the keyboard in: "code" for red and while the CLI
 ; works, otherwise "chrome" (the chat's message box).
-FocusTarget(color, label) => color = "red" || (color = "green" && label != "Claude writing") ? "code" : "chrome"
+FocusTarget(color, label) => color = "red" || (color = "green" && label != "Claude writing" && !(label ~= " running$")) ? "code" : "chrome"
 
 ; An unpaired chat row: green writing, yellow finished and not viewed since, grey otherwise.
 ChatRowView(state, since, viewedAt) {

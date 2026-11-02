@@ -14,8 +14,8 @@
 import {
   HOST_NAME, HEARTBEAT_MS, DEBOUNCE_MS, buildTabsMessage, buildChatsMessage, nextDelay, isHostMissing, debounce,
   normaliseUrl, pickTab, focusResult, checkPrompt, cleanHosts, promptFrame, sendTagOf,
-  approveStatus, approveTokenOf, approveWatcher, chatForRun, cleanRun, closesApproveTab, GRANT_BADGE, grantNotice, hostOrigins, isApprovePage,
-  deliveryMessage, notPostedText, postProblem, pruneApprovals, runLine,
+  approveLinkInfo, approveStatus, approveTokenOf, approveWatcher, chatForRun, cleanRun, closesApproveTab, GRANT_BADGE, grantNotice, hostOrigins, isApprovePage,
+  deliveryMessage, dismissNotPosted, notPostedText, postProblem, pruneApprovals, runLine, withApprovalStates,
 } from "./lib/bridge-core.js";
 
 let port = null;
@@ -35,7 +35,7 @@ async function sendTabs() {
     port?.postMessage(buildTabsMessage(tabs, windows));
     const chats = buildChatsMessage(tabs, windows, reports, viewedAt);
     for (const c of chats.chats) if (c.viewedAt) viewedAt.set(c.tabId, c.viewedAt);
-    port?.postMessage(chats);
+    port?.postMessage({ ...chats, chats: withApprovalStates(chats.chats, approvals) });
   } catch (e) {
     quiet(e);
   }
@@ -62,10 +62,15 @@ function onWatchReport(msg, sender) {
     const c = msg.chat;
     if (!c) reports.delete(tabId);
     else {
+      // A new turn in that chat means a line that couldn't post has been dealt with.
+      if (dismissNotPosted(approvals, tabId, reports.get(tabId)?.state, c.state)) saveApprovals();
       reports.set(tabId, {
         url: String(c.url ?? ""), state: String(c.state ?? "unknown"), since: c.since ?? null,
         issuedTag: typeof c.issuedTag === "string" ? c.issuedTag : null,
+        lastTag: typeof c.lastTag === "string" ? c.lastTag : null,
         composerEmpty: typeof c.composerEmpty === "boolean" ? c.composerEmpty : null,
+        approveKind: typeof c.approveKind === "string" ? c.approveKind : null,
+        approveExp: Number.isInteger(c.approveExp) ? c.approveExp : null,
       });
     }
     if (port) scheduleTabs();
@@ -178,6 +183,7 @@ const approvalsReady = (async () => {
 })();
 const saveApprovals = () => {
   approvals = pruneApprovals(approvals);
+  if (port) scheduleTabs();
   return chrome.storage.local.set({ [APPROVALS_KEY]: approvals }).catch(quiet);
 };
 
@@ -241,7 +247,43 @@ async function onApproveClick(msg, sender) {
     const token = approveTokenOf(msg.href, approvals.hosts);
     if (!token) return;
     const key = await tokenKey(token);
-    approvals.clicks[key] = { tabId, url, at: Date.now() };
+    approvals.clicks[key] = { tabId, url, at: Date.now(), kind: approveLinkInfo(msg.href).kind };
+    await saveApprovals();
+  } catch (e) {
+    quiet(e);
+  }
+}
+
+// The page has opened: the clicked link in the chat says Sent.
+async function noteApproveOpened(tabId, url) {
+  const token = approveTokenOf(url, approvals.hosts);
+  const click = approvals.clicks[await tokenKey(token)];
+  if (!click) return;
+  click.approveTabId = tabId;
+  await saveApprovals();
+  chrome.tabs.sendMessage(click.tabId, { type: "approve-link-opened", token }).catch(() => {});
+}
+
+// The approval page says whether a run is under way. Closing the tab ends it too.
+async function onApproveRunning(msg, sender) {
+  try {
+    await approvalsReady;
+    const token = sender?.id === chrome.runtime.id ? approveTokenOf(sender?.url, approvals.hosts) : null;
+    const click = token && approvals.clicks[await tokenKey(token)];
+    if (!click) return;
+    click.runningAt = msg.running ? Date.now() : null;
+    await saveApprovals();
+  } catch (e) {
+    quiet(e);
+  }
+}
+
+async function onApproveTabGone(tabId) {
+  try {
+    await approvalsReady;
+    const click = Object.values(approvals.clicks).find((c) => c.approveTabId === tabId && c.runningAt);
+    if (!click) return;
+    click.runningAt = null;
     await saveApprovals();
   } catch (e) {
     quiet(e);
@@ -252,6 +294,7 @@ async function watchApprovePage(tabId, url) {
   try {
     await approvalsReady;
     if (!isApprovePage(url, approvals.hosts)) return;
+    await noteApproveOpened(tabId, url);
     if (await allowed(new URL(url).host)) {
       await chrome.scripting.executeScript({ target: { tabId }, func: approveWatcher });
       return;
@@ -446,7 +489,7 @@ try {
     chrome.tabs.onMoved, chrome.tabs.onAttached, chrome.tabs.onDetached, chrome.tabs.onReplaced,
     chrome.windows.onCreated, chrome.windows.onRemoved, chrome.windows.onFocusChanged,
   ]) ev?.addListener(onChange);
-  chrome.tabs.onRemoved?.addListener((tabId) => { reports.delete(tabId); viewedAt.delete(tabId); });
+  chrome.tabs.onRemoved?.addListener((tabId) => { reports.delete(tabId); viewedAt.delete(tabId); onApproveTabGone(tabId); });
   // An in-place move from /new to /chat/<id>: nudge the watcher to report at once.
   chrome.tabs.onUpdated?.addListener((tabId, change, tab) => {
     if (port && change.url?.startsWith("https://claude.ai/")) {
@@ -462,6 +505,7 @@ try {
     if (msg?.type === "chat-state") onWatchReport(msg, sender);
     if (msg?.type === "send-prompt") onSendPrompt(msg, sender);
     if (msg?.type === "approve-click") onApproveClick(msg, sender);
+    if (msg?.type === "approve-running") onApproveRunning(msg, sender);
     if (msg?.type === "approve-run") onApproveRun(msg, sender);
     if (msg?.type === "approve-retry") onApproveRetry(msg, sender);
     if (msg?.type === "link-hosts?") {

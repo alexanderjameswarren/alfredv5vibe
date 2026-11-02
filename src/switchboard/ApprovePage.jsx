@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import { supabase, supabaseUrl, supabaseAnonKey } from '../supabaseClient';
 import CopyButton from '../shared/CopyButton';
 
@@ -7,7 +7,8 @@ import CopyButton from '../shared/CopyButton';
 // this page shows the SQL, runs the dry run by itself, then offers Approve and Don't run. Only a finished
 // action (a real run, a test, or Don't run) puts its id on the page, as data-switchboard-run-id; the extension
 // reads that and data-switchboard-project, posts the result to the chat and closes this tab. Where it can't,
-// the line is here to copy.
+// the line is here to copy. data-switchboard-running, with the link's kind, is there only while a run is under
+// way (approved, or a test, which runs on open), so the panel can say so.
 
 // As on OAuthConsent (primary) and ItemAddToCollection (secondary).
 const BUTTON = 'w-full sm:w-auto px-4 py-3 min-h-[44px] bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50';
@@ -105,6 +106,9 @@ function ResultLine({ line }) {
 
 export default function ApprovePage() {
   const { token } = useParams();
+  const linkKind = new URLSearchParams(useLocation().search).get('kind');
+  const kind = ['sql', 'git', 'deploy'].includes(linkKind) ? linkKind : 'sql';
+  const [approving, setApproving] = useState(false);
   const [signedIn, setSignedIn] = useState(null);
   const [preview, setPreview] = useState(null);
   const [ended, setEnded] = useState(null);
@@ -164,6 +168,7 @@ export default function ApprovePage() {
 
   async function runReal() {
     setBusy(true);
+    setApproving(true);
     setNote(null);
     try {
       const out = await callRunner('approve', { token, fingerprint: preview.fingerprint });
@@ -172,6 +177,7 @@ export default function ApprovePage() {
     } catch {
       setEnded('The connection was lost after Approve, so this may have run. Ask Claude to check before doing anything else.');
     }
+    setApproving(false);
     setBusy(false);
   }
 
@@ -222,12 +228,14 @@ export default function ApprovePage() {
     : mismatch ? 'Counts differ from what was expected, rolled back'
     : dry?.ok ? 'Dry run, rolled back' : 'The dry run failed, rolled back';
   const dryProblem = mismatch ? 'counts differ from what was expected' : dry?.summary;
+  const running = approving || (preview.test && busy && !dry);
 
   return (
     <Shell>
+      {running && <span hidden data-switchboard-running={kind} />}
       <p className="font-bold text-dark mb-2 break-words">{preview.headline}</p>
       <p className="text-sm text-dark">Project</p>
-      <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code}>{preview.project_code}</p>
+      <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code} data-switchboard-kind={kind}>{preview.project_code}</p>
       {preview.description && <p data-testid="approve-description" className="text-dark mb-4 break-words">{preview.description}</p>}
       <pre data-testid="approve-sql" className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark whitespace-pre-wrap break-words">
         {preview.sql}

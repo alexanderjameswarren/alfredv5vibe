@@ -5,8 +5,10 @@
 //
 // 🛑 NO CHAT TEXT LEAVES THIS PAGE. Each report carries the address, the title,
 // the state, when it last changed, the last run tag in Claude's latest message
-// (only lines that begin "Run tag:", only the tag) and whether the message box
-// is empty. Never the box's text, and never any message text.
+// and the newest anywhere in the chat (only lines that begin "Run tag:", only the
+// tag), the kind and expiry of a live approval link in the latest message (never
+// its token), and whether the message box is empty. Never the box's text, and
+// never any message text.
 //
 // The one exception is Send to CLI (switchboard2-h8r 1.2): when Alex clicks a
 // Send link (/send/<tag> on a host bridge.js lists), and only then, it hands
@@ -91,25 +93,42 @@
     return tag;
   }
 
-  /** Claude's latest message: { el, by } with `by` the matching selector's name, or el null and by "none". */
-  function latestMessage(root) {
+  /** Claude's messages, top to bottom, by the first selector that finds any: { els, by }. */
+  function allMessages(root) {
     for (const [name, selector] of MESSAGE_SELECTORS) {
       const outer = [...root.querySelectorAll(selector)].filter((el) => !el.parentElement?.closest(selector));
-      if (outer.length) return { el: outer[outer.length - 1], by: name };
+      if (outer.length) return { els: outer, by: name };
     }
-    return { el: null, by: "none" };
+    return { els: [], by: "none" };
   }
 
-  /**
-   * The issued tag in Claude's latest message, or null. The whole message is
-   * read, then each code block on its own, since a block's text keeps its line breaks.
-   */
+  /** Claude's latest message: { el, by } with `by` the matching selector's name, or el null and by "none". */
+  function latestMessage(root) {
+    const { els, by } = allMessages(root);
+    return { el: els[els.length - 1] ?? null, by };
+  }
+
+  /** The whole message is read, then each code block on its own, since a block's text keeps its line breaks. */
+  function tagIn(el) {
+    let tag = extractTag(el.innerText ?? el.textContent ?? "");
+    for (const block of el.querySelectorAll("pre")) tag = extractTag(block.textContent ?? "") ?? tag;
+    return tag;
+  }
+
+  /** The issued tag in Claude's latest message, or null. */
   function readTag(root) {
     const { el } = latestMessage(root);
-    if (!el) return null;
-    let issuedTag = extractTag(el.innerText ?? el.textContent ?? "");
-    for (const block of el.querySelectorAll("pre")) issuedTag = extractTag(block.textContent ?? "") ?? issuedTag;
-    return issuedTag;
+    return el ? tagIn(el) : null;
+  }
+
+  /** The newest tag anywhere in the chat, last top to bottom, or null. */
+  function readLastTag(root) {
+    const { els } = allMessages(root);
+    for (let i = els.length - 1; i >= 0; i--) {
+      const tag = tagIn(els[i]);
+      if (tag) return tag;
+    }
+    return null;
   }
 
   /**
@@ -211,11 +230,11 @@
       : { ...look, cursor: "default", "pointer-events": "none" };
   }
 
-  /** Every link in the page with this tag says so. Only ever its own words and look, and only when they differ. */
-  function markSendLinks(root, hosts, tag, state, reason) {
+  /** Every link `matches` picks says so. Only ever its own words and look, and only when they differ. */
+  function markLinks(root, matches, state, reason) {
     const text = sendLabel(state, reason);
     for (const a of root.querySelectorAll("a[href]")) {
-      if (sendTagOf(a.href, hosts) !== tag) continue;
+      if (!matches(a.href)) continue;
       if (a.textContent !== text) a.textContent = text;
       // Once per state: the page's observer watches attributes, and a re-rendered link has no mark.
       if (a.dataset.alfredSend === state) continue;
@@ -225,6 +244,9 @@
       for (const [name, value] of Object.entries(sendLook(state))) a.style.setProperty(name, value, "important");
     }
   }
+
+  const markSendLinks = (root, hosts, tag, state, reason) => markLinks(root, (href) => sendTagOf(href, hosts) === tag, state, reason);
+  const markApproveLinks = (root, hosts, token, state, reason) => markLinks(root, (href) => approveTokenOf(href, hosts) === token, state, reason);
 
   /** The only lines this may type into a chat. Same as lib/bridge-core.js POST_LINE; the tests hold them equal. */
   const POST_LINE = /^sql [0-9a-f-]{36}( cancelled(: [^\r\n]{1,200})?)?$/i;
@@ -239,6 +261,32 @@
     }
     if (u.protocol !== "https:" || !hosts.includes(u.host.toLowerCase())) return null;
     return /^\/approve\/([^/]+)\/?$/.exec(u.pathname)?.[1] ?? null;
+  }
+
+  /**
+   * What an approval link's address says, for display only: { kind, exp }. A link from before migration 196 says
+   * neither: SQL, no expiry. Same rule as lib/bridge-core.js approveLinkInfo; the tests hold them equal.
+   */
+  function approveLinkInfo(href) {
+    let params;
+    try {
+      params = new URL(String(href)).searchParams;
+    } catch {
+      return { kind: "sql", exp: null };
+    }
+    const kind = params.get("kind");
+    const exp = params.get("exp");
+    return { kind: ["sql", "git", "deploy"].includes(kind) ? kind : "sql", exp: /^\d{1,12}$/.test(exp ?? "") ? Number(exp) : null };
+  }
+
+  /** The last live approval link in Claude's latest message: { kind, exp }, never its token. Null for none or expired. */
+  function readApproveLink(root, hosts, nowSeconds) {
+    const { el } = latestMessage(root);
+    if (!el) return null;
+    const links = [...el.querySelectorAll("a[href]")].filter((a) => approveTokenOf(a.href, hosts));
+    if (!links.length) return null;
+    const info = approveLinkInfo(links[links.length - 1].href);
+    return info.exp !== null && info.exp <= nowSeconds ? null : info;
   }
 
   /** Capture-phase click: note a listed approval link and let it open as usual. True if it was one. */
@@ -333,8 +381,8 @@
   const normalise = (url) => String(url).split(/[?#]/)[0];
 
   globalThis.__alfredWatchCore = {
-    decideState, extractTag, extractPrompt, isChatPath, latestMessage, readTag, readPrompt, readPromptIn, sendTagOf,
-    promptForLink, onLinkClick, sendLabel, sendAllowed, sendLook, markSendLinks, approveTokenOf, onApproveClick, postLineShape: POST_LINE, focusComposer, cliPlan, sendCli, postLine, postBlock, boxEmpty, SELECTORS,
+    decideState, extractTag, extractPrompt, isChatPath, latestMessage, readTag, readLastTag, readPrompt, readPromptIn, sendTagOf,
+    promptForLink, onLinkClick, sendLabel, sendAllowed, sendLook, markSendLinks, markApproveLinks, approveTokenOf, approveLinkInfo, readApproveLink, onApproveClick, postLineShape: POST_LINE, focusComposer, cliPlan, sendCli, postLine, postBlock, boxEmpty, SELECTORS,
   };
   if (typeof chrome === "undefined" || !chrome.runtime?.id || typeof document === "undefined") return;
 
@@ -356,7 +404,21 @@
     });
     // Tags are read only from a finished message, so a half-written one is never sent.
     const issuedTag = state === "finished" ? readTag(document) : null;
-    return { state, issuedTag, composerEmpty: boxEmpty(document) };
+    const link = state === "finished" ? readApproveLink(document, approveHosts, Date.now() / 1000) : null;
+    return { state, issuedTag, lastTag: chatLastTag(state), link, composerEmpty: boxEmpty(document) };
+  }
+
+  // The whole chat is read only when a reply has finished or the message count moved; meanwhile the last answer stands.
+  let lastTag = null, lastTagKey = null, lastTagPath = null, lastState = null;
+  function chatLastTag(state) {
+    const path = location.pathname;
+    if (path !== lastTagPath) lastTagPath = path, lastTag = null, lastTagKey = null;
+    if (state === "finished") {
+      const key = allMessages(document).els.length;
+      if (key !== lastTagKey || lastState !== "finished") lastTag = readLastTag(document), lastTagKey = key;
+    }
+    lastState = state;
+    return lastTag;
   }
 
   function stop() {
@@ -380,6 +442,7 @@
     timer = null;
     try {
       for (const [tag, { state, reason }] of sendStates) markSendLinks(document, linkHosts, tag, state, reason);
+      for (const [token, { state, reason }] of approveStates) markApproveLinks(document, approveHosts, token, state, reason);
       if (!isChatPath(location.pathname)) {
         if (reported !== "gone") send(null), (reported = "gone"), (shown = null);
         return;
@@ -394,7 +457,8 @@
       if (p.state !== shown) shown = p.state, since = new Date().toISOString();
       const report = {
         url: normalise(location.href), title: document.title, state: shown, since,
-        issuedTag: p.issuedTag, composerEmpty: p.composerEmpty,
+        issuedTag: p.issuedTag, lastTag: p.lastTag, composerEmpty: p.composerEmpty,
+        approveKind: p.link?.kind ?? null, approveExp: p.link?.exp ?? null,
       };
       const json = JSON.stringify(report);
       if (json !== reported) send(report), (reported = json);
@@ -445,7 +509,20 @@
       stop();
     }
   };
+  // An approval link's words, like a Send link's: Sending, then Sent once its page has opened.
+  const approveStates = new Map();   // token -> { state, reason }
+  const setApprove = (token, state, reason = "") => {
+    approveStates.set(token, { state, reason });
+    markApproveLinks(document, approveHosts, token, state, reason);
+  };
+  const APPROVE_OPEN_MS = 30000;
   const noteApprove = (href) => {
+    const token = approveTokenOf(href, approveHosts);
+    // After this click's own turn, so the link opens before its words change.
+    setTimeout(() => setApprove(token, "sending"), 0);
+    setTimeout(() => {
+      if (approveStates.get(token)?.state === "sending") setApprove(token, "notsent", "the approve page didn't open");
+    }, APPROVE_OPEN_MS);
     try {
       chrome.runtime.sendMessage({ type: "approve-click", href }).catch(() => {});
     } catch {
@@ -489,6 +566,7 @@
       return true;    // answers asynchronously
     }
     if (msg?.type === "send-status" && typeof msg.tag === "string") setSend(msg.tag, msg.state === "sent" ? "sent" : "notsent", String(msg.reason ?? ""));
+    if (msg?.type === "approve-link-opened" && typeof msg.token === "string") setApprove(msg.token, "sent");
     if (msg?.type === "post-check") return reply({ did: postBlock(document) }), false;
     if (msg?.type === "post-line" && POST_LINE.test(String(msg.text))) {
       // A reply lost on the way back must not post it twice.

@@ -61,6 +61,9 @@ CLI's run-tag step (`s9`, or `s9 -> s10` when Claude has issued a newer prompt).
 | Green | `Claude writing` | the chat's message box |
 | Orange | `Send cli`: there's a report Claude hasn't read. A click types and sends `cli` if the box is empty and Claude is idle. | the chat |
 | Purple | `Prompt ready`: Claude issued a newer run tag. Nothing is typed. | the chat |
+| Tan | `SQL ready`, `Git ready`, `Deploy ready`: the chat's latest finished reply holds a live approval link. | the chat |
+| Light green | `SQL running`, `Git running`, `Deploy running`: approved, and running. | the chat |
+| Red | `SQL not posted`, `Git not posted`, `Deploy not posted`: the approve page couldn't post the result. A new turn in the chat clears it too. | clears it |
 | Yellow | `Your turn` | the chat |
 | Grey | `chat unknown`, `paused`, `closed`, `free`, `no status` | the chat |
 

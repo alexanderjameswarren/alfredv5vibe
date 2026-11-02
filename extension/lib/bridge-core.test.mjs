@@ -3,8 +3,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  approveStatus, approveTokenOf, approveWatcher, buildChatsMessage, buildTabsMessage, checkPrompt, chatForProject, chatForRun, cleanHosts, cleanRun, closesApproveTab, debounce, deliveryMessage, focusResult, notPostedText,
-  GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, isHostMissing, nextDelay, normaliseUrl, pickTab, POST_LINE, postProblem, projectOfTag, promptFrame, pruneApprovals, runLine, sendTagOf,
+  approveLinkInfo, approveStatus, approveTokenOf, approveWatcher, buildChatsMessage, buildTabsMessage, checkPrompt, chatForProject, chatForRun, cleanHosts, cleanRun, closesApproveTab, debounce, deliveryMessage, dismissNotPosted, focusResult, notPostedText,
+  GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, isHostMissing, nextDelay, normaliseUrl, pickTab, POST_LINE, postProblem, projectOfTag, promptFrame, pruneApprovals, runLine, sendTagOf, withApprovalStates,
 } from "./bridge-core.js";
 import "../claude-watch.js";
 
@@ -361,6 +361,100 @@ test("approve link: the token, by the same rule in the bridge and the watcher", 
   }
 });
 
+test("approve link: kind and expiry, by the same rule in the bridge and the watcher", () => {
+  const { approveLinkInfo: watchInfo } = globalThis.__alfredWatchCore;
+  const base = "https://alfredv5vibe.vercel.app/approve/abc123";
+  const cases = [
+    [`${base}?kind=git&exp=1793536200`, { kind: "git", exp: 1793536200 }],
+    [`${base}?kind=deploy&exp=1793536200`, { kind: "deploy", exp: 1793536200 }],
+    [base, { kind: "sql", exp: null }],
+    [`${base}?kind=docs&exp=soon`, { kind: "sql", exp: null }],
+    ["nope", { kind: "sql", exp: null }],
+  ];
+  for (const [href, want] of cases) {
+    assert.deepEqual(approveLinkInfo(href), want, href);
+    assert.deepEqual(watchInfo(href), want, `watcher: ${href}`);
+  }
+});
+
+test("approve link: only a live link in the latest reply counts, and no token leaves", async (t) => {
+  const { readApproveLink } = globalThis.__alfredWatchCore;
+  const hosts = ["alfredv5vibe.vercel.app"];
+  const link = (q = "") => `<a href="https://alfredv5vibe.vercel.app/approve/secret${q}">Approve</a>`;
+  const reply = (html) => `<div data-is-streaming="false">${html}</div>`;
+  const read = async (html) => {
+    const w = await dom(t, html);
+    return w ? readApproveLink(w.document, hosts, 1000) : undefined;
+  };
+  if ((await read(reply(link()))) === undefined) return;
+  assert.deepEqual(await read(reply(link("?kind=git&exp=2000"))), { kind: "git", exp: 2000 });
+  assert.deepEqual(await read(reply(link())), { kind: "sql", exp: null });
+  assert.equal(await read(reply(link("?kind=sql&exp=1000"))), null, "expired");
+  assert.equal(await read(reply(link("?kind=sql&exp=2000")) + reply("no link")), null, "an older reply");
+  assert.equal(await read(reply('<a href="https://evil.example/approve/secret">No</a>')), null, "an unlisted host");
+});
+
+test("approve link: Sending, then Sent, on the link with that token only", async (t) => {
+  const { markApproveLinks } = globalThis.__alfredWatchCore;
+  const hosts = ["alfredv5vibe.vercel.app"];
+  const w = await dom(t, `<a id="a" href="https://alfredv5vibe.vercel.app/approve/one?kind=sql&exp=2">Approve</a><a id="b" href="https://alfredv5vibe.vercel.app/approve/two">Other</a>`);
+  if (!w) return;
+  markApproveLinks(w.document, hosts, "one", "sending");
+  assert.equal(w.document.getElementById("a").textContent, "Sending…");
+  markApproveLinks(w.document, hosts, "one", "sent");
+  assert.equal(w.document.getElementById("a").textContent, "Sent ✓");
+  assert.equal(w.document.getElementById("b").textContent, "Other");
+});
+
+test("lastTag: the newest anywhere in the chat, when the latest reply has none", async (t) => {
+  const { readLastTag, readTag } = globalThis.__alfredWatchCore;
+  const prompt = (tag) => `<div data-is-streaming="false"><pre>Run tag: ${tag}\nWindow: main</pre></div>`;
+  const plain = `<div data-is-streaming="false"><p>No prompt here.</p></div>`;
+  const w = await dom(t, prompt("proj-abc-s1-aaaa") + prompt("proj-abc-s2-bbbb") + plain + plain);
+  if (!w) return;
+  assert.equal(readLastTag(w.document), "proj-abc-s2-bbbb");
+  assert.equal(readTag(w.document), null, "issuedTag stays the latest reply's");
+  const none = await dom(t, plain);
+  assert.equal(readLastTag(none.document), null);
+  // Last in the chat, not the highest step: a follow-up to an earlier step counts as newest.
+  const followUp = await dom(t, prompt("proj-abc-s5-bbbb") + prompt("proj-abc-s4b-cccc"));
+  assert.equal(readLastTag(followUp.document), "proj-abc-s4b-cccc");
+});
+
+test("buildChatsMessage passes the new fields only for a fresh report", () => {
+  const tab = { id: 1, windowId: 1, url: "https://claude.ai/chat/a" };
+  const report = { url: "https://claude.ai/chat/a", state: "finished", lastTag: "p-a1b-s2-abcd", approveKind: "git", approveExp: 9 };
+  const [c] = buildChatsMessage([tab], [], new Map([[1, report]])).chats;
+  assert.deepEqual([c.lastTag, c.approveKind, c.approveExp], ["p-a1b-s2-abcd", "git", 9]);
+  const [gone] = buildChatsMessage([{ ...tab, discarded: true }], [], new Map([[1, report]])).chats;
+  assert.deepEqual([gone.lastTag, gone.approveKind, gone.approveExp], [null, null, null]);
+});
+
+test("approval states: running while approved or waiting to post, notposted when it couldn't go", () => {
+  const chat = { tabId: 7, url: "https://claude.ai/chat/one", title: "x", issuedTag: null };
+  const from = { tabId: 7, url: chat.url, kind: "git" };
+  const NOW = 1000000;
+  const state = (a) => { const [c] = withApprovalStates([chat], a, NOW); return [c.approveState, c.approveStateKind]; };
+  assert.deepEqual(state({ clicks: {}, runs: [] }), [null, null]);
+  assert.deepEqual(state({ clicks: { k: { ...from, runningAt: NOW - 1000 } }, runs: [] }), ["running", "git"]);
+  assert.deepEqual(state({ clicks: { k: { ...from, runningAt: NOW - 11 * 60 * 1000 } }, runs: [] }), [null, null], "too old to believe");
+  assert.deepEqual(state({ clicks: {}, runs: [{ project: "p", from }] }), ["running", "git"]);
+  assert.deepEqual(state({ clicks: {}, runs: [{ project: "p", from, stopped: true }] }), ["notposted", "git"]);
+  assert.deepEqual(state({ clicks: {}, runs: [{ project: "p", from, stopped: true, dismissed: true }] }), [null, null]);
+  assert.deepEqual(state({ clicks: { k: { ...from, kind: undefined, runningAt: NOW } }, runs: [] }), ["running", "sql"], "an old click is SQL");
+});
+
+test("a new turn dismisses a stopped run; a chat already writing doesn't", () => {
+  const run = () => ({ stopped: true, from: { tabId: 7 } });
+  const a = { runs: [run()] };
+  assert.equal(dismissNotPosted(a, 7, "responding", "responding"), false);
+  assert.equal(dismissNotPosted(a, 8, "finished", "responding"), false);
+  assert.equal(dismissNotPosted(a, 7, "finished", "responding"), true);
+  assert.equal(a.runs[0].dismissed, true);
+  assert.equal(a.runs[0].stopped, true, "Try again still works");
+  assert.equal(dismissNotPosted(a, 7, "finished", "responding"), false);
+});
+
 test("approve link: a click is noted and still opens normally", async (t) => {
   const { onApproveClick } = globalThis.__alfredWatchCore;
   const w = await dom(t, `<a id="a" href="https://alfredv5vibe.vercel.app/approve/abc123">Approve</a><a id="b" href="https://evil.example/approve/abc123">No</a>`);
@@ -482,7 +576,7 @@ test("host access: origins from the list, and a notice only when one is missing"
 
 test("manifest: no Alfred host in the code, asked for at run time", () => {
   const m = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
-  assert.equal(m.version, "1.2.8");
+  assert.equal(m.version, "1.2.9");
   assert.equal(m.host_permissions.some((h) => /vercel\.app/.test(h)), false);
   assert.deepEqual(m.optional_host_permissions, ["https://*/*"]);
 });
@@ -562,6 +656,22 @@ test("approve watcher: a dry run sends nothing; a real run sends its id once per
   run(...Object.values(scope));
   assert.equal(sent.length, 2);
   assert.deepEqual(sent[1], sent[0]);
+});
+
+test("approve watcher: says when a run starts and stops, and the kind with the result", async (t) => {
+  const w = await dom(t, `${APPROVE_HTML}<i id="k" data-switchboard-kind="git"></i>`);
+  if (!w) return;
+  const sent = [];
+  const scope = { document: w.document, MutationObserver: w.MutationObserver, chrome: { runtime: { sendMessage: async (m) => sent.push(m) } } };
+  new Function(...Object.keys(scope), `return (${approveWatcher.toString()})();`)(...Object.values(scope));
+  const tick = () => new Promise((r) => setTimeout(r, 20));
+  w.document.getElementById("k").setAttribute("data-switchboard-running", "git");
+  await tick();
+  assert.deepEqual(sent, [{ type: "approve-running", running: true }]);
+  w.document.getElementById("k").removeAttribute("data-switchboard-running");
+  w.document.getElementById("r").setAttribute("data-switchboard-run-id", RUN);
+  await tick();
+  assert.deepEqual(sent.slice(1), [{ type: "approve-running", running: false }, { type: "approve-run", runId: RUN, project: "switchboard2-h8r", kind: "git" }]);
 });
 
 test("approve watcher: a cancellation sends its flag and reason", async (t) => {
@@ -674,7 +784,7 @@ test("chats: every claude.ai chat tab; unreported or discarded is unknown", () =
   assert.equal(chats[2].viewedAt, "2026-10-02T09:00:00.000Z");
   assert.equal(chats[2].url, "https://claude.ai/chat/c");
   assert.deepEqual(Object.keys(chats[0]).sort(),
-    ["composerEmpty", "issuedTag", "since", "state", "tabId", "title", "url", "viewedAt", "windowId"]);
+    ["approveExp", "approveKind", "composerEmpty", "issuedTag", "lastTag", "since", "state", "tabId", "title", "url", "viewedAt", "windowId"]);
 });
 
 test("a focus command picks its tab by id or address", () => {

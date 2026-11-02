@@ -275,6 +275,7 @@ NewSession(code, root) {
         chromeTitle: IniRead(SETTINGS_INI, "chrome", code, ""),
         chatLink: IniRead(SETTINGS_INI, "chatlink", code, ""),
         chatLinkFor: IniRead(SETTINGS_INI, "chatlinkcode", code, ""),
+        approveCleared: false,
     }
 }
 
@@ -792,10 +793,15 @@ Refresh() {
         issued := chat ? chat.Get("issuedTag", "") : ""
         ; Too old to believe: as if the endpoint had never answered.
         known := panelAt != "" && IsFresh(panelAt, A_NowUTC, PANEL_TRUST_S) ? panelKnown.Get(project, "") : ""
+        ; A tap on red "not posted" lasts until the chat stops reporting it, and its spent link stops counting too.
+        approveState := chat ? chat.Get("approveState", "") : ""
+        s.approveCleared := s.approveCleared && approveState = "notposted"
+        approveKind := chat && !s.approveCleared ? ApproveKindNow(chat.Get("approveKind", ""), chat.Get("approveExp", ""), UnixSeconds(A_NowUTC)) : ""
         v := ViewOf({free: s.free, closed: s.closed, paused: s.paused, kind: kind, runTag: s.runTag
             , promptAt: s.promptAt, reportTag: s.reportTag, reportAt: s.reportAt, chatState: chat ? chat.Get("state", "") : ""
             , chatSince: chat ? chat.Get("since", "") : "", issuedTag: issued, project: project, event: s.event
-            , outsideScope: s.outsideScope, sqlWaiting: IsObject(known) && known.sql
+            , outsideScope: s.outsideScope, approveKind: approveKind, approveState: s.approveCleared ? "" : approveState
+            , approveStateKind: chat ? chat.Get("approveStateKind", "") : ""
             , reportUnread: IsObject(known) ? known.unread : "", panelAt: panelAt})
         ; Compared before any overlay: a tap's own colours must not raise an alert.
         if v.color != s.baseColor {
@@ -1042,6 +1048,7 @@ ButtonClick(code, *) {
     s.unseen := false
     if latch {             ; acknowledged, and that is all, even with a report waiting underneath
         s.outsideScope := ""
+        s.approveCleared := s.approveCleared || s.label ~= " not posted$"
         Paint(s)
         return
     }
