@@ -10,6 +10,8 @@ const MIN_SECRET = 32;
 const PROJECT_CODE = /^[a-z0-9_-]{1,40}$/;
 
 export type Statement = { text: string; bare: string };
+export type Expected = number | "unknown";
+export type Count = { statement: number; action: string; count: number; expected?: Expected; differs: boolean };
 export type StatementResult = { command: string; count: number; rows?: unknown[] };
 export type RunOutcome = {
   ok: boolean;
@@ -21,7 +23,7 @@ export type RunOutcome = {
 export type Action = {
   id: string;
   user_id: string;
-  payload: { sql?: string; description?: string };
+  payload: { sql?: string; description?: string; expected?: Expected[]; test?: boolean };
   fingerprint: string;
   headline: string;
   status: string;
@@ -35,7 +37,10 @@ export type Deps = {
   insertAction(row: Record<string, unknown>): Promise<{ id: string }>;
   authUser(jwt: string): Promise<string | null>;
   findByLinkHash(hash: string, userId: string): Promise<Action | null>;
+  /** Whether the action's latest dry run was clean. */
   hasCleanDryRun(actionId: string): Promise<boolean>;
+  latestDryRun(actionId: string): Promise<{ id: string; result: Record<string, unknown> | null } | null>;
+  noteCancelled(runId: string, result: Record<string, unknown>): Promise<void>;
   consume(jwt: string, token: string, fingerprint: string): Promise<unknown>;
   runSql(statements: Statement[], commit: boolean): Promise<RunOutcome>;
   recordRun(run: Record<string, unknown>): Promise<string>;
@@ -174,12 +179,13 @@ function describe(s: Statement): string {
 }
 
 /** The capitals line on the click page, from the statements alone. */
-export function buildHeadline(sql: string): string {
+export function buildHeadline(sql: string, test = false): string {
   const statements = prepare(sql).statements;
   const phrases = [...new Set(statements.map(describe))].filter((p) => p !== "runs a select");
-  if (statements.length && !phrases.length) return "THIS RUNS A SELECT ON THE LIVE ALFRED DATABASE";
+  if (statements.length && !phrases.length && !test) return "THIS RUNS A SELECT ON THE LIVE ALFRED DATABASE";
   const shown = phrases.slice(0, 4).join(", ");
   const more = phrases.length > 4 ? ` AND ${phrases.length - 4} MORE` : "";
+  if (test) return `THIS TEST RUNS ONCE AND IS UNDONE: ${(shown || "runs a select").toUpperCase()}${more}`;
   const lead = statements.length && statements.every((s) => READ_ONLY.test(s.bare))
     ? "THIS MAY CHANGE DATA IN THE LIVE ALFRED DATABASE"
     : "THIS CHANGES THE LIVE ALFRED DATABASE";
@@ -256,6 +262,26 @@ export function summarise(statements: Statement[], results: StatementResult[]): 
     .join("; ");
 }
 
+// A do block or a function call changes rows Postgres doesn't count for it, so only these have a number to compare.
+const COUNTED = /^(insert|update|delete|merge)\b|^with\b.*\b(insert|update|delete|merge)\b/i;
+const counted = (statements: Statement[]) => statements.filter((s) => COUNTED.test(s.bare));
+
+const validExpected = (expected: unknown, wanted: number): expected is Expected[] =>
+  Array.isArray(expected) && expected.length === wanted &&
+  expected.every((e) => e === "unknown" || (Number.isInteger(e) && e >= 0));
+
+/** Rows per counted statement, against what the CLI expected. An action queued before expected counts has none. */
+export function countsFor(statements: Statement[], results: StatementResult[], expected?: Expected[]): Count[] {
+  if (!results.length) return [];
+  let at = 0;
+  return statements.flatMap((s, i) => {
+    if (!COUNTED.test(s.bare)) return [];
+    const want = expected?.[at++];
+    const count = results[i]?.count ?? 0;
+    return [{ statement: i + 1, action: describe(s), count, ...(want === undefined ? {} : { expected: want }), differs: typeof want === "number" && want !== count }];
+  });
+}
+
 // ---------------------------------------------------------------------------
 // routes
 // ---------------------------------------------------------------------------
@@ -265,7 +291,8 @@ const CORS = {
   "Access-Control-Allow-Headers": "authorization, content-type, apikey",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
-const RUN_ROUTES = new Set(["preview", "dry-run", "approve"]);
+const RUN_ROUTES = new Set(["preview", "dry-run", "approve", "cancel"]);
+const MAX_REASON = 200;
 
 function json(body: unknown, status = 200, browser = false): Response {
   return new Response(JSON.stringify(body), {
@@ -305,13 +332,26 @@ async function handleQueue(req: Request, deps: Deps): Promise<Response> {
   if (!description || description.length > MAX_DESCRIPTION || /[\r\n]/.test(description)) {
     return json({ ok: false, error: `description must be one line of at most ${MAX_DESCRIPTION} characters, saying what the SQL does.` }, 400);
   }
-  const { reasons } = prepare(sql);
+  const { statements, reasons } = prepare(sql);
   if (reasons.length) return json({ ok: false, error: "this goes to the SQL editor, not the queue.", reasons }, 422);
 
+  const test = body?.test === true;
+  const expected = body?.expected;
+  if (test && expected !== undefined) return json({ ok: false, error: "a test action is undone, so it takes no --expect." }, 400);
+  const writes = counted(statements);
+  if (!test && (writes.length || expected !== undefined) && !validExpected(expected, writes.length)) {
+    return json({
+      ok: false,
+      error: `--expect needs ${writes.length} comma-separated values, one for each insert, update and delete in order: a row count, or "unknown" if it can't be known.`,
+      reasons: writes.map(describe),
+    }, 422);
+  }
+
   // Only these fields reach the row. The kind, owner and headline are never the caller's.
-  const headline = buildHeadline(sql);
+  const headline = buildHeadline(sql, test);
+  const payload = { sql, description, ...(test ? { test } : {}), ...(!test && writes.length ? { expected } : {}) };
   const row = await deps.insertAction({
-    user_id: deps.userId, kind: "sql", project_code: code, payload: { sql, description }, headline, created_by: "cli",
+    user_id: deps.userId, kind: "sql", project_code: code, payload, headline, created_by: "cli",
   });
   return json({ ok: true, action_id: row.id, headline });
 }
@@ -333,13 +373,37 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
     return reply({ ok: false, error: "this link has expired." }, 410);
   }
   const sql = action.payload?.sql ?? "";
+  const test = action.payload?.test === true;
 
   if (route === "preview") {
     return reply({
       ok: true, action_id: action.id, headline: action.headline, description: action.payload?.description ?? null, sql, fingerprint: action.fingerprint,
-      project_code: action.project_code, expires_at: action.link_expires_at,
+      project_code: action.project_code, expires_at: action.link_expires_at, test,
     });
   }
+
+  const spend = async (fingerprint: string): Promise<Response | null> => {
+    try {
+      await deps.consume(jwt, token, fingerprint);
+      return null;
+    } catch (e) {
+      return reply({ ok: false, error: e instanceof Error ? e.message : String(e) }, 409);
+    }
+  };
+
+  if (route === "cancel") {
+    const reason = typeof body?.reason === "string" ? body.reason.replace(/\s+/g, " ").trim() : "";
+    if (reason.length > MAX_REASON) return reply({ ok: false, error: `the reason is over ${MAX_REASON} characters.` }, 400);
+    const dry = await deps.latestDryRun(action.id);
+    if (!dry) return reply({ ok: false, error: "run a dry run first." }, 409);
+    const refused = await spend(action.fingerprint);
+    if (refused) return refused;
+    await deps.setStatus(action.id, "cancelled");
+    await deps.noteCancelled(dry.id, { ...dry.result, cancelled: true, reason });
+    return reply({ ok: true, run_id: dry.id, cancelled: true, reason });
+  }
+
+  if (route === "approve" && test) return reply({ ok: false, error: "a test action only runs undone." }, 409);
 
   const { statements, reasons } = prepare(sql);
   if (reasons.length) return reply({ ok: false, error: "this goes to the SQL editor.", reasons }, 422);
@@ -349,28 +413,34 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
     const fingerprint = body?.fingerprint;
     if (typeof fingerprint !== "string" || !fingerprint) return reply({ ok: false, error: "fingerprint is missing." }, 400);
     if (!(await deps.hasCleanDryRun(action.id))) return reply({ ok: false, error: "run a clean dry run first." }, 409);
-    try {
-      await deps.consume(jwt, token, fingerprint);
-    } catch (e) {
-      return reply({ ok: false, error: e instanceof Error ? e.message : String(e) }, 409);
-    }
+    const refused = await spend(fingerprint);
+    if (refused) return refused;
   }
 
   const startedAt = new Date().toISOString();
   const outcome = await deps.runSql(statements, commit);
   if (outcome.busy && !commit) return reply({ ok: false, error: outcome.error }, 409);
+  // After the run, so a busy runner leaves the link usable. The run is undone, so a lost race has changed nothing.
+  if (test) {
+    const refused = await spend(action.fingerprint);
+    if (refused) return refused;
+  }
 
+  const counts = countsFor(statements, outcome.results, action.payload?.expected);
+  const mismatch = counts.some((c) => c.differs);
+  // A real run has committed by now, so a mismatch there is reported and doesn't turn it into a failure.
+  const ok = outcome.ok && (commit || !mismatch);
   const summary = outcome.ok
-    ? summarise(statements, outcome.results)
+    ? summarise(statements, outcome.results) + (mismatch ? ". Counts differ from what was expected." : "")
     : `failed at statement ${outcome.failedAt ?? "?"}: ${outcome.error}`;
   const conformance = commit && outcome.ok ? await deps.conformance() : undefined;
   const runId = await deps.recordRun({
     user_id: action.user_id, action_id: action.id, mode: commit ? "real" : "dry_run", summary,
-    result: { ok: outcome.ok, statements: outcome.results, error: outcome.error, failed_at: outcome.failedAt, conformance },
+    result: { ok, statements: outcome.results, counts, mismatch, error: outcome.error, failed_at: outcome.failedAt, conformance },
     started_at: startedAt, finished_at: new Date().toISOString(),
   });
-  if (commit) await deps.setStatus(action.id, outcome.ok ? "succeeded" : "failed");
-  return reply({ ok: outcome.ok, run_id: runId, summary, conformance });
+  if (commit || test) await deps.setStatus(action.id, outcome.ok ? "succeeded" : "failed");
+  return reply({ ok, run_id: runId, summary, conformance, counts, mismatch, ...(test ? { test } : {}) });
 }
 
 export async function handle(req: Request, deps: Deps): Promise<Response> {

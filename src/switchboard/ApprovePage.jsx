@@ -4,9 +4,10 @@ import { supabase, supabaseUrl, supabaseAnonKey } from '../supabaseClient';
 import CopyButton from '../shared/CopyButton';
 
 // Where a Switchboard approval link lands (spec §8.1). The runner decides everything;
-// this page shows the SQL, runs the dry run by itself, then offers Approve. Only a real run puts
-// its id on the page, as data-switchboard-run-id; the extension reads that and data-switchboard-project,
-// posts the result to the chat and closes this tab. Where it can't, the line is here to copy.
+// this page shows the SQL, runs the dry run by itself, then offers Approve and Don't run. Only a finished
+// action (a real run, a test, or Don't run) puts its id on the page, as data-switchboard-run-id; the extension
+// reads that and data-switchboard-project, posts the result to the chat and closes this tab. Where it can't,
+// the line is here to copy.
 
 // As on OAuthConsent (primary) and ItemAddToCollection (secondary).
 const BUTTON = 'w-full sm:w-auto px-4 py-3 min-h-[44px] bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50';
@@ -45,13 +46,39 @@ function Shell({ children }) {
   );
 }
 
-function RunResult({ title, summary, conformance, runId }) {
+/** One line per counted statement: its rows, and what was expected when that's a number. */
+function countLine({ statement, action, count, expected }) {
+  const rows = `${count} ${count === 1 ? 'row' : 'rows'}`;
+  return `Statement ${statement}: ${action}: ${rows}${typeof expected === 'number' ? `, expected ${expected}` : ''}`;
+}
+
+function RunResult({ title, summary, conformance, runId, counts, marks }) {
   return (
-    <div className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm" {...(runId ? { 'data-switchboard-run-id': runId } : {})}>
+    <div className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm" {...(runId ? { 'data-switchboard-run-id': runId } : {})} {...marks}>
       <p className="font-medium text-dark mb-1">{title}</p>
       <p className="text-dark break-words">{summary}</p>
+      {counts?.length > 0 && (
+        <ul className="text-dark mt-2 break-words">
+          {counts.map((c) => <li key={c.statement} className={c.differs ? 'font-bold' : undefined}>{countLine(c)}</li>)}
+        </ul>
+      )}
       {conformance && <p className="text-dark mt-2 break-words">{conformance}</p>}
       {runId && <p className="text-dark mt-2 font-mono break-all">Run {runId}</p>}
+    </div>
+  );
+}
+
+/** Beside any error or mismatch: the ids and what went wrong, for pasting to Claude. */
+function CopyDetails({ actionId, dryRunId, error, counts }) {
+  const text = () => [
+    actionId && `Action: ${actionId}`,
+    dryRunId && `Dry run: ${dryRunId}`,
+    error && `Problem: ${error}`,
+    ...(counts ?? []).map(countLine),
+  ].filter(Boolean).join('\n');
+  return (
+    <div className="mb-4">
+      <CopyButton size="large" label="Copy details" getText={text} className={`${SECOND_BUTTON} inline-flex items-center justify-center gap-2`} />
     </div>
   );
 }
@@ -60,8 +87,7 @@ function RunResult({ title, summary, conformance, runId }) {
  * The line for the chat, for wherever the extension can't post it. Where it can, this tab closes first.
  * The extension fills the hidden status and shows Try again; it adds no markup or styling of its own.
  */
-function ResultLine({ runId }) {
-  const line = `sql ${runId}`;
+function ResultLine({ line }) {
   return (
     <div>
       <p className="text-dark mb-2">Paste this into the Claude chat, then close this tab.</p>
@@ -85,6 +111,8 @@ export default function ApprovePage() {
   const [note, setNote] = useState(null);
   const [dry, setDry] = useState(null);
   const [real, setReal] = useState(null);
+  const [cancelled, setCancelled] = useState(null);
+  const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const dryStarted = useRef(false);
 
@@ -147,6 +175,21 @@ export default function ApprovePage() {
     setBusy(false);
   }
 
+  async function dontRun() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const out = await callRunner('cancel', { token, reason });
+      if (out.body.cancelled) setCancelled(out.body);
+      else refusal(out);
+    } catch {
+      setNote("Couldn't reach the runner, and it may not have heard this. Nothing ran. Try again.");
+    }
+    setBusy(false);
+  }
+
+  const details = { actionId: preview?.action_id, dryRunId: dry?.run_id };
+
   if (signedIn === null) return <Shell><p className="text-muted">Loading…</p></Shell>;
 
   if (!signedIn) {
@@ -163,8 +206,22 @@ export default function ApprovePage() {
     );
   }
 
-  if (ended) return <Shell><p className="text-dark">{ended}</p></Shell>;
+  if (ended) {
+    return (
+      <Shell>
+        <p className="text-dark mb-4">{ended}</p>
+        <CopyDetails {...details} error={ended} />
+      </Shell>
+    );
+  }
   if (!preview) return <Shell><p className="text-muted">Loading…</p></Shell>;
+
+  const mismatch = Boolean(dry?.mismatch);
+  const dryTitle = dry?.test
+    ? (dry.ok ? 'Test run, undone' : 'The test failed, undone')
+    : mismatch ? 'Counts differ from what was expected, rolled back'
+    : dry?.ok ? 'Dry run, rolled back' : 'The dry run failed, rolled back';
+  const dryProblem = mismatch ? 'counts differ from what was expected' : dry?.summary;
 
   return (
     <Shell>
@@ -176,31 +233,71 @@ export default function ApprovePage() {
         {preview.sql}
       </pre>
 
-      {note && <p className="mb-4 text-sm text-dark break-words">{note}</p>}
+      {note && (
+        <>
+          <p className="mb-4 text-sm text-dark break-words">{note}</p>
+          <CopyDetails {...details} error={note} />
+        </>
+      )}
 
-      {real ? (
+      {cancelled ? (
+        <>
+          <RunResult
+            title="Not run"
+            summary={cancelled.reason || 'No reason given.'}
+            runId={cancelled.run_id}
+            marks={{ 'data-switchboard-cancelled': '', 'data-switchboard-reason': cancelled.reason }}
+          />
+          <ResultLine line={`sql ${cancelled.run_id} cancelled${cancelled.reason ? `: ${cancelled.reason}` : ''}`} />
+        </>
+      ) : real ? (
         <>
           <RunResult
             title={real.ok ? 'Ran for real' : 'The real run failed'}
             summary={real.summary}
             conformance={real.conformance}
             runId={real.run_id}
+            counts={real.counts}
           />
-          <ResultLine runId={real.run_id} />
+          {(!real.ok || real.mismatch) && (
+            <CopyDetails {...details} error={real.mismatch ? 'the real run committed, and its counts differ from what was expected' : real.summary} counts={real.counts} />
+          )}
+          <ResultLine line={`sql ${real.run_id}`} />
+        </>
+      ) : dry?.test ? (
+        <>
+          <RunResult title={dryTitle} summary={dry.summary} runId={dry.run_id} counts={dry.counts} />
+          {!dry.ok && <CopyDetails {...details} error={dry.summary} counts={dry.counts} />}
+          <ResultLine line={`sql ${dry.run_id}`} />
         </>
       ) : (
         <>
-          {dry && <RunResult title={dry.ok ? 'Dry run, rolled back' : 'The dry run failed, rolled back'} summary={dry.summary} />}
-          {busy && !dry && <p className="mb-4 text-dark">Running the dry run…</p>}
+          {dry && <RunResult title={dryTitle} summary={dry.summary} counts={dry.counts} />}
+          {dry && !dry.ok && <CopyDetails {...details} error={dryProblem} counts={dry.counts} />}
+          {busy && !dry && <p className="mb-4 text-dark">{preview.test ? 'Running the test…' : 'Running the dry run…'}</p>}
+          {dry && (
+            <div className="mb-4">
+              <label htmlFor="dont-run-reason" className="block text-sm text-dark mb-1">Reason for not running (optional)</label>
+              <input
+                id="dont-run-reason"
+                type="text"
+                maxLength={200}
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                className="w-full px-3 py-2 min-h-[44px] rounded-lg border border-border text-dark"
+              />
+            </div>
+          )}
           <div className="flex flex-col sm:flex-row gap-3">
-            {busy && !dry ? null : dry?.ok ? (
+            {busy && !dry ? null : dry?.ok || mismatch ? (
               <>
-                <button className={BUTTON} disabled={busy} onClick={runReal}>Approve and run for real</button>
+                <button className={BUTTON} disabled={busy || mismatch} onClick={runReal}>Approve and run for real</button>
                 <button className={SECOND_BUTTON} disabled={busy} onClick={runDry}>Run the dry run again</button>
               </>
             ) : (
-              <button className={BUTTON} disabled={busy} onClick={runDry}>Dry run</button>
+              <button className={BUTTON} disabled={busy} onClick={runDry}>{preview.test ? 'Run the test' : 'Dry run'}</button>
             )}
+            {dry && <button className={SECOND_BUTTON} disabled={busy} onClick={dontRun}>Don't run</button>}
           </div>
         </>
       )}

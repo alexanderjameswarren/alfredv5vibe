@@ -39,6 +39,59 @@ test("queue: sends the file's SQL and the project, with the key in a header", as
   assert.deepEqual(JSON.parse(calls[0].init.body), { project_code: "p-x", sql: "select 1;\n", description: "Reads 1." });
 });
 
+test("queue: --expect and --test travel in the request only when given", async () => {
+  const sent = async (args) => {
+    const { fetchFn, calls } = answering(200, { ok: true, action_id: "a1", headline: "H" });
+    await queueFile({ file: sqlFile(), project: "p-x", description: "Reads 1.", ...args }, SETTINGS, fetchFn);
+    return JSON.parse(calls[0].init.body);
+  };
+  assert.deepEqual((await sent({ expect: "2, unknown,0" })).expected, [2, "unknown", 0]);
+  assert.equal((await sent({ test: true })).test, true);
+  const plain = await sent({});
+  assert.equal("expected" in plain || "test" in plain, false);
+});
+
+test("queue: a malformed --expect, or --expect with --test, is refused before any request", async () => {
+  const { fetchFn, calls } = answering(200, {});
+  const base = { file: sqlFile(), project: "p-x", description: "Reads 1." };
+  for (const args of [{ expect: "" }, { expect: "1,,2" }, { expect: "lots" }, { expect: "-1" }, { expect: "1.5" }, { expect: "1", test: true }]) {
+    const out = await queueFile({ ...base, ...args }, SETTINGS, fetchFn);
+    assert.equal(out.ok, false, JSON.stringify(args));
+    assert.match(out.error, /--expect/);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("the command passes --expect and --test through", async () => {
+  let body;
+  const server = createServer((req, res) => {
+    let got = "";
+    req.on("data", (d) => (got += d));
+    req.on("end", () => {
+      body = JSON.parse(got);
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ok: true, action_id: "a1", headline: "H" }));
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const script = path.resolve(import.meta.dirname, "..", "sql-queue.mjs");
+  const run = (extra) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [script, sqlFile(), "--project", "p-x", "--describe", "Reads 1.", ...extra], {
+      env: { ...process.env, SWITCHBOARD_QUEUE_SECRET: SECRET, SWITCHBOARD_QUEUE_URL: `http://127.0.0.1:${server.address().port}/q` },
+      stdio: "ignore",
+    });
+    child.on("close", resolve);
+  });
+  try {
+    assert.equal(await run(["--expect", "3,unknown"]), 0);
+    assert.deepEqual(body.expected, [3, "unknown"]);
+    assert.equal(await run(["--test"]), 0);
+    assert.equal(body.test, true);
+  } finally {
+    server.close();
+  }
+});
+
 test("queue: refuses before any request", async () => {
   const { fetchFn, calls } = answering(200, {});
   const description = "Reads 1.";

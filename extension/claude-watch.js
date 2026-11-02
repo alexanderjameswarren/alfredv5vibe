@@ -14,7 +14,7 @@
 // "Run tag:"/"Window:" header to its closing "Run tag:" line, nothing around them.
 //
 // It also types one line into the chat when bridge.js asks (switchboard2-h8r 2.7):
-// "sql <run id>", after a real run, only when the chat is idle and its box completely
+// "sql <run id>" or its cancelled form, after a finished action, only when the chat is idle and its box completely
 // empty: no text, images or files. It never submits anything Alex put there.
 // And when Alex clicks an /approve/ link on a listed host, it tells bridge.js that
 // link's address, so the line comes back to this tab. The link still opens as usual.
@@ -210,6 +210,9 @@
       if (sendTagOf(a.href, hosts) === tag && a.textContent !== text) a.textContent = text;
   }
 
+  /** The only lines this may type into a chat. Same as lib/bridge-core.js POST_LINE; the tests hold them equal. */
+  const POST_LINE = /^sql [0-9a-f-]{36}( cancelled(: [^\r\n]{1,200})?)?$/i;
+
   /** An approval link's token, or null. Same rule as lib/bridge-core.js approveTokenOf; the tests hold them equal. */
   function approveTokenOf(href, hosts) {
     let u;
@@ -315,7 +318,7 @@
 
   globalThis.__alfredWatchCore = {
     decideState, extractTag, extractPrompt, isChatPath, latestMessage, readTag, readPrompt, readPromptIn, sendTagOf,
-    promptForLink, onLinkClick, sendLabel, sendAllowed, markSendLinks, approveTokenOf, onApproveClick, focusComposer, cliPlan, sendCli, postLine, postBlock, boxEmpty, SELECTORS,
+    promptForLink, onLinkClick, sendLabel, sendAllowed, markSendLinks, approveTokenOf, onApproveClick, postLineShape: POST_LINE, focusComposer, cliPlan, sendCli, postLine, postBlock, boxEmpty, SELECTORS,
   };
   if (typeof chrome === "undefined" || !chrome.runtime?.id || typeof document === "undefined") return;
 
@@ -471,7 +474,7 @@
     }
     if (msg?.type === "send-status" && typeof msg.tag === "string") setSend(msg.tag, msg.state === "sent" ? "sent" : "notsent", String(msg.reason ?? ""));
     if (msg?.type === "post-check") return reply({ did: postBlock(document) }), false;
-    if (msg?.type === "post-line" && /^sql [0-9a-f-]{36}$/i.test(String(msg.text))) {
+    if (msg?.type === "post-line" && POST_LINE.test(String(msg.text))) {
       // A reply lost on the way back must not post it twice.
       if (postedLines.has(msg.text)) return reply({ did: "sent" }), false;
       postLine(document, msg.text).then((did) => {

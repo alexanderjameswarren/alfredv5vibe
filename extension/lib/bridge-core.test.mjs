@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   approveStatus, approveTokenOf, approveWatcher, buildChatsMessage, buildTabsMessage, checkPrompt, chatForProject, chatForRun, cleanHosts, cleanRun, closesApproveTab, debounce, deliveryMessage, focusResult, notPostedText,
-  GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, isHostMissing, nextDelay, normaliseUrl, pickTab, postProblem, projectOfTag, promptFrame, pruneApprovals, sendTagOf,
+  GRANT_BADGE, grantNotice, hostOrigins, isApprovePage, isHostMissing, nextDelay, normaliseUrl, pickTab, POST_LINE, postProblem, projectOfTag, promptFrame, pruneApprovals, runLine, sendTagOf,
 } from "./bridge-core.js";
 import "../claude-watch.js";
 
@@ -444,7 +444,7 @@ test("host access: origins from the list, and a notice only when one is missing"
 
 test("manifest: no Alfred host in the code, asked for at run time", () => {
   const m = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
-  assert.equal(m.version, "1.2.6");
+  assert.equal(m.version, "1.2.7");
   assert.equal(m.host_permissions.some((h) => /vercel\.app/.test(h)), false);
   assert.deepEqual(m.optional_host_permissions, ["https://*/*"]);
 });
@@ -454,6 +454,26 @@ test("cleanRun: a UUID and a project code, or null", () => {
   assert.equal(cleanRun({ runId: "x", project: "p" }), null);
   assert.equal(cleanRun({ runId: RUN, project: "Bad Project" }), null);
   assert.equal(cleanRun(null), null);
+});
+
+test("cleanRun: a cancellation keeps its one-line reason; a bad reason drops it all", () => {
+  const base = { runId: RUN, project: "p-x" };
+  assert.deepEqual(cleanRun({ ...base, cancelled: true }), { ...base, cancelled: true, reason: "" });
+  assert.deepEqual(cleanRun({ ...base, cancelled: true, reason: "wrong table" }), { ...base, cancelled: true, reason: "wrong table" });
+  assert.equal(cleanRun({ ...base, cancelled: true, reason: "two\nlines" }), null);
+  assert.equal(cleanRun({ ...base, cancelled: true, reason: "x".repeat(201) }), null);
+  assert.equal(cleanRun({ ...base, cancelled: true, reason: 7 }), null);
+  assert.deepEqual(cleanRun({ ...base, reason: "ignored" }), base);
+});
+
+test("runLine: the line for the chat, and the watcher accepts only such lines", () => {
+  assert.equal(runLine({ runId: RUN }), `sql ${RUN}`);
+  assert.equal(runLine({ runId: RUN, cancelled: true, reason: "" }), `sql ${RUN} cancelled`);
+  assert.equal(runLine({ runId: RUN, cancelled: true, reason: "wrong table" }), `sql ${RUN} cancelled: wrong table`);
+  const { postLineShape } = globalThis.__alfredWatchCore;
+  assert.equal(postLineShape.source, POST_LINE.source);
+  for (const good of [`sql ${RUN}`, `sql ${RUN} cancelled`, `sql ${RUN} cancelled: wrong table`]) assert.match(good, postLineShape);
+  for (const bad of ["hello", `sql ${RUN} done`, `sql ${RUN} cancelled: a\nb`, `sql ${RUN} cancelled: ${"x".repeat(201)}`]) assert.doesNotMatch(bad, postLineShape);
 });
 
 test("chatForProject: issued tag first, then title; two matches is none", () => {
@@ -504,6 +524,18 @@ test("approve watcher: a dry run sends nothing; a real run sends its id once per
   run(...Object.values(scope));
   assert.equal(sent.length, 2);
   assert.deepEqual(sent[1], sent[0]);
+});
+
+test("approve watcher: a cancellation sends its flag and reason", async (t) => {
+  const w = await dom(t, APPROVE_HTML);
+  if (!w) return;
+  const sent = [];
+  const r = w.document.getElementById("r");
+  r.setAttribute("data-switchboard-run-id", RUN);
+  r.setAttribute("data-switchboard-cancelled", "");
+  r.setAttribute("data-switchboard-reason", "wrong table");
+  new Function("document", "MutationObserver", "chrome", `return (${approveWatcher.toString()})();`)(w.document, w.MutationObserver, { runtime: { sendMessage: async (m) => sent.push(m) } });
+  assert.deepEqual(sent, [{ type: "approve-run", runId: RUN, project: "switchboard2-h8r", cancelled: true, reason: "wrong table" }]);
 });
 
 test("approve watcher: a re-injection replaces the one a reload left dead", async (t) => {

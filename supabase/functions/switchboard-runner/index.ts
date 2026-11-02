@@ -11,10 +11,12 @@ import { type Action, type Deps, handle, type RunOutcome, type Statement, type S
 //
 // 🛑 A SERVER-TO-SERVER EXCEPTION, LIKE clip-capture. Not an MCP tool: no defineTool, no ctx.db.
 //
-//   POST /queue    x-switchboard-queue-secret. { project_code, sql, description } -> { ok, action_id, headline }
-//   POST /preview  Alex's JWT. { token } -> { headline, description, sql, fingerprint, ... }. Runs nothing.
-//   POST /dry-run  Alex's JWT. { token } -> { run_id, summary }. Rolled back; the link is not spent.
-//   POST /approve  Alex's JWT. { token, fingerprint } -> { run_id, summary, conformance }. Needs a clean dry run.
+//   POST /queue    x-switchboard-queue-secret. { project_code, sql, description, expected?, test? } -> { ok, action_id, headline }
+//   POST /preview  Alex's JWT. { token } -> { headline, description, sql, fingerprint, test, ... }. Runs nothing.
+//   POST /dry-run  Alex's JWT. { token } -> { run_id, summary, counts, mismatch }. Rolled back; the link is not spent,
+//                  unless it's a test action, whose one run this is.
+//   POST /approve  Alex's JWT. { token, fingerprint } -> { run_id, summary, conformance, counts }. Needs a clean latest dry run.
+//   POST /cancel   Alex's JWT. { token, reason? } -> { run_id, cancelled, reason }. Spends the link; runs nothing.
 //
 // ⚠️ verify_jwt must be false in config.toml: /queue has no user token, so the run routes check the JWT themselves.
 // After every deploy an unauthenticated POST to /queue must come back 401 with this function's own body.
@@ -82,6 +84,9 @@ function deps(): Deps {
     if (res.error) throw new Error(res.error.message);
     return res.data as T;
   };
+  const latestDryRun: Deps["latestDryRun"] = async (actionId) =>
+    must(await db.from("switchboard_runs").select("id, result").eq("action_id", actionId).eq("mode", "dry_run")
+      .order("started_at", { ascending: false }).limit(1).maybeSingle()) as { id: string; result: Record<string, unknown> | null } | null;
   return {
     queueSecret: Deno.env.get("SWITCHBOARD_QUEUE_SECRET") ?? "",
     userId: Deno.env.get("CLIPBOARD_USER_ID") ?? "",
@@ -92,10 +97,10 @@ function deps(): Deps {
     },
     findByLinkHash: async (hash, userId) =>
       must(await db.from("switchboard_actions").select(ACTION_COLUMNS).eq("link_hash", hash).eq("user_id", userId).maybeSingle()) as Action | null,
-    hasCleanDryRun: async (actionId) => {
-      const rows = must(await db.from("switchboard_runs").select("id").eq("action_id", actionId).eq("mode", "dry_run")
-        .eq("result->>ok", "true").limit(1)) as unknown[];
-      return rows.length > 0;
+    hasCleanDryRun: async (actionId) => (await latestDryRun(actionId))?.result?.ok === true,
+    latestDryRun,
+    noteCancelled: async (runId, result) => {
+      must(await db.from("switchboard_runs").update({ result }).eq("id", runId));
     },
     // With Alex's JWT, so that auth.uid() in the function is his.
     consume: async (jwt, token, fingerprint) =>
