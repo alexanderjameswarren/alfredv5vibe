@@ -72,8 +72,9 @@ const NET_WORTH_COLUMNS =
 export const TXN_COLUMNS =
   "id, account_id, account_label, posted_at, transacted_at, txn_date, amount, description, clean_description, " +
   "payee, memo, mcc, pending, merchant_id, merchant_name, merchant_source, kind, kind_source, transfer_pair_id, " +
-  "transfer_candidate, reviewed, tag_names, split_count, needs_review, excluded_tags, project_names, first_seen_at, last_seen_at";
+  "transfer_candidate, reviewed, tag_names, split_count, needs_review, excluded_tags, project_names, first_seen_at, last_seen_at, source";
 export const WB_KINDS = ["spend", "income", "transfer", "refund", "investment", "interest", "fee"] as const;
+export const WB_TXN_SOURCES = ["sync", "history_import", "both"] as const;
 const HOLDING_COLUMNS =
   "account_id, as_of, symbol, description, shares, market_value, cost_basis, purchase_price, " +
   "currency, account:wb_accounts(display_name, name)";
@@ -347,9 +348,11 @@ export const getWbTransactionsTool = defineTool({
     const merchantId = absent(args.merchant_id) ? null : requireId(T, "merchant_id", args.merchant_id);
     const tags = tagNames(T, args.tag);
     const needsReview = optBool(T, "needs_review", args.needs_review);
+    const source = oneOf(T, "source", args.source, WB_TXN_SOURCES);
     const LIMIT = limitOf(T, args.limit);
 
     let q = ctx.db.from("wb_transaction_list").select(TXN_COLUMNS, { count: "exact" });
+    if (source && source !== "both") q = q.eq("source", source);
     if (accountId) q = q.eq("account_id", accountId);
     if (from) q = q.gte("posted_at", pacificMidnight(from));
     if (to) q = q.lt("posted_at", pacificMidnight(nextDay(to)));

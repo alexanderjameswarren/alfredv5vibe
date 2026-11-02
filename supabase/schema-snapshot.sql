@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-01 12:10, through migration 192 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-02 08:10, through migration 194 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -8579,6 +8579,41 @@ COMMENT ON FUNCTION "public"."wb_monthly_equivalent"("p_amount" numeric, "p_inte
 
 
 
+CREATE OR REPLACE FUNCTION "public"."wb_order_matches_check"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  o public.wb_orders%rowtype;
+  t public.wb_transactions%rowtype;
+begin
+  select * into o from public.wb_orders where id = new.order_id;
+  select * into t from public.wb_transactions where id = new.transaction_id;
+  if o.site is distinct from 'amazon' then
+    raise exception 'wb_order_matches: only Amazon shipments are matched' using errcode = '23514';
+  end if;
+  if o.amount <= 0 then
+    raise exception 'wb_order_matches: a shipment totalling zero is never matched' using errcode = '23514';
+  end if;
+  if t.amount is distinct from -o.amount then
+    raise exception 'wb_order_matches: the charge must be exactly the shipment amount' using errcode = '23514';
+  end if;
+  if new.days_apart is distinct from
+     (coalesce(t.posted_at, t.transacted_at) at time zone 'America/Los_Angeles')::date - o.ship_date then
+    raise exception 'wb_order_matches: days_apart must be the charge date minus the ship date' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."wb_order_matches_check"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."wb_order_matches_check"() IS 'Warren Buffet: refuses a match unless it is an Amazon shipment above zero, the charge is exactly its amount, and days_apart is the real gap (P4-D7).';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."wb_pair_decision"("p_forward" integer, "p_reverse" integer) RETURNS "text"
     LANGUAGE "sql" IMMUTABLE
     SET "search_path" TO 'public', 'pg_temp'
@@ -15479,6 +15514,137 @@ COMMENT ON VIEW "public"."wb_net_worth_daily" IS 'App: Warren Buffet. Per day, t
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."wb_order_items" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "context_id" "text" NOT NULL,
+    "order_id" "uuid" NOT NULL,
+    "line_no" integer NOT NULL,
+    "site" "text" NOT NULL,
+    "asin" "text",
+    "product_name" "text" NOT NULL,
+    "department" "text",
+    "quantity" integer NOT NULL,
+    "unit_amount" numeric(14,2) NOT NULL,
+    "line_amount" numeric(14,2) NOT NULL,
+    "refunded_amount" numeric(14,2),
+    "refund_date" "date",
+    "order_date" "date" NOT NULL,
+    "ship_date" "date" NOT NULL,
+    "buyer" "text",
+    "tag_id" "uuid",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "wb_order_items_amounts_check" CHECK ((("unit_amount" >= (0)::numeric) AND ("line_amount" >= (0)::numeric))),
+    CONSTRAINT "wb_order_items_quantity_check" CHECK (("quantity" >= 0)),
+    CONSTRAINT "wb_order_items_refund_check" CHECK (((("refunded_amount" IS NULL) AND ("refund_date" IS NULL)) OR (("refunded_amount" IS NOT NULL) AND ("refunded_amount" > (0)::numeric) AND ("refund_date" IS NOT NULL)))),
+    CONSTRAINT "wb_order_items_site_check" CHECK (("site" = ANY (ARRAY['amazon'::"text", 'wholefoods'::"text"])))
+);
+
+
+ALTER TABLE "public"."wb_order_items" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."wb_order_items" IS 'App: Warren Buffet. One product line of a shipment, Amazon or Whole Foods. Never holds addresses, tracking, gift fields or invoices (P4-D7).';
+
+
+
+COMMENT ON COLUMN "public"."wb_order_items"."line_no" IS 'Position in the shipment. Identical lines exist, so this keeps them distinct.';
+
+
+
+COMMENT ON COLUMN "public"."wb_order_items"."unit_amount" IS 'Price of one, before tax, positive.';
+
+
+
+COMMENT ON COLUMN "public"."wb_order_items"."line_amount" IS 'Total for the line, positive. Includes tax, shipping and discounts.';
+
+
+
+COMMENT ON COLUMN "public"."wb_order_items"."refunded_amount" IS 'Total refunded on this line, positive. Empty when none was refunded or a refund could not be placed on one line.';
+
+
+
+COMMENT ON COLUMN "public"."wb_order_items"."refund_date" IS 'Pacific date of the latest refund on this line.';
+
+
+
+COMMENT ON COLUMN "public"."wb_order_items"."buyer" IS 'Who bought it. Empty for now; holds the place for Elise''s orders.';
+
+
+
+COMMENT ON COLUMN "public"."wb_order_items"."tag_id" IS 'The item''s category, set later in chat. Empty until then.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."wb_order_matches" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "context_id" "text" NOT NULL,
+    "order_id" "uuid" NOT NULL,
+    "transaction_id" "uuid" NOT NULL,
+    "days_apart" integer NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "wb_order_matches_days_check" CHECK ((("days_apart" >= 0) AND ("days_apart" <= 3)))
+);
+
+
+ALTER TABLE "public"."wb_order_matches" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."wb_order_matches" IS 'App: Warren Buffet. An Amazon shipment and the one card charge of exactly its amount, 0 to 3 days after it shipped. Unmatched charges have no row (P4-D7).';
+
+
+
+COMMENT ON COLUMN "public"."wb_order_matches"."days_apart" IS 'Charge date minus ship date, Pacific.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."wb_orders" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "context_id" "text" NOT NULL,
+    "site" "text" NOT NULL,
+    "order_number" "text" NOT NULL,
+    "order_date" "date" NOT NULL,
+    "ship_date" "date" NOT NULL,
+    "amount" numeric(14,2) NOT NULL,
+    "order_status" "text",
+    "shipment_status" "text",
+    "payment_method_type" "text",
+    "buyer" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "wb_orders_amount_check" CHECK (("amount" >= (0)::numeric)),
+    CONSTRAINT "wb_orders_site_check" CHECK (("site" = ANY (ARRAY['amazon'::"text", 'wholefoods'::"text"])))
+);
+
+
+ALTER TABLE "public"."wb_orders" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."wb_orders" IS 'App: Warren Buffet. One shipment: the items of one order with one ship date. Imported from Amazon''s data export (P4-D7).';
+
+
+
+COMMENT ON COLUMN "public"."wb_orders"."site" IS 'amazon or wholefoods. Only amazon shipments are matched to charges.';
+
+
+
+COMMENT ON COLUMN "public"."wb_orders"."order_number" IS 'The order id as Amazon gives it. Several shipments can share one.';
+
+
+
+COMMENT ON COLUMN "public"."wb_orders"."ship_date" IS 'Pacific date. A row naming several ship dates sits on the earliest.';
+
+
+
+COMMENT ON COLUMN "public"."wb_orders"."amount" IS 'Sum of the items'' line amounts, positive. Includes tax, shipping and discounts.';
+
+
+
+COMMENT ON COLUMN "public"."wb_orders"."buyer" IS 'Who bought it. Empty for now; holds the place for Elise''s orders.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."wb_planned_items" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -17520,6 +17686,41 @@ ALTER TABLE ONLY "public"."wb_merchants"
 
 
 
+ALTER TABLE ONLY "public"."wb_order_items"
+    ADD CONSTRAINT "wb_order_items_key" UNIQUE ("order_id", "line_no");
+
+
+
+ALTER TABLE ONLY "public"."wb_order_items"
+    ADD CONSTRAINT "wb_order_items_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."wb_order_matches"
+    ADD CONSTRAINT "wb_order_matches_order_key" UNIQUE ("order_id");
+
+
+
+ALTER TABLE ONLY "public"."wb_order_matches"
+    ADD CONSTRAINT "wb_order_matches_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."wb_order_matches"
+    ADD CONSTRAINT "wb_order_matches_transaction_key" UNIQUE ("transaction_id");
+
+
+
+ALTER TABLE ONLY "public"."wb_orders"
+    ADD CONSTRAINT "wb_orders_key" UNIQUE ("user_id", "site", "order_number", "ship_date");
+
+
+
+ALTER TABLE ONLY "public"."wb_orders"
+    ADD CONSTRAINT "wb_orders_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."wb_planned_items"
     ADD CONSTRAINT "wb_planned_items_pkey" PRIMARY KEY ("id");
 
@@ -18295,6 +18496,26 @@ CREATE UNIQUE INDEX "wb_merchants_name_key" ON "public"."wb_merchants" USING "bt
 
 
 
+CREATE INDEX "wb_order_items_context_idx" ON "public"."wb_order_items" USING "btree" ("context_id");
+
+
+
+CREATE INDEX "wb_order_items_order_date_idx" ON "public"."wb_order_items" USING "btree" ("order_date" DESC);
+
+
+
+CREATE INDEX "wb_order_items_tag_idx" ON "public"."wb_order_items" USING "btree" ("tag_id");
+
+
+
+CREATE INDEX "wb_order_matches_context_idx" ON "public"."wb_order_matches" USING "btree" ("context_id");
+
+
+
+CREATE INDEX "wb_orders_context_idx" ON "public"."wb_orders" USING "btree" ("context_id");
+
+
+
 CREATE INDEX "wb_planned_items_due_idx" ON "public"."wb_planned_items" USING "btree" ("due_on");
 
 
@@ -18683,6 +18904,18 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."wb_order_items" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."wb_order_matches" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."wb_orders" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."wb_planned_items" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -19024,6 +19257,10 @@ CREATE OR REPLACE TRIGGER "wb_balance_snapshots_touch_updated_at" BEFORE UPDATE 
 
 
 CREATE OR REPLACE TRIGGER "wb_merchants_touch_updated_at" BEFORE UPDATE ON "public"."wb_merchants" FOR EACH ROW EXECUTE FUNCTION "public"."wb_touch_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "wb_order_matches_check" BEFORE INSERT OR UPDATE ON "public"."wb_order_matches" FOR EACH ROW EXECUTE FUNCTION "public"."wb_order_matches_check"();
 
 
 
@@ -19911,6 +20148,56 @@ ALTER TABLE ONLY "public"."wb_merchants"
 
 
 
+ALTER TABLE ONLY "public"."wb_order_items"
+    ADD CONSTRAINT "wb_order_items_context_id_fkey" FOREIGN KEY ("context_id") REFERENCES "public"."contexts"("id");
+
+
+
+ALTER TABLE ONLY "public"."wb_order_items"
+    ADD CONSTRAINT "wb_order_items_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "public"."wb_orders"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."wb_order_items"
+    ADD CONSTRAINT "wb_order_items_tag_id_fkey" FOREIGN KEY ("tag_id") REFERENCES "public"."wb_tags"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."wb_order_items"
+    ADD CONSTRAINT "wb_order_items_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."wb_order_matches"
+    ADD CONSTRAINT "wb_order_matches_context_id_fkey" FOREIGN KEY ("context_id") REFERENCES "public"."contexts"("id");
+
+
+
+ALTER TABLE ONLY "public"."wb_order_matches"
+    ADD CONSTRAINT "wb_order_matches_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "public"."wb_orders"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."wb_order_matches"
+    ADD CONSTRAINT "wb_order_matches_transaction_id_fkey" FOREIGN KEY ("transaction_id") REFERENCES "public"."wb_transactions"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."wb_order_matches"
+    ADD CONSTRAINT "wb_order_matches_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."wb_orders"
+    ADD CONSTRAINT "wb_orders_context_id_fkey" FOREIGN KEY ("context_id") REFERENCES "public"."contexts"("id");
+
+
+
+ALTER TABLE ONLY "public"."wb_orders"
+    ADD CONSTRAINT "wb_orders_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
+
+
+
 ALTER TABLE ONLY "public"."wb_planned_items"
     ADD CONSTRAINT "wb_planned_items_context_id_fkey" FOREIGN KEY ("context_id") REFERENCES "public"."contexts"("id");
 
@@ -20625,6 +20912,18 @@ CREATE POLICY "claude_reader_read" ON "public"."wb_merchants" FOR SELECT TO "cla
 
 
 
+CREATE POLICY "claude_reader_read" ON "public"."wb_order_items" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_order_matches" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_orders" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
 CREATE POLICY "claude_reader_read" ON "public"."wb_planned_items" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
 
 
@@ -21273,6 +21572,39 @@ ALTER TABLE "public"."wb_merchants" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "wb_merchants_access" ON "public"."wb_merchants" USING ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true))))) WITH CHECK ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true)))));
+
+
+
+ALTER TABLE "public"."wb_order_items" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "wb_order_items_access" ON "public"."wb_order_items" USING ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true))))) WITH CHECK ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true)))));
+
+
+
+ALTER TABLE "public"."wb_order_matches" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "wb_order_matches_access" ON "public"."wb_order_matches" USING ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true))))) WITH CHECK ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true)))));
+
+
+
+ALTER TABLE "public"."wb_orders" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "wb_orders_access" ON "public"."wb_orders" USING ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
    FROM "public"."contexts"
   WHERE ("contexts"."shared" = true))))) WITH CHECK ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
    FROM "public"."contexts"
@@ -22359,6 +22691,12 @@ GRANT ALL ON FUNCTION "public"."wb_link_subscription"("p_transaction_ids" "uuid"
 REVOKE ALL ON FUNCTION "public"."wb_monthly_equivalent"("p_amount" numeric, "p_interval_count" integer, "p_interval_unit" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_monthly_equivalent"("p_amount" numeric, "p_interval_count" integer, "p_interval_unit" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_monthly_equivalent"("p_amount" numeric, "p_interval_count" integer, "p_interval_unit" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."wb_order_matches_check"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."wb_order_matches_check"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."wb_order_matches_check"() TO "service_role";
 
 
 
@@ -26590,6 +26928,177 @@ GRANT SELECT("not_subscription") ON TABLE "public"."wb_merchants" TO "claude_rea
 
 GRANT ALL ON TABLE "public"."wb_net_worth_daily" TO "authenticated";
 GRANT ALL ON TABLE "public"."wb_net_worth_daily" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."wb_order_items" TO "authenticated";
+GRANT ALL ON TABLE "public"."wb_order_items" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("order_id") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("line_no") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("site") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("asin") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("product_name") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("department") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("quantity") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("unit_amount") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("line_amount") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("refunded_amount") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("refund_date") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("order_date") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("ship_date") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("buyer") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("tag_id") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_order_items" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."wb_order_matches" TO "authenticated";
+GRANT ALL ON TABLE "public"."wb_order_matches" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_order_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_order_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_order_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("order_id") ON TABLE "public"."wb_order_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("transaction_id") ON TABLE "public"."wb_order_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("days_apart") ON TABLE "public"."wb_order_matches" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_order_matches" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."wb_orders" TO "authenticated";
+GRANT ALL ON TABLE "public"."wb_orders" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_orders" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_orders" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_orders" TO "claude_reader";
+
+
+
+GRANT SELECT("site") ON TABLE "public"."wb_orders" TO "claude_reader";
+
+
+
+GRANT SELECT("order_number") ON TABLE "public"."wb_orders" TO "claude_reader";
+
+
+
+GRANT SELECT("order_date") ON TABLE "public"."wb_orders" TO "claude_reader";
+
+
+
+GRANT SELECT("ship_date") ON TABLE "public"."wb_orders" TO "claude_reader";
+
+
+
+GRANT SELECT("amount") ON TABLE "public"."wb_orders" TO "claude_reader";
+
+
+
+GRANT SELECT("order_status") ON TABLE "public"."wb_orders" TO "claude_reader";
+
+
+
+GRANT SELECT("shipment_status") ON TABLE "public"."wb_orders" TO "claude_reader";
+
+
+
+GRANT SELECT("payment_method_type") ON TABLE "public"."wb_orders" TO "claude_reader";
+
+
+
+GRANT SELECT("buyer") ON TABLE "public"."wb_orders" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_orders" TO "claude_reader";
 
 
 

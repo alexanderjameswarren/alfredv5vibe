@@ -21,6 +21,7 @@
 //   mark_wb_missed_dates_not_needed tier 2 — up to 25 missed dates marked Not needed, or undone
 //   unconfirm_wb_planned_match  tier 2 — remove a confirmed match; never changes the stage
 //   get_wb_action_items         tier 1 — the money to-do list (wb_action_items), every section in one object
+//   get_wb_order_items          tier 1 — Amazon and Whole Foods items, with any matched card charge (Phase 4, P4-D7)
 //
 // get_wb_free_cash takes an optional what_if list (A43): free cash with and without
 // hypothetical items, writing nothing.
@@ -32,7 +33,7 @@
 
 import { defineTool, envelope, readTable } from "../platform.ts";
 import {
-  absent, checkRange, limitOf, listResult, MONEY_CONTEXT_ID, oneOf, optBool, optText, parseDate, parseMoney,
+  absent, checkRange, limitOf, listResult, MONEY_CONTEXT_ID, oneOf, optBool, optText, parseDate, parseMoney, searchTerm,
 } from "./warren-buffet.ts";
 import { dbError, HAND_SOURCES, idList, uuidOf } from "./warren-buffet-p2.ts";
 
@@ -220,6 +221,63 @@ export const getWbPlannedMatchesTool = defineTool({
       for (const p of (tx ?? []) as Obj[]) payments.set(p.id as string, p);
     }
     return listResult(rows.map((r) => ({ ...r, payment: payments.get(r.transaction_id as string) ?? null })), count, LIMIT);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// get_wb_order_items — tier 1
+// ---------------------------------------------------------------------------
+
+export const ORDER_SITES = ["amazon", "wholefoods"] as const;
+
+export const getWbOrderItemsTool = defineTool({
+  name: "get_wb_order_items",
+  tables: { reads: ["wb_order_items", "wb_order_matches", "wb_transaction_list"], writes: [] },
+  tier: 1,
+  handler: async (args: Obj, ctx) => {
+    const T = "get_wb_order_items";
+    const search = searchTerm(T, args.search);
+    const site = oneOf(T, "site", args.site, ORDER_SITES);
+    const from = parseDate(T, "from", args.from);
+    const to = parseDate(T, "to", args.to);
+    checkRange(T, from, to, "from", "to");
+    return await readTable(ctx, {
+      tool: T,
+      table: "wb_order_items",
+      args,
+      omit: ["user_id", "context_id", "created_at"],
+      filter: (q) => {
+        // Every word must appear, in any order.
+        for (const word of search ? search.split(" ") : []) q = q.ilike("product_name", `%${word}%`);
+        if (site) q = q.eq("site", site);
+        if (from) q = q.gte("order_date", from);
+        if (to) q = q.lte("order_date", to);
+        return q;
+      },
+      order: [{ column: "order_date", ascending: false }, { column: "id", ascending: true }],
+      attach: async (rows) => {
+        const orderIds = [...new Set(rows.map((r) => r.order_id as string))];
+        const { data: found, error } = await ctx.db.from("wb_order_matches")
+          .select("order_id, transaction_id, days_apart").in("order_id", orderIds);
+        if (error) throw new Error(dbError(T, error));
+        const matches = (found ?? []) as Obj[];
+        const charges = new Map<string, Obj>();
+        if (matches.length) {
+          const { data: tx, error: te } = await ctx.db.from("wb_transaction_list")
+            .select(PAYMENT_COLUMNS).in("id", matches.map((x) => x.transaction_id as string));
+          if (te) throw new Error(dbError(T, te));
+          for (const p of (tx ?? []) as Obj[]) charges.set(p.id as string, p);
+        }
+        const byOrder = new Map(matches.map((x) => [x.order_id as string, x]));
+        return {
+          rows: rows.map((r) => {
+            const hit = byOrder.get(r.order_id as string);
+            const charge = hit ? charges.get(hit.transaction_id as string) : null;
+            return { ...r, matched_charge: charge ? { ...charge, days_apart: hit!.days_apart } : null };
+          }),
+        };
+      },
+    });
   },
 });
 

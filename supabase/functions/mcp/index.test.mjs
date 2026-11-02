@@ -352,8 +352,12 @@ test("the tool count is 72 after the job-search tools", () => {
                       ...EXPECTED_ADDED_ARNOLD_5, ...EXPECTED_ADDED_ARNOLD_8, ...EXPECTED_ADDED_SWITCHBOARD_25]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
-  assert.equal(registered.length, 183,
-    `expected 183 registered tools, found ${registered.length}: ` +
+  const orderItems = registered.find((r) => r.name === "get_wb_order_items");
+  assert.ok(orderItems, "missing get_wb_order_items");
+  assert.match(orderItems.cfg.description, /Refunds are included where they could be tied to an item/);
+  // 2026-11-02, +1 for Warren Buffet Phase 4 Step 8b: Amazon and Whole Foods items.
+  assert.equal(registered.length, 184,
+    `expected 184 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -519,7 +523,7 @@ test("Warren Buffet Phase 3 schemas advertise exactly the args their handlers re
     rest = rest.replace(body, "");
   }
   const blocks = rest.split("defineTool({").slice(1);
-  assert.equal(blocks.length, 18, `expected 18 tools in warren-buffet-p3.ts, found ${blocks.length}`);
+  assert.equal(blocks.length, 19, `expected 19 tools in warren-buffet-p3.ts, found ${blocks.length}`);
   const tiers = {};
   for (const b of blocks) {
     const name = /name:\s*"([^"]+)"/.exec(b)[1];
@@ -537,7 +541,7 @@ test("Warren Buffet Phase 3 schemas advertise exactly the args their handlers re
     get_wb_true_cost: 1, get_wb_cash_projection: 1, upsert_wb_project: 2, upsert_wb_planned_item: 2,
     create_wb_planned_match: 3, update_wb_planned_match: 2, set_wb_transaction_project: 2, update_wb_settings: 3,
     get_wb_project_summary: 1, get_wb_missed_dates: 1, mark_wb_missed_dates_not_needed: 2, unconfirm_wb_planned_match: 2,
-    get_wb_action_items: 1,
+    get_wb_action_items: 1, get_wb_order_items: 1,
   });
 });
 

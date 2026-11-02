@@ -143,6 +143,20 @@ test("get_wb_transactions Phase 2 filters run before the limit", async () => {
   await assert.rejects(m.getWbTransactionsTool.handler({ tag: [""] }, { db }), /tag must be/);
 });
 
+test("get_wb_transactions source filter", async () => {
+  const eqs = async (args) => {
+    const db = fakeDb();
+    await m.getWbTransactionsTool.handler(args, { db });
+    assert.match(db.log[0].ops.find((o) => o[0] === "select")[1], /\bsource\b/);
+    return db.log[0].ops.filter((o) => o[0] === "eq");
+  };
+  assert.deepEqual(await eqs({}), []);
+  assert.deepEqual(await eqs({ source: "both" }), []);
+  assert.deepEqual(await eqs({ source: "sync" }), [["eq", "source", "sync"]]);
+  assert.deepEqual(await eqs({ source: "history_import" }), [["eq", "source", "history_import"]]);
+  await assert.rejects(m.getWbTransactionsTool.handler({ source: "x" }, { db: fakeDb() }), /source must be one of/);
+});
+
 test("get_wb_transactions rejects min above max", async () => {
   await assert.rejects(
     m.getWbTransactionsTool.handler({ min_amount: 10, max_amount: -10 }, { db: fakeDb() }),
