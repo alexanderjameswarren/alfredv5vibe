@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-02 14:19, through migration 197 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-02 15:01, through migration 198 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -4503,10 +4503,11 @@ begin
 
   -- Apps, activity and quiet.
   with last_use as (
-    select ac.app_id, max((ac.occurred_at at time zone c_tz)::date) as last_on
+    select ac.app_id, max((ac.occurred_at at time zone c_tz)::date) as last_on,
+           bool_or((ac.occurred_at at time zone c_tz)::date = v_local - 1) as on_yesterday
       from public.activity ac group by ac.app_id
   ), a as (
-    select ap.id as app_id, ap.name, pf.rhythm_days, pf.activity_recipe, pf.current_state, l.last_on,
+    select ap.id as app_id, ap.name, pf.rhythm_days, pf.activity_recipe, pf.current_state, l.last_on, l.on_yesterday,
            exists (select 1 from public.overwatch_watch w
                     where w.app_id = ap.id and w.kind = 'ease_off'
                       and w.starts_on <= v_local and w.ends_on >= v_local) as eased
@@ -4518,7 +4519,7 @@ begin
     'apps', coalesce(jsonb_agg(jsonb_build_object(
         'app_id', a.app_id, 'name', a.name, 'rhythm_days', a.rhythm_days, 'activity_recipe', a.activity_recipe,
         'current_state', a.current_state, 'last_activity_on', a.last_on,
-        'active_yesterday', a.last_on is not null and a.last_on >= v_local - 1) order by a.app_id), '[]'::jsonb),
+        'active_yesterday', coalesce(a.on_yesterday, false)) order by a.app_id), '[]'::jsonb),
     'quiet_apps', coalesce(jsonb_agg(jsonb_build_object(
         'app', a.app_id, 'last_used_on', a.last_on, 'days_since', v_local - a.last_on, 'rhythm_days', a.rhythm_days)
         order by a.app_id)
@@ -4603,9 +4604,14 @@ begin
          from low)) end
     into v_r;
 
-  -- Schedules: each job's true last ok run. A schedule created after its due time has not missed it.
+  -- Schedules: each job's true last ok run. Stopped once the current due time plus grace has passed with no ok run after
+  -- the previous due time plus grace: a run before expected_by counts, and one inside the previous cycle's grace counts
+  -- for that cycle only. A schedule created after its due time has not missed it. The previous due time is worked out in
+  -- Pacific days, so daylight time cannot move it.
   with s as (
     select sc.app, sc.job, sc.grace_hours, sc.created_at, due.due_at,
+           ((due.due_at at time zone c_tz)
+             - case when sc.cadence = 'daily' then interval '1 day' else interval '7 days' end) at time zone c_tz as previous_due_at,
            (select max(coalesce(r.finished_at, r.started_at)) from public.platform_runs r
              where r.app = sc.app and r.job = sc.job and r.status = 'ok') as last_ok
       from public.platform_schedules sc
@@ -4629,7 +4635,7 @@ begin
         from s
        where s.created_at <= s.due_at
          and s.due_at + make_interval(hours => s.grace_hours) < p_as_of
-         and (s.last_ok is null or s.last_ok < s.due_at)
+         and (s.last_ok is null or s.last_ok <= s.previous_due_at + make_interval(hours => s.grace_hours))
       union all
       -- notify-dispatch writes no runs: its sign of life is the reminder queue.
       select jsonb_build_object('app', sc.app, 'job', sc.job,
