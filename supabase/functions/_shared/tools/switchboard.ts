@@ -113,6 +113,48 @@ export const readerSeam = {
 /** An error's words for Claude and the log: a driver's error can quote the address it was given. */
 const cleanError = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/postgres(ql)?:\/\/\S+/gi, "[connection string]");
 
+// --- The plan guard: only public and pg_catalog, read from what Postgres says it would do. ---
+
+const READABLE_SCHEMAS = new Set(["public", "pg_catalog"]);
+// pg_catalog functions that take a query or a table by name, so the plan can't see what they read.
+const RUNS_TEXT = /\b(query_to_xml|query_to_xmlschema|query_to_xml_and_xmlschema|cursor_to_xml|cursor_to_xmlschema|table_to_xml|table_to_xmlschema|table_to_xml_and_xmlschema|schema_to_xml|schema_to_xmlschema|schema_to_xml_and_xmlschema|database_to_xml|database_to_xmlschema|database_to_xml_and_xmlschema|ts_stat|ts_rewrite)\s*\(/gi;
+const NAME_IN_PLAN = String.raw`("[^"]+"|[A-Za-z_][\w$]*)`;
+const QUALIFIED_CALL = new RegExp(String.raw`${NAME_IN_PLAN}\.${NAME_IN_PLAN}\s*\(`, "g");
+const QUALIFIED_CAST = new RegExp(String.raw`::${NAME_IN_PLAN}\.${NAME_IN_PLAN}`, "g");
+const NOT_EXPRESSIONS = new Set(["Schema", "Alias", "Relation Name", "Node Type"]);
+
+const stripStrings = (s: string) => s.replace(/'(?:[^']|'')*'/g, "''").replace(/\$([A-Za-z_]\w*)?\$[\s\S]*?\$\1\$/g, "''");
+
+/** What in an EXPLAIN (VERBOSE, FORMAT JSON) plan reaches outside the readable schemas. [] when nothing does. */
+export function planProblems(plan: unknown): string[] {
+  const found = new Set<string>();
+  const readExpression = (text: string) => {
+    const bare = stripStrings(text);
+    for (const re of [QUALIFIED_CALL, QUALIFIED_CAST]) {
+      for (const m of bare.matchAll(re)) {
+        const schema = m[1].replace(/"/g, "");
+        if (!READABLE_SCHEMAS.has(schema)) found.add(`${schema}.${m[2].replace(/"/g, "")}`);
+      }
+    }
+    for (const m of bare.matchAll(RUNS_TEXT)) found.add(m[1].toLowerCase());
+  };
+  const walk = (v: unknown, key = "") => {
+    if (typeof v === "string") {
+      if (key === "Schema" && !READABLE_SCHEMAS.has(v)) found.add(v);
+      if (!NOT_EXPRESSIONS.has(key)) readExpression(key === "Function Name" ? `${v}()` : v);
+    } else if (Array.isArray(v)) {
+      for (const x of v) walk(x, key);
+    } else if (v && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) walk(x, k);
+    }
+  };
+  walk(plan);
+  return [...found];
+}
+
+const outsideReadable = (what: string) =>
+  new Error(`refused: this query reaches outside public and pg_catalog (${what}). get_sql_read reads only public and pg_catalog.`);
+
 /** One statement, read only, limited, always rolled back. The extended protocol refuses a second statement. */
 async function runReadOnly(text: string) {
   const out = { rows: [] as unknown[], truncated: false, error: null as string | null };
@@ -125,6 +167,14 @@ async function runReadOnly(text: string) {
       await tx.unsafe("set transaction read only");
       await tx.unsafe("set local statement_timeout = '10s'");
       await tx.unsafe("set local lock_timeout = '1s'");
+      // information_schema's views expand to pg_catalog tables, so its name is only ever in the query's own text.
+      if (/\binformation_schema\b/i.test(stripStrings(text))) throw outsideReadable("information_schema");
+      const answer = await tx.unsafe(`explain (verbose, format json) ${text}`, [], { simple: false }) as Record<string, unknown>[];
+      const raw = answer[0]?.["QUERY PLAN"];
+      const plan = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (!plan) throw new Error("refused: the query's plan could not be read.");
+      const problems = planProblems(plan);
+      if (problems.length) throw outsideReadable(problems.join(", "));
       for await (const batch of tx.unsafe(text, [], { simple: false }).cursor(MAX_ROWS + 1)) {
         out.truncated = batch.length > MAX_ROWS;
         out.rows = batch.slice(0, MAX_ROWS);

@@ -47,8 +47,10 @@ test("tiers", () => {
 
 // --- get_sql_read ---------------------------------------------------------------------------------------------------
 
-const READ = "get_sql_read";
 const MINUTE = 60 * 1000;
+// Shaped as EXPLAIN (VERBOSE, FORMAT JSON) answers.
+const planOf = (node) => [{ Plan: node }];
+const PLAN_PUBLIC = planOf({ "Node Type": "Seq Scan", Schema: "public", "Relation Name": "items", Alias: "items", Output: ["id", "lower(title)"], Filter: "(status = 'net.http_get('::text)" });
 
 /** A db with the kill switch, two window counts, and a record of what was logged. */
 function readDb({ enabled = true, tenMin = 0, day = 0, settingsError = null, countError = null, logError = null } = {}) {
@@ -78,18 +80,26 @@ function readDb({ enabled = true, tenMin = 0, day = 0, settingsError = null, cou
 }
 
 /** Stands in for postgres.js and for how Postgres answers each statement. */
-function fakeReader({ rows = [{ n: 1 }], error = null, connectError = null } = {}) {
+function fakeReader({ rows = [{ n: 1 }], error = null, connectError = null, plan = PLAN_PUBLIC } = {}) {
   const log = { sent: [], options: [], ended: 0, rolledBack: 0, committed: 0, cursorSize: null, url: null };
   const tx = {
     unsafe(text, params, options) {
       log.sent.push(text);
       if (options) log.options.push(options);
-      const fail = () => {
+      const multi = () => {
         if (/;\s*\S/.test(text)) throw new Error("cannot insert multiple commands into a prepared statement");
+      };
+      const fail = () => {
+        multi();
         if (error) throw new Error(error);
       };
       return {
-        then: (res, rej) => { try { res([]); } catch (e) { rej(e); } },
+        then: (res, rej) => {
+          try {
+            multi();
+            res(/^explain/i.test(text) ? [{ "QUERY PLAN": plan }] : []);
+          } catch (e) { rej(e); }
+        },
         cursor(size) {
           log.cursorSize = size;
           return (async function* () {
@@ -132,9 +142,10 @@ test("read: begin, read only, both limits, one statement, always rolled back, co
   assert.deepEqual(log.sent.slice(0, 3).map((s) => s.toLowerCase()), [
     "set transaction read only", "set local statement_timeout = '10s'", "set local lock_timeout = '1s'",
   ]);
-  assert.equal(log.sent[3], "select 1 as n");
-  assert.equal(log.sent.length, 4);
-  assert.deepEqual(log.options, [{ simple: false }]);
+  assert.equal(log.sent[3], "explain (verbose, format json) select 1 as n");
+  assert.equal(log.sent[4], "select 1 as n");
+  assert.equal(log.sent.length, 5);
+  assert.deepEqual(log.options, [{ simple: false }, { simple: false }]);
   assert.equal(log.committed, 0);
   assert.equal(log.rolledBack, 1);
   assert.equal(log.ended, 1);
@@ -194,6 +205,68 @@ for (const [name, sql, error, want] of [
     assert.equal(db.logged[0].query_text, sql);
   });
 }
+
+test("plan guard: a query on public and pg_catalog passes, whatever its strings say", () => {
+  assert.deepEqual(m.planProblems(PLAN_PUBLIC), []);
+  assert.deepEqual(m.planProblems(planOf({ "Node Type": "Seq Scan", Schema: "pg_catalog", "Relation Name": "pg_class", Output: ["pg_catalog.lower(relname)", "t.n", "(t.a).b"] })), []);
+  assert.deepEqual(m.planProblems(planOf({ "Node Type": "Result", Output: ["current_user"] })), []);
+  assert.deepEqual(m.planProblems(planOf({ "Node Type": "Function Scan", Schema: "pg_catalog", "Function Name": "generate_series", Output: ["g"] })), []);
+});
+
+test("plan guard: finds another schema wherever the plan names it", () => {
+  const cases = [
+    ["a net table", planOf({ "Node Type": "Seq Scan", Schema: "net", "Relation Name": "_http_response", Output: ["id"] }), /net/],
+    ["a table under a join", planOf({ "Node Type": "Hash Join", Schema: undefined, Plans: [{ "Node Type": "Seq Scan", Schema: "public", "Relation Name": "items" }, { "Node Type": "Hash", Plans: [{ "Node Type": "Seq Scan", Schema: "net", "Relation Name": "http_request_queue" }] }] }), /net/],
+    ["a net function in the output", planOf({ "Node Type": "Result", Output: ["net.http_get('https://x'::text)"] }), /net\.http_get/],
+    ["a function in a filter", planOf({ "Node Type": "Seq Scan", Schema: "public", "Relation Name": "items", Filter: "(net.check(id) = 1)" }), /net\.check/],
+    ["a quoted function name", planOf({ "Node Type": "Result", Output: ['"Odd"."fn"(1)'] }), /Odd/],
+    ["a function in the from clause", planOf({ "Node Type": "Function Scan", Schema: "vault", "Function Name": "x" }), /vault/],
+    ["a cast to another schema's type", planOf({ "Node Type": "Result", Output: ["'a'::net.http_method"] }), /net/],
+    ["a function that runs a query from text", planOf({ "Node Type": "Result", Output: ["query_to_xml('select 1 from net._http_response'::text, false, false, ''::text)"] }), /query_to_xml/],
+    ["ts_stat", planOf({ "Node Type": "Function Scan", Schema: "pg_catalog", "Function Name": "ts_stat", "Function Call": "ts_stat('select 1'::text)" }), /ts_stat/],
+  ];
+  for (const [name, plan, want] of cases) assert.match(m.planProblems(plan).join(), want, name);
+});
+
+for (const [name, sql, plan, want] of [
+  ["net tables", "select * from net._http_response", planOf({ "Node Type": "Seq Scan", Schema: "net", "Relation Name": "_http_response" }), /net/],
+  ["net functions", "select net.http_get('https://x')", planOf({ "Node Type": "Result", Output: ["net.http_get('https://x'::text)"] }), /net\.http_get/],
+  ["information_schema, whose plan shows only pg_catalog", "select count(*) from information_schema.tables", planOf({ "Node Type": "Aggregate", Plans: [{ "Node Type": "Seq Scan", Schema: "pg_catalog", "Relation Name": "pg_class" }] }), /information_schema/],
+  ["information_schema, quoted", 'select 1 from "information_schema"."tables"', PLAN_PUBLIC, /information_schema/],
+]) {
+  test(`read: the guard refuses ${name} before the query runs, and logs it`, async () => {
+    const log = fakeReader({ plan });
+    const db = readDb();
+    const out = await runRead({ sql }, db);
+    assert.equal(out.ok, false);
+    assert.match(out.error, want);
+    assert.match(out.error, /public and pg_catalog/);
+    assert.ok(!log.sent.includes(sql), "the query itself must not be sent");
+    assert.equal(log.committed, 0);
+    assert.equal(db.logged[0].ok, false);
+    assert.match(db.logged[0].error, want);
+  });
+}
+
+test("read: a query on public still runs, and a string naming a schema doesn't trip it", async () => {
+  const log = fakeReader();
+  const sql = "select id from items where title = 'information_schema net.http_get('";
+  const out = await runRead({ sql }, readDb());
+  assert.equal(out.ok, true);
+  assert.ok(log.sent.includes(sql));
+});
+
+test("read: a plan that comes back as text is read the same", async () => {
+  fakeReader({ plan: JSON.stringify(planOf({ "Node Type": "Seq Scan", Schema: "net", "Relation Name": "x" })) });
+  assert.equal((await runRead({ sql: "select 1" }, readDb())).ok, false);
+});
+
+test("read: a plan that can't be read refuses, rather than running unchecked", async () => {
+  const log = fakeReader({ plan: "not json" });
+  const out = await runRead({ sql: "select 1" }, readDb());
+  assert.equal(out.ok, false);
+  assert.ok(!log.sent.includes("select 1"));
+});
 
 test("read: a trailing semicolon is still one statement", async () => {
   fakeReader();
