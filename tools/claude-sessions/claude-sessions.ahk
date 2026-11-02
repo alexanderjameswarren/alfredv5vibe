@@ -1361,7 +1361,7 @@ TouchState() {
     for i, t in tiles
         touchOrder[t.id] := i
     db := DbStrip(claimsState["claims"], nowUtc)
-    return {type: "state", main: MainStrip(mainProject), db: db.text, dbRed: db.red ? 1 : 0, tiles: tiles
+    return {type: "state", main: MainStrip(mainProject), db: db.text, dbRed: db.red ? 1 : 0, tiles: tiles, rows: TileRows(tiles.Length)
         , mode: touchPlace = "" ? "touch" : touchPlace.mode, noTouch: touchPlace = "" ? 0 : touchPlace.noTouch}
 }
 

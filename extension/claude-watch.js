@@ -203,11 +203,27 @@
   /** A link that is on its way or delivered takes no more clicks; a refused one can be tried again. */
   const sendAllowed = (state) => state !== "sending" && state !== "sent";
 
-  /** Every link in the page with this tag says so. Only ever its own words, and only when they differ. */
+  /** How a clicked link looks: plain text while it can't be clicked, a plain button when it can be retried. */
+  function sendLook(state) {
+    const look = { "text-decoration": "none", color: "inherit" };
+    return state === "notsent"
+      ? { ...look, cursor: "pointer", "pointer-events": "auto", display: "inline-block", padding: "2px 10px", "border-style": "solid", "border-width": "1px", "border-color": "currentcolor", "border-radius": "6px" }
+      : { ...look, cursor: "default", "pointer-events": "none" };
+  }
+
+  /** Every link in the page with this tag says so. Only ever its own words and look, and only when they differ. */
   function markSendLinks(root, hosts, tag, state, reason) {
     const text = sendLabel(state, reason);
-    for (const a of root.querySelectorAll("a[href]"))
-      if (sendTagOf(a.href, hosts) === tag && a.textContent !== text) a.textContent = text;
+    for (const a of root.querySelectorAll("a[href]")) {
+      if (sendTagOf(a.href, hosts) !== tag) continue;
+      if (a.textContent !== text) a.textContent = text;
+      // Once per state: the page's observer watches attributes, and a re-rendered link has no mark.
+      if (a.dataset.alfredSend === state) continue;
+      a.dataset.alfredSend = state;
+      a.removeAttribute("style");
+      // Important, or claude.ai's own link rules win.
+      for (const [name, value] of Object.entries(sendLook(state))) a.style.setProperty(name, value, "important");
+    }
   }
 
   /** The only lines this may type into a chat. Same as lib/bridge-core.js POST_LINE; the tests hold them equal. */
@@ -318,7 +334,7 @@
 
   globalThis.__alfredWatchCore = {
     decideState, extractTag, extractPrompt, isChatPath, latestMessage, readTag, readPrompt, readPromptIn, sendTagOf,
-    promptForLink, onLinkClick, sendLabel, sendAllowed, markSendLinks, approveTokenOf, onApproveClick, postLineShape: POST_LINE, focusComposer, cliPlan, sendCli, postLine, postBlock, boxEmpty, SELECTORS,
+    promptForLink, onLinkClick, sendLabel, sendAllowed, sendLook, markSendLinks, approveTokenOf, onApproveClick, postLineShape: POST_LINE, focusComposer, cliPlan, sendCli, postLine, postBlock, boxEmpty, SELECTORS,
   };
   if (typeof chrome === "undefined" || !chrome.runtime?.id || typeof document === "undefined") return;
 

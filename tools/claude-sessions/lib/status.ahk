@@ -193,7 +193,8 @@ ViewOf(p) {
     if cliIdle && !reported
         return {color: "red", label: "Check CLI"}
     ; Spec 7.2 precedence: Waiting on SQL, Prompt ready, Send cli, Running, Your turn.
-    if p.HasOwnProp("sqlWaiting") && p.sqlWaiting
+    ; Tan only once the CLI has stopped: an action queued during a run shows when the run ends.
+    if cliIdle && p.HasOwnProp("sqlWaiting") && p.sqlWaiting
         return {color: "tan", label: "Waiting on SQL"}
     finished := p.chatState = "finished"
     if finished && NewerTag(p.runTag, p.issuedTag, p.project)
@@ -626,13 +627,17 @@ FenceBox(monitors) {
 ; Colours the page draws; everything else is grey.
 TileColor(c) => c ~= "^(red|orange|paleorange|purple|yellow|green|greenrun|greenshort|overrun|tan)$" ? c : "grey"
 
-; Sorted by group (0 CLI, paused ones included, 1 chats, 3 orphans), then lane order
-; (t.lane; none or 0 comes after), then the previous order (`prev`: id -> position), so a
-; colour or status change never moves a tile. New tiles go at the end, in input order.
+; Rows on the page: 3 x 2 up to 6 tiles; from 7, the smaller 3 x 3, so 9 fit before scrolling.
+TileRows(count) => count >= 7 ? 3 : 2
+
+; Sorted by group (0 CLI, paused ones included, 1 chats, 3 orphans), with the main checkout
+; always first, then lane order (t.lane; none or 0 comes after), then the previous order
+; (`prev`: id -> position), so a colour or status change never moves a tile. New tiles go at
+; the end, in input order.
 TileSort(tiles, prev) {
     keyed := []
     for t in tiles {
-        lane := t.HasOwnProp("lane") && t.lane ? t.lane : 999999
+        lane := t.id = "cli:main" ? 0 : t.HasOwnProp("lane") && t.lane ? t.lane : 999999
         keyed.Push({t: t, k: Format("{}{:06}{:06}{:06}", t.group, lane, prev.Get(t.id, 999999), A_Index)})
     }
     out := []

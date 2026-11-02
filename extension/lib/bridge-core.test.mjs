@@ -276,6 +276,44 @@ test("send link: every link with the tag says so, and only those", async (t) => 
   assert.equal(page.anchor.querySelector("b"), null);
 });
 
+test("send link: plain text while sending or sent, a button when it can be retried", async (t) => {
+  const { markSendLinks } = globalThis.__alfredWatchCore;
+  const hosts = ["alfredv5vibe.vercel.app"];
+  const page = await chatPage(t);
+  if (!page) return;
+  const { style } = page.anchor;
+  for (const state of ["sending", "sent"]) {
+    markSendLinks(page.document, hosts, "sb-h8r-s13-q2vx", state);
+    assert.equal(style.getPropertyValue("text-decoration"), "none", state);
+    assert.equal(globalThis.__alfredWatchCore.sendLook(state).color, "inherit", state);   // jsdom's parser drops this one
+    assert.equal(style.getPropertyValue("cursor"), "default", state);
+    assert.equal(style.getPropertyValue("pointer-events"), "none", state);
+    assert.equal(style.getPropertyValue("border-style"), "", state);
+  }
+  markSendLinks(page.document, hosts, "sb-h8r-s13-q2vx", "notsent", "busy");
+  assert.equal(style.getPropertyValue("text-decoration"), "none");
+  assert.equal(style.getPropertyValue("cursor"), "pointer");
+  assert.equal(style.getPropertyValue("pointer-events"), "auto");
+  assert.equal(style.getPropertyValue("border-style"), "solid");
+  // A retry goes back to plain text.
+  markSendLinks(page.document, hosts, "sb-h8r-s13-q2vx", "sending");
+  assert.equal(style.getPropertyValue("border-style"), "");
+  assert.equal(style.getPropertyValue("pointer-events"), "none");
+});
+
+test("send link: repeated marking leaves the style attribute alone, so it can't wake the observer", async (t) => {
+  const { markSendLinks } = globalThis.__alfredWatchCore;
+  const page = await chatPage(t);
+  if (!page) return;
+  markSendLinks(page.document, ["alfredv5vibe.vercel.app"], "sb-h8r-s13-q2vx", "sent");
+  const seen = [];
+  const watcher = new page.anchor.ownerDocument.defaultView.MutationObserver((m) => seen.push(...m));
+  watcher.observe(page.anchor, { attributes: true, childList: true });
+  markSendLinks(page.document, ["alfredv5vibe.vercel.app"], "sb-h8r-s13-q2vx", "sent");
+  assert.equal(watcher.takeRecords().length + seen.length, 0);
+  watcher.disconnect();
+});
+
 test("delivery: a host frame becomes one clean message for the tab", () => {
   assert.deepEqual(deliveryMessage({ tag: "sb-h8r-s13-q2vx", ok: true, error: "ignored", text: "x" }), { type: "send-status", tag: "sb-h8r-s13-q2vx", state: "sent", reason: "" });
   assert.deepEqual(deliveryMessage({ tag: "sb-h8r-s13-q2vx", ok: false, error: "the CLI is running" }), { type: "send-status", tag: "sb-h8r-s13-q2vx", state: "notsent", reason: "the CLI is running" });
@@ -444,7 +482,7 @@ test("host access: origins from the list, and a notice only when one is missing"
 
 test("manifest: no Alfred host in the code, asked for at run time", () => {
   const m = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
-  assert.equal(m.version, "1.2.7");
+  assert.equal(m.version, "1.2.8");
   assert.equal(m.host_permissions.some((h) => /vercel\.app/.test(h)), false);
   assert.deepEqual(m.optional_host_permissions, ["https://*/*"]);
 });
