@@ -26,6 +26,8 @@ function fakes(over = {}) {
     authUser: async (jwt) => (jwt === "good" ? USER : jwt === "other" ? "someone-else" : null),
     findByLinkHash: async (h) => (h === hash(TOKEN) ? action : null),
     hasCleanDryRun: async () => true,
+    latestDryRun: async () => ({ id: "dry-1", result: { ok: true } }),
+    noteCancelled: async (id, result) => (calls.cancelled = { id, result }),
     consume: async (jwt, token, fp) => (calls.consumed.push({ jwt, token, fp }), { action_id: "act-1" }),
     runSql: async (statements, commit) => (calls.runSql.push({ statements, commit }), {
       ok: true, results: statements.map(() => ({ command: "DELETE", count: 3 })),
@@ -318,6 +320,159 @@ test("run routes refuse SQL that belongs in the editor, even if a row holds it",
   }
   assert.equal(calls.runSql.length, 0);
   assert.equal(calls.consumed.length, 0);
+});
+
+const WRITES = "insert into t values (1), (2); update t set a = 1 where a = 2; create table u (a int); delete from t where a = 3";
+const DESCRIBED = { project_code: "p-x", description: "Changes t." };
+const answers = (...counts) => async (statements) => ({
+  ok: true, results: statements.map((_, i) => ({ command: "X", count: counts[i] ?? 0 })),
+});
+
+test("queue: stores one expected count per insert, update and delete; a schema change needs none", async () => {
+  const { deps, calls } = fakes();
+  const res = await handle(queue({ ...DESCRIBED, sql: WRITES, expected: [2, "unknown", 1] }), deps);
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls.inserted[0].payload.expected, [2, "unknown", 1]);
+  const schema = fakes();
+  assert.equal((await handle(queue({ ...DESCRIBED, sql: "create table u (a int); alter table u add b int" }), schema.deps)).status, 200);
+  assert.equal("expected" in schema.calls.inserted[0].payload, false);
+});
+
+test("queue: a missing, short, long or malformed expected list is refused and names the statements", async () => {
+  for (const expected of [undefined, [], [1, 2], [1, 2, 3, 4], [1, -1, 2], [1, "lots", 2], [1, 1.5, 2], "2,1,1"]) {
+    const { deps, calls } = fakes();
+    const res = await handle(queue({ ...DESCRIBED, sql: WRITES, expected }), deps);
+    assert.equal(res.status, 422, JSON.stringify(expected));
+    const out = await res.json();
+    assert.match(out.error, /--expect/);
+    assert.equal(out.reasons.length, 3);
+    assert.equal(calls.inserted.length, 0);
+  }
+  const { deps } = fakes();
+  assert.equal((await handle(queue({ ...DESCRIBED, sql: "select 1", expected: [1] }), deps)).status, 422);
+});
+
+test("queue: a with statement that writes needs a count; one that only reads does not", async () => {
+  const sql = "with d as (delete from t where a = 1 returning *) select count(*) from d";
+  assert.equal((await handle(queue({ ...DESCRIBED, sql }), fakes().deps)).status, 422);
+  assert.equal((await handle(queue({ ...DESCRIBED, sql, expected: ["unknown"] }), fakes().deps)).status, 200);
+  assert.equal((await handle(queue({ ...DESCRIBED, sql: "with a as (select 1) select * from a" }), fakes().deps)).status, 200);
+});
+
+test("dry run: counts come back per statement, and a match is clean", async () => {
+  const { deps, calls, action } = fakes({ runSql: answers(2, 1, 0, 3) });
+  action.payload = { sql: WRITES, expected: [2, "unknown", 3] };
+  const out = await (await handle(post("dry-run", { token: TOKEN }, jwt()), deps)).json();
+  assert.equal(out.ok, true);
+  assert.equal(out.mismatch, false);
+  assert.deepEqual(out.counts, [
+    { statement: 1, action: "inserts rows into t", count: 2, expected: 2, differs: false },
+    { statement: 2, action: "updates rows in t", count: 1, expected: "unknown", differs: false },
+    { statement: 4, action: "deletes rows from t", count: 3, expected: 3, differs: false },
+  ]);
+  assert.equal(calls.runs[0].result.ok, true);
+  assert.deepEqual(calls.runs[0].result.counts, out.counts);
+});
+
+test("dry run: a count off the expected one is not clean, and is recorded so", async () => {
+  const { deps, calls, action } = fakes({ runSql: answers(2, 9, 0, 3) });
+  action.payload = { sql: WRITES, expected: [2, 1, 3] };
+  const out = await (await handle(post("dry-run", { token: TOKEN }, jwt()), deps)).json();
+  assert.equal(out.ok, false);
+  assert.equal(out.mismatch, true);
+  assert.equal(out.counts[1].differs, true);
+  assert.match(out.summary, /differ/);
+  assert.equal(calls.runs[0].result.ok, false);
+  assert.equal(calls.runs[0].result.mismatch, true);
+});
+
+test("dry run: an older action with no expected counts still shows its counts", async () => {
+  const { deps } = fakes();
+  const out = await (await handle(post("dry-run", { token: TOKEN }, jwt()), deps)).json();
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.counts, [{ statement: 1, action: "deletes rows from wb_rules", count: 3, differs: false }]);
+});
+
+test("cancel: spends the link, marks the action cancelled, and notes the reason on the latest dry run", async () => {
+  const { deps, calls } = fakes();
+  const res = await handle(post("cancel", { token: TOKEN, reason: "  wrong\n table " }, jwt()), deps);
+  const out = await res.json();
+  assert.deepEqual(out, { ok: true, run_id: "dry-1", cancelled: true, reason: "wrong table" });
+  assert.deepEqual(calls.consumed[0], { jwt: "good", token: TOKEN, fp: "fp-1" });
+  assert.deepEqual(calls.status, [{ id: "act-1", status: "cancelled" }]);
+  assert.deepEqual(calls.cancelled, { id: "dry-1", result: { ok: true, cancelled: true, reason: "wrong table" } });
+  assert.equal(calls.runSql.length, 0);
+});
+
+test("cancel: the reason is optional, one short line; with no dry run nothing is spent", async () => {
+  const quiet = fakes();
+  assert.equal((await (await handle(post("cancel", { token: TOKEN }, jwt()), quiet.deps)).json()).reason, "");
+  const long = fakes();
+  assert.equal((await handle(post("cancel", { token: TOKEN, reason: "x".repeat(201) }, jwt()), long.deps)).status, 400);
+  assert.equal(long.calls.consumed.length, 0);
+  const none = fakes({ latestDryRun: async () => null });
+  assert.equal((await handle(post("cancel", { token: TOKEN }, jwt()), none.deps)).status, 409);
+  assert.equal(none.calls.consumed.length, 0);
+  assert.deepEqual(none.calls.status, []);
+});
+
+test("cancel: needs Alex's JWT and a live link, and a spent link can't be cancelled", async () => {
+  const { deps, calls, action } = fakes();
+  assert.equal((await handle(post("cancel", { token: TOKEN }), deps)).status, 401);
+  action.link_used_at = new Date().toISOString();
+  assert.equal((await handle(post("cancel", { token: TOKEN }, jwt()), deps)).status, 410);
+  assert.equal(calls.consumed.length, 0);
+  const lost = fakes({ consume: async () => { throw new Error("this link has already been used."); } });
+  assert.equal((await handle(post("cancel", { token: TOKEN }, jwt()), lost.deps)).status, 409);
+  assert.deepEqual(lost.calls.status, []);
+});
+
+test("test action: queued with its flag and its own headline; takes no expected counts", async () => {
+  const { deps, calls } = fakes();
+  const out = await (await handle(queue({ ...DESCRIBED, sql: "update t set a = 1 where b = 2", test: true }), deps)).json();
+  assert.equal(calls.inserted[0].payload.test, true);
+  assert.equal(out.headline, "THIS TEST RUNS ONCE AND IS UNDONE: UPDATES ROWS IN T");
+  assert.equal(buildHeadline("select 1", true), "THIS TEST RUNS ONCE AND IS UNDONE: RUNS A SELECT");
+  assert.equal((await handle(queue({ ...DESCRIBED, sql: "select 1", test: true, expected: [1] }), fakes().deps)).status, 400);
+  const plain = fakes();
+  await handle(queue({ ...DESCRIBED, sql: "select 1", test: "yes" }), plain.deps);
+  assert.equal("test" in plain.calls.inserted[0].payload, false);
+});
+
+test("test action: runs undone, spends the link, is marked done; Approve is refused", async () => {
+  const { deps, calls, action } = fakes();
+  action.payload = { sql: "delete from t where a = 1", test: true };
+  assert.equal((await (await handle(post("preview", { token: TOKEN }, jwt()), deps)).json()).test, true);
+  assert.equal((await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), deps)).status, 409);
+  assert.equal(calls.runSql.length, 0);
+  const out = await (await handle(post("dry-run", { token: TOKEN }, jwt()), deps)).json();
+  assert.equal(out.test, true);
+  assert.equal(out.run_id, "run-1");
+  assert.equal(calls.runSql[0].commit, false);
+  assert.equal(calls.runs[0].mode, "dry_run");
+  assert.deepEqual(calls.consumed, [{ jwt: "good", token: TOKEN, fp: "fp-1" }]);
+  assert.deepEqual(calls.status, [{ id: "act-1", status: "succeeded" }]);
+});
+
+test("test action: a failure is marked failed; a busy runner keeps the link; a lost race records nothing", async () => {
+  const sql = { sql: "select 1", test: true };
+  const failed = fakes({ runSql: async () => ({ ok: false, results: [], error: "boom", failedAt: 1 }) });
+  failed.action.payload = sql;
+  await handle(post("dry-run", { token: TOKEN }, jwt()), failed.deps);
+  assert.deepEqual(failed.calls.status, [{ id: "act-1", status: "failed" }]);
+  const busy = fakes({ runSql: async () => ({ ok: false, busy: true, results: [], error: "another run is in progress." }) });
+  busy.action.payload = sql;
+  assert.equal((await handle(post("dry-run", { token: TOKEN }, jwt()), busy.deps)).status, 409);
+  assert.equal(busy.calls.consumed.length, 0);
+  const lost = fakes({ consume: async () => { throw new Error("this link has already been used."); } });
+  lost.action.payload = sql;
+  assert.equal((await handle(post("dry-run", { token: TOKEN }, jwt()), lost.deps)).status, 409);
+  assert.equal(lost.calls.runs.length, 0);
+});
+
+test("index.ts: only the latest dry run makes an action clean", () => {
+  const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  assert.match(src, /order\("started_at", \{ ascending: false \}\)/);
 });
 
 test("index.ts: one command per send, in a transaction it holds", () => {

@@ -184,9 +184,23 @@ export function grantNotice(missing) {
 /** Close the approval tab only once the line is really sent, and only if that tab still shows an approval page. */
 export const closesApproveTab = (did, tabUrl, hosts) => did === "sent" && isApprovePage(tabUrl, hosts);
 
-/** Only a well-formed run id and project from a page's message go any further. */
+/** Only a well-formed run id and project from a page's message go any further, and a cancellation's one-line reason. */
 export function cleanRun(msg) {
-  return RUN_ID_SHAPE.test(msg?.runId ?? "") && PROJECT_SHAPE.test(msg?.project ?? "") ? { runId: msg.runId, project: msg.project } : null;
+  if (!RUN_ID_SHAPE.test(msg?.runId ?? "") || !PROJECT_SHAPE.test(msg?.project ?? "")) return null;
+  const run = { runId: msg.runId, project: msg.project };
+  if (!msg.cancelled) return run;
+  const reason = msg.reason ?? "";
+  if (typeof reason !== "string" || reason.length > 200 || /[\r\n]/.test(reason)) return null;
+  return { ...run, cancelled: true, reason };
+}
+
+/** The only lines the extension may type into a chat. claude-watch.js has a copy (it cannot import); the tests hold them equal. */
+export const POST_LINE = /^sql [0-9a-f-]{36}( cancelled(: [^\r\n]{1,200})?)?$/i;
+
+/** The line for the chat: "sql <run id>", or for Don't run, "sql <dry-run id> cancelled" and the reason. */
+export function runLine(run) {
+  if (!run.cancelled) return `sql ${run.runId}`;
+  return `sql ${run.runId} cancelled${run.reason ? `: ${run.reason}` : ""}`;
 }
 
 /**
@@ -268,16 +282,19 @@ export function approveStatus(text, runId) {
 
 /**
  * Injected into the approval page by bridge.js, so it must stand alone. Waits for
- * the run id only a real run puts on the page, and hands it over with the page's
- * project code. A new injection replaces the last, which an extension reload left dead.
+ * the run id the page shows only once it's finished (a real run, a test, or Don't run),
+ * and hands it over with the page's project code. A new injection replaces the last, which an extension reload left dead.
  */
 export function approveWatcher() {
   document.__alfredApproveWatch?.disconnect?.();
   const check = () => {
-    const runId = document.querySelector("[data-switchboard-run-id]")?.getAttribute("data-switchboard-run-id");
+    const mark = document.querySelector("[data-switchboard-run-id]");
+    const runId = mark?.getAttribute("data-switchboard-run-id");
     if (!runId) return false;
     const project = document.querySelector("[data-switchboard-project]")?.getAttribute("data-switchboard-project");
-    chrome.runtime.sendMessage({ type: "approve-run", runId, project }).catch(() => {});
+    const cancelled = mark.hasAttribute("data-switchboard-cancelled")
+      ? { cancelled: true, reason: mark.getAttribute("data-switchboard-reason") ?? "" } : {};
+    chrome.runtime.sendMessage({ type: "approve-run", runId, project, ...cancelled }).catch(() => {});
     return true;
   };
   if (check()) return;

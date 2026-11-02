@@ -15,7 +15,7 @@ import {
   HOST_NAME, HEARTBEAT_MS, DEBOUNCE_MS, buildTabsMessage, buildChatsMessage, nextDelay, isHostMissing, debounce,
   normaliseUrl, pickTab, focusResult, checkPrompt, cleanHosts, promptFrame, sendTagOf,
   approveStatus, approveTokenOf, approveWatcher, chatForRun, cleanRun, closesApproveTab, GRANT_BADGE, grantNotice, hostOrigins, isApprovePage,
-  deliveryMessage, notPostedText, postProblem, pruneApprovals,
+  deliveryMessage, notPostedText, postProblem, pruneApprovals, runLine,
 } from "./lib/bridge-core.js";
 
 let port = null;
@@ -228,7 +228,7 @@ function grantHosts() {
 }
 
 // The approval result (spec 8.1): an approval page on a listed host reports its run id,
-// and "sql <run id>" goes to the tab its link was clicked in, once that chat is idle.
+// and "sql <run id>", or its cancelled form, goes to the tab its link was clicked in, once that chat is idle.
 let posting = false;
 
 // A watcher saw an approval link clicked. The link opens as usual.
@@ -355,7 +355,7 @@ async function postRuns() {
     const [tabs, windows] = await Promise.all([chrome.tabs.query({}), chrome.windows.getAll()]);
     const { chats } = buildChatsMessage(tabs, windows, reports, viewedAt);
     for (const run of runs) {
-      const line = `sql ${run.runId}`;
+      const line = runLine(run);
       const { chat, why } = chatForRun(chats, run);
       // Asked of the live page before anything moves, so a busy chat isn't even brought forward.
       let did = chat ? await askChat(chat.tabId) : null;

@@ -32,6 +32,7 @@ const open = () =>
   );
 const dryRun = () => fireEvent.click(screen.getByRole('button', { name: /^dry run$/i }));
 const CLEAN = () => reply({ ok: true, run_id: 'dry1', summary: 'runs a select' });
+const DRY = '11111111-2222-3333-4444-555555555555';
 
 beforeEach(() => {
   supabase.auth.getSession.mockReset();
@@ -162,6 +163,123 @@ test('a busy dry run keeps the page and can be tried again', async () => {
   expect(await screen.findByText(/another run is in progress/)).toBeInTheDocument();
   dryRun();
   expect(await screen.findByRole('button', { name: /^approve/i })).toBeInTheDocument();
+});
+
+const COUNTS = [
+  { statement: 1, action: 'inserts rows into t', count: 2, expected: 2, differs: false },
+  { statement: 2, action: 'updates rows in t', count: 1, expected: 5, differs: true },
+];
+const MISMATCH = () => reply({ ok: false, mismatch: true, run_id: 'dry1', summary: 'inserts 2 rows into t; updates 1 row in t', counts: COUNTS });
+const copied = () => navigator.clipboard.writeText.mock.calls.at(-1)[0];
+const copyDetails = async () => {
+  Object.assign(navigator, { clipboard: { writeText: jest.fn().mockResolvedValue() } });
+  fireEvent.click(await screen.findByRole('button', { name: /copy details/i }));
+};
+
+test('the dry run lists each statement\'s rows', async () => {
+  runner({ preview: reply(PREVIEW), 'dry-run': reply({ ok: true, run_id: 'dry1', summary: 's', counts: [
+    { statement: 1, action: 'deletes rows from t', count: 3, expected: 3, differs: false },
+    { statement: 3, action: 'updates rows in u', count: 1, expected: 'unknown', differs: false },
+  ] }) });
+  open();
+  expect(await screen.findByText(/statement 1: deletes rows from t: 3 rows/i)).toBeInTheDocument();
+  expect(screen.getByText(/statement 3: updates rows in u: 1 row$/i)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /^approve/i })).toBeEnabled();
+  expect(screen.queryByRole('button', { name: /copy details/i })).not.toBeInTheDocument();
+});
+
+test('a count mismatch disables Approve, shows expected against actual, and copies the details', async () => {
+  runner({ preview: reply(PREVIEW), 'dry-run': MISMATCH });
+  open();
+  expect(await screen.findByText(/statement 2: updates rows in t: 1 row, expected 5/i)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /^approve/i })).toBeDisabled();
+  expect(screen.getByRole('button', { name: /dry run again/i })).toBeEnabled();
+  await copyDetails();
+  const text = copied();
+  expect(text).toContain('Action: a1');
+  expect(text).toContain('Dry run: dry1');
+  expect(text).toContain('counts differ from what was expected');
+  expect(text).toContain('Statement 2: updates rows in t: 1 row, expected 5');
+  expect(text).toContain('Statement 1: inserts rows into t: 2 rows');
+});
+
+test('Copy details sits beside a failed dry run and a refusal, not beside the run line', async () => {
+  runner({ preview: reply(PREVIEW), 'dry-run': reply({ ok: false, run_id: 'dry1', summary: 'failed at statement 1: boom' }) });
+  const { unmount } = open();
+  await copyDetails();
+  expect(copied()).toContain('failed at statement 1: boom');
+  unmount();
+  runner({ preview: reply(PREVIEW), 'dry-run': reply({ ok: false, error: 'another run is in progress.' }, 409) });
+  const second = open();
+  await copyDetails();
+  expect(copied()).toContain('another run is in progress.');
+  expect(copied()).toContain('Action: a1');
+  second.unmount();
+  runner({ preview: reply({ ok: false, error: 'this link has expired.' }, 410) });
+  open();
+  await copyDetails();
+  expect(copied()).toMatch(/has expired/);
+});
+
+test('Don\'t run sends the reason, puts the dry run id and the cancelled line on the page', async () => {
+  runner({ preview: reply(PREVIEW), 'dry-run': CLEAN, cancel: reply({ ok: true, cancelled: true, run_id: DRY, reason: 'wrong table' }) });
+  const { container } = open();
+  fireEvent.change(await screen.findByLabelText(/reason/i), { target: { value: 'wrong table' } });
+  fireEvent.click(screen.getByRole('button', { name: /don't run/i }));
+  expect(await screen.findByText(`sql ${DRY} cancelled: wrong table`)).toBeInTheDocument();
+  expect(JSON.parse(called('cancel')[0][1].body)).toEqual({ token: 'tok1', reason: 'wrong table' });
+  const mark = container.querySelector('[data-switchboard-run-id]');
+  expect(mark.getAttribute('data-switchboard-run-id')).toBe(DRY);
+  expect(mark).toHaveAttribute('data-switchboard-cancelled');
+  expect(mark.getAttribute('data-switchboard-reason')).toBe('wrong table');
+  expect(screen.queryByRole('button', { name: /^approve/i })).not.toBeInTheDocument();
+  expect(container.querySelector('[data-switchboard-retry]')).not.toBeNull();
+});
+
+test('Don\'t run with no reason has a plain line; it is offered on a mismatch and a failure too', async () => {
+  runner({ preview: reply(PREVIEW), 'dry-run': MISMATCH, cancel: reply({ ok: true, cancelled: true, run_id: DRY, reason: '' }) });
+  const { unmount } = open();
+  fireEvent.click(await screen.findByRole('button', { name: /don't run/i }));
+  expect(await screen.findByText(`sql ${DRY} cancelled`)).toBeInTheDocument();
+  unmount();
+  runner({ preview: reply(PREVIEW), 'dry-run': reply({ ok: false, run_id: 'dry1', summary: 'failed at statement 1: boom' }) });
+  open();
+  expect(await screen.findByRole('button', { name: /don't run/i })).toBeInTheDocument();
+});
+
+test('a Don\'t run the runner refuses keeps the page and says why', async () => {
+  runner({ preview: reply(PREVIEW), 'dry-run': CLEAN, cancel: reply({ ok: false, error: 'the runner hit an error; see its logs.' }, 500) });
+  open();
+  fireEvent.click(await screen.findByRole('button', { name: /don't run/i }));
+  expect(await screen.findByText(/the runner hit an error/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /^approve/i })).toBeInTheDocument();
+});
+
+test('a test action runs once by itself, never offers Approve, and puts its run id on the page', async () => {
+  runner({ preview: reply({ ...PREVIEW, test: true }), 'dry-run': reply({ ok: true, test: true, run_id: DRY, summary: 'updates 1 row in t', counts: [] }) });
+  const { container } = open();
+  expect(await screen.findByText(`sql ${DRY}`)).toBeInTheDocument();
+  expect(screen.getByText(/test run, undone/i)).toBeInTheDocument();
+  expect(called('dry-run')).toHaveLength(1);
+  expect(container.querySelector('[data-switchboard-run-id]').getAttribute('data-switchboard-run-id')).toBe(DRY);
+  expect(container.querySelector('[data-switchboard-cancelled]')).toBeNull();
+  expect(screen.queryByRole('button', { name: /^approve/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /don't run/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /dry run/i })).not.toBeInTheDocument();
+});
+
+test('a failed test still posts its run id, with Copy details; a busy one can be tried again', async () => {
+  runner({ preview: reply({ ...PREVIEW, test: true }), 'dry-run': reply({ ok: false, test: true, run_id: DRY, summary: 'failed at statement 1: boom' }) });
+  const { unmount } = open();
+  expect(await screen.findByText(`sql ${DRY}`)).toBeInTheDocument();
+  await copyDetails();
+  expect(copied()).toContain('boom');
+  unmount();
+  let n = 0;
+  runner({ preview: reply({ ...PREVIEW, test: true }), 'dry-run': () => (n++ ? reply({ ok: true, test: true, run_id: DRY, summary: 's' }) : reply({ ok: false, error: 'another run is in progress.' }, 409)) });
+  open();
+  fireEvent.click(await screen.findByRole('button', { name: /run the test/i }));
+  expect(await screen.findByText(`sql ${DRY}`)).toBeInTheDocument();
 });
 
 test('a lost connection at Approve warns it may have run and offers no retry', async () => {
