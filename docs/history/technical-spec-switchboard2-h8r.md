@@ -305,7 +305,7 @@ Two sizes, chosen by the number of tiles, chats and orphans included (`TileRows`
 
 - **Up to 6 tiles: 3 × 2.** The grid fills the space between the top bar and the bottom of the window; each row is (area height − one gap) ÷ 2. Name 39px and action 34px, meta 30px, not 34px: at 34px the deadlock and padlock lines ("⇄ restructure p1", "restructure p1") would be cut off. The kind icons scale with the meta text, and the strip is 10px.
 - **7 tiles or more: 3 × 3 (2.9c),** so 9 fit before scrolling. Name 30px, action 26px, meta 26px. The timer's own line break is dropped, and a tile whose action still takes two lines shows its name on one line, with "…".
-- **Open:** at 3 × 2, a two-line name with "Both working" and an estimate cuts the name. Alex decides after seeing it live.
+- **Decided (s46):** 3 × 2 keeps long names as they are, so a two-line name with "Both working" and an estimate stays cut.
 - **More tiles than fit** go on the next page, which scroll-snap and the arrows handle. The down arrow shows the number of the next page's first tile ("7+", or "10+" at 3 × 3) instead of "N more".
 - **Fit tables,** for the 30px meta line; at 26px there is more room, so they are on the safe side. The tile width is unchanged (3 columns, 260px inside), so only the type size matters. `TileTextWidth` keeps its 26px advance widths; `TileInfoWidth` scales the room by 26/30: 225 with no icon, 197 beside the padlock, 185 beside the terminal (was 260, 231, 219). Still fit: "⇄ restructure p1", "s11 · Blocking 1", and project names beside the padlock. No longer fit: "1 held · Blocking 1" (cut off with "…"), and a holder's git counts beside "s3 · Blocking 1" (dropped, as before when there is no room).
 
