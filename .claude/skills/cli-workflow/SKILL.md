@@ -5,7 +5,7 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
-Skill version: 2026-10-30
+Skill version: 2026-11-02
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -225,9 +225,9 @@ and it can only do that if there is a tag.
 
 ### Nothing travels by hand
 
-- **Every message Alex sends to the CLI is a tagged prompt this skill writes**,
-  never a bare reply he types. A mid-step confirmation or answer takes a letter
-  step: `s18c` after `s18b`.
+- **Every message meant for the CLI, even a one-line answer, is a tagged prompt
+  this skill writes, with a Send link**, never a bare reply he types. A mid-step
+  confirmation or answer takes a letter step: `s18c` after `s18b`.
 - **CLI output comes back through `get_recent_clips` by run tag**, never pasted.
   If the clip is missing, say so and wait; do not ask him to paste it.
 - **A changed skill is offered from main**, after its checkpoint, with the
@@ -244,6 +244,9 @@ report you have not yet read and processed.** Design changes discussed in the
 meantime wait, and go into the prompt written after that report. Two prompts in
 flight means the second is written against a state the first is still changing,
 and Switchboard can only show one tag per project as waiting.
+
+**Never write a CLI prompt while that CLI is running.** Agree the change in words,
+and write the prompt after its report. The Send link would be refused anyway.
 
 **Never write a CLI prompt in a reply that is waiting on something from Alex** —
 SQL results, a test outcome, a git command's result, an answer to a question.
@@ -828,9 +831,10 @@ At the step that needs the database, not before:
    `supabase/migrations/_pending_<owner>_<purpose>.sql` and only gets its real
    number here, after the sync, when the folder listing is current. Then the
    numbered file is written and the `_pending_` one deleted.
-6. Alex runs the migration in the Supabase SQL editor. Function deploys the
-   thread runs itself — **but only while holding `db:deploy`.** The guard blocks
-   `supabase functions deploy` and `supabase db push` otherwise.
+6. The thread queues the migration with `scripts/sql-queue.mjs`, and Alex approves
+   it by a link (next section). Function deploys the thread runs itself — **but
+   only while holding `db:deploy`.** The guard blocks `supabase functions deploy`
+   and `supabase db push` otherwise.
 7. Verify.
 8. Alex runs `gitpush` → that worktree → **Checkpoint**, naming the migration and
    function paths, so only those reach main. **Checkpoint releases the `db:`
@@ -847,6 +851,47 @@ At the step that needs the database, not before:
 `083`, both write `084`. The filenames differ, so nothing conflicts and no claim
 is contested — claims coordinate paths, and this is a collision in a number.
 Numbering last, after a sync, is the only moment the answer is right.
+
+### SQL goes through the queue
+
+Prompts tell the CLI to queue migrations, data changes and test scripts:
+`--describe` always, `--expect` for inserts, updates and deletes (a count, or
+`unknown` said explicitly), `--test` for verification and test scripts. Test scripts
+return their checks as a result row from a block that undoes itself, never a
+deliberate final error. The rules are in alfred-v5's `CLAUDE.md`.
+
+**When a report gives an action id:**
+
+1. Read it with `get_switchboard_run`.
+2. Review the full SQL against the description and the expected counts. If they
+   disagree, stop and say so; there is no link.
+3. Call `issue_switchboard_link` with the fingerprint you reviewed. One link is live
+   at a time, and it lasts 30 minutes, so issue it when he can click.
+4. In chat, show the headline, the description and the approve link. Only that link:
+   never a link to the action as an Alfred record.
+5. **For anything where the dry run must be checked first** (platform changes,
+   coverage lists), tell him to open the link and wait for the dry run before
+   approving. The page runs it by itself.
+
+**What comes back in the chat:**
+
+- `sql <run id>`: read the run with `get_switchboard_run` and report it.
+- `sql <id> cancelled: <reason>`: read that dry run and act on the reason. The reason
+  is optional.
+
+**The SQL editor is the fallback, for two things only:** what the runner refused, and
+anything holding a secret such as a password, which never goes in the queue.
+
+### Read-only questions: get_sql_read
+
+For read-only questions about Alex's data, call `get_sql_read` rather than asking him
+to run a query.
+
+- **Name the columns.** `select *` fails where a column is secret.
+- **Only `public` and `pg_catalog`.** Other schemas are refused, `information_schema`
+  included, so use `pg_catalog` for table and column lists.
+- **Mind the budget:** 20 per 10 minutes and 200 a day. One statement, 1000 rows at
+  most, 10 seconds.
 
 ### Claims are never released by the thread
 
@@ -1360,6 +1405,9 @@ own block) and its complete contents (in its own block).
 
 ### Rule 5: several read-only SQL checks become one JSON query
 
+Most checks now go through `--test` or `get_sql_read` (see "SQL goes through the
+queue"). This rule is for the editor, when it's needed.
+
 The Supabase SQL Editor only shows the result of the last statement when several
 are pasted together. So whenever he needs to run more than one read-only
 `select` to check something, combine them into a single query that returns one
@@ -1382,9 +1430,8 @@ select json_build_object(
   which is easy to misread as an error.
 - No semicolons inside the inner queries.
 - Tell him what to paste back, named by where it appears in the SQL editor:
-  "paste the result cell in the Results grid". For a script that ends in a
-  deliberate error, "paste the red error line in the Results panel"; for a
-  NOTICE, "paste the line in the Messages tab".
+  "paste the result cell in the Results grid". For a NOTICE, "paste the line in
+  the Messages tab".
 
 **Only pure reads.** Migrations, inserts, updates, deletes, and any function
 call that changes state stay as separate statements, run on their own, so a
@@ -1413,8 +1460,8 @@ platform`. In particular, any generated prompt that creates a table or tool must
   final `check_platform_conformance` step (CONFORMANT required to call it done);
 - build tools via `defineTool` with a declared tier, reaching the DB only through
   `ctx.db`;
-- treat SQL migrations as a manual prerequisite the user runs (see Step 2) — the
-  platform SQL is applied out-of-band in Supabase, not by the CLI.
+- have the CLI queue SQL migrations for Alex to approve by a link (see "SQL goes
+  through the queue") — the CLI never applies them itself.
 
 When in doubt whether a task is platform-governed, it is if it writes to Supabase.
 
@@ -1446,7 +1493,7 @@ Determine if this is a **simple** or **complex** change:
 
 Before generating CLI instructions, identify any manual steps the user must complete:
 - Setting up external accounts/services
-- Running database migrations or SQL scripts
+- SQL the queue can't take (see "SQL goes through the queue")
 - Installing dependencies
 - Creating API keys or credentials
 - Configuring environment variables
@@ -1484,9 +1531,8 @@ Feedback: paste the result cell here.
 worked are combined into one JSON query, per Rule 5. The steps that change the
 database stay separate.
 
-**Platform-layer note:** for Alfred/Ken/Homer work, SQL migrations are always a
-manual prerequisite — the user runs them in the Supabase SQL editor, and the
-schema-side objects (`register_table`, RPCs, policies) must be deployed and
+**Platform-layer note:** for Alfred/Ken/Homer work, the CLI queues SQL migrations
+and Alex approves them by a link, and the schema-side objects (`register_table`, RPCs, policies) must be deployed and
 verified CONFORMANT *before* the CLI touches the TypeScript that depends on them.
 Sequencing the SQL after the handler wiring means debugging two unknowns at once.
 
@@ -1506,7 +1552,7 @@ a prompt asks Alex to run one and waits, rather than asking the CLI to.
 `npx supabase functions deploy`, but only as part of the database step above:
 after `gitsync`, after the drift check, and while the thread holds `db:deploy`.
 The guard blocks it otherwise, so a prompt that asks for a bare deploy wastes a
-round trip. Migrations are always Alex's to run in the Supabase SQL editor.
+round trip. Migrations the CLI queues; running them is Alex's click on the link.
 
 This is also the rule in alfred-v5's `CLAUDE.md`, so a prompt that asks for a
 commit will be refused there and simply wastes a round trip.
@@ -1516,6 +1562,8 @@ ends with the same line repeated (see "Run tags" above), and carries this line s
 follows Rule 5 when it hands SQL back:
 
 ```
+Queue migrations, data changes and test scripts with scripts/sql-queue.mjs; don't
+hand them to me for the SQL editor unless the runner refuses them or they hold a secret.
 If you need me to run more than one read-only SELECT in the Supabase SQL Editor,
 combine them into one query that returns a single JSON object: wrap each query
 as (select coalesce(json_agg(t), '[]'::json) from (<query>) t), give each a
@@ -1633,6 +1681,9 @@ Only proceed to the next step after I confirm verification is successful.
   "Next step's scope" with the next step's block, then the timing table
 - Never commit, push, merge, or run any git command that changes state
 - If you need clarification, stop and ask
+- Queue migrations, data changes and test scripts with scripts/sql-queue.mjs; don't
+  hand them to me for the SQL editor unless the runner refuses them or they hold a
+  secret
 - If you need me to run more than one read-only SELECT in the Supabase SQL
   Editor, combine them into one query that returns a single JSON object: wrap
   each query as (select coalesce(json_agg(t), '[]'::json) from (<query>) t),

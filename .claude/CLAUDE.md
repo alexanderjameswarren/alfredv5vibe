@@ -118,8 +118,8 @@ see the SQL section below for why.
 5. **Number the migration now**, not earlier: list `supabase/migrations/`, take
    the next free number, write the numbered file, delete the `_pending_` one.
    The sync in step 2 is what makes that number trustworthy.
-6. Deploy. Migrations are his to run in the Supabase SQL editor; function
-   deploys you run yourself. Run `check_platform_conformance` where the platform
+6. Deploy. Migrations you queue with `scripts/sql-queue.mjs` for him to approve
+   by a link (see the SQL section); function deploys you run yourself. Run `check_platform_conformance` where the platform
    contract requires it.
 7. Verify.
 8. Stop and ask Alex to run `gitpush` in **Checkpoint** mode for this worktree,
@@ -346,17 +346,47 @@ substitutions, say — say so and ask Alex first. Do not just do it.
 ALL SQL goes in supabase/migrations/, numbered in sequence, with one exception
 below. That includes schema changes, backfills, data repairs and one-off diagnostic
 queries. Never create SQL under docs/. Name the file so its purpose is obvious from
-the list, e.g. 031_backfill_sam_session_events.sql. Alex runs every migration himself
-in the Supabase SQL editor — never apply one, and never assume one has been
-applied.
+the list, e.g. 031_backfill_sam_session_events.sql. You queue it; Alex approves it by
+a link. Never apply one yourself, and never assume one has been applied.
 
-**The exception: scripts run by hand live in `supabase/tests/<project>/`, never in
-`supabase/migrations/`.** That means verification queries, test scripts and test
-cleanups, and above all anything that ends in a deliberate error to roll itself back.
-Such a file in migrations would break any replay of the folder, and gitpush's snapshot
-check would count it as a migration that never changes the schema. Number them in
-run order (`1_verify.sql`, `2_failure_test.sql`), make each one runnable whole (no
-"select this part"), and claim them like any other file.
+**The exception: verification and test scripts live in `supabase/tests/<project>/`,
+never in `supabase/migrations/`.** That means verification queries, test scripts and
+test cleanups. Such a file in migrations would break any replay of the folder, and
+gitpush's snapshot check would count it as a migration that never changes the schema.
+Number them in run order (`1_verify.sql`, `2_failure_test.sql`), make each one
+runnable whole (no "select this part"), and claim them like any other file.
+
+**A test script returns its checks as a result row, from a block that undoes itself.**
+Never a deliberate final error: the runner would record that as a failed run. The
+block raises its own error inside an inner `begin ... exception`, keeps the results in
+a variable, hands them on with `set_config`, and ends with `select current_setting(...)`.
+
+### Queue SQL, don't hand it over
+
+Migrations, data changes and test scripts go through the queue, not to Alex for the SQL
+editor:
+
+```
+node scripts/sql-queue.mjs <file.sql> --describe "<one sentence>" [--expect <n,unknown,...>] [--test]
+```
+
+- **`--describe`, always.** One plain sentence: what it inserts, updates, deletes or
+  creates, in which table, and roughly how many rows.
+- **`--expect` for inserts, updates and deletes.** One value for each, in order: the
+  row count, or `unknown` said explicitly when it can't be known. A wrong number
+  disables Approve. Schema changes need none. A do block gives no count, so say what
+  it changes in `--describe`.
+- **`--test` for verification and test scripts.** One run, undone, with no Approve. It
+  takes no `--expect`.
+
+Report the action id it prints, and stop. Claude reviews it and issues the link; the
+run id comes back to Claude, not to you. **Queued is not applied.**
+
+**The SQL editor is the fallback, for two things only:** what the runner can't run (it
+refuses at queue time and says why: `create index concurrently`, an index on an
+existing table, an update or delete with no `where`, and the like), and anything
+holding a secret such as a password, which never goes in the queue. Then give Alex the
+file and say which of the two it is.
 
 Every migration that creates a table, view or function grants it explicitly in the same file, and gives anon nothing. See Rule 2b in `.claude/skills/mcp-platform/SKILL.md`.
 
@@ -371,7 +401,7 @@ supabase/migrations/_pending_<owner>_<purpose>.sql
 for example `supabase/migrations/_pending_inbox-ui_add_filter_column.sql`. Claim
 that path like any other file and work in it.
 
-**Give it its real number only when you are about to ask Alex to run it, and only
+**Give it its real number only when you are about to queue it, and only
 after `gitsync`.** At that point, and not before, list `supabase/migrations/`, take
 the next free number, write the numbered file, and delete the `_pending_` one. The
 guard allows that delete because you hold the claim on it.
@@ -392,13 +422,14 @@ supabase/migrations/ now holds three kinds of file, and the MOVED header on each
 says which: schema changes that must be applied in order; one-off data repairs
 and backfills, applied once; and read-only diagnostics and verification queries
 that are never "applied" at all. Do not treat the folder as a sequence to run end
-to end, and do not assume a numbered file was ever run — Alex runs each one
-himself and says so. Files 001-030 are schema changes; 031-056 are mixed, and
+to end, and do not assume a numbered file was ever run — only a run id, or Alex
+saying so, shows that it was. Files 001-030 are schema changes; 031-056 are mixed, and
 were renumbered from docs/ on 2026-09-18.
 
 ## Supabase verification queries
 
-When you ask me to run more than one SELECT query in the Supabase SQL Editor,
+Most checks now go through `--test` above, or Claude's `get_sql_read`. When you do
+ask me to run more than one SELECT query in the Supabase SQL Editor,
 combine them into a single query that returns one JSON object, so I can run it
 once and paste back a single result. Use this pattern:
 
