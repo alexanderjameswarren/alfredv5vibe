@@ -65,6 +65,10 @@ body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verd
 .grid{display:grid;gap:var(--gap);grid-template-columns:repeat(3,minmax(0,1fr))}
 .tile{scroll-snap-align:start;border:0;border-radius:14px;padding:10px 14px;display:flex;flex-direction:column;
   justify-content:space-between;text-align:left;font:inherit;position:relative;overflow:hidden;min-height:0;touch-action:pan-y}
+/* 7 tiles or more: 3 x 3 at the smaller type. A two-line name and a two-line action don't both fit, so the name gives way */
+.grid.small{--nameSize:30px; --actSize:26px; --metaSize:26px}
+.grid.small .action{white-space:normal}
+.grid.small .name.oneline{-webkit-line-clamp:1}
 .t-red{background:var(--red);color:var(--onRed)} .t-orange{background:var(--orange);color:var(--onOrange)}
 .t-purple{background:var(--purple);color:var(--onPurple)}
 .t-paleorange{background:#FFCC80;color:#000}   /* Sending cli: the same in both themes */
@@ -165,7 +169,9 @@ body{background:var(--bg);color:var(--railText);font-family:"AtkinsonLocal",Verd
   </div>
 </div>
 <script>
-const ROWS = 2, GAP = 10, HOLD = 600, SLOP = 12;
+const GAP = 10, HOLD = 600, SLOP = 12;
+let ROWS = 2;              // from the latest state: 3 from 7 tiles up
+const ACTION_ONE_LINE = 40;   // px: one line of action at 26px is about 29, two about 57
 document.documentElement.style.setProperty("--hold", HOLD + "ms");
 const $ = id => document.getElementById(id);
 const grid = $("grid"), tiles = $("tiles");
@@ -295,6 +301,8 @@ gitIdle();
 
 function render(st) {
   mode = st.mode;
+  ROWS = st.rows;
+  grid.classList.toggle("small", ROWS === 3);
   setHint(st.noTouch ? "none" : st.mode);
   setText($("main"), st.main);
   setText($("db"), st.db);
@@ -323,6 +331,7 @@ function render(st) {
     if (pct >= 0) strip.style.setProperty("--pct", pct + "%");
     b.style.setProperty("--blend", (t.blend ?? 100) + "%");
     if (grid.children[i] !== b) grid.insertBefore(b, grid.children[i] || null);
+    name.classList.toggle("oneline", ROWS === 3 && action.offsetHeight > ACTION_ONE_LINE);
     seen.add(t.id);
   });
   for (const [id, b] of els) if (!seen.has(id)) { b.remove(); els.delete(id); }

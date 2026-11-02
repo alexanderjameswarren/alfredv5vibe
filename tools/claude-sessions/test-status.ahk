@@ -71,6 +71,8 @@ Check("view your turn", V(P("waiting")), "yellow / Your turn")
 Check("view prompt beats running", V(P("processing", , {issuedTag: "proj-abc-s10-bbbb"})), "purple / Prompt ready")
 Check("view prompt beats report", V(P("waiting", , {issuedTag: "proj-abc-s10-bbbb", chatSince: "2026-10-03T09:59:00.000Z"})), "purple / Prompt ready")
 Check("view sql beats prompt", V(P("waiting", , {issuedTag: "proj-abc-s10-bbbb", sqlWaiting: true})), "tan / Waiting on SQL")
+Check("view sql waits while the CLI runs", V(P("processing", , {sqlWaiting: true})), "green / CLI working")
+Check("view sql waits while both work", V(P("processing", "responding", {sqlWaiting: true})), "green / Both working")
 Check("view outside scope while running", V(P("processing", , {outsideScope: "undeclared update: a.js"})), "red / Outside scope")
 Check("view outside scope beats sql", V(P("waiting", , {outsideScope: "x", sqlWaiting: true})), "red / Outside scope")
 Check("view approve beats outside scope", V(P("red", , {outsideScope: "x"})), "red / Approve")
@@ -540,6 +542,17 @@ Check("lanes first, in order", Ids(TileSort([TlL("n", 0), TlL("b", 2), TlL("a", 
 Check("no lane keeps its order", Ids(TileSort([TlL("x", 0), TlL("y", 0), TlL("a", 1)], Map("y", 1, "x", 2))), "ayx")
 Check("a lane beats the old order", Ids(TileSort([TlL("a", 2), TlL("b", 1)], Map("a", 1, "b", 2))), "ba")
 Check("groups still come first", Ids(TileSort([{id: "c", group: 1, color: "grey"}, TlL("a", 1)], Map("c", 1))), "ac")
+SortedIds(list) {
+    s := ""
+    for t in list
+        s .= t.id " "
+    return Trim(s)
+}
+Check("main first, before any lane", SortedIds(TileSort([TlL("a", 1), TlL("n", 0), TlL("cli:main", 0)], Map("a", 1, "n", 2))), "cli:main a n")
+Check("main first, even with a lane of its own", SortedIds(TileSort([TlL("a", 1), TlL("cli:main", 5)], Map("a", 1))), "cli:main a")
+Check("rows: 6 tiles", TileRows(6), 2)
+Check("rows: 7 tiles", TileRows(7), 3)
+Check("rows: none", TileRows(0), 2)
 
 ; #Warn only prints, so load this file again with /validate and fail on any warning.
 warnOut := A_Temp "\claude-sessions-test-warnings.txt"
