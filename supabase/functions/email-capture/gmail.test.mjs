@@ -126,9 +126,9 @@ test("address lists", () => {
 });
 
 test("alfred+tag maps to Alex and swallows no other mapping", () => {
-  assert.equal(p.findMapping(["alfred+jobs@secorus.com"]).label, "Alex");
-  assert.equal(p.findMapping(["alex.warren+elise+alfred@secorus.com"]).label, "Elise");
-  assert.equal(p.findMapping(["recipes@secorus.com"]).captureAddress, "recipes");
+  assert.equal(p.findCaptureHit(["alfred+jobs@secorus.com"]).mapping.label, "Alex");
+  assert.equal(p.findCaptureHit(["alex.warren+elise+alfred@secorus.com"]).mapping.label, "Elise");
+  assert.equal(p.findCaptureHit(["recipes@secorus.com"]).mapping.captureAddress, "recipes");
 });
 
 test("self-forward: SENT, no auth headers, captured", () => {
@@ -201,6 +201,24 @@ test("forged safe sender: DMARC fails → rejected", () => {
 test("stranger's X-Forwarded-For into alfred@ rejected", () => {
   const xff = { ...STRANGER, headers: [...STRANGER.headers, { Name: "X-Forwarded-For", Value: "bad@evil.example alfred@secorus.com" }] };
   assert.equal(g.decideGmail(xff, SENDERS).reason, "forwarded_by_unknown_account");
+  const renamed = { ...STRANGER, headers: [...STRANGER.headers, { Name: "X-X-Forwarded-For", Value: "bad@evil.example alfred@secorus.com" }] };
+  assert.equal(g.decideGmail(renamed, SENDERS).reason, "forwarded_by_unknown_account");
+});
+
+test("auto-forward on Google's hop alone, or the renamed header alone", () => {
+  const noHeader = { ...AUTO_FORWARD, headers: AUTO_FORWARD.headers.filter((h) => h.Name !== "X-Forwarded-For") };
+  assert.equal(g.decideGmail(noHeader, SENDERS).via, "forward");
+  const renamedOnly = { ...AUTO_FORWARD, headers: AUTO_FORWARD.headers
+    .filter((h) => !/authentication-results/i.test(h.Name))
+    .map((h) => h.Name === "X-Forwarded-For" ? { ...h, Name: "X-X-Forwarded-For" } : h) };
+  assert.equal(g.decideGmail(renamedOnly, SENDERS).via, "forward");
+});
+
+test("Google's hop into another capture address does not count", () => {
+  const other = { ...AUTO_FORWARD, headers: AUTO_FORWARD.headers
+    .filter((h) => h.Name !== "X-Forwarded-For")
+    .map((h) => ({ ...h, Value: h.Value.replaceAll("caf_=alfred=", "caf_=recipes=") })) };
+  assert.equal(g.decideGmail(other, SENDERS).reason, "sender_not_allowed");
 });
 
 test("labelled mail not sent to a capture address is trusted", () => {
@@ -268,11 +286,10 @@ test("a failed lookup never blocks", async () => {
 });
 
 test("rejection notice links to Gmail", () => {
-  const n = p.buildNotice({ reason: "sender_not_allowed", fromAddress: "someone@example.com", postmarkMessageId: "",
+  const n = p.buildNotice({ reason: "sender_not_allowed", fromAddress: "someone@example.com",
     gmailLink: "https://mail.google.com/mail/u/?authuser=alex.warren@secorus.com#all/g-f", gmailId: "g-f" },
   new Date("2026-10-29T18:00:00Z"));
   assert.match(n.capturedText, /Open it in Gmail: https:\/\/mail\.google\.com/);
   assert.match(n.capturedText, /not on the list/);
   assert.equal(n.sourceMetadata.gmail_id, "g-f");
-  assert.equal("postmark_message_id" in n.sourceMetadata, false);
 });

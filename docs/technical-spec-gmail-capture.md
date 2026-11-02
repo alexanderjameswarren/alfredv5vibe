@@ -1,8 +1,9 @@
 # Gmail capture — technical spec (gmail_capture-h3w)
 
-Replaces the Postmark inbound integration (free tier 100/month; ~300 expected) with
-a Google Apps Script in alex.warren@secorus.com that posts labelled mail to the
-existing `email-capture` Edge Function. Earlier design: docs/technical-spec-email-capture.md.
+Live since 2026-10-29: a Google Apps Script in alex.warren@secorus.com posts labelled
+mail to the `email-capture` Edge Function. It replaced the Postmark inbound integration
+(free tier 100/month; ~300 expected), whose code was removed on 2026-11-02 (function v31).
+Earlier design, historical: docs/technical-spec-email-capture.md.
 Progress: docs/progress-gmail-capture.md.
 
 ## Flow
@@ -16,8 +17,7 @@ Gmail filter (or Alex by hand) applies `alfred` / `alfred/<app>` → Apps Script
 alfred@secorus.com and recipes@secorus.com are **aliases** of alex.warren@secorus.com.
 Capture addresses: alfred@, recipes@, alex.warren+alfred@, alex.warren+elise+alfred@,
 and any alfred+<tag>@. Plus tags on the alias are delivered (step 3: To and
-Delivered-To both show `alfred+jobs@secorus.com`). USER_MAPPINGS today has no
-alfred+<tag>@ entry (`/alfred@secorus\.com/` does not match it), so step 5 adds
+Delivered-To both show `alfred+jobs@secorus.com`). USER_MAPPINGS maps
 `/alfred\+[^@]+@secorus\.com/i` → Alex, above the catch-all. When no `alfred/<child>`
 label is present, the plus tag sets the app through the same map.
 alfred@, recipes@ and alex.warren+alfred@ are treated alike;
@@ -68,7 +68,7 @@ later (one entry in USER_MAPPINGS). alex.warren+elise+alfred@ is still in USER_M
   retried next run.
 - `dryRun()` posts with `dry_run: true` and logs decisions without inserting.
 
-## Payload (Gmail branch)
+## Payload
 
 POST with header `x-capture-secret` (function secret `GMAIL_CAPTURE_SECRET`):
 `source: "gmail-script"`, `gmail_id`, `thread_id`, `gmail_link`, `label_ids`,
@@ -85,10 +85,9 @@ and a text preview, and writes nothing (no row, no notice). 401 wrong secret; 50
 unset, senders unreadable, user unmapped or insert failed (the script retries); 400 bad body.
 Code: `supabase/functions/email-capture/gmail.ts` (pure), `index.ts` `handleGmail`.
 
-## Edge Function changes
+## Edge Function
 
-- Branch by auth: `x-capture-secret` → Gmail branch; `?token=` → Postmark branch,
-  unchanged until removal.
+- Auth: only `x-capture-secret`. Anything else, a `?token=` included, gets 401.
 - Trust (`gmail.ts`, pure, tested):
   1. No capture address in To/Cc/Delivered-To → trusted (only Alex can label).
   2. `sent` (SENT in the Gmail API label ids) → trusted. A self-forward carries no
@@ -100,12 +99,12 @@ Code: `supabase/functions/email-capture/gmail.ts` (pure), `index.ts` `handleGmai
      read `fail` on a passing hand forward). No such header and not SENT → reject.
   5. Auto-forward by an approved forwarder: `googleForwardHop` (spf=pass `+caf_`
      mailfrom into that capture address) or an X-Forwarded-For hop into it → accept.
-  6. Else reject; a rejection notice links to Gmail instead of Postmark.
-- Senders come from `email_capture_senders`, not the hard-coded lists.
-- User: USER_MAPPINGS as now (capture address decides; D2).
+  6. Else reject; a rejection notice links to the message in Gmail.
+- Senders come from `email_capture_senders`.
+- User: USER_MAPPINGS (capture address decides; D2).
 - Dedup: `source_metadata.messageId` = Gmail id (the migration 126 unique index covers
-  it, no inbox change); `original_message_id` check as now catches mail already captured
-  through Postmark.
+  it, no inbox change); the `original_message_id` check also catches mail captured before
+  the cutover, through Postmark.
 - Metadata: from, fromName, forwarder, date, subject, labels, attachments, auth results
   (dmarc/dkim/spf), gmail_link, capture_address, auto_forwarded, original_*.
 
@@ -127,11 +126,11 @@ enhdesigns@gmail.com only. Hand forwards pass as a safe sender; auto-forwards as
 approved forwarder. Her auto-forward confirmation code to alfred@ will be rejected and
 left unread; that is expected.
 
-## Cutover order
+## Cutover order (done; steps 10 and 12 are Alex's, see the progress file)
 
-1. Step 3 recon (done): filter a fires on a self-forward; alfred+jobs@ is delivered.
+1. Step 3 recon: filter a fires on a self-forward; alfred+jobs@ is delivered.
 2. Migration run; conformance.
-3. Function deployed with the Gmail branch; Postmark still live.
+3. Function deployed with the Gmail branch, Postmark alongside it.
 4. Script pushed; Script Properties set; dry run on real forwards (hand and auto).
 5. Rename `forwarded` → `alfred` (forwarded/jobs etc. move to alfred/…). Filters a and
    b now say `alfred`.
@@ -142,8 +141,8 @@ left unread; that is expected.
 9. Watch a few days.
 10. Remove the Postmark forwarding address in secorus settings.
 11. Remove the Postmark branch, `?token=`, `EMAIL_CAPTURE_SECRET` and hard-coded lists;
-    redeploy.
-12. Delete the Postmark inbound server.
+    redeploy (v31, 2026-11-02).
+12. Delete the Postmark inbound server and the `EMAIL_CAPTURE_SECRET` function secret.
 
 ## Filter checklist
 
@@ -153,15 +152,18 @@ left unread; that is expected.
 |---|---|---|
 | a | `{to:alfred@secorus.com to:recipes@secorus.com to:alex.warren+alfred@secorus.com deliveredto:alfred@secorus.com deliveredto:recipes@secorus.com}` | mark as read, apply `alfred`; **no forward** |
 | b | `{idealist.org alerts@jobs.80000hours.org team@probablygood.org jobalerts-noreply@linkedin.com eaopportunitiesboard@centreforeffectivealtruism.org}` | apply `alfred/jobs` (set explicitly: the rename leaves it `alfred`); **no forward** |
-| new | `to:alfred+jobs@secorus.com` | apply `alfred/jobs`, never send to Spam |
-| new | `to:alfred+wb@secorus.com` | apply `alfred/wb`, never send to Spam |
-| new | `to:alfred+arnold@secorus.com` | apply `alfred/arnold`, never send to Spam |
+| optional | `to:alfred+jobs@secorus.com` | apply `alfred/jobs` |
+| optional | `to:alfred+wb@secorus.com` | apply `alfred/wb` |
+| optional | `to:alfred+arnold@secorus.com` | apply `alfred/arnold` |
+
+The plus-tag filters are optional (step 7): filter a already matches alfred+<tag>@ (GCAP3 B
+went through it), and the function routes on the plus tag when no `alfred/<child>` label is
+present. They only make the app visible as a Gmail label.
 | optional | `to:alex.warren+elise+alfred@secorus.com` | apply `alfred` (code maps it to Elise; nothing catches it today) |
 
-Settings → Forwarding: remove the Postmark address at step 10.
+Settings → Forwarding: no forwarding address is needed.
 
 **Personal gmail.com (alexanderjameswarren@gmail.com)**
 
 - Auto-forward filters to alfred@secorus.com: unchanged.
-- No filter forwards straight to Postmark; change any that does to alfred@.
 - alfred@secorus.com stays a verified forwarding address.

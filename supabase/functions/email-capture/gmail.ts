@@ -11,8 +11,8 @@ import {
   googleForwardHop,
   normaliseSenderAddress,
   originalMessageId,
+  type MailHeader,
   type OriginalHeaders,
-  type PostmarkHeader,
   safeEqual,
   type SecretVerdict,
   type UserMapping,
@@ -42,7 +42,7 @@ export interface GmailPayload {
   gmail_link?: string;
   label_ids?: string[];
   labels?: string[];
-  headers: PostmarkHeader[];
+  headers: MailHeader[];
   text_body?: string;
   attachments?: GmailAttachment[];
   dry_run?: boolean;
@@ -78,7 +78,7 @@ export function addressesIn(value: string | null | undefined): string[] {
 }
 
 /** To, Cc, then Gmail's own (first) Delivered-To: where a capture address can show. */
-export function recipientAddresses(headers: PostmarkHeader[]): string[] {
+export function recipientAddresses(headers: MailHeader[]): string[] {
   return [
     ...addressesIn(getHeader(headers, "To")),
     ...addressesIn(getHeader(headers, "Cc")),
@@ -100,7 +100,7 @@ export interface AuthSummary {
  * authserv-id is mx.google.com. Google prepends its own, so a sender's copy sits lower.
  * A self-sent message has none.
  */
-export function googleAuthResults(headers: PostmarkHeader[]): AuthSummary | null {
+export function googleAuthResults(headers: MailHeader[]): AuthSummary | null {
   const raw = getHeader(headers, "Authentication-Results");
   if (!raw) return null;
   const [servId, ...rest] = raw.split(";");
@@ -226,7 +226,7 @@ export interface EmailRowStore {
 
 /**
  * The Gmail id (this path's messageId), then the original Message-ID, which also
- * catches mail already captured through Postmark. A failed lookup never blocks.
+ * catches mail captured before the Gmail cutover. A failed lookup never blocks.
  */
 export async function findDuplicate(
   store: EmailRowStore,

@@ -1,11 +1,11 @@
 // email-capture parse — the pure logic of the email-capture Edge Function.
 //
 // No Deno APIs, no imports, no I/O, so parse.test.mjs can run it under node --test.
-// Spec: docs/technical-spec-email-capture.md.
+// Spec: docs/technical-spec-gmail-capture.md.
 
-// --- Webhook secret ---
+// --- Secret ---
 
-/** Constant-time string compare, so the token can't be guessed byte by byte. */
+/** Constant-time string compare, so the secret can't be guessed byte by byte. */
 export function safeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
@@ -15,26 +15,15 @@ export function safeEqual(a: string, b: string): boolean {
 
 export type SecretVerdict = "ok" | "missing_config" | "bad_token";
 
-/**
- * Checks the `token` query parameter against the configured secret.
- * `missing_config` means the function has no secret set: the caller answers
- * 500 so Postmark retries, rather than accepting mail unauthenticated.
- */
-export function checkWebhookToken(url: string, secret: string | undefined): SecretVerdict {
-  if (!secret) return "missing_config";
-  const token = new URL(url).searchParams.get("token") ?? "";
-  return safeEqual(token, secret) ? "ok" : "bad_token";
-}
-
 // --- Dedupe ---
 
-export interface PostmarkHeader {
+export interface MailHeader {
   Name: string;
   Value: string;
 }
 
 /** First header with this name, case-insensitive. */
-export function getHeader(headers: PostmarkHeader[] | null | undefined, name: string): string | null {
+export function getHeader(headers: MailHeader[] | null | undefined, name: string): string | null {
   const want = name.toLowerCase();
   const h = (headers ?? []).find((x) => x?.Name?.toLowerCase() === want);
   return h ? h.Value : null;
@@ -45,7 +34,7 @@ export function getHeader(headers: PostmarkHeader[] | null | undefined, name: st
  * the original's, so it catches the same mail forwarded twice; a hand forward
  * has its own new one.
  */
-export function originalMessageId(headers: PostmarkHeader[] | null | undefined): string | null {
+export function originalMessageId(headers: MailHeader[] | null | undefined): string | null {
   const raw = getHeader(headers, "Message-Id");
   const id = raw?.trim().replace(/^<|>$/g, "").trim();
   return id || null;
@@ -63,8 +52,7 @@ export function isUniqueViolation(error: { code?: string } | null | undefined): 
 // When email arrives at recipes@secorus.com → Alex, tagged as the recipes address
 // When email arrives at alfred@secorus.com → Alex
 //
-// A capture address decides WHOSE inbox a capture lands in (D2). Only a trusted
-// auto-forward with no capture address falls back to FORWARDER_USERS.
+// A capture address decides WHOSE inbox a capture lands in (D2).
 //
 // `captureAddress` is optional. When a mapping sets it, the value is written to
 // the inbox row's source_metadata as `capture_address`, so enrichment can tell
@@ -114,31 +102,10 @@ export const USER_MAPPINGS: UserMapping[] = [
   },
 ];
 
-// --- Sender Allowlist ---
-// Mail is accepted from these addresses, or as a trusted Gmail auto-forward BY
-// one of them (checkAutoForward). The main gate is the webhook token; forging
-// a From header is easy, so this list is a filter, not authentication.
-export const FROM_ALLOWLIST: string[] = [
-  "alexanderjameswarren@gmail.com",
-  "alex.warren@secorus.com",
-  "enhdesigns@gmail.com",
-];
-
-// Forwarding account → whose inbox, when no capture address matches (D2).
-export const FORWARDER_USERS: Record<string, { userEmail: string; label: string }> = {
-  "alexanderjameswarren@gmail.com": { userEmail: "alexanderjameswarren@gmail.com", label: "Alex" },
-  "alex.warren@secorus.com": { userEmail: "alexanderjameswarren@gmail.com", label: "Alex" },
-  "enhdesigns@gmail.com": { userEmail: "enhdesigns@gmail.com", label: "Elise" },
-};
-
 /** Bare lower-case address from `Name <a@b>` or `a@b`. */
 export function normaliseSenderAddress(from: string): string {
   const angled = from.match(/<([^>]+)>/);
   return (angled ? angled[1] : from).trim().toLowerCase();
-}
-
-export function isSenderAllowed(sender: string): boolean {
-  return FROM_ALLOWLIST.some((allowed) => allowed.toLowerCase() === sender);
 }
 
 export function domainOf(address: string | null | undefined): string {
@@ -146,74 +113,7 @@ export function domainOf(address: string | null | undefined): string {
   return at === -1 ? "(none)" : (address as string).slice(at + 1).replace(/>.*$/, "").toLowerCase();
 }
 
-/** First capture-address mapping, trying each address in order. */
-export function findMapping(addresses: string[]): UserMapping | null {
-  for (const address of addresses) {
-    for (const mapping of USER_MAPPINGS) {
-      if (mapping.pattern.test(address)) return mapping;
-    }
-  }
-  return null;
-}
-
-// --- Trusted Gmail auto-forward ---
-
-export type ForwardVerdict =
-  | { trusted: true; account: string }
-  | { trusted: false; reason: string; domain?: string };
-
-const POSTMARK_RECEIVER = /\breceiver=p-pm-inbound/i;
-
-/**
- * A mail from any sender, auto-forwarded by an allowlisted Gmail account.
- * Trusted only when Postmark's own SPF line — the first Received-SPF, the only
- * one naming a Postmark receiver — passes for a +caf_ Return-Path whose
- * account is allowlisted. X-Forwarded-For is a cross-check, never enough alone.
- * Spec: docs/technical-spec-email-capture.md, "Trusted auto-forward".
- */
-export function checkAutoForward(headers: PostmarkHeader[] | null | undefined): ForwardVerdict {
-  const returnPath = (getHeader(headers, "Return-Path") ?? "").trim().replace(/^<|>$/g, "").toLowerCase();
-  if (!returnPath) return { trusted: false, reason: "no_return_path" };
-
-  const caf = /^([^@+\s]+)\+caf_=[^@\s]+@([^@\s]+)$/.exec(returnPath);
-  if (!caf) return { trusted: false, reason: "return_path_not_caf", domain: domainOf(returnPath) };
-  const account = `${caf[1]}@${caf[2]}`;
-  if (!isSenderAllowed(account)) {
-    return { trusted: false, reason: "forwarder_not_allowed", domain: caf[2] };
-  }
-
-  const spf = (headers ?? [])
-    .filter((h) => h?.Name?.toLowerCase() === "received-spf")
-    .map((h) => h.Value ?? "");
-  if (!spf.length) return { trusted: false, reason: "no_spf", domain: caf[2] };
-  const first = spf[0];
-  if (!POSTMARK_RECEIVER.test(first)) return { trusted: false, reason: "first_spf_not_postmark", domain: caf[2] };
-  if (spf.slice(1).some((v) => POSTMARK_RECEIVER.test(v))) {
-    return { trusted: false, reason: "second_postmark_spf", domain: caf[2] };
-  }
-  if (!/^\s*pass\b/i.test(first)) return { trusted: false, reason: "spf_not_pass", domain: caf[2] };
-  if (!/\bidentity=mailfrom\b/i.test(first)) return { trusted: false, reason: "spf_not_mailfrom", domain: caf[2] };
-  const envelope = /\benvelope-from="?([^";\s]+)"?/i.exec(first)?.[1]?.toLowerCase();
-  if (envelope !== returnPath) return { trusted: false, reason: "envelope_mismatch", domain: caf[2] };
-
-  const xff = getHeader(headers, "X-Forwarded-For");
-  if (xff && xff.trim().split(/\s+/)[0].toLowerCase() !== account) {
-    return { trusted: false, reason: "xff_mismatch", domain: caf[2] };
-  }
-  return { trusted: true, account };
-}
-
-// --- Accept or not, and whose inbox ---
-
-export type CaptureDecision =
-  | {
-    accept: true;
-    userEmail: string;
-    label: string;
-    captureAddress?: string;
-    via: "from" | "forward";
-  }
-  | { accept: false; reason: string; domain: string; captureHit?: string };
+// --- Capture addresses and forwarding hops ---
 
 /** The first capture address among the recipients, and its mapping. */
 export function findCaptureHit(addresses: string[]): { address: string; mapping: UserMapping } | null {
@@ -230,7 +130,7 @@ export function findCaptureHit(addresses: string[]): { address: string; mapping:
 const FORWARDED_FOR = /^(?:x-)+forwarded-for$/i;
 
 /** Every X-Forwarded-For hop, renamed ones too: `<forwarding account> <forwarded-to>`. */
-export function forwardHops(headers: PostmarkHeader[] | null | undefined): { account: string; to: string }[] {
+export function forwardHops(headers: MailHeader[] | null | undefined): { account: string; to: string }[] {
   return (headers ?? [])
     .filter((h) => FORWARDED_FOR.test(h?.Name ?? ""))
     .map((h) => {
@@ -246,7 +146,7 @@ export function forwardHops(headers: PostmarkHeader[] | null | undefined): { acc
  * Only results headers down to the first Authentication-Results are read:
  * Google prepends its own, so anything a sender wrote sits lower.
  */
-export function googleForwardHop(headers: PostmarkHeader[] | null | undefined): { account: string; to: string } | null {
+export function googleForwardHop(headers: MailHeader[] | null | undefined): { account: string; to: string } | null {
   for (const h of headers ?? []) {
     const name = h?.Name?.toLowerCase();
     if (name !== "authentication-results" && name !== "arc-authentication-results") continue;
@@ -267,87 +167,16 @@ export function googleForwardHop(headers: PostmarkHeader[] | null | undefined): 
   return null;
 }
 
-/** First address of every X-Forwarded-For header: the accounts that forwarded it. */
-export function forwardingAccounts(headers: PostmarkHeader[] | null | undefined): string[] {
-  return forwardHops(headers).map((hop) => hop.account);
-}
-
-/**
- * `recipients`: ToFull, To, CcFull, Cc, in order. Gmail's own Delivered-To (the
- * first one; a sender's would sit lower) is added last, so a capture address in
- * Bcc still counts.
- *
- * Rule 1: a capture address is a recipient → accept if (a) the From is
- *   allowlisted, or (b) an earlier hop shows an allowlisted account forwarding
- *   to that same capture address: Google's spf=pass +caf_ mailfrom
- *   (googleForwardHop), or an X-Forwarded-For, renamed or not (option A,
- *   decided risk: that header can be faked; see the spec).
- * Rule 2: otherwise a trusted auto-forward (checkAutoForward) is accepted.
- * Either way, any X-Forwarded-For (renamed too) naming a non-allowlisted account rejects.
- * Rejections carry a reason and one domain, never content or a full address.
- */
-export function decideCapture(
-  sender: string,
-  recipients: string[],
-  headers: PostmarkHeader[] | null | undefined,
-): CaptureDecision {
-  const deliveredTo = getHeader(headers, "Delivered-To");
-  const addresses = [...recipients, ...(deliveredTo ? [deliveredTo] : [])].filter(Boolean);
-  const hit = findCaptureHit(addresses);
-  const captureHit = hit?.address;
-
-  const stranger = forwardingAccounts(headers).find((a) => !isSenderAllowed(a));
-  if (stranger) {
-    return { accept: false, reason: "forwarded_by_unknown_account", domain: domainOf(stranger), captureHit };
-  }
-
-  const fromAllowed = isSenderAllowed(sender);
-  if (hit) {
-    const m = hit.mapping;
-    if (fromAllowed) {
-      return { accept: true, userEmail: m.userEmail, label: m.label, captureAddress: m.captureAddress, via: "from" };
-    }
-    // (b): Google's authenticated +caf_ envelope first, else a forwarding header.
-    // The capture address's own hop forwards to Postmark, so a hop whose
-    // forwarded-to IS the capture address can only be an earlier one.
-    const intoCapture = (hop: { account: string; to: string } | null) =>
-      !!hop && hop.to === hit.address && isSenderAllowed(hop.account);
-    const allowedHop = intoCapture(googleForwardHop(headers)) || forwardHops(headers).some(intoCapture);
-    if (allowedHop) {
-      return { accept: true, userEmail: m.userEmail, label: m.label, captureAddress: m.captureAddress, via: "forward" };
-    }
-    return { accept: false, reason: "capture_address_sender_not_allowed", domain: domainOf(sender), captureHit };
-  }
-
-  const forward = checkAutoForward(headers);
-  if (forward.trusted) {
-    const user = FORWARDER_USERS[forward.account];
-    if (user) return { accept: true, userEmail: user.userEmail, label: user.label, via: "forward" };
-  }
-  if (!fromAllowed) {
-    return {
-      accept: false,
-      reason: `sender_not_allowed:${forward.trusted ? "no_forwarder_user" : forward.reason}`,
-      domain: domainOf(sender),
-    };
-  }
-  return { accept: false, reason: "no_mapping", domain: domainOf(addresses[0]) };
-}
-
 // --- Rejection notices ---
 
-export const POSTMARK_INBOUND_URL = "https://account.postmarkapp.com/servers/18272581/streams/inbound/messages/";
 export const NOTICE_USER_EMAIL = "alexanderjameswarren@gmail.com";
 const NOTICE_TIME_ZONE = "America/Los_Angeles";
 
 /** Plain words for a rejection reason. */
 export function plainReason(reason: string): string {
-  if (reason === "capture_address_sender_not_allowed") return "the sender is not on the allowlist";
-  if (reason === "forwarded_by_unknown_account") return "it was forwarded by an account that is not on the allowlist";
-  if (reason === "no_mapping") return "no capture address or forwarding account matched a user";
+  if (reason === "forwarded_by_unknown_account") return "it was forwarded by an account that is not on the list";
   if (reason === "sender_not_authenticated") return "the sender is on the list but Google's sender checks did not pass";
   if (reason === "sender_not_allowed") return "the sender is not on the list and it is not an approved auto-forward";
-  if (reason.startsWith("sender_not_allowed")) return "the sender is not on the allowlist and it is not a trusted auto-forward";
   return reason;
 }
 
@@ -360,36 +189,28 @@ export interface RejectionInfo {
   reason: string;
   fromAddress: string;
   captureAddress?: string;
-  postmarkMessageId: string;
-  /** Gmail branch: the notice links here instead of Postmark. */
   gmailLink?: string;
   gmailId?: string;
 }
 
 /**
- * The notice row's text and metadata. Never the subject or body. The Postmark
- * id is stored as postmark_message_id, not messageId, so the dedupe index
- * (keyed on messageId) never blocks a notice.
+ * The notice row's text and metadata. Never the subject or body. The Gmail id
+ * is stored as gmail_id, not messageId, so the dedupe index (keyed on
+ * messageId) never blocks a notice.
  */
 export function buildNotice(r: RejectionInfo, now: Date): { capturedText: string; sourceMetadata: Record<string, unknown> } {
   const from = r.fromAddress || "(no sender)";
-  const capturedText = r.gmailLink
-    ? `Email blocked from ${from}: ${plainReason(r.reason)}. ` +
-      `Open it in Gmail: ${r.gmailLink} (labelled forwarded/rejected; remove the label to check it again).`
-    : `Email blocked from ${from}: ${plainReason(r.reason)}. ` +
-      `View it in Postmark: ${POSTMARK_INBOUND_URL}${r.postmarkMessageId} (also still in your secorus Gmail inbox).`;
+  const where = r.gmailLink ? `Open it in Gmail: ${r.gmailLink} (labelled` : "It is in your secorus Gmail inbox (labelled";
+  const capturedText = `Email blocked from ${from}: ${plainReason(r.reason)}. ` +
+    `${where} forwarded/rejected; remove the label to check it again).`;
   const sourceMetadata: Record<string, unknown> = {
     rejected: true,
     reason: r.reason,
     from_address: from,
     notice_day: noticeDay(now),
   };
-  if (r.gmailLink) {
-    sourceMetadata.gmail_link = r.gmailLink;
-    if (r.gmailId) sourceMetadata.gmail_id = r.gmailId;
-  } else {
-    sourceMetadata.postmark_message_id = r.postmarkMessageId;
-  }
+  if (r.gmailLink) sourceMetadata.gmail_link = r.gmailLink;
+  if (r.gmailId) sourceMetadata.gmail_id = r.gmailId;
   if (r.captureAddress) sourceMetadata.capture_address = r.captureAddress;
   return { capturedText, sourceMetadata };
 }
