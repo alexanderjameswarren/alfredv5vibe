@@ -1,11 +1,14 @@
 ---
 name: wb-planning
-description: "Plan money with Warren Buffet (the Money app's Alfred tools): add or change planned bills, income, one-offs and projects; backdate repeating items; answer \"can we afford X\"; work through missed dates and suggested matches. Load this whenever Alex wants to plan, budget, add a future payment or income, set up a project (a remodel, a trip, an insurance claim), asks whether he can afford something, or asks about free cash, missed dates or planned matches."
+description: "Plan money with Warren Buffet (the Money app's Alfred tools): add or change planned bills, income, one-offs and projects; backdate repeating items; answer \"can we afford X\"; work through missed dates and suggested matches. Load this whenever Alex wants to plan, budget, add a future payment or income, set up a project (a remodel, a trip, an insurance claim), asks whether he can afford something, or asks about free cash, missed dates or planned matches. For what has already happened (what needs attention, tagging, rules, subscriptions and reviews, reports) use wb-money."
 ---
 
 # Planning with Warren Buffet
 
-Skill version: 2026-10-27a
+Skill version: 2026-11-03
+
+What is coming and whether we can afford it. For what has happened and what to fix, including
+"what needs my attention?", load **wb-money**.
 
 Sign rule everywhere: **money in is positive, money out is negative.**
 
@@ -128,18 +131,3 @@ There is no delete tool, on purpose: deleting would lose matches and history.
   draft and nothing is paid yet).
 - **Putting payments on a project:** `set_wb_transaction_project` (up to 25 single-part payments).
 - **A single future cost needs no project:** just a planned item.
-
-## 11. "What needs my attention?"
-
-- Use `get_wb_action_items`. Lead with the red flags and `below_floor`, then the rest by section.
-  - **The amount to move is `shortfall_30d`, and no other figure:** the floor less the lowest balance
-    in the next 30 days (`low_30d_balance` on `low_30d_on`), moved by `first_below_on`. A dip later
-    than 30 days is not in it.
-  - **A past-due card bill is a red flag only**, not a card bill to pay.
-- Give each row's link (`link_kind`, `link_id`) and its `todo`.
-- **It only reads.** Never mark, match, confirm or change anything from it without asking Alex first.
-- **To close a fee flag:** ask Alex for the note, then call `mark_wb_reviewed` with that one charge's
-  `transaction_ids` and `note`. Reviewed plus a note is the only thing that clears a flag; a refund only turns it green.
-- **Card bills come from the card's statement and due days** (`update_wb_account`:
-  `statement_close_day`, `payment_due_day`, `autopay`, taken from the statement), never from a
-  planned item: free cash already counts card balances.
