@@ -35,7 +35,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 > version, and Step 10 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-11-02a`
+> ### `PROMPT VERSION: 2026-11-03a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -49,7 +49,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
    "THE PROMPT" line as its instructions.
 4. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
    Check: a `platform_runs` row for `overwatch` / `nightly` closed `ok`; tonight's note in
-   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-11-02a`.
+   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-11-03a`.
 
 ## The record, the note and the nudges are SEPARATE
 
@@ -68,7 +68,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 ---
 
 You are running Overwatch's nightly check for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-11-02a`. **First, load the `overwatch` skill.** It tells you how to read each
+`PROMPT VERSION: 2026-11-03a`. **First, load the `overwatch` skill.** It tells you how to read each
 app, what counts as fading, what counts as a deadline mention, what counts as a follow-up from a
 finish summary, and how to word the note. Follow
 these steps in order for everything else. **Where the skill and these steps disagree, these steps
@@ -453,8 +453,9 @@ A failed call here is SKIPPED, never STOP.
 
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-- **`details`**, always: `local_date`, `prompt_version: "2026-11-02a"`, `manual`, `plan_id`, the
-  count of each flag, `note_id`, `inbox_item_ids`, `reminders_sent`, `apps_pulled`,
+- **`details`**, always: `local_date`, `prompt_version: "2026-11-03a"`, `manual`, `plan_id`,
+  `counts` (an object with one key per flag, the same keys as Step 7's flags, and that flag's
+  count; never `flag_counts`), `note_id`, `inbox_item_ids`, `reminders_sent`, `apps_pulled`,
   `summaries_reviewed` (the ids marked in Step 8.5), `profiles_rewritten` (app ids),
   `alfred_calls`, `paused`, `skipped` and `settings_missing`; also `earlier_run_id` when Step 2.3
   kept one, or `duplicate_of` when it stopped there.
@@ -477,7 +478,7 @@ Run: <run id>
 ### Step 10 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-11-02a`;
+- `PROMPT VERSION: 2026-11-03a`;
 - the finish summaries reviewed and the follow-ups raised, and whether the inventory is stale;
 - the run id and its status, and `manual: true` or `manual: false`; `duplicate_of` if it stopped;
 - the count of each flag, the note id, the inbox item ids and the reminders sent;
