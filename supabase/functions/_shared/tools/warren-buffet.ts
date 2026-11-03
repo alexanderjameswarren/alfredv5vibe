@@ -346,6 +346,7 @@ export const getWbTransactionsTool = defineTool({
     const pending = optBool(T, "pending", args.pending);
     const kind = oneOf(T, "kind", args.kind, WB_KINDS);
     const merchantId = absent(args.merchant_id) ? null : requireId(T, "merchant_id", args.merchant_id);
+    const subscriptionId = absent(args.subscription_id) ? null : requireId(T, "subscription_id", args.subscription_id);
     const tags = tagNames(T, args.tag);
     const needsReview = optBool(T, "needs_review", args.needs_review);
     const source = oneOf(T, "source", args.source, WB_TXN_SOURCES);
@@ -364,6 +365,7 @@ export const getWbTransactionsTool = defineTool({
     if (pending !== null) q = q.eq("pending", pending);
     if (kind) q = q.eq("kind", kind);
     if (merchantId) q = q.eq("merchant_id", merchantId);
+    if (subscriptionId) q = q.eq("subscription_id", subscriptionId);
     if (tags) q = q.overlaps("tag_names", tags);
     if (needsReview !== null) q = q.eq("needs_review", needsReview);
     const { data, error, count } = await q
