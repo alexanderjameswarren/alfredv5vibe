@@ -20,9 +20,13 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
 > version, and Step 9 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-10-23d`
+> ### `PROMPT VERSION: 2026-11-03a`
 >
 > Bump the date-letter whenever this file changes below the line.
+>
+> 2026-10-25a was recovered from the live task on Nov 2 2026. 2026-11-03a makes reviews actionable:
+> a review date moves only through a review in chat, REVIEWS DUE shows the last review and price
+> change, and active subscriptions with no review date are counted.
 
 ## Setting it up (once)
 
@@ -44,7 +48,7 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
    Step 2 reads that, and Step 8 records `manual: true`. Check three things:
    - a `platform_runs` row for `warren_buffet` / `wb_weekly_cleanup` closed `ok`;
    - one inbox item, or none on a quiet week;
-   - a final report that shows `PROMPT VERSION: 2026-10-23d`.
+   - a final report that shows `PROMPT VERSION: 2026-11-03a`.
 
 ## The record and the notification are SEPARATE
 
@@ -63,7 +67,7 @@ A quiet week raises nothing. A signal that fires on the normal case teaches its 
 ---
 
 You are running the weekly Money cleanup for Alex and Elise's household finances in Alfred.
-`PROMPT VERSION: 2026-10-23d`. Follow these steps in order. **Do not improvise.**
+`PROMPT VERSION: 2026-11-03a`. Follow these steps in order. **Do not improvise.**
 
 ### The rules that override everything else
 
@@ -146,7 +150,10 @@ whatever happens.
    - If it errors, STOP with `failure_kind: "review_queue_read"`.
 4. **Reviews due:** `get_wb_subscriptions` with `status: "active"`, `limit: 50`.
    - Keep the rows whose `review_date` is on or before `review_horizon`: `id`, `name`, `review_date`,
-     `term_end_date`, `auto_renew`, `current_price`.
+     `term_end_date`, `auto_renew`, `current_price`, `previous_price`, `last_change_on`,
+     `last_reviewed_on`, `last_verdict`.
+   - From the same read, also keep **`no_review_date_count`**: how many active subscriptions have no
+     `review_date`.
    - **Then drop every row whose `id` is the `link_id` of a `subscription_review` row in
      `needs_attention`** (Step 3.1): a review date already passed is in TO DO, and shows only there.
      What is left are the reviews coming up in the next 30 days.
@@ -164,7 +171,8 @@ It is a **quiet week** when **all** of these hold:
 - no To do rows (reconcile, overdue, late, card bills, needs attention, Money inbox and intentions);
 - no rule-health rows;
 - the review queue is empty;
-- no reviews due.
+- no reviews due;
+- every active subscription has a review date (`no_review_date_count` is 0).
 
 Major expenses and cash flow are for reading, not deciding, so they never make a week un-quiet.
 On a quiet week, go to Step 8 and close `ok` with `quiet: true`. **Create no item.**
@@ -216,10 +224,11 @@ Alfred. Each line ends with its `todo`.
   - For `card_days_missing`, propose:
     `update_wb_account({"id": "<link_id>", "statement_close_day": <…>, "payment_due_day": <…>, "autopay": "<none|minimum|full>"})`.
 - **Needs attention** (never `rule_health`): "<title><if link_id: " (<link: link_id>)">. <todo>"
-  - For a `subscription_review` row (a review date already passed), add the two calls REVIEWS DUE
+  - For a `subscription_review` row (a review date already passed), add the two lines REVIEWS DUE
     would have given it:
-    to keep it and review again later: `upsert_wb_subscription({"id": "<link_id>", "review_date": "<YYYY-MM-DD>"})`;
+    to review it, say in chat: `review <name>`;
     to stop it: `upsert_wb_subscription({"id": "<link_id>", "status": "cancelled"})`.
+    A review date moves only through a review: never propose a `review_date` call.
 - **Money from Alfred:** each `money_inbox` row as "Inbox: <title> (<link: link_id>). <todo>", then
   each `money_intentions` row as "Intention: <title> (<link: link_id>). <todo>"
 
@@ -275,7 +284,7 @@ Overview's order first, then the cleanup sections.
 ```
 Money cleanup — week of <local_date>
 
-<one line: funds transfer yes/no, how many flags, to-do rows, major expenses, rule findings, queue items and reviews due>
+<one line: funds transfer yes/no, how many flags, to-do rows, major expenses, rule findings, queue items, reviews due and subscriptions with no review date>
 <if previous_item_id: "Last week's item is still open: <link: previous_item_id>.">
 
 FUNDS TRANSFER REQUIRED
@@ -302,15 +311,17 @@ REVIEW QUEUE (<total>)
 Work through it in Money → Review.
 
 REVIEWS DUE (<count>)
-- <name> (<link: id>): review <review_date><, prepaid to term_end_date><, auto-renews yes/no>, price <current_price>.
-  To keep it and review again later: upsert_wb_subscription({"id": "<id>", "review_date": "<YYYY-MM-DD>"})
+- <name> (<link: id>): review <review_date><, prepaid to term_end_date><, auto-renews yes/no>, price <current_price><if last_change_on: ", was <previous_price> until <last_change_on>">. Last review: <last_reviewed_on and last_verdict, or "never">.
+  To review it, say in chat: review <name>
   To stop it: upsert_wb_subscription({"id": "<id>", "status": "cancelled"})
+<if no_review_date_count > 0: "<no_review_date_count> active subscriptions have no review date. To set them, say in chat: set review dates.">
 
 Nothing here was changed. Approve a line by asking Claude to run its call.
 ```
 
 Set these fields:
 - `source_type: "task"`
+- `source_app: "warren_buffet"`
 - `source_metadata: { "task_name": "Money cleanup", "run_date": "<local_date>" }`
 - `ai_reasoning: "Created by the wb_weekly_cleanup scheduled task, run <run id>."`
 
@@ -322,10 +333,10 @@ errors, STOP with `failure_kind: "inbox_write"`.
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `ok` unless a step said STOP; then `failed`.
 - **`details`**, always:
-  - `local_date`, `prompt_version: "2026-10-23d"` and `manual` (true or false, from Step 2);
+  - `local_date`, `prompt_version: "2026-11-03a"` and `manual` (true or false, from Step 2);
   - `funds_transfer` (true or false), `flags_count`, `todo_count`, `overdue_count`, `late_count`,
     `major_expenses_count`, `rule_health` (the counts by finding), `review_queue_total`,
-    `reviews_due_count`;
+    `reviews_due_count`, `no_review_date_count`;
   - then one of `inbox_item_id` or `quiet: true`;
   - also `previous_item_id` and `inbox_read_failed` when they apply.
 - **On `failed`:** `error_message` is the verbatim error, and `details.failure_kind` is one of
@@ -333,8 +344,8 @@ Call `update_platform_run` with the run id, **once**.
   `read_truncated`, `inbox_write`, `run_open`, `unknown`. **Never downgrade a failure to `ok` to get
   past a rejected close.**
 
-**On `failed`, also** call `create_inbox_item` with `source_type: "task"`, the same
-`source_metadata`, and this `captured_text`:
+**On `failed`, also** call `create_inbox_item` with `source_type: "task"`, `source_app: "warren_buffet"`,
+the same `source_metadata`, and this `captured_text`:
 
 ```
 Money cleanup FAILED — <failure_kind>, <local_date>
@@ -347,7 +358,7 @@ Run: <run id>
 ### Step 9 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-23d`;
+- `PROMPT VERSION: 2026-11-03a`;
 - the run id and its status, and `manual: true` or `manual: false`;
 - the counts from Step 8;
 - the inbox item id, or "quiet week, no item";

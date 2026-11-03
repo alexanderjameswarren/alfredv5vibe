@@ -5,7 +5,7 @@ description: "Plan money with Warren Buffet (the Money app's Alfred tools): add 
 
 # Planning with Warren Buffet
 
-Skill version: 2026-11-03b
+Skill version: 2026-11-03c
 
 What is coming and whether we can afford it. For what has happened and what to fix, including
 "what needs my attention?", load **wb-money**.
@@ -24,7 +24,7 @@ project, tax_year) and wait for Alex's OK. One OK covers the rows in that table,
 
 Before adding a bill, look for it:
 - `get_wb_subscriptions`: a subscription is already counted in free cash and true cost. Never add
-  one as a planned item too. Adding QuickBooks as a planned bill while it is an active
+  one as a planned item too. Adding an accounting app as a planned bill while it is an active
   subscription counts it twice.
 - `get_wb_planned_items` (drafts are included by default): an item with the same payee, amount or
   date may already exist. Edit it (`upsert_wb_planned_item` with `id`) instead of adding a second.

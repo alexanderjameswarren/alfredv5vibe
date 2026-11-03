@@ -2,7 +2,7 @@
 -- Kind: test (writes invented fixtures, then rolls everything back: nothing persists, not even audit rows)
 -- Applied: YES — run 2026-10-20 by Alex after 143: 24/24 checks passed, rolled back by design. Safe to re-run any time.
 --
--- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md).
+-- Moved from supabase/migrations/144_wb_phase3_step8_tolerance_cover_tests.sql on Nov 3 2026.
 -- Every name and amount below is invented ("ZZ test" fixtures). No real financial data.
 -- Every check reads fixture rows only, or a change caused by them, so real data does not matter.
 --
@@ -10,7 +10,7 @@
 -- whole run rolls back. The error text is the result:
 --   WB TEST RESULT (rolled back): {"all_passed": true, "checks": {...}}
 -- Expect all_passed true.
--- supabase/migrations/144_wb_phase3_step8_tolerance_cover_tests.sql
+-- supabase/tests/warren_buffet_p3/11_phase3_step8_tolerance_cover_tests.sql
 
 create or replace function pg_temp.zz_txn(p_acct uuid, p_merchant uuid, p_on date, p_amount numeric)
 returns uuid

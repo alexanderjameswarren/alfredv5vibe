@@ -42,12 +42,26 @@ describe("recordDestination, rows loaded", () => {
     ["collection_items", { collection_id: "c1" }, { kind: "collection", id: "c1" }],
     ["item_groups", {}, { kind: "path", path: "/groups/detail/r1" }],
     ["item_group_members", { group_id: "g1" }, { kind: "path", path: "/groups/detail/g1" }],
+    ["wb_accounts", {}, { kind: "path", path: "/money/accounts/r1" }],
+    ["wb_transactions", {}, { kind: "path", path: "/money/transactions/r1" }],
+    ["wb_subscriptions", {}, { kind: "path", path: "/money/subscriptions/r1" }],
+    ["wb_planned_items", {}, { kind: "path", path: "/money/plan/items/r1" }],
+    ["wb_projects", {}, { kind: "path", path: "/money/plan/projects/r1" }],
   ])("%s %j", (table, row, expected) => {
     expect(recordDestination(res(table, row), loaded)).toEqual(expected);
   });
 
   it("maps every table it lists", () => {
-    expect(Object.keys(RECORD_SCREENS)).toHaveLength(13);
+    expect(Object.keys(RECORD_SCREENS)).toHaveLength(18);
+  });
+
+  it.each(["wb_accounts", "wb_transactions", "wb_subscriptions", "wb_planned_items", "wb_projects"])(
+    "%s needs no loaded state", (table) => {
+      expect(recordDestination(res(table), empty).kind).toBe("path");
+    });
+
+  it.each(["wb_rules", "wb_merchants"])("%s has no screen, goes generic", (table) => {
+    expect(recordDestination(res(table), loaded)).toEqual(GENERIC);
   });
 });
 

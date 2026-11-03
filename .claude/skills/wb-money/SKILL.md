@@ -5,7 +5,7 @@ description: "Look after money that has already happened in Warren Buffet (the M
 
 # Money with Warren Buffet: what happened, and what to fix
 
-Skill version: 2026-11-03b
+Skill version: 2026-11-03c
 
 This skill covers what has happened. **wb-planning** covers what is coming and whether we can
 afford it; load it for planned items, projects, free cash with a what-if, missed dates and matches.
@@ -83,7 +83,11 @@ Start one when Alex says "review <name>", when a weekly-cleanup REVIEWS DUE line
 when a review date has passed.
 
 **a. Read.** `get_wb_subscriptions` with `search`, `include_reviews` and `include_prices`. Show the
-price changes since the last review, or the whole history on a first review.
+price changes since the last review, or the whole history on a first review. When the charges show
+a price change the price history lacks, propose recording each one with
+`record_wb_subscription_price`, passing the charge's `transaction_id` so the date is the charge's
+date. Put them in the same save table as the review (step f), so the next review's "changed since
+last review" has real data.
 
 **b. Usage.** Read `usage_clues` and follow them:
 - Charges at the merchant: `get_wb_transactions` with `subscription_id`, or `merchant_id`.
@@ -109,7 +113,8 @@ the next review date: at least yearly for monthly ones; 30 days before renewal o
 annual, prepaid and auto-renewing ones.
 
 **f. Save.** Show the table (verdict, next review date, period, uses, amount paid, cost per use,
-market check, notes), then `record_wb_subscription_review`. It saves the review and moves the review
+market check, notes, and any missing prices from step a), then `record_wb_subscription_review`,
+and `record_wb_subscription_price` for each missing price. It saves the review and moves the review
 date together, and changes nothing else. **Cancelling, downgrading or switching are separate
 proposed calls** (`upsert_wb_subscription`), never folded into the review. A refusal from the
 database comes back as it is: read it to Alex and fix the input.

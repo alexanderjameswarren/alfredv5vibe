@@ -2,7 +2,7 @@
 -- Kind: test (writes invented fixtures, then rolls everything back: nothing persists, not even audit rows)
 -- Applied: YES — run 2026-10-17 by Alex after 137: 42/42 checks passed, rolled back by design. Safe to re-run any time.
 --
--- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md).
+-- Moved from supabase/migrations/138_wb_phase3_step5_tests.sql on Nov 3 2026.
 -- Every name and amount below is invented ("ZZ test" fixtures). No real financial data.
 -- Dates are in 2031, so real data does not reach the burn months; everything else is measured as a
 -- change caused by the fixtures, so real balances and subscriptions do not matter.
@@ -11,7 +11,7 @@
 -- whole run rolls back. The error text is the result:
 --   WB TEST RESULT (rolled back): {"all_passed": true, "checks": {...}}
 -- Expect all_passed true.
--- supabase/migrations/138_wb_phase3_step5_tests.sql
+-- supabase/tests/warren_buffet_p3/9_phase3_step5_tests.sql
 
 create or replace function pg_temp.wb_test_p3_step5a()
 returns void
