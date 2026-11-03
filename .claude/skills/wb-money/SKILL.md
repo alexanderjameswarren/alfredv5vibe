@@ -1,11 +1,11 @@
 ---
 name: wb-money
-description: "Look after money that has already happened in Warren Buffet (the Money app's Alfred tools): what needs Alex's attention in money; the review queue and tagging transactions; fixing rules, merchants and tags; subscriptions and subscription reviews (\"review <name>\", reviews due, is it worth it); Amazon order items; spending, cash-flow, true-cost, net-worth and balance reports; and approving a line from the weekly Money cleanup item. Load this whenever Alex asks what needs his attention in money, wants transactions tagged or fixed, a rule or merchant changed, a subscription reviewed, added or cancelled, a spending or net-worth question answered, or says yes to a cleanup line. For planning ahead (planned bills, income, projects, \"can we afford X\", missed dates, matches) use wb-planning."
+description: "Look after money that has already happened in Warren Buffet (the Money app's Alfred tools): what needs Alex's attention in money; the review queue and tagging transactions; fixing rules, merchants and tags; subscriptions and subscription reviews (\"review\" and a subscription's name, reviews due, is it worth it); Amazon order items; spending, cash-flow, true-cost, net-worth and balance reports; and approving a line from the weekly Money cleanup item. Load this whenever Alex asks what needs his attention in money, wants transactions tagged or fixed, a rule or merchant changed, a subscription reviewed, added or cancelled, a spending or net-worth question answered, or says yes to a cleanup line. For planning ahead (planned bills, income, projects, \"can we afford X\", missed dates, matches) use wb-planning."
 ---
 
 # Money with Warren Buffet: what happened, and what to fix
 
-Skill version: 2026-11-03
+Skill version: 2026-11-03b
 
 This skill covers what has happened. **wb-planning** covers what is coming and whether we can
 afford it; load it for planned items, projects, free cash with a what-if, missed dates and matches.
@@ -24,15 +24,15 @@ that table, nothing more.
 
 ## 1. "What needs my attention?"
 
-- Use `get_wb_action_items`. Lead with the red flags and `below_floor`, then the rest by section.
+- Use `get_wb_action_items`. Lead with `below_floor`, then the red flags, then the rest by section.
   - **The amount to move is `shortfall_30d`, and no other figure:** the floor less the lowest balance
     in the next 30 days (`low_30d_balance` on `low_30d_on`), moved by `first_below_on`. A dip later
-    than 30 days is not in it.
+    than 30 days is not in it. If `first_below_on` is null, there is nothing to move. Never quote another "move" amount.
   - **A past-due card bill is a red flag only**, not a card bill to pay.
 - Give each row's link (`link_kind`, `link_id`) and its `todo`.
 - **It only reads.** Never mark, match, confirm or change anything from it without asking Alex first.
 - **To close a fee flag:** ask Alex for the note, then call `mark_wb_reviewed` with that one charge's
-  `transaction_ids` and `note`. Reviewed plus a note is the only thing that clears a flag; a refund only turns it green.
+  `transaction_ids` and `note`. Reviewed plus a note is the only thing that clears a flag. Only a refund-kind credit of the same amount on that card turns it green (never a card payment or a transfer), and each refund counts for one fee.
 - **Card bills come from the card's statement and due days** (`update_wb_account`:
   `statement_close_day`, `payment_due_day`, `autopay`, taken from the statement), never from a
   planned item: free cash already counts card balances.
