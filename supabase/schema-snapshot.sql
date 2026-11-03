@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-02 15:01, through migration 198 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-03 13:21, through migration 199 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -9570,6 +9570,142 @@ COMMENT ON FUNCTION "public"."wb_process_transactions"("ids" "uuid"[]) IS 'Warre
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."wb_subscription_reviews" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "context_id" "text" NOT NULL,
+    "subscription_id" "uuid" NOT NULL,
+    "reviewed_on" "date" DEFAULT (("now"() AT TIME ZONE 'America/Los_Angeles'::"text"))::"date" NOT NULL,
+    "period_from" "date",
+    "period_to" "date",
+    "uses" integer,
+    "amount_paid" numeric(12,2),
+    "cost_per_use" numeric(12,2),
+    "verdict" "text" NOT NULL,
+    "market_check" "text",
+    "next_review_on" "date",
+    "notes" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "wb_subscription_reviews_amount_check" CHECK ((("amount_paid" IS NULL) OR ("amount_paid" >= (0)::numeric))),
+    CONSTRAINT "wb_subscription_reviews_cost_check" CHECK ((("cost_per_use" IS NULL) OR (("cost_per_use" >= (0)::numeric) AND ("uses" > 0)))),
+    CONSTRAINT "wb_subscription_reviews_market_check" CHECK ((("market_check" IS NULL) OR (("char_length"("market_check") <= 300) AND ("market_check" !~ '[\r\n]'::"text")))),
+    CONSTRAINT "wb_subscription_reviews_next_check" CHECK (((("verdict" = 'cancel'::"text") OR ("next_review_on" IS NOT NULL)) AND (("next_review_on" IS NULL) OR ("next_review_on" > "reviewed_on")))),
+    CONSTRAINT "wb_subscription_reviews_period_check" CHECK (((("period_from" IS NULL) = ("period_to" IS NULL)) AND (("period_to" IS NULL) OR ("period_to" >= "period_from")))),
+    CONSTRAINT "wb_subscription_reviews_uses_check" CHECK ((("uses" IS NULL) OR ("uses" >= 0))),
+    CONSTRAINT "wb_subscription_reviews_verdict_check" CHECK (("verdict" = ANY (ARRAY['keep'::"text", 'downgrade'::"text", 'switch'::"text", 'shop_around'::"text", 'cancel'::"text"])))
+);
+
+
+ALTER TABLE "public"."wb_subscription_reviews" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."wb_subscription_reviews" IS 'App: Warren Buffet. One row per review of a subscription: was it used, what it cost per use, the market check and the verdict. Saved by wb_record_subscription_review. Uses come only from a usage clue''s source or from Alex. A verdict changes nothing on the subscription: cancelling, downgrading or switching are separate calls. user_id and context_id are copied from the subscription by trigger.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."id" IS 'Primary key.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."user_id" IS 'Owner, copied from the subscription by trigger.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."context_id" IS 'Household context, copied from the subscription by trigger.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."subscription_id" IS 'The subscription reviewed. Its reviews go when it does.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."reviewed_on" IS 'The Pacific date of the review. Two on one day are allowed; the newest created_at counts as the last.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."period_from" IS 'First day of the period looked at. Set together with period_to.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."period_to" IS 'Last day of the period looked at. Set together with period_from.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."uses" IS 'Uses counted in the period, from a usage clue''s source or from Alex. Null means not countable; 0 means counted and unused.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."amount_paid" IS 'Amount paid in the period, positive dollars like wb_subscription_prices. Null when unknown.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."cost_per_use" IS 'amount_paid divided by uses, positive dollars. Null when uses is null or 0.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."verdict" IS 'keep, downgrade, switch, shop_around or cancel.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."market_check" IS 'One short dated line with its source: what a fair price looked like at this review. Null when none was done.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."next_review_on" IS 'The date this review moved review_date to. Required unless the verdict is cancel, and after reviewed_on.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."notes" IS 'Anything else worth keeping from the review.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscription_reviews"."created_at" IS 'When the row was saved.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."wb_record_subscription_review"("p_subscription_id" "uuid", "p_verdict" "text", "p_next_review_on" "date" DEFAULT NULL::"date", "p_reviewed_on" "date" DEFAULT NULL::"date", "p_period_from" "date" DEFAULT NULL::"date", "p_period_to" "date" DEFAULT NULL::"date", "p_uses" integer DEFAULT NULL::integer, "p_amount_paid" numeric DEFAULT NULL::numeric, "p_cost_per_use" numeric DEFAULT NULL::numeric, "p_market_check" "text" DEFAULT NULL::"text", "p_notes" "text" DEFAULT NULL::"text") RETURNS "public"."wb_subscription_reviews"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_row public.wb_subscription_reviews;
+begin
+  if p_next_review_on is null and p_verdict is distinct from 'cancel' then
+    raise exception 'wb_record_subscription_review: a next review date is required unless the verdict is cancel. Nothing was changed.'
+      using errcode = '22023';
+  end if;
+  perform 1 from public.wb_subscriptions s where s.id = p_subscription_id for update;
+  if not found then
+    raise exception 'wb_record_subscription_review: no subscription % that you can see. Nothing was changed.', p_subscription_id
+      using errcode = '22023';
+  end if;
+
+  insert into public.wb_subscription_reviews (
+    subscription_id, context_id, reviewed_on, period_from, period_to, uses, amount_paid, cost_per_use,
+    verdict, market_check, next_review_on, notes)
+  select s.id, s.context_id, coalesce(p_reviewed_on, (now() at time zone 'America/Los_Angeles')::date),
+         p_period_from, p_period_to, p_uses, p_amount_paid, p_cost_per_use,
+         p_verdict, p_market_check, p_next_review_on, p_notes
+  from public.wb_subscriptions s
+  where s.id = p_subscription_id
+  returning * into v_row;
+
+  -- Only the review date moves. A cancel with no next date leaves it alone.
+  if p_next_review_on is not null then
+    update public.wb_subscriptions set review_date = p_next_review_on where id = p_subscription_id;
+  end if;
+  return v_row;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."wb_record_subscription_review"("p_subscription_id" "uuid", "p_verdict" "text", "p_next_review_on" "date", "p_reviewed_on" "date", "p_period_from" "date", "p_period_to" "date", "p_uses" integer, "p_amount_paid" numeric, "p_cost_per_use" numeric, "p_market_check" "text", "p_notes" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."wb_record_subscription_review"("p_subscription_id" "uuid", "p_verdict" "text", "p_next_review_on" "date", "p_reviewed_on" "date", "p_period_from" "date", "p_period_to" "date", "p_uses" integer, "p_amount_paid" numeric, "p_cost_per_use" numeric, "p_market_check" "text", "p_notes" "text") IS 'App: Warren Buffet. Saves one subscription review and moves the subscription''s review_date to p_next_review_on, in one transaction. Requires a next date unless the verdict is cancel, and changes nothing else on the subscription. Security invoker, so wb_ RLS applies. Called by record_wb_subscription_review.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."wb_refresh_subscriptions"("p_ids" "uuid"[]) RETURNS integer
     LANGUAGE "plpgsql"
     SET "search_path" TO 'public', 'pg_temp'
@@ -10285,6 +10421,25 @@ $$;
 
 
 ALTER FUNCTION "public"."wb_subscription_prices_copy_owner"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."wb_subscription_reviews_copy_owner"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  select s.user_id, s.context_id into new.user_id, new.context_id
+  from public.wb_subscriptions s
+  where s.id = new.subscription_id;
+  if not found then
+    raise exception 'wb_subscription_reviews: subscription % not found', new.subscription_id using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."wb_subscription_reviews_copy_owner"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."wb_subscriptions_fill_interval"() RETURNS "trigger"
@@ -16766,6 +16921,7 @@ CREATE TABLE IF NOT EXISTS "public"."wb_subscriptions" (
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "interval_count" integer,
     "interval_unit" "text",
+    "usage_clues" "text",
     CONSTRAINT "wb_subscriptions_billed_through_check" CHECK ((("billed_through_id" IS NULL) OR ("billed_through_id" <> "id"))),
     CONSTRAINT "wb_subscriptions_bundle_check" CHECK ((("bundle_id" IS NULL) OR ("bundle_id" <> "id"))),
     CONSTRAINT "wb_subscriptions_cadence_check" CHECK (("cadence" = ANY (ARRAY['monthly'::"text", 'quarterly'::"text", 'annual'::"text", 'other'::"text"]))),
@@ -16810,6 +16966,10 @@ COMMENT ON COLUMN "public"."wb_subscriptions"."interval_count" IS 'Billing inter
 
 
 COMMENT ON COLUMN "public"."wb_subscriptions"."interval_unit" IS 'week or month; set together with interval_count.';
+
+
+
+COMMENT ON COLUMN "public"."wb_subscriptions"."usage_clues" IS 'Where and how to tell this subscription is used: which app, intention, tag or merchant to look at, and what counts as one use. Read by Claude during a review. Null means no clue yet, so Claude asks.';
 
 
 
@@ -17559,8 +17719,11 @@ CREATE OR REPLACE VIEW "public"."wb_subscription_overview" WITH ("security_invok
     "s"."created_at",
     "s"."updated_at",
     "s"."interval_count",
-    "s"."interval_unit"
-   FROM ((((("public"."wb_subscriptions" "s"
+    "s"."interval_unit",
+    "s"."usage_clues",
+    "lr"."reviewed_on" AS "last_reviewed_on",
+    "lr"."verdict" AS "last_verdict"
+   FROM (((((("public"."wb_subscriptions" "s"
      CROSS JOIN "today")
      LEFT JOIN "public"."wb_merchants" "m" ON (("m"."id" = "s"."merchant_id")))
      LEFT JOIN "public"."wb_subscriptions" "bt" ON (("bt"."id" = "s"."billed_through_id")))
@@ -17572,13 +17735,19 @@ CREATE OR REPLACE VIEW "public"."wb_subscription_overview" WITH ("security_invok
                     ELSE NULL::"date"
                 END AS "last_change_on"
            FROM "public"."wb_subscription_prices" "p"
-          WHERE (("p"."subscription_id" = "s"."id") AND ("p"."effective_on" <= "today"."d"))) "pr" ON (true));
+          WHERE (("p"."subscription_id" = "s"."id") AND ("p"."effective_on" <= "today"."d"))) "pr" ON (true))
+     LEFT JOIN LATERAL ( SELECT "r"."reviewed_on",
+            "r"."verdict"
+           FROM "public"."wb_subscription_reviews" "r"
+          WHERE ("r"."subscription_id" = "s"."id")
+          ORDER BY "r"."reviewed_on" DESC, "r"."created_at" DESC
+         LIMIT 1) "lr" ON (true));
 
 
 ALTER VIEW "public"."wb_subscription_overview" OWNER TO "postgres";
 
 
-COMMENT ON VIEW "public"."wb_subscription_overview" IS 'App: Warren Buffet. One row per subscription with merchant, billed-through and bundle names, current_price (today), previous_price and last_change_on, charge_count, the billing interval (interval_count, interval_unit), and overdue: active, more than 7 days past next_expected_on, and not before term_end_date (after it, only when auto_renew is not false). Cadence other with no interval has no next date and is never overdue. Missing charges live here, not in wb_review_queue. security_invoker, so wb_ RLS applies.';
+COMMENT ON VIEW "public"."wb_subscription_overview" IS 'App: Warren Buffet. One row per subscription with merchant, billed-through and bundle names, current_price (today), previous_price and last_change_on, charge_count, the billing interval (interval_count, interval_unit), usage_clues, the last review (last_reviewed_on, last_verdict; null when never reviewed), and overdue: active, more than 7 days past next_expected_on, and not before term_end_date (after it, only when auto_renew is not false). Cadence other with no interval has no next date and is never overdue. Missing charges live here, not in wb_review_queue. security_invoker, so wb_ RLS applies.';
 
 
 
@@ -18469,6 +18638,11 @@ ALTER TABLE ONLY "public"."wb_subscription_prices"
 
 
 
+ALTER TABLE ONLY "public"."wb_subscription_reviews"
+    ADD CONSTRAINT "wb_subscription_reviews_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."wb_subscriptions"
     ADD CONSTRAINT "wb_subscriptions_pkey" PRIMARY KEY ("id");
 
@@ -19220,6 +19394,10 @@ CREATE INDEX "wb_splits_transaction_idx" ON "public"."wb_splits" USING "btree" (
 
 
 
+CREATE INDEX "wb_subscription_reviews_latest_idx" ON "public"."wb_subscription_reviews" USING "btree" ("subscription_id", "reviewed_on" DESC, "created_at" DESC);
+
+
+
 CREATE INDEX "wb_subscriptions_merchant_idx" ON "public"."wb_subscriptions" USING "btree" ("merchant_id");
 
 
@@ -19624,6 +19802,10 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."wb_subscription_reviews" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."wb_subscriptions" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -19993,6 +20175,10 @@ CREATE OR REPLACE TRIGGER "wb_splits_touch_updated_at" BEFORE UPDATE ON "public"
 
 
 CREATE OR REPLACE TRIGGER "wb_subscription_prices_copy_owner" BEFORE INSERT OR UPDATE ON "public"."wb_subscription_prices" FOR EACH ROW EXECUTE FUNCTION "public"."wb_subscription_prices_copy_owner"();
+
+
+
+CREATE OR REPLACE TRIGGER "wb_subscription_reviews_copy_owner" BEFORE INSERT OR UPDATE ON "public"."wb_subscription_reviews" FOR EACH ROW EXECUTE FUNCTION "public"."wb_subscription_reviews_copy_owner"();
 
 
 
@@ -21066,6 +21252,21 @@ ALTER TABLE ONLY "public"."wb_subscription_prices"
 
 
 
+ALTER TABLE ONLY "public"."wb_subscription_reviews"
+    ADD CONSTRAINT "wb_subscription_reviews_context_id_fkey" FOREIGN KEY ("context_id") REFERENCES "public"."contexts"("id");
+
+
+
+ALTER TABLE ONLY "public"."wb_subscription_reviews"
+    ADD CONSTRAINT "wb_subscription_reviews_subscription_id_fkey" FOREIGN KEY ("subscription_id") REFERENCES "public"."wb_subscriptions"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."wb_subscription_reviews"
+    ADD CONSTRAINT "wb_subscription_reviews_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
+
+
+
 ALTER TABLE ONLY "public"."wb_subscriptions"
     ADD CONSTRAINT "wb_subscriptions_billed_through_id_fkey" FOREIGN KEY ("billed_through_id") REFERENCES "public"."wb_subscriptions"("id") ON DELETE SET NULL;
 
@@ -21634,6 +21835,10 @@ CREATE POLICY "claude_reader_read" ON "public"."wb_splits" FOR SELECT TO "claude
 
 
 CREATE POLICY "claude_reader_read" ON "public"."wb_subscription_prices" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."wb_subscription_reviews" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
 
 
 
@@ -22388,6 +22593,17 @@ ALTER TABLE "public"."wb_subscription_prices" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "wb_subscription_prices_access" ON "public"."wb_subscription_prices" USING ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true))))) WITH CHECK ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
+   FROM "public"."contexts"
+  WHERE ("contexts"."shared" = true)))));
+
+
+
+ALTER TABLE "public"."wb_subscription_reviews" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "wb_subscription_reviews_access" ON "public"."wb_subscription_reviews" USING ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
    FROM "public"."contexts"
   WHERE ("contexts"."shared" = true))))) WITH CHECK ((("user_id" = "auth"."uid"()) OR ("context_id" IN ( SELECT "contexts"."id"
    FROM "public"."contexts"
@@ -23427,6 +23643,77 @@ GRANT ALL ON FUNCTION "public"."wb_process_transactions"("ids" "uuid"[]) TO "ser
 
 
 
+GRANT ALL ON TABLE "public"."wb_subscription_reviews" TO "authenticated";
+GRANT ALL ON TABLE "public"."wb_subscription_reviews" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("context_id") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("subscription_id") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("reviewed_on") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("period_from") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("period_to") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("uses") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("amount_paid") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("cost_per_use") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("verdict") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("market_check") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("next_review_on") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."wb_subscription_reviews" TO "claude_reader";
+
+
+
+REVOKE ALL ON FUNCTION "public"."wb_record_subscription_review"("p_subscription_id" "uuid", "p_verdict" "text", "p_next_review_on" "date", "p_reviewed_on" "date", "p_period_from" "date", "p_period_to" "date", "p_uses" integer, "p_amount_paid" numeric, "p_cost_per_use" numeric, "p_market_check" "text", "p_notes" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."wb_record_subscription_review"("p_subscription_id" "uuid", "p_verdict" "text", "p_next_review_on" "date", "p_reviewed_on" "date", "p_period_from" "date", "p_period_to" "date", "p_uses" integer, "p_amount_paid" numeric, "p_cost_per_use" numeric, "p_market_check" "text", "p_notes" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."wb_record_subscription_review"("p_subscription_id" "uuid", "p_verdict" "text", "p_next_review_on" "date", "p_reviewed_on" "date", "p_period_from" "date", "p_period_to" "date", "p_uses" integer, "p_amount_paid" numeric, "p_cost_per_use" numeric, "p_market_check" "text", "p_notes" "text") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."wb_refresh_subscriptions"("p_ids" "uuid"[]) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_refresh_subscriptions"("p_ids" "uuid"[]) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_refresh_subscriptions"("p_ids" "uuid"[]) TO "service_role";
@@ -23514,6 +23801,12 @@ GRANT ALL ON FUNCTION "public"."wb_subscription_price_on"("p_subscription_id" "u
 REVOKE ALL ON FUNCTION "public"."wb_subscription_prices_copy_owner"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."wb_subscription_prices_copy_owner"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."wb_subscription_prices_copy_owner"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."wb_subscription_reviews_copy_owner"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."wb_subscription_reviews_copy_owner"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."wb_subscription_reviews_copy_owner"() TO "service_role";
 
 
 
