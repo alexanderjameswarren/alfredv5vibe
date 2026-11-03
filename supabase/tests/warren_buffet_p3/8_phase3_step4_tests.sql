@@ -4,14 +4,14 @@
 -- Edited 2026-10-20 for A45 (spec): partial_not_paid became within_tolerance_paid. A confirmed amount short of the
 -- planned one by no more than amount_tolerance now covers it, so the item is paid. Expects 143 to be applied.
 --
--- All SQL lives in supabase/migrations/ (see .claude/CLAUDE.md).
+-- Moved from supabase/migrations/136_wb_phase3_step4_tests.sql on Nov 3 2026.
 -- Every name and amount below is invented ("ZZ test" fixtures). No real financial data.
 --
 -- HOW TO READ THE RESULT: the script ends by raising an error on purpose, so the
 -- whole run rolls back. The error text is the result:
 --   WB TEST RESULT (rolled back): {"all_passed": true, "checks": {...}}
 -- Expect all_passed true.
--- supabase/migrations/136_wb_phase3_step4_tests.sql
+-- supabase/tests/warren_buffet_p3/8_phase3_step4_tests.sql
 
 create or replace function pg_temp.wb_test_p3_step4a()
 returns void

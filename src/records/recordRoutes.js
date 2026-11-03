@@ -4,6 +4,11 @@ import {
   executionPath,
   samSongPath,
   groupDetailPath,
+  moneyAccountPath,
+  moneyPlannedItemPath,
+  moneyProjectPath,
+  moneySubscriptionPath,
+  moneyTransactionPath,
 } from "../viewPaths";
 
 // Where a resolved record opens. Pure: takes resolve_record's result
@@ -60,6 +65,12 @@ export const RECORD_SCREENS = {
   item_groups: (row, lookup) => (lookup.group?.(row.id) ? path(groupDetailPath(row.id)) : null),
   item_group_members: (row, lookup) =>
     lookup.group?.(row.group_id) ? path(groupDetailPath(row.group_id)) : null,
+  // Money detail screens fetch by id. Rules and merchants have no screen, so they stay generic.
+  wb_accounts: (row) => path(moneyAccountPath(row.id)),
+  wb_transactions: (row) => path(moneyTransactionPath(row.id)),
+  wb_subscriptions: (row) => path(moneySubscriptionPath(row.id)),
+  wb_planned_items: (row) => path(moneyPlannedItemPath(row.id)),
+  wb_projects: (row) => path(moneyProjectPath(row.id)),
 };
 
 export function recordDestination(result, lookup) {
