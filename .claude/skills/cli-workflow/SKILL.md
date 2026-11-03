@@ -5,7 +5,7 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
-Skill version: 2026-11-02b
+Skill version: 2026-11-03a
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -806,15 +806,15 @@ code so the next tagged prompt can set a new one. It is one step, in the
 ### One conversation per project
 
 **Start a fresh claude.ai conversation, and a fresh CLI session, for each
-project.** Claude Code reads its hook settings when a conversation starts, so a
-change to `.claude/settings.local.json` — a new hook, a new matcher, a new
-permission — does nothing in the conversation that made it. A session that
-edited the guard is the one session that cannot be trusted to be guarded by it.
+project.** A session that edited the guard is the one session that cannot be
+trusted to be guarded by it.
 
-The hook *scripts* are read on every call, so a change to `claims-guard.mjs` or
-`prompt-check.mjs` takes effect at once; it is the settings that need the
-restart. When a project has changed either, say so in the final report and tell
-Alex to start the next one fresh.
+Hook changes take effect in the running session: the hook *scripts* are read on
+every call, and a change to the hook entries in settings (seen at s60b) applies
+at once too. So a step that removes or changes hook entries, or the hook scripts,
+makes that its **last** change: if it breaks a hook, nothing after it runs
+unguarded or gets stuck. When a project has changed either, say so in the final
+report and tell Alex to start the next one fresh.
 
 ### The database step, just in time
 

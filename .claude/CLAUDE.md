@@ -9,10 +9,18 @@ deleting branches, and no `checkout` or `restore` of files.
 Read-only git is fine and wanted: `status`, `diff`, `log`, `show`, `blame`,
 `grep`.
 
-**`gitcom`, `gitsync` and `gitpush` are Alex's too.** They live in this repo, at
+**`gitcom`, `gitsync` and `gitpush` are Alex's too.** They run from
 `scripts/git-commit-claimed.mjs`, `scripts/git-sync.mjs` and
 `scripts/git-push-worktrees.mjs`, and they do commit, merge and push — which is
 exactly why you never run them. Ask him to. Reading them is fine.
+
+**`scripts/` and `.claude/hooks/` hold shims for Switchboard's files.** Since s61,
+`claims.mjs`, `clip.mjs`, the four git commands, `overwatch-post.mjs`, every hook,
+and the libraries alfred-v5 still imports from `scripts/lib/` are shims that run the
+installed Switchboard in `%LOCALAPPDATA%\Switchboard`. The code lives in the
+`C:\Users\Alex\projects\switchboard` repo. A change to claims, clip, the guards or the
+git commands is made there, not here. If Switchboard isn't installed, the guards
+block everything and say so. The rules in this file are unchanged.
 
 When the work is done, leave every change in the working tree, uncommitted, and
 tell Alex exactly which files you changed. Committing and pushing are his
@@ -507,9 +515,11 @@ CI=true npx react-scripts test --watchAll=false
 node --test "scripts/lib/*.test.mjs"
 ```
 
-The first is the app suite. The second is the CLI tooling — claims, the git
-commands, the hooks — which runs under `node --test`, needs no `npm install`,
-and is not picked up by the first. Run both at the end.
+The first is the app suite. The second is the scripts that stay in alfred-v5:
+inventory, schema snapshot, sql-queue and not-an-artist. It runs under `node --test`,
+needs no `npm install`, and is not picked up by the first. Run both at the end.
+Tests for claims, the hooks, clip and the git commands live in the switchboard
+repo and run there.
 
 Never plain `npx jest`. While working, run only the test files related to the
 change; run the full suite once, at the end.
