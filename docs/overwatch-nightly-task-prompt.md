@@ -10,30 +10,22 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
   `push_time` (05:00), so everything lands before Alex is up at 5.
 - **App / job:** `overwatch` / `nightly` (schedule row from migration 177, with the weekly one).
   claude.ai task `trig_013sUsnchXf7L29ti7CunERU`.
-- **Tools:** the **Alfred** connector (mcp v174 or later: `get_project_estimates`, `get_friction`
-  with `status`, `get_inbox` with `source_app`, and since 2026-10-27 `get_finish_summaries`,
-  `get_platform_inventory` and `mark_finish_summaries_reviewed`; mcp v176 or later for
-  `get_portfolios`) and the **Claude_Code_Remote**
-  connector (`list_triggers`), which every Claude task already has. The **`overwatch` skill** must be
-  available to the task.
-- **Call budget:** the Alfred connector allows **60 calls in 5 minutes**. The prompt reads in bulk
-  and groups locally, so a typical night makes about 43 to 48 Alfred calls (up to 4 more when apps
-  with no activity row need their last use read from their own data), spread over more than
-  5 minutes of run time; rule 8 keeps it under the limit on a heavy night. The impact review
-  (counts 10 and 11) adds **2 calls on a night with no finish summary** (the summaries read and the
-  freshness read), and on a night with one summary about **8 to 12** more, **at most 19** (the
-  table list, the skills, up to 5 table reads, up to 5 follow-up items, up to 2 profile rewrites and
-  the mark), which is when rule 8's pause matters. The portfolio review check (count 12) adds
-  **1 call** every night, the notify-dispatch check (count 4a) **1 call**, and the open-ended events
-  read (count 7) at most **1 page**.
-- **Settings it reads** from the active plan: `stall_days`, `waiting_on_alex_days`, `fading_days`,
+- **Tools:** the **Alfred** connector (mcp v192 or later, for `get_overwatch_nightly_counts`) and the
+  **Claude_Code_Remote** connector (`list_triggers`), which every Claude task already has. The
+  **`overwatch` skill** must be available to the task.
+- **Call budget:** the Alfred connector allows **60 calls in 5 minutes**, shared with other tasks.
+  One call, `get_overwatch_nightly_counts`, returns most of the counts, so a typical night makes
+  **about 12 to 20** Alfred calls: opening the run, the counts, the recipe pulls, an app's own data
+  when it has no activity row, and the writes. A finish summary adds about **8 to 12** more, **at most
+  19** (the table list, the skills, up to 5 table reads, up to 5 follow-up items, up to 2 profile
+  rewrites and the mark), so the worst night is about 38. Rule 8's pause stays as a safety net.
+- **Settings it reads** from the active plan, through the counts: `stall_days`, `waiting_on_alex_days`, `fading_days`,
   `overrun_factor`, `active_project_limit`, `inbox_backlog_threshold`, `routing_low_confidence`,
   `overdue_days`, `urgent_within_days` (to add through the gate), `pushes_per_day`, `push_time`, and
   `inventory_stale_days` (to add through the gate; **7** until then, rule 1).
-- **Needs** `first_report_at` on `get_project_plans` rows for the estimated finish (Step 33's
-  change to `overwatch_project_progress`); until then every finish is "unknown".
 - **Spec:** `docs/technical-spec-overwatch-q4n.md` section 6 (the nightly job and the rule for
-  Overwatch's scheduled tasks), 4.6 to 4.12 and Appendix C.
+  Overwatch's scheduled tasks), 4.6 to 4.12 and Appendix C; `docs/technical-spec-nightly_counts-f8k.md`
+  for the counts call.
 - **Edit rule:** change this file, then paste it into the task. Never edit the task alone. A change
   to procedure goes here; a change to judgment goes in the skill.
 
@@ -43,7 +35,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 > version, and Step 10 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-10-31a`
+> ### `PROMPT VERSION: 2026-11-02a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -57,7 +49,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
    "THE PROMPT" line as its instructions.
 4. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
    Check: a `platform_runs` row for `overwatch` / `nightly` closed `ok`; tonight's note in
-   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-10-31a`.
+   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-11-02a`.
 
 ## The record, the note and the nudges are SEPARATE
 
@@ -76,7 +68,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 ---
 
 You are running Overwatch's nightly check for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-10-31a`. **First, load the `overwatch` skill.** It tells you how to read each
+`PROMPT VERSION: 2026-11-02a`. **First, load the `overwatch` skill.** It tells you how to read each
 app, what counts as fading, what counts as a deadline mention, what counts as a follow-up from a
 finish summary, and how to word the note. Follow
 these steps in order for everything else. **Where the skill and these steps disagree, these steps
@@ -86,9 +78,10 @@ win.** Do not improvise.
 
 1. **THE PLAN SETS EVERY NUMBER.** Every threshold, limit and time comes from the active plan's
    `settings` (Step 3.1). **Never use a number that is not there**, except the call budget in rule 8.
-   If a setting a count needs is missing, skip that count and add the setting's name to
-   `settings_missing`. Never guess a default. **The one exception:** `inventory_stale_days` (count
-   10) is **7** while the plan lacks it; add `inventory_stale_days (used 7)` to `settings_missing`.
+   The counts call leaves out a count whose setting is missing and names the setting in
+   `settings_missing`; copy that list. Never guess a default. **The one exception:**
+   `inventory_stale_days` (count 10) is **7** while the plan lacks it; the counts call does this and
+   says `inventory_stale_days (used 7)`.
 2. **YOU READ, COUNT AND REPORT; YOU NEVER CHANGE.** The only tools that write that you may call
    are: `create_platform_run`, `update_platform_run`, `log_activity` (Step 4 only),
    `create_overwatch_note`, `create_inbox_item`, `create_reminder`, `update_overwatch_watch` (only
@@ -109,9 +102,9 @@ win.** Do not improvise.
 6. **WHEN A CALL FAILS, QUOTE THE ERROR VERBATIM.**
 7. **EVERY RECORD ID YOU SHOW IS A LINK**, written `https://alfredv5vibe.vercel.app/<id>`, after
    the name it belongs to, in parentheses.
-8. **THE CALL BUDGET.** The Alfred connector allows 60 calls in 5 minutes. **Read in bulk and group
-   locally**, as each step says; never loop one call per app, per schedule or per record where a
-   step gives a bulk read. Keep a running count of Alfred calls and the time of the first one.
+8. **THE CALL BUDGET.** The Alfred connector allows 60 calls in 5 minutes. **Read from the counts**,
+   as each step says; never re-read with another tool what `counts` already holds, and never use a
+   helper agent to read more. Keep a running count of Alfred calls and the time of the first one.
    - When the count reaches **45** and fewer than 5 minutes have passed since the first call,
      **pause once** until 5 minutes have passed, then start a new count and a new window.
    - If you cannot pause, or a call is refused for the rate limit, SKIP the remaining counts in
@@ -136,52 +129,40 @@ create the failure item (Step 9, "On failed"), then Step 10.
 
 ### Step 2 — The date, manual, and a run already today
 
-1. Work out **today's date in America/Los_Angeles** (`local_date`) and its UTC offset now (`-07:00`
-   in daylight time, `-08:00` in standard time).
-2. Decide `manual`, **now, before reading anything else**: `true` if the message that started this
+1. Decide `manual`, **now, before reading anything else**: `true` if the message that started this
    run (any text besides these instructions) says it is manual, by hand, a test, or a "run now";
    otherwise `false`.
-3. **A run already today:** `get_platform_runs` with `app: "overwatch"`, `job: "nightly"`,
-   `limit: 5`. Look for a run other than this one whose `started_at` is on `local_date` (Pacific).
+2. **The counts, one call:** `get_overwatch_nightly_counts` with no arguments. Keep the whole object
+   as `counts`; every step below reads from it. `counts.local_date` is today in America/Los_Angeles
+   and `counts.utc_offset` its offset now. If the call says there is no active plan, STOP with
+   `failure_kind: "plan_read"`; if it errors otherwise, STOP with `failure_kind: "state_read"`.
+3. **A run already today:** `counts.prior_runs.today`, **leaving out this run's own id**.
    - **Scheduled run** (`manual` false) and one exists: **stop at once.** Go to Step 9 and close
      `ok` with `details.duplicate_of` set to that run's id. Nothing else: no note, no items, no
      nudges.
-   - **Manual run:** always go ahead, and keep the other run's id as `earlier_run_id`. Read
-     everything again (rule 3). Step 7 then replaces today's note, which is what
-     `create_overwatch_note` does for a second note on the same day and period.
-   - **Keep the two newest real runs before today** (not this one, not `running`, no
-     `details.duplicate_of`) and their `details.skipped`, for Step 6's scan gaps.
+   - **Manual run:** always go ahead, and keep the other run's id as `earlier_run_id`. Step 7 then
+     replaces today's note, which is what `create_overwatch_note` does for a second note on the same
+     day and period.
+   - `counts.prior_runs.last_two` holds the two newest real runs before today and their `skipped`,
+     for Step 6's scan gaps.
 
-### Step 3 — Read Overwatch's own state
+### Step 3 — Overwatch's own state, from the counts
 
-1. **The plan:** `get_overwatch_plan`. Keep `id`, `instructions`, `settings` and
-   `checks_next_run`. `instructions` is Alex's focus and tone for the note (Step 7). If it errors or
-   returns no active plan, STOP with `failure_kind: "plan_read"`.
-2. **Checks due:** the `checks_next_run` entries whose `check_on` is on or before `local_date`.
-   Keep the rest, unchanged, for Step 8.
-3. **Watch items:** `get_overwatch_watch` with `current: false`, `limit: 50`, **one call**. From it:
-   - **in force:** `starts_on` on or before `local_date` and `ends_on` null or on or after it;
-   - **ended:** `ends_on` before `local_date` and `expiry_noted_at` null.
-   Keep each one's `id`, `kind`, `text`, `app_id`, `group_id` and `ends_on`.
-4. **The last note:** `get_overwatch_notes` with `limit: 1`. Keep its `created_at` as `since_last`;
-   if it is today's note from an earlier run, use the one before it (`limit: 2`). If there is none,
-   `since_last` is `local_date` minus 1 day.
-5. **Apps:** `get_apps`. Keep each `id` and `name`.
-6. **App profiles:** `get_records` with `table: "app_profiles"`, `limit: 50`, then once more with
-   `ids` set to every row's `id` for the full `activity_recipe` and `current_state`. Keep, per
-   `app_id`: `rhythm_days`, `activity_recipe`, `current_state`.
+1. **The plan:** `counts.plan`: `id`, `instructions`, `settings`. `instructions` is Alex's focus and
+   tone for the note (Step 7).
+2. **Checks due:** `counts.checks_due`. `counts.plan.checks_later` is the rest, kept unchanged for
+   Step 8.
+3. **Watch items:** `counts.watch_in_force` and `counts.watch_ended`.
+4. **The last note:** `counts.since_last`.
+5. **Apps and profiles:** `counts.apps`: `app_id`, `name`, `rhythm_days`, `activity_recipe`,
+   `current_state`, `last_activity_on`.
 
-Steps 3.3 to 3.6: if one errors, STOP with `failure_kind: "state_read"`.
+### Step 4 — Yesterday's activity, then pull the apps that need it
 
-### Step 4 — Read recent activity, then pull the apps that need it
-
-1. **Recent activity, in bulk:** `get_activity` with `from` = `local_date` minus the **smallest**
-   `rhythm_days` of any app, `to` = `local_date`, `limit: 50`, paging with `offset` until the NOTE
-   says there is no more (at most 4 pages; stop there if there are more). **Group by `app_id`** and
-   keep, per app, the newest row's date and whether any row is dated yesterday (`local_date` minus
-   1 day, Pacific). An app seen here is not quiet for any rhythm.
-2. **Pull**, for each app whose profile has an `activity_recipe` **and** that has no activity row
-   dated yesterday:
+1. **Yesterday:** `counts.activity_yesterday`, grouped by `app_id`. An app with a row here was active
+   yesterday.
+2. **Pull**, for each app in `counts.apps` with an `activity_recipe` **and** no row in
+   `counts.activity_yesterday`:
    - Follow the recipe, read the way the skill says, with **at most 2** `get_*` calls for that app.
      A recipe that needs more is SKIPPED (`pull:<app_id>`, "recipe needs more than 2 calls").
    - If it finds use or progress yesterday, call `log_activity` **once** for that app: `kind` `used`
@@ -190,7 +171,7 @@ Steps 3.3 to 3.6: if one errors, STOP with `failure_kind: "state_read"`.
      `2026-10-25T12:00:00-07:00`; `-08:00` once standard time starts), `app_id`, and a one-line
      `title`. Never leave `occurred_at` out: it would default to the time the run happened, which is
      the wrong day. The `source_ref` makes a re-run add nothing. Then count the app as active
-     yesterday in 4.1's grouping.
+     yesterday.
    - If a recipe's call fails, SKIP that app (`pull:<app_id>`) and go on.
 
 Keep, per app, `pulled: true`, `pulled: "nothing yesterday"`, `pulled: "already active"` or
@@ -198,80 +179,45 @@ Keep, per app, `pulled: true`, `pulled: "nothing yesterday"`, `pulled: "already 
 
 ### Step 5 — Count
 
-Each count names its setting. If a read errors, SKIP the count.
+Each count below reads a key of `counts`, which holds it worked out from the plan's settings. A key
+named in Step 7's flags and left out of `counts` means its setting is missing (rule 1): leave it out.
+Only counts 1, 4b, 6, 7, 9 and 11 need anything from you.
 
-1. **Quiet apps** (`rhythm_days`, per app). An app with a row in Step 4.1's window (or pulled as
-   active yesterday) is not quiet. For each other app with a `rhythm_days` and no `ease_off` watch
-   item in force, one `get_activity` with its `app_id` and `limit: 1`. This is the one per-app read;
-   it only covers apps not seen in the window.
-   - **`last_used_on` is required for every such app.** If `get_activity` returned a row, it is that
-     row's date (Pacific). **If the activity log has no row for the app, you must look in the app's
-     own data**: the newest record its `activity_recipe` names (the last job application, the last
-     Ken attempt, the last Money review), read the way the skill says. If Step 4's pull already read
-     that record tonight, use its date and make no new call; otherwise make **one** call for it.
-     Its date is `last_used_on`.
+1. **Quiet apps** (`rhythm_days`, per app). Start from `counts.quiet_apps`.
+   - **Remove any app Step 4's pull just found active.**
+   - **Each app in `counts.quiet_needs_own_data` has no activity row, so you must look in its own
+     data**: the newest record its `activity_recipe` names (the last job application, the last Ken
+     attempt, the last Money review), read the way the skill says. If Step 4's pull already read that
+     record tonight, use its date and make no new call; otherwise make **one** call for it. Its date
+     is `last_used_on`.
    - `last_used_on` is null **only** when that call returns no records at all (the app has no data),
      or the recipe names no record to read. "No activity row" is never a reason for null.
-   - Quiet when `last_used_on` is more than `rhythm_days` days before `local_date`, or is null.
+   - Such an app is quiet when `last_used_on` is more than `rhythm_days` days before `local_date`, or
+     is null.
    - Keep, in this exact shape (flag `quiet_apps`, one entry per quiet app):
      `{ "app": "<app_id>", "last_used_on": "YYYY-MM-DD" | null, "days_since": <whole days from last_used_on to local_date> | "none", "rhythm_days": <n> }`.
      `days_since` is "none" exactly when `last_used_on` is null.
-2. **Projects:** `get_project_plans` with no arguments (active Projects), **one call**. Keep each row
-   whole. If it errors, SKIP counts 2a to 2e (2f is its own read).
-   - a. **Stalled** (`stall_days`): `last_report_at` more than `stall_days` days ago, or null with
-     `has_plan: true`, **and** `waiting_on_kind` is not `project`.
-   - b. **Waiting on Alex** (`waiting_on_alex_days`): `waiting_on_kind: "alex"` and
-     `status_written_at` more than `waiting_on_alex_days` days ago.
-   - c. **Overrun** (`overrun_factor`): `effort_estimate` is set and `steps_used` is above
-     `effort_estimate × overrun_factor`; or `target_date` is before `local_date`. Keep which one.
-   - d. **Over the limit** (`active_project_limit`): the number of rows above
-     `active_project_limit`. Keep the count and the limit.
-   - g. **Estimated finish** (no setting; from the row): when it has `effort_estimate`,
-     `steps_used` above 0 and `first_report_at`, the finish is `local_date` plus
-     ceil((`effort_estimate` − `steps_used`) × days since `first_report_at` ÷ `steps_used`) days:
-     the pace so far, projected over the steps remaining. `steps_used` at or above the estimate is
-     "over estimate". Otherwise "unknown". Keep it for every row.
-   - e. **Scope changes:** `get_project_estimates` with `group_ids` set to every row's `group_id`
-     (one call for up to 20). Keep each history row whose `kind` is `scope_increase` or
-     `scope_decrease` and whose `created_at` is after `since_last`: project, `steps_added`,
-     `at_step`, `reason`, and the new `estimate`.
-   - f. **Empty Project groups:** `get_groups` with `group_type: "Project"`,
-     `status: ["active", "someday"]`, `limit: 50`, **one call** (get_project_plans carries no
-     members). Keep each group whose `members` list has no item or intention: name, id, status.
-     Every Project should hold at least one; the note says so, and no inbox item is raised for it.
-3. **Inbox, in one bulk read:** `get_inbox` with `limit: 50`, paging with `offset` until the NOTE
-   says there is no more. From those rows only:
-   - a. **Backlog** (`inbox_backlog_threshold`): group by `source_app`. For each app above
-     `inbox_backlog_threshold`, keep app, total and the oldest item's age in days.
-   - b. **Unrouted:** the rows with no `source_app`. Keep the total, and how many have `created_at`
-     more than one day ago.
-   - c. **Low-confidence routing** (`routing_low_confidence`): rows with a `source_app` and an
-     `ai_confidence` below `routing_low_confidence`: id, first line of `captured_text`,
-     `source_app`, `ai_confidence`. At most 10, newest first.
-   - d. **Overwatch's own open items**, for Step 6: the first line of each row with
-     `source_app: "overwatch"`.
-   - f. **Open follow-ups**, for Step 6.7: the first line of each row, whatever its `source_app`,
-     that starts `Overwatch: follow-up`.
-   - e. **Urgent** (`stall_days`, for the backlog): the 3b rows older than a day, the 3a apps whose
-     oldest item is older than `stall_days` days, and the 3c rows. The note's inbox line is
-     "<total> items. Nothing urgent." when there are none; otherwise it lists only these.
+2. **Projects:** `counts.projects` holds each active Project's row whole, for the note.
+   - a. **Stalled:** `counts.stalled`.
+   - b. **Waiting on Alex:** `counts.waiting_on_alex`.
+   - c. **Overrun:** `counts.overruns`; `kind` says `steps` or `target`.
+   - d. **Over the limit:** `counts.over_limit`.
+   - g. **Estimated finish:** `counts.estimated_finish`, one per project, a date, "over estimate" or
+     "unknown".
+   - e. **Scope changes:** `counts.scope_changes`, since the last note.
+   - f. **Empty Project groups:** `counts.empty_projects`. Every Project should hold at least one item
+     or intention; the note says so, and no inbox item is raised for it.
+3. **Inbox:**
+   - a. **Backlog:** `counts.backlogs`.
+   - b. **Unrouted:** `counts.unrouted`.
+   - c. **Low-confidence routing:** `counts.low_confidence_routing`.
+   - d. **Overwatch's own open items**, for Step 6: `counts.overwatch_open_first_lines`.
+   - f. **Open follow-ups**, for Step 6.7: `counts.followup_open_first_lines`.
+   - e. **Urgent:** `counts.inbox_urgent`. The note's inbox line is "<`counts.inbox_total`> items.
+     Nothing urgent." when its three lists are empty; otherwise it lists only these.
 4. **Schedules and tasks:**
-   - a. **Stopped schedules:** `get_platform_schedules` with `enabled: true`, `limit: 50`, then
-     `get_platform_runs` with `status: "ok"`, `limit: 50`, **one call each**. Group the runs by `app`
-     and `job`. For each schedule except `overwatch` / `nightly` and `alfred` / `notify-dispatch`,
-     work out when it last should have
-     run: today's `expected_by` in Pacific if that has passed, else the previous due day's
-     (`daily`: yesterday; `weekly`: the last `day_of_week`, where 0 is Sunday). Stopped when that
-     time plus `grace_hours` has passed and its newest `ok` run in the list finished before it, or it
-     has none in the list and the oldest run in the list is older than that time. Keep app, job and
-     the last `ok` run's date, or "not in the last 50 runs".
-     **`alfred` / `notify-dispatch` writes no runs**, so its sign of life is the reminder queue:
-     `get_reminders` with `limit: 1` (scheduled only, soonest first, **one call**). Stopped only when
-     that reminder's `due_at` plus the schedule's `grace_hours` has passed. Keep app, job and
-     `last_ok: "reminder due <date> unsent"`. No scheduled reminder means not stopped.
-     Then `get_platform_runs` with
-     `status: "running"`, `limit: 20`: any run started before today other than this one is an
-     orphan.
+   - a. **Stopped schedules and orphans:** `counts.stopped_schedules` (app, job, `last_ok`) and
+     `counts.orphan_runs`. A run from today is never an orphan, so this run is not in the list.
    - b. **Scheduled tasks:** `list_triggers` (Claude_Code_Remote; it does not count against the
      Alfred budget). **Skip one-time tasks**: any with `run_once_at` set, or that has ended. For
      each other **enabled** task except this one, flag it when its last run failed, or when its
@@ -279,42 +225,30 @@ Each count names its setting. If a read errors, SKIP the count.
      name, schedule, last run time and status. A task with no matching `platform_schedules` row (by
      name, or by the app and job its prompt opens) is also kept, as `unregistered`. If
      `list_triggers` is not available or errors, SKIP this count.
-5. **Repeated claim blocks:** `get_claim_blocks` with `since` = `local_date` minus 30 days,
-   `limit: 50`. Group by the pair (`waiter_code`, `holder_code`), either way round. Repeated when a
-   pair has **three or more** episodes (distinct `blocked_at`). Only when one is repeated,
-   `get_project_links` with `kind: "no_parallel"`: match each code to its Project's `group_id`
-   through `project_code` in count 2, and drop any pair whose two groups are already linked. A code
-   with no Project still counts; say "no Project" for it.
-6. **Fading** (`fading_days`): `get_intents` with `status: ["active"]`, `limit: 50`, then
-   `get_items` with `status: ["active"]`, `limit: 50`, paging each with `offset` until the NOTE says
-   there is no more. A candidate is one whose latest `updated_at`, `status_changed_at` and
-   `last_completed_at` is more than `fading_days` days before `local_date`. Which candidates are
-   really fading is the skill's call. Keep at most the 10 oldest that are: kind, id, text or name,
-   days. **Keep the intentions list for count 7.**
-7. **Overdue intentions** (`overdue_days`), from two bulk reads:
-   - `get_events` with `date_from` = `local_date` minus `fading_days` days and **no `date_to`**, so
-     future events come back too, `limit: 50`, paging until done;
-   - `get_execution_history` with the same `date_from` and `date_to` = `local_date` minus
-     `overdue_days` days minus 1, `limit: 50`, paging until done.
-   - a. **Scheduled and missed:** an event dated on or before that `date_to`, whose intention is
-     active (from count 6) and whose `id`
-     is no execution's `event_id`. Keep intention, id, the event's date and days overdue.
-   - b. **A deadline with no date:** from count 6's intentions, the active ones with no event
-     anywhere in the events read, past or future, whose text or description mentions a deadline or a time period. What counts as
-     one is the skill's call. Keep intention, id and the words that make it a deadline, and, when
-     the words name a date, that date. **Urgent** (`urgent_within_days`) when that date is within
-     `urgent_within_days` days of `local_date`; while the setting is missing, none is urgent.
-8. **Watch items that ended:** the list from Step 3.3.
-9. **Checks due:** the list from Step 3.2, each with what you found about its `about`.
-10. **Inventory freshness** (`inventory_stale_days`, 7 while missing, rule 1):
-    `get_platform_inventory` with `limit: 1`, **one call**. Every part of one rebuild shares its
-    `seen_at`, so that row's `seen_at` is the last rebuild. Stale when it is more than
-    `inventory_stale_days` days before `local_date`, or when the call returns no rows. Keep
-    `seen_at` (or "never") and the days.
-11. **Impact review of finish summaries:** `get_finish_summaries` with `limit: 10`, **one call**
-    (unreviewed only, oldest work first in your handling: sort by `finished_at`). With none, this
-    count is done. Otherwise take **at most 3** tonight; the rest wait, unreviewed, for the next
-    night, and the note says how many wait. For the ones you take:
+5. **Repeated claim blocks:** `counts.claim_blocks`: pairs with three or more episodes in 30 days and
+   no `no_parallel` link. A null `group_a` or `group_b` means that code has no Project; say "no
+   Project" for it.
+6. **Fading** (`fading_days`): `counts.fading_candidates`: `total`, and `rows`, the oldest 50. They
+   are one-off active intentions with no event today or later, no undone event in the window, not
+   touched for more than `fading_days` days, and not named by a `focus` or `keep_an_eye_on` watch item.
+   **Items never fade**, and nothing reads them for this. Which candidates are really fading is the
+   skill's call. Keep at most the 10 oldest that are: kind, id, text, days.
+7. **Overdue intentions** (`overdue_days`):
+   - a. **Scheduled and missed:** `counts.overdue_intentions`.
+   - b. **A deadline with no date:** `counts.deadline_candidates` are the active intentions with no
+     event in the window, past or future, with their text and the first 200 characters of their
+     description. Which of them mention a deadline is the skill's call. Keep intention, id and the
+     words that make it a deadline, and, when the words name a date, that date. **Urgent**
+     (`urgent_within_days`) when that date is within `urgent_within_days` days of `local_date`; while
+     the setting is missing, none is urgent.
+8. **Watch items that ended:** `counts.watch_ended`.
+9. **Checks due:** `counts.checks_due`, each with what you found about its `about`, as `found`.
+10. **Inventory freshness:** `counts.inventory_stale`: an empty list when fresh, otherwise `seen_at`
+    (or "never") and the days.
+11. **Impact review of finish summaries:** `counts.finish_summaries` is the oldest 10 unreviewed, and
+    `counts.finish_summaries_total` how many there are. With none, this count is done. Otherwise take
+    **at most 3** tonight, oldest first; the rest wait, unreviewed, for the next night, and the note
+    says how many wait. For the ones you take:
     - a. **The inventory, once for all of them:** `get_platform_inventory` with `kind: "table"`,
       `limit: 50`, paging until the NOTE says there is no more (at most 3 calls), and with
       `kind: "skill"`, `limit: 50` (one call). Keep the table names, and each skill's `name`,
@@ -339,18 +273,15 @@ Each count names its setting. If a read errors, SKIP the count.
     - g. **What the work changed for an app:** the skill decides whether a summary changes what an
       app does (a new screen, new tools, a new table it owns); keep the app and one or two
       sentences for Step 8.4. At most **2** apps tonight.
-    - h. Keep the ids of the summaries you took. If 11a, 11c or the summaries read errors, SKIP the
-      whole count (`count:impact_review`) and keep no ids, so they stay unreviewed for tomorrow.
-12. **Portfolio plans due a review:** `get_portfolios` with `limit: 20`, **one call**. Keep each
-    portfolio whose `active_plan.review_by` is before `local_date`: its `name`, `id` and the
-    `review_by` date. A portfolio with no active plan, or no `review_by`, is not due. No inbox item:
-    this is one line in the note (Step 7). If the call errors, SKIP (`count:portfolio_review`).
+    - h. Keep the ids of the summaries you took. If 11a or 11c errors, SKIP the whole count
+      (`count:impact_review`) and keep no ids, so they stay unreviewed for tomorrow.
+12. **Portfolio plans due a review:** `counts.portfolio_review_due`. No inbox item: this is one line in
+    the note (Step 7).
 
 ### Step 6 — Raise inbox items
 
 Use the open Overwatch items from count 3d. **Never raise an item when an open one starts with the
-same text up to its " — "**: say "still open" for it in the note instead. (If count 3 was SKIPPED,
-read them with one `get_inbox` with `source_app: "overwatch"`, `limit: 50`.)
+same text up to its " — "**: say "still open" for it in the note instead.
 
 `<link: id>` means `https://alfredv5vibe.vercel.app/<id>`.
 
@@ -383,7 +314,7 @@ of a title and a first line.
    Kind `status_request`, plus `"group_id": "<group_id>"`.
 2. **One for fading items, when there are any** (count 6). First line:
    `Overwatch: fading — <N> items`. Title: `Overwatch: <N> fading`. Then one line per item:
-   `<text or name> (<link: id>), no
+   `<text> (<link: id>), no
    activity for <days> days. Keep, park or let go?` Kind `fading`.
 3. **One for overdue intentions, when there are any** (count 7). First line:
    `Overwatch: overdue — <N> missed, <M> undated`. Title: `Overwatch: <N> missed, <M> undated`.
@@ -476,8 +407,8 @@ Call `create_overwatch_note` with `period: "nightly"`, `for_date: <local_date>`,
     bullet. A night with nothing under Action Required says "- Nothing needs you tonight."
 - **`flags`**: an object with one key per count, each a list of what you kept (an empty list when
   the count ran and found nothing; leave out a key whose count was skipped): `quiet_apps`,
-  `stalled`, `waiting_on_alex`, `overruns`, `over_limit`, `scope_changes`, `empty_projects`,
-  `backlogs`, `unrouted`,
+  `stalled`, `waiting_on_alex`, `overruns`, `over_limit`, `estimated_finish`, `scope_changes`,
+  `empty_projects`, `backlogs`, `unrouted`,
   `low_confidence_routing`, `stopped_schedules`, `orphan_runs`, `task_health`, `claim_blocks`,
   `fading`, `overdue_intentions`, `deadline_no_date`, `watch_ended`, `checks_due`,
   `inventory_stale` (`{ "seen_at": … | "never", "days": … }`, or an empty list when fresh),
@@ -506,11 +437,11 @@ errors, STOP with `failure_kind: "note_write"`.
    - any other item: its title without "Overwatch: ".
 2. **Watch items that ended:** for each one in the note, `update_overwatch_watch` with its `id`
    and `expiry_noted: true`.
-3. **Checks for the next run:** `update_overwatch_checks` with the checks kept in Step 3.2, plus a
+3. **Checks for the next run:** `update_overwatch_checks` with `counts.plan.checks_later`, plus a
    check for anything tonight's note asked to look at again (`text`, `check_on`, and `about` as an
    app id or group id). Pass the whole list; an empty list clears it.
 4. **An app's current state** (count 11g, at most 2): `update_app_profile` with the `app_id` and
-   `current_state` only: the app's `current_state` from Step 3.6 with what the work changed worked in
+   `current_state` only: the app's `current_state` from `counts.apps` with what the work changed worked in
    the way the skill says. Never `activity_recipe` or `rhythm_days`.
 5. **Mark the summaries reviewed** (count 11h): `mark_finish_summaries_reviewed` with the kept ids
    and `run_id` this run's id, **one call**, only after Step 6's follow-ups were raised. Summaries
@@ -522,7 +453,7 @@ A failed call here is SKIPPED, never STOP.
 
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-- **`details`**, always: `local_date`, `prompt_version: "2026-10-31a"`, `manual`, `plan_id`, the
+- **`details`**, always: `local_date`, `prompt_version: "2026-11-02a"`, `manual`, `plan_id`, the
   count of each flag, `note_id`, `inbox_item_ids`, `reminders_sent`, `apps_pulled`,
   `summaries_reviewed` (the ids marked in Step 8.5), `profiles_rewritten` (app ids),
   `alfred_calls`, `paused`, `skipped` and `settings_missing`; also `earlier_run_id` when Step 2.3
@@ -546,7 +477,7 @@ Run: <run id>
 ### Step 10 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-31a`;
+- `PROMPT VERSION: 2026-11-02a`;
 - the finish summaries reviewed and the follow-ups raised, and whether the inventory is stale;
 - the run id and its status, and `manual: true` or `manual: false`; `duplicate_of` if it stopped;
 - the count of each flag, the note id, the inbox item ids and the reminders sent;

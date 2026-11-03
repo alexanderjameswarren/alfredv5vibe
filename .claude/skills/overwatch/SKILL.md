@@ -5,7 +5,7 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
-Skill version: 2026-10-31a
+Skill version: 2026-11-02a
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
@@ -122,8 +122,9 @@ Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
 ### Watch items
 
 `create_overwatch_watch` for a dated `focus`, `ease_off` or `keep_an_eye_on`, pointing
-at an `app_id` or `group_id` when it is about one. An `ease_off` on an app stops its
-quiet days counting. `update_overwatch_watch` changes one.
+at an `app_id`, `group_id` or `intent_id` when it is about one. An `ease_off` on an app stops its
+quiet days counting. A `focus` or `keep_an_eye_on` keeps the intention it names, or any intention
+in its group, out of fading. `update_overwatch_watch` changes one; a null `intent_id` clears it.
 
 ### The plan
 
@@ -161,10 +162,11 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
   use is in its own data: the newest record its recipe names (the last job application, the
   last Ken attempt, the last Money review). Use that date. "Unknown" is only for an app with
   no data at all.
-- **Fading.** A candidate is old by the dates; it is fading only if it still means to happen.
-  Not fading: reference items, someday-style holders, recurring intentions that are simply
-  between occurrences, and anything a `focus` or `keep_an_eye_on` watch item names. Fading:
-  a one-off intention or an active item that was started or promised and has gone silent.
+- **Fading.** Fading is one-off active intentions only. Items never fade: they are reference
+  material, and a to-do linked to an item is tracked by its intention. A candidate is old by the
+  dates; it is fading only if it still means to happen. Not fading: someday-style holders, and
+  anything a `focus` or `keep_an_eye_on` watch item names, by its `intent_id` or its group, or in
+  its words. Fading: a one-off intention that was started or promised and has gone silent.
   When unsure, include it; the item asks keep, park or let go.
 - **A deadline with no date.** An active intention with no event whose text or description
   names a cutoff: "by", "before", "claim by", "expires", "points expire", "deadline",
