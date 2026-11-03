@@ -213,7 +213,7 @@ import {
   upsertWbPlannedItemTool,
   upsertWbProjectTool,
 } from "../_shared/tools/warren-buffet-p3.ts";
-import { setWbOrderItemTagsTool, splitWbOrderChargesTool } from "../_shared/tools/warren-buffet-p4.ts";
+import { recordWbSubscriptionReviewTool, setWbOrderItemTagsTool, splitWbOrderChargesTool } from "../_shared/tools/warren-buffet-p4.ts";
 import {
   getDriveMixSongsTool,
   createDriveMixSongsTool,
@@ -3963,6 +3963,7 @@ export function createMcpServer(token: string) {
         pending: z.boolean().optional().describe("true = only pending, false = only posted."),
         kind: wbKind.optional().describe("Only this kind."),
         merchant_id: z.string().optional().describe("Only this merchant (get_wb_merchants, field id)."),
+        subscription_id: z.string().optional().describe("Only charges linked to this subscription (get_wb_subscriptions, field id). Use it to count a subscription's charges in a review; a merchant can have several subscriptions."),
         tag: z.union([z.string(), z.array(z.string())]).optional().describe("A tag name, or a list: rows carrying any of them."),
         needs_review: z.boolean().optional().describe("true = only rows in the review queue."),
         source: z.enum(["sync", "history_import", "both"]).optional().describe("Where rows came from: sync = the live bank feed, history_import = bank history imported from files, from before the feed began. Default both."),
@@ -4470,6 +4471,7 @@ export function createMcpServer(token: string) {
       title: "Get Subscriptions",
       description:
         "Subscriptions with merchant, cadence and billing interval (interval_count + interval_unit), current_price (today), previous_price and last_change_on, amount_tolerance, term_end_date, auto_renew, review_date, last_charged_on, next_expected_on, charge_count, billed-through and bundle names, and overdue (active, more than 7 days past the expected charge, and not inside a prepaid term). watching = detected by the daily sync from monthly charges of similar size, not yet confirmed. " +
+        "For reviews: usage_clues (where and how to tell it is used; null means ask Alex), last_reviewed_on and last_verdict (null when never reviewed). Call it at the start of a subscription review, with include_reviews for the history. " +
         WB_SUBS + "Tier 1.",
       inputSchema: {
         status: wbSubStatus.optional(),
@@ -4477,6 +4479,7 @@ export function createMcpServer(token: string) {
         search: z.string().optional().describe("Part of the subscription's name."),
         overdue_only: z.boolean().optional().describe("Only subscriptions whose expected charge is missing."),
         include_prices: z.boolean().optional().describe("Add each subscription's price history, newest first."),
+        include_reviews: z.boolean().optional().describe("Add each subscription's reviews, newest first, at most 10 each."),
         limit: z.number().optional().describe("Max rows, default 20, cap 50."),
       },
     },
@@ -4488,7 +4491,7 @@ export function createMcpServer(token: string) {
     {
       title: "Create or Update Subscription",
       description:
-        "Create a subscription (default status active), or edit one by id: confirm a detected one with status active, pause or cancel, set plan, cadence or billing interval (interval_count + interval_unit: every 2 months is 2 + month, every 2 weeks is 2 + week; monthly, quarterly and annual are 1, 3 and 12 months, and any other interval sets cadence other; cadence other with no interval has no next date and is never overdue), prepaid term_end_date, auto_renew, review_date, billed_through_id (billed through another subscription, e.g. via a bundle provider) and bundle_id (part of a bundle). Only given fields change; null clears. Then reprocesses the merchant's transactions so charges link (reprocess: false to skip). " +
+        "Create a subscription (default status active), or edit one by id: confirm a detected one with status active, pause or cancel, set plan, cadence or billing interval (interval_count + interval_unit: every 2 months is 2 + month, every 2 weeks is 2 + week; monthly, quarterly and annual are 1, 3 and 12 months, and any other interval sets cadence other; cadence other with no interval has no next date and is never overdue), prepaid term_end_date, auto_renew, review_date, billed_through_id (billed through another subscription, e.g. via a bundle provider), bundle_id (part of a bundle) and usage_clues. Only given fields change; null clears. Then reprocesses the merchant's transactions so charges link (reprocess: false to skip). " +
         "To dismiss a detection that is not a subscription (a utility, HOA, insurance or store), pass id and not_subscription: true alone: the merchant is marked not_subscription, so detection skips it, and the watching row is deleted. not_subscription: false restores detection for that merchant. " +
         WB_SUBS + "Tier 2.",
       inputSchema: {
@@ -4509,6 +4512,7 @@ export function createMcpServer(token: string) {
         status: wbSubStatus.optional(),
         owner: z.enum(["alex", "elise", "joint"]).nullable().optional(),
         notes: z.string().nullable().optional(),
+        usage_clues: z.string().nullable().optional().describe("Where and how to tell it is used: which app, intention, tag or merchant to look at, and what counts as one use. Save what Alex tells you during a review, so the next review can count uses without asking."),
         not_subscription: z.boolean().optional().describe("With id only: true dismisses a watching row and stops detection for its merchant; false restores detection."),
         reprocess: z.boolean().optional().describe("Default true."),
       },
@@ -4533,6 +4537,33 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(recordWbSubscriptionPriceTool, args, token),
+  );
+
+  server.registerTool(
+    "record_wb_subscription_review",
+    {
+      title: "Record Subscription Review",
+      description:
+        "Save one subscription review and move its review_date to next_review_on, together. Call it at the end of a review, after showing Alex the findings and the verdict and getting his yes. " +
+        "verdict is keep, downgrade, switch, shop_around or cancel; it records the decision only and changes nothing else on the subscription: to cancel, pause, downgrade or switch, propose upsert_wb_subscription separately. " +
+        "next_review_on is required unless the verdict is cancel, and must be after reviewed_on. Count uses only from the usage_clues source or from Alex; leave uses null when they cannot be counted. " +
+        "cost_per_use is amount_paid / uses and needs uses above 0. market_check is one short dated line naming its source, only from a search Alex asked for in this review. Returns the review and the subscription's new review_date. " +
+        WB_SUBS + "Tier 2.",
+      inputSchema: {
+        subscription_id: z.string().describe("The subscription reviewed (get_wb_subscriptions, field id)."),
+        verdict: z.enum(["keep", "downgrade", "switch", "shop_around", "cancel"]),
+        next_review_on: wbDate("When to review it next; required unless verdict is cancel"),
+        reviewed_on: wbDate("The day of the review. Default today (Pacific)"),
+        period_from: wbDate("First day of the period looked at; pass with period_to"),
+        period_to: wbDate("Last day of the period looked at; pass with period_from"),
+        uses: z.number().optional().describe("Uses counted in the period, a whole number; 0 means counted and unused. Omit when not countable."),
+        amount_paid: z.number().optional().describe("Paid in the period, positive dollars."),
+        cost_per_use: z.number().optional().describe("amount_paid divided by uses, positive dollars."),
+        market_check: z.string().optional().describe("One dated line with its source, at most 300 characters, no line breaks."),
+        notes: z.string().optional(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(recordWbSubscriptionReviewTool, args, token),
   );
 
   server.registerTool(

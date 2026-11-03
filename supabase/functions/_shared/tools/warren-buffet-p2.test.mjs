@@ -311,11 +311,12 @@ test("the confirmed fix calls wb_apply_fix as claude and returns the described r
 const SUB = { id: id(70), name: "ZZ Stream", status: "watching", merchant_id: id(50), merchant_name: "ZZ Stream" };
 
 /** Subscriptions fake: the overview answers with `sub`; transactions with `txn`. */
-function subDb({ sub = SUB, txn = null, prices = [] } = {}) {
+function subDb({ sub = SUB, txn = null, prices = [], reviews = [] } = {}) {
   return fakeDb((table, ops) => {
     if (table === "wb_subscription_overview") {
       return has(ops, "maybeSingle") ? { data: sub, error: null } : { data: [sub], error: null, count: 1 };
     }
+    if (table === "wb_subscription_reviews") return { data: reviews, error: null };
     if (table === "wb_subscription_prices") {
       return has(ops, "single") ? { data: { id: id(80), amount: 6 }, error: null } : { data: prices, error: null };
     }
@@ -333,6 +334,27 @@ test("get_wb_subscriptions filters and attaches price history on request", async
   assert.deepEqual(ops.filter((o) => o[0] === "eq"), [["eq", "status", "watching"], ["eq", "overdue", true]]);
   assert.equal(out.data[0].prices.length, 1);
   await assert.rejects(m.getWbSubscriptionsTool.handler({ status: "gone" }, { db }), /status must be one of/);
+});
+
+test("get_wb_subscriptions returns the review fields, and reviews newest first, capped, on request", async () => {
+  const reviews = Array.from({ length: 12 }, (_, i) => ({ subscription_id: id(70), reviewed_on: `2026-01-${String(20 - i).padStart(2, "0")}` }));
+  const db = subDb({ reviews });
+  const out = await m.getWbSubscriptionsTool.handler({ include_reviews: true }, { db });
+  assert.match(db.log[0].ops.find((o) => o[0] === "select")[1], /usage_clues, last_reviewed_on, last_verdict/);
+  const ops = db.log.find((q) => q.table === "wb_subscription_reviews").ops;
+  assert.deepEqual(ops.filter((o) => o[0] === "order").map((o) => o[1]), ["reviewed_on", "created_at"]);
+  assert.equal(out.data[0].reviews.length, m.MAX_REVIEWS_PER_SUBSCRIPTION);
+  assert.equal(out.data[0].reviews[0].reviewed_on, "2026-01-20");
+  const plain = subDb();
+  await m.getWbSubscriptionsTool.handler({}, { db: plain });
+  assert.ok(!plain.log.some((q) => q.table === "wb_subscription_reviews"));
+});
+
+test("upsert_wb_subscription sets and clears usage_clues", async () => {
+  const db = subDb({ sub: { ...SUB, status: "active" } });
+  await m.upsertWbSubscriptionTool.handler({ id: id(70), usage_clues: " ZZ app opens " }, { db });
+  await m.upsertWbSubscriptionTool.handler({ id: id(70), usage_clues: null }, { db });
+  assert.deepEqual(db.op("wb_subscriptions", "update").map((o) => o[1]), [{ usage_clues: "ZZ app opens" }, { usage_clues: null }]);
 });
 
 test("upsert_wb_subscription creates as active in the Money context, then reprocesses the merchant", async () => {
