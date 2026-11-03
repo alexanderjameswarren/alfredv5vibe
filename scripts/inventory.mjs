@@ -58,7 +58,7 @@ function sendEvent(event, label) {
     return null;
   });
   say(`\nQueued ${label} (${(Buffer.byteLength(JSON.stringify(event)) / 1024).toFixed(0)} KB). Sending…`);
-  const r = spawnSync(process.execPath, [path.join(ROOT, SENDER_SCRIPT)], { cwd: ROOT, stdio: "inherit", windowsHide: true });
+  const r = spawnSync(process.execPath, [path.resolve(ROOT, SENDER_SCRIPT)], { cwd: ROOT, stdio: "inherit", windowsHide: true });
   say(`Details in ${ctx.outboxFile}.log`);
   if (r.status !== 0) process.exitCode = 1;
 }

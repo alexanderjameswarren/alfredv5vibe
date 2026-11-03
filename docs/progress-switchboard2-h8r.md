@@ -67,7 +67,12 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | tiles | s55 | Live test of the five states | — | done (s55-x2rf), with one bug fixed in s55b: live on extension 1.2.9, tan "SQL ready", the link's Sent, light green "SQL running", the result posted and "Claude writing"; with text in the box, red "SQL not posted", the page kept the line and Try again, a tap cleared to "Your turn", and Try again posted. Actions 96ad49f7-7ff4-43e3-bc5f-41569d935c26 and c0f0e983-d212-4067-a648-1ccf420feee6; runs 20b85a9b-2f51-4ec6-86e6-30aa576739b5 and 4bf80586-9033-4e8a-9511-99e35b4d32f3 | 2026-11-02 |
 | tiles | s55b | A link whose run has finished stops counting as live | — | done (s55b-m4zh), extension 1.2.10, in main. No separate retest, by Alex's choice: the next real link will show it | 2026-11-02 |
 | 3 | s56 | Seed script and dry run | — | done (s56-g7tn, s56b-d5qv): the seed ran into the scratchpad, 78 files, 41 rewrites. Node tests there: 408 pass, 34 fail, all for s57 to fix; panel tests pass | 2026-11-02 |
-| 3 | s57-s72 | The move: seed, install, settings, hooks, shims, `sb`, Salesforce guard, deploy wrapper, PII hold, finish modes, panel across repos, FIRST CLIENT at s70, extension split, cutover: spec §9 | — | todo | |
+| 3 | s57-s57d | Seed run, tests green (new repo, `switchboard_repo-k7m`) | — | done, switchboard f565e94: the guard accepts `claims/` and `clip/` paths as well as `scripts/`, tests use the new repo's files, the Overwatch sender is found from its library, version strings | 2026-11-03 |
+| 3 | s58 | install.ps1 (new repo) | — | done, switchboard 2b66af7: install to `%LOCALAPPDATA%\Switchboard`, `.gitattributes`, README install section | 2026-11-03 |
+| 3 | s59, s59b | Config loader (new repo) | — | done, switchboard 2096122: `loader/load.mjs` (`repos.json`, `projects.json`), Overwatch and `setupCmd` per repo, WRONG REPO in prompt-check, install copies the loader | 2026-11-03 |
+| 3 | s60, s60b | User-level hooks (new repo) | — | done, switchboard ac77b8d, installed: the known-repo rule and stand-back, the sound in every folder, install registers them with a backup | 2026-11-03 |
+| 3 | s61 | Shims in alfred-v5 | — | built (s61-q3jx): scripts, hooks and the libraries alfred-v5 still imports run the installed copy; moved tests and unused libraries deleted; `scripts/lib` tests 54 pass | 2026-11-03 |
+| 3 | s62-s72 | `sb`, Salesforce guard, deploy wrapper, PII hold, finish modes, panel across repos, FIRST CLIENT at s70, extension split, cutover: spec §9 | — | todo | |
 | 5 git | s73-s78 | Every git command by link: spec §11 | see below | todo | |
 | 4 | s79-s83 | Salesforce reads: spec §10 | see below | todo | |
 | 5 SF | s84-s87 | Salesforce actions by link: spec §11 | see below | todo | |
@@ -422,9 +427,19 @@ Blocks are rooted in the new repo, `C:\Users\Alex\projects\switchboard\`, unless
 **s60, user-level hooks** (estimated run: 12m). No-op outside listed repos; install.ps1 registers them.
 - update: hooks/, install.ps1, tests
 
-**s61, shims in alfred-v5 (alfred-v5 window)** (estimated run: 12m). Shims, project hooks removed, CLAUDE.md and the skill the same day. The Overwatch nightly counts thread should have finished or claimed before this. `scripts/sql-queue.mjs` stays in alfred-v5 but imports `claims-core`, which moves, so it must import it from the installed copy.
-- update: scripts/claims.mjs, scripts/clip.mjs, scripts/git-commit-claimed.mjs, scripts/git-new-worktree.mjs, scripts/git-push-worktrees.mjs, scripts/git-sync.mjs, scripts/overwatch-post.mjs, .claude/settings.local.json, .claude/CLAUDE.md, .claude/skills/cli-workflow/SKILL.md
-- delete: .claude/hooks/, moved scripts/lib/ files
+**s61, shims in alfred-v5 (alfred-v5 window)** (estimated run: 15m). Shims, CLAUDE.md and the skill. Changed from the plan: the hooks stay as shims, and the project hook settings stay, so every worktree keeps working until s72.
+- update: scripts/, .claude/hooks/, .claude/CLAUDE.md, .claude/skills/cli-workflow/SKILL.md
+- delete: scripts/lib/
+
+Notes from s57 to s61, for the steps they name:
+- Interface version strings (s57) are written but not enforced yet.
+- s68: `git/git-push-worktrees.mjs` line 247 runs `scripts/schema-snapshot.mjs` in the repo, which only alfred-v5 has.
+- The Overwatch outbox check (a repo posts only where the sender is at its root, and the config can only switch it off) must stay as safe in any later change.
+- A broken `claims-core` stops the guard everywhere with a misleading message. Give that case its own message later.
+- Change an import and its use in one edit, so the guard never runs a half-changed file.
+- s64: the Salesforce guard runs in every folder, known repo or not.
+- The new repo's `.claude/settings.local.json` is machine-local.
+- The seed's path map missed `scripts/inventory.mjs`; it stays in alfred-v5, using the shims for `claims-core`, `finish-summary` and `overwatch-post`.
 
 **s62, `sb project`, `sb org`, protection** (estimated run: 15m). Spec §5.4 and §5.5.
 - create: sb/ and tests
@@ -460,9 +475,9 @@ Also in s64, since it rewrites the shell parser's rules: fix the s51 guard false
 **s71, extension split** (estimated run: 12m). Switchboard's own Chrome extension with a fixed ID; the host manifest re-registered; the clipper stays in alfred-v5.
 - update: extension/, install.ps1 (new repo); extension/ (alfred-v5, bridge half deleted)
 
-**s72, cutover (alfred-v5 window)** (estimated run: 8m). Delete the shims and `tools/claude-sessions/`; Alex updates his profile.
-- update: .claude/CLAUDE.md, .claude/skills/cli-workflow/SKILL.md
-- delete: moved scripts, tools/claude-sessions/
+**s72, cutover (alfred-v5 window)** (estimated run: 8m). Remove alfred-v5's hook settings, its sound entries, and the shims (moved from s61), then `tools/claude-sessions/`. Every worktree's `.claude/settings.local.json` must be done then too, not only main's: the settings are machine-local, so each is changed by hand or by a script Alex approves. The hook settings change is the step's last change. Before `scripts/overwatch-post.mjs` goes: the installed `claims-core` decides that a repo posts to Overwatch by finding the sender at its root (`SENDER_IN_REPO`), so deleting that shim silently stops alfred-v5's Overwatch events unless the check changes first.
+- update: .claude/CLAUDE.md, .claude/skills/cli-workflow/SKILL.md, .claude/settings.local.json
+- delete: the shims in scripts/ and scripts/lib/, .claude/hooks/, tools/claude-sessions/
 
 ### Part 3, every git command by link
 
