@@ -1,0 +1,260 @@
+# Notification routing — technical spec
+
+Project code `notification_routing-d7v`. Overview item: https://alfredv5vibe.vercel.app/mw15al9fhphsn40gqcv.
+Progress: `docs/progress-notification_routing-d7v.md`.
+
+## 1. Goal
+
+Every phone or watch pop comes from Alfred and is logged. No scheduled task sends a Claude app
+push. Apps and tasks say what happened; one dispatcher decides what reaches Alex, under rules in
+one place (Overwatch's plan). When Alex's workflow changes he changes that plan, not every task.
+
+## 2. Decisions (step 1, approved 2026-11-03)
+
+1. **Two stages in one hourly task.** The "Claude hourly notifications" task becomes the
+   dispatcher. Stage A watches the enabled apps (Arnold for now) against their own plans and writes
+   signals. Stage B dispatches.
+2. **One home for pacing.** Window, caps and the watched-app list move into the `delivery`
+   section of Overwatch's plan. The dispatcher stops reading `claude_notification_settings` at
+   cutover. Its rows stay.
+3. **Overwatch writes signals, not reminders.** `create_reminder` gains a required `started_by`
+   (`alex`, `chat`, `task:<job>`) and refuses `task:*`.
+4. **Arnold morning review** raises a signal only when it raised an inbox item. Silent otherwise.
+   No daily reminder.
+5. **The Dispatcher is a screen** at `/overwatch/dispatcher`, opened from a new Dispatcher row on
+   the Overwatch tab, like Plan and Briefing.
+6. **Deliver now.** An inbox outcome is done in the database at once. A pop goes through
+   `push-send` (user JWT) in a new `signal_id` mode that sends and logs.
+7. **started_by** on `claude_notifications` and `reminders`. `notify-dispatch` logs every pop it
+   sends.
+8. **Signals raised after 19:00 wait until 05:00.** Reminders and step timers are unaffected.
+
+## 3. What exists today (the starting point)
+
+| Sender | Writes | Channel | Logged |
+|---|---|---|---|
+| `notify-dispatch` (pg_cron, every minute, service role) | reminders and notification_steps due | Alfred push | no |
+| `send_alfred_push` (MCP, tier 1) | one push | Alfred push | yes, `claude_notifications` |
+| Claude hourly notifications task (Arnold only) | Arnold nudges via `send_alfred_push` | Alfred push | yes |
+| Overwatch nightly | nudges via `create_reminder` at `push_time`, plus inbox items | reminder push, inbox | no |
+| Overwatch weekly, SAM daily review, Money cleanup, DJ daily (failure) and weekly, Ken seed check, Drive Mix (failure) | `create_inbox_item` | inbox | no |
+| Arnold morning review | `create_inbox_item` + `log_claude_notification` | inbox | yes |
+| `wb-sync` (edge fn, service role) | inbox rows, one per open `error_key`, after checking open items | inbox | no |
+| Every scheduled task | completion push | Claude app push | no |
+
+## 4. Signals
+
+### 4.1 Table `public.signals`
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid pk | `gen_random_uuid()` |
+| `user_id` | uuid not null | default `auth.uid()`; server senders pass it explicitly |
+| `app` | text not null | an `apps.id` |
+| `job` | text not null | 1-100 chars |
+| `severity` | text not null | `low`, `normal`, `high`, `urgent` |
+| `subject_key` | text not null | ties repeats together, e.g. `wb-sync:failure`; lower case, no spaces, 1-200 |
+| `title` | text not null | 1-200 |
+| `body` | text | |
+| `link` | text | Alfred path `/<id>` or null |
+| `started_by` | text not null | `alex`, `chat`, `task:<job>` |
+| `source_ref` | text | optional idempotency key; unique per user when set, so a retried run cannot raise twice |
+| `state` | text not null | `queued` → `held`, `delivered`, `merged`, `dropped`; `resolved` (see 4.3) |
+| `outcome` | text | `inbox` or `pop` when delivered |
+| `reason` | text | the rule that decided, in plain words |
+| `decided_at` | timestamptz | |
+| `decided_run_id` | uuid | the dispatcher's `platform_runs` row |
+| `inbox_id` | text | fk `inbox(id)` on delete set null: the item it became or merged into |
+| `notification_id` | uuid | the `claude_notifications` row for a pop |
+| `merged_into` | uuid | fk `signals(id)` |
+| `bundle_id` | uuid | shared by the signals in one digest |
+| `details` | jsonb object | anything the sender wants kept |
+| `created_at`, `updated_at` | timestamptz | |
+
+Indexes: `(user_id, state, created_at)`, `(user_id, subject_key, created_at desc)`, unique
+`(user_id, source_ref) where source_ref is not null`. A guard trigger lets only the state columns
+(`state`, `outcome`, `reason`, `decided_at`, `decided_run_id`, `inbox_id`, `notification_id`,
+`merged_into`, `bundle_id`, `updated_at`) change after insert; what the sender wrote is fixed.
+
+### 4.2 Database functions
+
+- `raise_signal(p_app, p_job, p_severity, p_subject_key, p_title, p_body, p_link, p_started_by,
+  p_source_ref, p_details, p_user_id default null)`: inserts, returns `{created, id, duplicate_of?}`.
+  `p_user_id` is honoured only for service_role (wb-sync); otherwise `auth.uid()`. Granted to
+  authenticated and service_role.
+- `resolve_signal(p_app, p_subject_key, p_started_by, p_user_id default null)`: records that the
+  subject is healthy again (a `resolved` row), which resets its escalation count. wb-sync calls it
+  on an ok run. Written in step 7, where wb-sync first needs it (moved from step 3).
+- `dispatch_signals(p_now timestamptz default now())`: compute only. Returns `{at, local_time,
+  local_date, plan_id, in_window, pops, decisions}` with one decision per queued signal:
+  `{signal_id, app, severity, subject_key, decision, reason, repeats, merge_target_signal_id,
+  inbox_id, bundle}`, decision `wait`, `hold`, `inbox`, `pop`, `merge` or `digest`; or
+  `{stopped}` when the active plan has no delivery section. Writes nothing.
+- `overwatch_delivery_problem(p jsonb)`: validator for the delivery section; null when valid
+  (or absent), else a plain message. Used by a check constraint on `overwatch_plans`, with the
+  helper `overwatch_delivery_whole`.
+
+### 4.3 Tools (`_shared/tools/signals.ts`)
+
+| Tool | Tier | Does |
+|---|---|---|
+| `raise_signal` | 1 | write one signal (append-only, like `create_inbox_item`) |
+| `resolve_signal` | 1 | mark a subject healthy again |
+| `get_signals` | 1 | read signals, filters for app, state, subject_key, date range |
+| `get_delivery_rules` | 1 | the active Overwatch plan's `delivery` section (in `overwatch-plan.ts`) |
+| `get_dispatch_plan` | 1 | `dispatch_signals()`: each queued signal's decision and reason, and pops sent and left this hour and today; optional `at` to preview another time |
+| `deliver_signals` | 1 | recompute the plan and apply it: hold, create inbox items, send pops (shared `web-push-send.ts`), merge, one digest; logs every inbox item and pop in `claude_notifications` with `signal_id` and `started_by`; takes only `wording` and `digest` text and an optional `run_id` |
+| `update_signal` | 2 | hold, drop, or deliver now (chat and the screen). Step 11, with the screen's actions |
+
+Apps never check for an existing inbox item and never pick a channel. They raise a signal every
+time something is worth knowing; the dispatcher merges.
+
+## 5. The delivery section of Overwatch's plan
+
+`overwatch_plans.settings.delivery`, validated by `overwatch_delivery_problem`. Plans are
+versioned, so every rule change has a reason and a `supersedes_id`.
+
+```json
+{
+  "window": { "start": "05:00", "end": "19:00" },
+  "pace": { "max_pops_per_hour": 3, "max_pops_per_day": 8, "min_gap_minutes": 20 },
+  "priority": { "severity_order": ["urgent", "high", "normal", "low"], "app_order": ["alfred", "arnold", "warren_buffet", "overwatch"] },
+  "defaults": { "low": "hold", "normal": "inbox", "high": "pop", "urgent": "pop" },
+  "bundling": { "digest_severities": ["low", "normal"], "min_signals": 3 },
+  "escalation": [
+    { "subject_key": "wb-sync:failure", "hold_repeats": 1, "inbox_repeats": 3 },
+    { "subject_key": "*", "hold_repeats": 2, "inbox_repeats": null }
+  ],
+  "merge": { "into_open_inbox": true, "pop_merge_hours": 12 },
+  "watchers": [ { "app": "arnold", "enabled": true, "plan_tool": "get_arnold_plan", "progress_tool": "get_arnold_progress" } ]
+}
+```
+
+- `window`: quiet hours are outside it, end exclusive. Decision 8.
+- `pace`: limits on pops only; inbox items are not capped. Pops counted are `alfred_push` rows in
+  `claude_notifications` (pending or sent) except jobs `reminder` and `step_timer`: Alex's own
+  always fire and never use up the dispatcher's caps. The hour is the clock hour; the day is the
+  Pacific date. `min_gap_minutes` is measured from the last pop before this run, so one run can
+  send several pops up to the hourly cap.
+- `escalation`: `hold_repeats` is how many earlier held or delivered signals of a subject (since
+  its last `resolved`) before the next goes from hold to inbox; `inbox_repeats` the same for inbox
+  → pop; null never. The first entry whose `subject_key` is `*`, equal to the subject, or a prefix
+  of it before a `:` wins (so `wb-sync:failure` covers `wb-sync:failure:<error_key>`).
+- `watchers`: replaces `claude_notification_settings.apps` (decision 2).
+- Overwatch's `pushes_per_day` and `push_time` are retired when Overwatch moves to signals (step 8).
+- Every number is a whole number; `overwatch_delivery_problem` names the first thing wrong, and an
+  `overwatch_plans` check constraint makes `create_overwatch_plan` refuse an invalid section.
+
+**Seed (step 4 migration).** A new plan version per user with notification settings
+(`written_by: "overwatch"`, the only non-Alex author the table allows), copying every existing
+setting and adding `delivery` with the window, hourly and daily caps and watchers copied from
+`claude_notification_settings` (today 05:00-20:00, 3 an hour, no daily cap, Arnold) and
+`min_gap_minutes: 0`, so nothing changes for Arnold at cutover. The 19:00 end in the example above
+is a later rule change for Alex to make, not the seed.
+
+## 6. Dispatcher rules (`dispatch_signals`)
+
+Queued signals in priority order (severity order, then app order, then oldest first), six rules in
+this order:
+
+1. **Quiet hours.** Outside the window → `wait`.
+2. **Default** from `defaults[severity]`. (Before it: a signal whose subject already has an
+   earlier signal in this run being delivered merges into that one.)
+3. **Escalation.** Count the subject's earlier held, delivered and merged signals since its last
+   `resolved`, this run's held ones included. Past `hold_repeats`, hold becomes inbox; past
+   `inbox_repeats`, inbox becomes pop. Example: a sync failure is held; the second in a row
+   becomes an inbox item.
+4. **Merge.** An inbox outcome for a subject with an open (unarchived) inbox item → `merge` into
+   it. A pop for such a subject still pops, pointing at that item. A pop for a subject popped
+   within `pop_merge_hours` → `merge`. Merging bumps the item's `source_metadata.repeat_count`.
+5. **Bundling.** `min_signals` or more pops of a `digest_severities` severity in one run, not
+   pointing at an open item, become one `digest`: one inbox item listing them and one pop.
+6. **Pace.** Each pop, and the digest as a whole, is one unit, in priority order. A unit that
+   would break the hourly or daily cap or the minimum gap: urgent → `wait`; a pop pointing at an
+   open item → `merge`; otherwise → `inbox`. A held-back digest becomes one inbox item per signal.
+
+Escalation comes before merge so repeats can still turn into a pop while an item is open; that
+is the one change from the step 1 order.
+
+The function decides and writes nothing; `deliver_signals` recomputes the plan itself and takes
+only wording from Claude (titles and bodies of pops and the digest). Each signal moves only from
+`queued`, so a repeated run cannot deliver it twice.
+
+## 7. The dispatcher task (`docs/claude-hourly-notifications-task-prompt.md`)
+
+Hourly 05:00-19:00 Pacific, Alfred connector only. Opens and closes a `platform_runs` row
+(`alfred` / `claude_hourly_notifications`, renamed in notes to "dispatcher").
+
+- **Stage A, watch.** For each enabled watcher: read its plan and progress and its sent log, apply
+  the plan's nudge instructions, and `raise_signal` each one (no push).
+- **Stage B, dispatch.** `get_dispatch_plan`, word pops and digests, `deliver_signals`. Close the
+  run with counts by decision.
+
+Only writes: `create_platform_run`, `update_platform_run`, `raise_signal`, `deliver_signals`.
+
+## 8. Senders and how each moves across
+
+| Sender | Step | Change |
+|---|---|---|
+| `send_alfred_push`, `log_claude_notification` | 3 | take `started_by`; `claude_notifications` gains `started_by`, `signal_id` |
+| Claude hourly task | 5 | becomes the dispatcher (section 7) |
+| `notify-dispatch` | 6 | logs every reminder and step pop in `claude_notifications` (app `alfred`, job `reminder` or `step_timer`, dedupe `reminder:<id>:<due_at>`, `started_by` from the reminder; steps are `alex`), inserting with explicit `user_id` under service role. Never goes through the dispatcher. |
+| `create_reminder` | 6 | required `started_by`; `task:*` refused. `reminders.started_by` backfilled `alex` for `created_by = app`, `chat` for `claude` (approximate) |
+| `wb-sync` | 7 | `raise_signal` (`wb-sync:failure:<error_key>`, service role, `started_by: task:wb-sync`) on blocking errors, `resolve_signal` on ok; its own open-item check goes |
+| Overwatch nightly and weekly | 8 | signals instead of reminders and nudge inbox items; long reports stay inbox items it writes itself, each with a signal pointing at it |
+| Arnold morning review | 8 | signal only when it raised an item (decision 4) |
+| Money cleanup, DJ daily and weekly, Ken seed check, SAM daily review, Drive Mix | 9 | a signal for each thing worth knowing; failures are `high` with subject `<app>:<job>:failure`. SAM and Drive Mix prompts are pasted in by Alex and saved to the repo first |
+| Every scheduled task's Claude app push | 13 | Alex turns it off in claude.ai |
+
+Report-style items (Money cleanup, DJ weekly, Overwatch weekly) stay inbox items written by the
+task, because the dispatcher would only copy them; the task raises a `normal` signal with the
+item's link so the dispatcher can pop or bundle it. Later, not in this project: SAM practice
+reminder, Monty Don freeze warning.
+
+## 9. Guardrails
+
+- Alex's reminders and item step timers never go through the dispatcher. They always fire, and
+  are logged.
+- Every pop is logged by its sender (`notify-dispatch`, `send_alfred_push`, `deliver_signals`,
+  `push-send` signal mode) with `started_by`.
+- The dispatcher's own runs are watched by the Overwatch nightly (section 11).
+
+## 10. The Dispatcher screen
+
+`/overwatch/dispatcher` (`OVERWATCH_DISPATCHER_PATH` in `src/viewPaths.js`), a route screen like
+Plan and Briefing, opened from a Dispatcher row on the Overwatch tab. Files:
+`src/overwatch/DispatcherPage.jsx`, `dispatcherModel.js`, reads in `overwatchApi.js`.
+
+- **Sections:** Queued, Held, Delivered, Merged (signals); History (the `claude_notifications`
+  log, newest first, with `started_by`); Reminders and Step timers (scheduled ones).
+- **Actions (step 11):** signals: hold, drop, deliver now; reminders: edit text or time, cancel
+  (`remindersApi.js`); step timers: reschedule, cancel (`notificationStepsApi.js`).
+- **Deliver now** (decision 6): inbox outcome by `update_signal`-equivalent RPC; a pop by
+  `push-send` with `{ signal_id }`, which sends to the caller's devices and logs with
+  `started_by: alex`.
+- **UI patterns:** existing Overwatch section and list styles; every confirmation is a modal like
+  `src/groups/ArchiveGroupDialog.jsx`. Phone width first, nothing scrolls sideways.
+
+## 11. Nightly checks (step 12)
+
+`overwatch_nightly_counts` gains a `dispatcher` block: runs yesterday (expected about 15),
+failures, signals by decision, held subjects with repeats, pops against the caps, and pops logged
+by each sender and `started_by`. The nightly prompt:
+
+- proposes rule changes (a task inbox item with a paste-ready prompt, as for other plan changes),
+  for example a subject held every day, or a cap hit three days running;
+- **if the dispatcher has no ok run since yesterday 07:00**, raises an inbox item directly (not a
+  signal, since the dispatcher is what is broken).
+
+## 12. Platform rules (mcp-platform skill)
+
+- Every new table: `platform.register_table()`, which grants authenticated and service_role and
+  strips anon and PUBLIC.
+- Every new function: `revoke all ... from public, anon` and explicit `grant execute` to
+  authenticated and/or service_role as its callers need. Anon gets nothing.
+- Tools reach the database only through `ctx.db`; every `defineTool` declares its tier and its
+  `tables`.
+- Every migration block ends with `check_platform_conformance`, which must return `CONFORMANT`.
+- SQL written as `supabase/migrations/_pending_notification_routing-d7v_<purpose>.sql`, numbered
+  after `gitsync` at the step that queues it; tests in `supabase/tests/notification_routing-d7v/`,
+  returning their checks as a result row from a block that undoes itself.

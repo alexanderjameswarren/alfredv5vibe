@@ -18,19 +18,13 @@
 import { defineTool } from "../platform.ts";
 import { loadVapid, sendToAll } from "../web-push-send.ts";
 import type { EndpointResult, PushSubscriptionRow } from "../web-push-send.ts";
-import { dbError, fail, KINDS, logNotification, optionalText, requireEnum, requireText } from "./claude-notifications.ts";
+import {
+  dbError, fail, KINDS, logNotification, optionalStartedBy, optionalText, requireAlfredPath, requireEnum, requireText,
+} from "./claude-notifications.ts";
+
+export { requireAlfredPath };
 
 type Row = Record<string, unknown>;
-
-/** An Alfred path, /<id>. The service worker resolves it against its own origin. */
-export function requireAlfredPath(tool: string, v: unknown): string | null {
-  const link = optionalText(tool, "link", v);
-  if (link === null) return null;
-  if (!link.startsWith("/") || link.startsWith("//") || /\s/.test(link)) {
-    throw fail(tool, `\`link\` must be an Alfred path starting with "/", e.g. "/<id>", got ${JSON.stringify(link)}.`);
-  }
-  return link;
-}
 
 /** The delivery status and detail recorded for a set of endpoint results. */
 export function deliveryOutcome(results: EndpointResult[]) {
@@ -60,6 +54,7 @@ export const sendAlfredPushTool = defineTool({
     const body = optionalText(tool, "body", args.body);
     const link = requireAlfredPath(tool, args.link);
     const dedupeKey = requireText(tool, "dedupe_key", args.dedupe_key, 300);
+    const startedBy = optionalStartedBy(tool, args.started_by);
 
     try {
       loadVapid();
@@ -68,7 +63,7 @@ export const sendAlfredPushTool = defineTool({
     }
 
     const logged = await logNotification(ctx.db, tool, {
-      app, job, kind, channel: "alfred_push", title, dedupe_key: dedupeKey, body, link,
+      app, job, kind, channel: "alfred_push", title, dedupe_key: dedupeKey, body, link, started_by: startedBy,
     });
     if (!logged.created) {
       throw fail(tool, `refused: dedupe_key "${dedupeKey}" has already been used ` +

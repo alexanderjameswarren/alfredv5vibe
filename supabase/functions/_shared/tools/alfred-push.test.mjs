@@ -104,6 +104,21 @@ test("logs first, sends to every device, records the result; dead devices report
   assert.ok(!JSON.stringify(out).includes("secret"), "the result must not carry any endpoint");
 });
 
+test("started_by reaches the log row; absent is null; a bad one is refused before anything", async () => {
+  const db = fakeDb({ subs: [SUBS[0]] });
+  await m.sendAlfredPushTool.handler({ ...ARGS, started_by: "task:claude_hourly_notifications" }, { db });
+  const [, , p] = db.calls.find(([t, n]) => t === "rpc" && n === "log_claude_notification");
+  assert.equal(p.p_started_by, "task:claude_hourly_notifications");
+
+  const db2 = fakeDb({ subs: [SUBS[0]] });
+  await m.sendAlfredPushTool.handler(ARGS, { db: db2 });
+  assert.equal(db2.calls.find(([t, n]) => t === "rpc" && n === "log_claude_notification")[2].p_started_by, null);
+
+  const db3 = fakeDb({ subs: [SUBS[0]] });
+  await assert.rejects(m.sendAlfredPushTool.handler({ ...ARGS, started_by: "bot" }, { db: db3 }), /`started_by` must be/);
+  assert.equal(db3.calls.length, 0);
+});
+
 test("a used dedupe_key is refused and nothing is sent", async () => {
   sends.length = 0;
   const db = fakeDb({ subs: SUBS, logResult: { data: { created: false, id: "n0",

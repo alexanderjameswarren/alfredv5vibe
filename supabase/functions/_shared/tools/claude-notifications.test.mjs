@@ -56,6 +56,24 @@ test("log: passes every field to log_claude_notification, status sent by default
   assert.equal(p.p_link, null);
 });
 
+test("log: started_by is passed when given, null when absent, and checked", async () => {
+  const rpcs = { log_claude_notification: { data: { created: true, id: "n1" }, error: null } };
+  const db = fakeDb({ rpcs });
+  await m.logClaudeNotificationTool.handler({ ...LOG_ARGS, started_by: "task:arnold_morning_review" }, { db });
+  const [, , p] = db.calls.find(([t, n]) => t === "rpc" && n === "log_claude_notification");
+  assert.equal(p.p_started_by, "task:arnold_morning_review");
+  assert.equal(p.p_signal_id, null);
+
+  const db2 = fakeDb({ rpcs });
+  await m.logClaudeNotificationTool.handler(LOG_ARGS, { db: db2 });
+  assert.equal(db2.calls.find(([t, n]) => t === "rpc" && n === "log_claude_notification")[2].p_started_by, null);
+
+  const db3 = fakeDb();
+  await assert.rejects(m.logClaudeNotificationTool.handler({ ...LOG_ARGS, started_by: "Task:x" }, { db: db3 }),
+    /`started_by` must be "alex", "chat" or "task:<job>"/);
+  assert.equal(db3.calls.length, 0);
+});
+
 test("log: a used dedupe_key comes back as created false, not an error", async () => {
   const db = fakeDb({ rpcs: { log_claude_notification: {
     data: { created: false, id: "n0", duplicate_of: { title: "Yoga missed Tuesday" } }, error: null } } });

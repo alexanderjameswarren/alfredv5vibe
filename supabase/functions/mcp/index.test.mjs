@@ -343,13 +343,17 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_ARNOLD_8 = ["get_claude_notification_settings", "update_claude_notification_settings"];
   // Switchboard 2.5, +2.
   const EXPECTED_ADDED_SWITCHBOARD_25 = ["get_switchboard_run", "issue_switchboard_link", "get_sql_read"];
+  // Notification routing steps 3 and 4, +5.
+  const EXPECTED_ADDED_NOTIFICATION_ROUTING = ["raise_signal", "get_signals", "get_dispatch_plan", "deliver_signals",
+    "get_delivery_rules"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
                       ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C, ...EXPECTED_ADDED_P5,
                       ...EXPECTED_ADDED_READ, ...EXPECTED_ADDED_OVERWATCH_13, ...EXPECTED_ADDED_OVERWATCH_14,
                       ...EXPECTED_ADDED_OVERWATCH_22, ...EXPECTED_ADDED_OVERWATCH_46, ...EXPECTED_ADDED_OVERWATCH_54,
-                      ...EXPECTED_ADDED_ARNOLD_5, ...EXPECTED_ADDED_ARNOLD_8, ...EXPECTED_ADDED_SWITCHBOARD_25]) {
+                      ...EXPECTED_ADDED_ARNOLD_5, ...EXPECTED_ADDED_ARNOLD_8, ...EXPECTED_ADDED_SWITCHBOARD_25,
+                      ...EXPECTED_ADDED_NOTIFICATION_ROUTING]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
   const orderItems = registered.find((r) => r.name === "get_wb_order_items");
@@ -360,9 +364,9 @@ test("the tool count is 72 after the job-search tools", () => {
   }
   assert.ok(registered.some((r) => r.name === "get_overwatch_nightly_counts"), "get_overwatch_nightly_counts is not registered");
   // 2026-11-02, +1 for Warren Buffet Phase 4 Step 8b: Amazon and Whole Foods items. +2 for Step 8f: item tags and splits.
-  // +1 for nightly counts.
-  assert.equal(registered.length, 187,
-    `expected 187 registered tools, found ${registered.length}: ` +
+  // +1 for nightly counts. +5 for notification routing (signals, dispatcher, delivery rules).
+  assert.equal(registered.length, 192,
+    `expected 192 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -404,6 +408,30 @@ test("Restructure P3: get_apps and archive_inbox_item schemas match their handle
       for (const k of SHARED_READ_OPTIONS) if (k in (t.cfg.inputSchema ?? {})) read.add(k);
     }
     assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
+  }
+});
+
+test("Notification routing: signal tools and started_by schemas match their handlers, at tier 1", () => {
+  const blocks = [];
+  for (const b of readFileSync(join(TOOLS, "signals.ts"), "utf-8").split("defineTool({").slice(1)) blocks.push(b);
+  for (const [file, name] of [["alfred-push.ts", "send_alfred_push"], ["claude-notifications.ts", "log_claude_notification"]]) {
+    blocks.push(readFileSync(join(TOOLS, file), "utf-8").split("defineTool({").slice(1).find((b) => b.includes(`name: "${name}"`)));
+  }
+  const names = [];
+  for (const b of blocks) {
+    const name = /name:\s*"([^"]+)"/.exec(b)[1];
+    names.push(name);
+    assert.equal(Number(/tier:\s*(\d)/.exec(b)[1]), 1, name);
+    const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    addSharedRead(b, read, t);
+    assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
+  }
+  assert.deepEqual(names, ["raise_signal", "get_signals", "get_dispatch_plan", "deliver_signals", "send_alfred_push",
+    "log_claude_notification"]);
+  for (const name of ["send_alfred_push", "log_claude_notification"]) {
+    assert.ok("started_by" in registered.find((r) => r.name === name).cfg.inputSchema, name);
   }
 });
 
@@ -717,7 +745,7 @@ test("Overwatch Steps 13 and 14 schemas advertise exactly the args their handler
   assert.deepEqual(tiers, {
     get_activity: 1, log_activity: 1, get_project_plans: 1, update_project_plan: 2,
     get_project_links: 1, create_project_link: 2, record_project_estimate: 2, get_project_estimates: 1,
-    get_overwatch_plan: 1, create_overwatch_plan: 3, update_overwatch_checks: 2,
+    get_overwatch_plan: 1, create_overwatch_plan: 3, update_overwatch_checks: 2, get_delivery_rules: 1,
     get_overwatch_watch: 1, create_overwatch_watch: 2, update_overwatch_watch: 2,
     get_overwatch_notes: 1, create_overwatch_note: 2, get_claim_blocks: 1, update_app_profile: 2,
     record_seen_releases: 1, log_friction: 1, get_friction: 1, update_friction: 2,
@@ -751,7 +779,8 @@ test("the platform tools take any app id, not a fixed list", () => {
   // Overwatch Step 5: apps(id) is the list, enforced by a foreign key.
   const src = readFileSync(join(HERE, "index.ts"), "utf-8");
   assert.equal(src.match(/^\s+app: z\.enum\(/gm), null);
-  assert.equal(src.match(/^\s+app: z\.string\(\)(\.optional\(\))?\.describe\("[^"]*get_apps/gm).length, 6);
+  // +1 for raise_signal (notification routing).
+  assert.equal(src.match(/^\s+app: z\.string\(\)(\.optional\(\))?\.describe\("[^"]*get_apps/gm).length, 7);
 });
 
 test("create_job_application stays UNGATED", () => {

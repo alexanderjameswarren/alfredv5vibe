@@ -84,6 +84,14 @@ import {
   updateClaudeNotificationSettingsTool,
 } from "../_shared/tools/claude-notifications.ts";
 import { sendAlfredPushTool } from "../_shared/tools/alfred-push.ts";
+import {
+  SEVERITIES,
+  STATES,
+  deliverSignalsTool,
+  getDispatchPlanTool,
+  getSignalsTool,
+  raiseSignalTool,
+} from "../_shared/tools/signals.ts";
 import { getAppsTool, checkSourceApp } from "../_shared/tools/apps.ts";
 import { checkSuggestedGroupId, suggestedGroupError, withSuggestedGroups } from "../_shared/tools/inbox-groups.ts";
 import { getGroupsTool } from "../_shared/tools/groups.ts";
@@ -118,6 +126,7 @@ import {
   createOverwatchPlanTool,
   createOverwatchWatchTool,
   getClaimBlocksTool,
+  getDeliveryRulesTool,
   getFrictionTool,
   getOverwatchNotesTool,
   getOverwatchPlanTool,
@@ -3143,6 +3152,7 @@ export function createMcpServer(token: string) {
         body: z.string().optional().describe("Notification text."),
         link: z.string().optional().describe("Alfred path opened on tap, always \"/\" followed by the record's id: /<id>. Default: Alfred's home."),
         dedupe_key: z.string().describe("Unique per notification; a repeat is refused."),
+        started_by: z.string().optional().describe("Who started it: \"alex\", \"chat\", or \"task:<job>\" for a scheduled task, e.g. task:claude_hourly_notifications."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(sendAlfredPushTool, args, token),
@@ -3167,6 +3177,7 @@ export function createMcpServer(token: string) {
         local_date: z.string().optional().describe("Pacific date YYYY-MM-DD. Default: today."),
         delivery_status: z.enum(["pending", "sent", "failed", "no_subscription"]).optional().describe("Default sent."),
         delivery_detail: z.record(z.string(), z.unknown()).optional().describe("e.g. {\"inbox_id\": \"...\"}."),
+        started_by: z.string().optional().describe("Who started it: \"alex\", \"chat\", or \"task:<job>\" for a scheduled task, e.g. task:arnold_morning_review."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(logClaudeNotificationTool, args, token),
@@ -3224,6 +3235,85 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(updateClaudeNotificationSettingsTool, args, token),
+  );
+
+  // --- Signals and the dispatcher (docs/technical-spec-notification_routing-d7v.md §4-§6) ---
+  server.registerTool(
+    "raise_signal",
+    {
+      title: "Raise Signal",
+      description:
+        "Raise one signal: something an app or task thinks is worth Alex knowing. Raise it EVERY time it happens; never check for an existing inbox item and never choose a channel. " +
+        "The dispatcher decides, under the delivery rules in Overwatch's plan, whether it is held, becomes an inbox item, pops (an Alfred push) or merges into one already delivered. subject_key ties repeats together (e.g. wb-sync:failure), and escalation and merging count by it. " +
+        "source_ref is an optional idempotency key: a repeat is not raised twice and comes back as { created: false, duplicate_of }. Returns { created, id }. Tier 1.",
+      inputSchema: {
+        app: z.string().describe("App id from get_apps, e.g. warren_buffet."),
+        job: z.string().describe("What raised it, e.g. overwatch_nightly."),
+        severity: z.enum(SEVERITIES as [string, ...string[]]).describe("low, normal, high or urgent; each maps to a default outcome in the delivery rules."),
+        subject_key: z.string().describe("Lower case letters, digits and : _ . -, e.g. wb-sync:failure."),
+        title: z.string().describe("Short title, at most 200 characters."),
+        body: z.string().optional().describe("The text."),
+        link: z.string().optional().describe("Alfred path, \"/\" followed by the record's id: /<id>."),
+        started_by: z.string().describe("Who started it: \"alex\", \"chat\", or \"task:<job>\" for a scheduled task."),
+        source_ref: z.string().optional().describe("Optional idempotency key, e.g. a run id; at most 300 characters."),
+        details: z.record(z.string(), z.unknown()).optional().describe("Anything else to keep, e.g. {\"kind\": \"nudge\"} to log a pop as that kind."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(raiseSignalTool, args, token),
+  );
+
+  server.registerTool(
+    "get_signals",
+    {
+      title: "Get Signals",
+      description:
+        "Read signals, newest first, with filters for app, job, state (queued, held, delivered, merged, dropped, resolved), severity, subject_key and a time range (since inclusive, until exclusive, ISO timestamps). Each row says what the dispatcher decided and why (state, outcome, reason) and where it went (inbox_id, notification_id, merged_into). Tier 1.",
+      inputSchema: {
+        app: z.string().optional(),
+        job: z.string().optional(),
+        state: z.enum(STATES as [string, ...string[]]).optional(),
+        severity: z.enum(SEVERITIES as [string, ...string[]]).optional(),
+        subject_key: z.string().optional(),
+        since: z.string().optional().describe("ISO timestamp, e.g. 2026-11-03T05:00:00-08:00."),
+        until: z.string().optional().describe("ISO timestamp, exclusive."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getSignalsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_dispatch_plan",
+    {
+      title: "Get Dispatch Plan",
+      description:
+        "What the dispatcher would do right now with each queued signal, under the delivery rules in the active Overwatch plan. Writes nothing. " +
+        "Returns { at, local_time, in_window, pops: { this_hour, today, hour_left_after, day_left_after }, decisions: [{ signal_id, app, severity, subject_key, decision, reason, repeats, merge_target_signal_id, inbox_id, bundle }] }; decision is wait, hold, inbox, pop, merge or digest. " +
+        "Returns { stopped } when the plan has no delivery section. Read this, word the pops and the digest, then call deliver_signals. Tier 1.",
+      inputSchema: {
+        at: z.string().optional().describe("ISO timestamp to preview another time. Default: now."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getDispatchPlanTool, args, token),
+  );
+
+  server.registerTool(
+    "deliver_signals",
+    {
+      title: "Deliver Signals",
+      description:
+        "Do what the dispatcher decides now: hold, create inbox items, send pops (Alfred push, pointing at an inbox item), merge repeats into what was already delivered, and send one digest for bundled signals. " +
+        "It recomputes the plan itself, so decisions never come from the caller; pass only the wording for pops (wording keyed by signal id) and the digest. A signal without wording uses its own title and body. Every inbox item and pop is logged in claude_notifications with signal_id and started_by. Only queued signals move, so a repeat call cannot deliver twice. " +
+        "Returns { at, counts, results, digest?, errors }. Tier 1.",
+      inputSchema: {
+        run_id: z.string().optional().describe("The dispatcher's platform_runs id, recorded on each decided signal."),
+        wording: z.record(z.string(), z.object({ title: z.string(), body: z.string().optional() })).optional()
+          .describe("{\"<signal id>\": {\"title\": \"...\", \"body\": \"...\"}} for the pops you word."),
+        digest: z.object({ title: z.string(), body: z.string().optional() }).optional()
+          .describe("Title and text of the digest pop, when the plan has one."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(deliverSignalsTool, args, token),
   );
 
   // --- Overwatch, Phase 3 (docs/technical-spec-overwatch-q4n.md §7) ---
@@ -3479,6 +3569,18 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(updateOverwatchChecksTool, args, token),
+  );
+
+  server.registerTool(
+    "get_delivery_rules",
+    {
+      title: "Get Delivery Rules",
+      description:
+        "Read the delivery section of Overwatch's active plan: the rules the dispatcher applies to every signal: window (quiet hours outside it), pace (max_pops_per_hour, max_pops_per_day, min_gap_minutes), priority, defaults by severity, bundling, escalation, merge and watchers (the apps the dispatcher's watch stage reads). " +
+        "Returns { plan_id, delivery }, or delivery null with a note when the plan has none. Change the rules with create_overwatch_plan (settings.delivery). Tier 1.",
+      inputSchema: {},
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getDeliveryRulesTool, args, token),
   );
 
   server.registerTool(

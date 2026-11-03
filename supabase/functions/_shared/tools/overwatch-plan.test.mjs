@@ -77,6 +77,26 @@ test("create_overwatch_plan refuses before proposing", async () => {
   await assert.rejects(() => m.createOverwatchPlanTool.propose({ ...planArgs, written_by: "bob" }, { db }), /written_by must be one of/);
 });
 
+test("get_delivery_rules: the active plan's delivery section, or null with a note", async () => {
+  assert.equal(m.getDeliveryRulesTool.tier, 1);
+  const delivery = { window: { start: "05:00", end: "20:00" } };
+  const db = fakeDb(() => ({ data: { ...PLAN, settings: { ...PLAN.settings, delivery } }, error: null }));
+  const out = await m.getDeliveryRulesTool.handler({}, { db });
+  assert.deepEqual(out.delivery, delivery);
+  assert.equal(out.plan_id, "p1");
+  assert.ok(saw(db, "overwatch_plans", "eq", "active", true));
+  const none = await m.getDeliveryRulesTool.handler({}, { db: fakeDb(() => ({ data: PLAN, error: null })) });
+  assert.equal(none.delivery, null);
+  assert.match(none.note, /no delivery section/);
+});
+
+test("create_overwatch_plan: a delivery section that is not an object is refused before the database", async () => {
+  const db = fakeDb();
+  await assert.rejects(m.createOverwatchPlanTool.handler({ ...planArgs, settings: { delivery: [1] } }, { db }),
+    /settings\.delivery must be a JSON object/);
+  assert.equal(db.calls.filter(([t]) => t === "rpc").length, 0);
+});
+
 test("update_overwatch_checks checks each entry, then calls the RPC", async () => {
   const db = fakeDb();
   await m.updateOverwatchChecksTool.handler({ checks: [{ text: "Look at DJ", check_on: "2026-11-01", about: "dj" }] }, { db });
