@@ -5,7 +5,7 @@ description: "Plan money with Warren Buffet (the Money app's Alfred tools): add 
 
 # Planning with Warren Buffet
 
-Skill version: 2026-11-03
+Skill version: 2026-11-03b
 
 What is coming and whether we can afford it. For what has happened and what to fix, including
 "what needs my attention?", load **wb-money**.
@@ -43,6 +43,8 @@ Before adding a bill, look for it:
 - **Amounts that vary** (fuel, utilities, a card's statement): suggest a wider `amount_tolerance`
   before creating, and say why. A payment only matches when its amount is within the tolerance, so
   a tight one matches only some months, and the rest stay in the burn rate.
+- **A repeating date that is due but not yet paid counts on day 1** of the projection, like a
+  subscription, until a payment is matched to it.
 
 ## 3. Drafts and stages
 
@@ -60,6 +62,8 @@ Before adding a bill, look for it:
 | `cancelled` | not happening; kept for the record |
 
 - Move the stage on as the quote and invoice arrive.
+- A one-off at `paid` no longer counts as coming due anywhere (coming up, major expenses, the
+  projection), even with no matched payment.
 
 ## 4. tax_year
 
@@ -77,6 +81,8 @@ year. If it is unclear which year a payment counts for, ask Alex; do not guess.
 - **Be careful with generic bill-pay merchants**, such as a bank's online bill pay or a payment
   app that pays many payees. Linking one would suggest every bill paid through it. Prefer the real
   payee's merchant; if only the generic one exists, say so and ask, or leave the merchant empty.
+- **Something paid by card** is planned on the day it is charged: WB counts card spending as gone
+  that day, not on the card's due date.
 
 ## 6. "Can we afford X?"
 
@@ -109,6 +115,7 @@ Use `get_wb_free_cash` with `what_if`. It writes nothing.
   `planned_match`. Answer with `update_wb_planned_match`; for a part-payment, confirm with a lower `amount`.
 - **By hand:** `create_wb_planned_match` (tier 3). Show the proposal first: `amount_applied` and
   `would_mark_paid`. Pass `transaction_id` for a single-part payment, or `split_id`. A repeating item needs `occurrence_on`.
+- **Confirming a match clears the other suggestions** for that date and for that payment.
 - **A wrong confirmed match:** `unconfirm_wb_planned_match` with `match_id`. It never changes the stage.
   - **If `paid_not_covered` is true, ask Alex whether to set the item back to `invoiced`.** Only after a yes, use `upsert_wb_planned_item` with `stage: "invoiced"`.
 - **Within tolerance counts as covered (A45).** A date or one-off whose confirmed payments leave no
