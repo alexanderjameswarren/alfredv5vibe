@@ -4,13 +4,13 @@
       "Bash(dir:*)",
       "Bash(findstr:*)",
       "Bash(git log:*)",
-      "Bash(node scripts/claims.mjs status)",
-      "Bash(node scripts/claims.mjs status:*)",
-      "Bash(node scripts/claims.mjs check:*)",
-      "Bash(node scripts/claims.mjs release:*)",
-      "Bash(node scripts/claims.mjs claim:*)",
-      "Bash(node scripts/claims.mjs reserve:*)",
-      "Bash(node scripts/claims.mjs yield:*)",
+      "Bash(claims.cmd status)",
+      "Bash(claims.cmd status:*)",
+      "Bash(claims.cmd check:*)",
+      "Bash(claims.cmd release:*)",
+      "Bash(claims.cmd claim:*)",
+      "Bash(claims.cmd reserve:*)",
+      "Bash(claims.cmd yield:*)",
       "Bash(npx eslint:*)",
       "Bash(npx react-scripts build:*)",
       "Bash(npm uninstall:*)",
@@ -33,68 +33,9 @@
       "mcp__claude_ai_Aflred_v5__get_database_schema",
       "Bash(ls:*)",
       "Bash(node src/utils/recurrence.test.js)",
-      "Bash(powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/claude-sessions/run-tests.ps1)",
       "Read(//c/Users/Alex/projects/alfred-v5/.git/alfred-claims.json)",
       "Read(//c/Users/Alex/projects/alfred-v5/.git/alfred-project-code.json)"
     ]
   },
-  "preferredNotifChannel": "terminal_bell",
-
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [{
-          "type": "command",
-          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/prompt-check.mjs\""
-        }, {
-          "type": "command",
-          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-notice.mjs\""
-        }]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell",
-        "hooks": [{
-          "type": "command",
-          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/claims-guard.mjs\""
-        }, {
-          "type": "command",
-          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/plan-guard.mjs\""
-        }]
-      }
-    ],
-    "Notification": [
-      {
-        "matcher": "",
-        "hooks": [{
-          "type": "command",
-         "command": "powershell.exe -NoProfile -c \"(New-Object Media.SoundPlayer 'C:\\Windows\\Media\\Windows Ringout.wav').PlaySync()\""
-        }, {
-          "type": "command",
-          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-status.mjs\""
-        }]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "",
-        "hooks": [{
-          "type": "command",
-          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-status.mjs\""
-        }]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [{
-          "type": "command",
-          "command": "powershell.exe -NoProfile -c \"(New-Object Media.SoundPlayer 'C:\\Windows\\Media\\Windows Ringout.wav').PlaySync()\""
-        }, {
-          "type": "command",
-          "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-status.mjs\""
-        }]
-      }
-    ]
-  }
+  "preferredNotifChannel": "terminal_bell"
 }
