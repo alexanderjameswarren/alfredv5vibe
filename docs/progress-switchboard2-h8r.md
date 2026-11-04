@@ -72,10 +72,22 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 3 | s59, s59b | Config loader (new repo) | — | done, switchboard 2096122: `loader/load.mjs` (`repos.json`, `projects.json`), Overwatch and `setupCmd` per repo, WRONG REPO in prompt-check, install copies the loader | 2026-11-03 |
 | 3 | s60, s60b | User-level hooks (new repo) | — | done, switchboard ac77b8d, installed: the known-repo rule and stand-back, the sound in every folder, install registers them with a backup | 2026-11-03 |
 | 3 | s61 | Shims in alfred-v5 | — | built (s61-q3jx): scripts, hooks and the libraries alfred-v5 still imports run the installed copy; moved tests and unused libraries deleted; `scripts/lib` tests 54 pass | 2026-11-03 |
-| 3 | s62-s72 | `sb`, Salesforce guard, deploy wrapper, PII hold, finish modes, panel across repos, FIRST CLIENT at s70, extension split, cutover: spec §9 | — | todo | |
-| 5 git | s73-s78 | Every git command by link: spec §11 | see below | todo | |
-| 4 | s79-s83 | Salesforce reads: spec §10 | see below | todo | |
-| 5 SF | s84-s87 | Salesforce actions by link: spec §11 | see below | todo | |
+| 3 | s62-s68 | `sb repo/project/org`, client start and end, Salesforce guard, deploy wrapper, compare and tiers, PII hold, finish modes (switchboard repo) | — | done, switchboard commits 13b1a2b to 12f75f6 | 2026-11-04 |
+| 3 | s69 | Panel across repos | — | done, switchboard 215335b: every repo in `projects.json`, settings in `config\panel.ini`, install makes the shortcuts, git commands read `mainBranch` | 2026-11-04 |
+| 3 | s70 | Client reports | — | done, switchboard 7212976: clip attaches git's change list to every client-repo report; gitpush skips the Overwatch inventory where there is no alfred-v5 mcp | 2026-11-04 |
+| 3 | s71 | Claims init and clip fixes | — | done, switchboard dd7aa78: `claims init` (`sb client start` runs it); a missing claims file blocks only repo changes; report text sent to clip is never read as a change; `clip --last`; `claims.cmd` recognised; chat titles match with spaces | 2026-11-04 |
+| 3 | s72 | Shared sf org check | — | done, switchboard 9bb9943: one org check (display, org list, instance URL) with named failures; "Report sent" and "Report held" tiles; Alex's own sf usernames pass the PII hold; install stops and restarts the panel | 2026-11-04 |
+| 3 | s73 | Bridge and Terminal tiles | — | done, switchboard a9a55d3: bridge host registered to the install; per-repo Terminal tiles; `sb org verify` on the shared helper; `sb deploy` and `sb test` print coverage | 2026-11-04 |
+| 3 | s74, s74b | Panel layout A | — | done, switchboard 7562934, b95bbb1: repo groups, a black Terminal tile with a PS badge, drag scrolling, chats grouped by project code; `sb repo name` | 2026-11-04 |
+| 3 | s75a, s75d, s75e | Extension split | — | done, switchboard 5028bb0, 13bdf7e: fixed id `bfehbmjaaplaplldfdcgjifgjimchldf` from a manifest key, installed to `%LOCALAPPDATA%\Switchboard\extension`; the seed had copied 6 of its 20 files, now whole; install names what holds the panel folder and always restarts the panel | 2026-11-04 |
+| 3 | FIRST CLIENT GATE | Team IMPACT | — | passed: registered by `--adopt`; two fixes built, reviewed and deployed to sandbox and production, each in its own worktree | 2026-11-04 |
+| 3 | s75b | alfred-v5 cutover plan | — | done (s75b-n6gw), read-only; the skill yielded to cli_rules-v8m | 2026-11-04 |
+| 3 | s76 | Overwatch without the repo's sender | — | done, switchboard 4018732: `repos.json` `overwatch: true` posts through the installed sender, on for alfred-v5; bridge for the fixed id only; the brown top bar back | 2026-11-04 |
+| 3 | s77 | CLAUDE.md names the installed commands | — | built (s77-k8dz) | 2026-11-04 |
+| 3 | s78-s79 | Settings handover, then deleting the shims and dead folders; then Finish | — | todo | |
+| 5 git | s80-s87 | Every git command by link: spec §11, plus sandbox sf checks, `sb client` answers and the panel snapshot | see below | todo | |
+| 4 | s88-s92 | Salesforce reads: spec §10 | see below | todo | |
+| 5 SF | s93-s96 | Salesforce actions by link: spec §11 | see below | todo | |
 | 6-8 | | Spec §12-§14 | | todo | |
 
 ## Proposed scope per step (Phase 0)
@@ -372,7 +384,7 @@ Database items per step are in the table at the top. Report unread and lane orde
 
 ## Proposed scope per step (s50 onward)
 
-From the s48 plan and Alex's decisions in s49. A block leaves out any list that is nothing or none. Blocks from s56 to s72 and s74 to s87 name folders where the files don't exist yet; each is narrowed to real paths when its prompt is written.
+From the s48 plan and Alex's decisions in s49. A block leaves out any list that is nothing or none. Blocks from s56 to s72 and s80 to s96 (renumbered at s77) name folders where the files don't exist yet; each is narrowed to real paths when its prompt is written.
 
 ### Part 1, tile fixes, ahead of the move
 
@@ -389,7 +401,7 @@ From the s48 plan and Alex's decisions in s49. A block leaves out any list that 
 - deploy: mcp
 - SQL: switchboard_actions
 
-*A database step's block must list the numbered file and the `_pending_` delete, or the plan guard refuses them at the numbering (s52). s73 and s79 need the same when their prompts are written.*
+*A database step's block must list the numbered file and the `_pending_` delete, or the plan guard refuses them at the numbering (s52). s80, s87 and s88 need the same when their prompts are written.*
 
 **s52c, deploy `mcp`** (estimated run: 3m; after migration 196 has run and its test has passed). Claim `db:deploy` at this step, deploy, run `check_platform_conformance`, then Alex checkpoints.
 - create: nothing
@@ -457,7 +469,7 @@ Also in s64, since it rewrites the shell parser's rules: fix the s51 guard false
 **s65, deploy wrapper: files, lock, tests** (estimated run: 15m). Spec §9.7.
 - create: salesforce/deploy.mjs and its test
 
-**s66, wrapper: compare and tiers** (estimated run: 15m). The click tier is refused until s85.
+**s66, wrapper: compare and tiers** (estimated run: 15m). The click tier is refused until s94.
 - update: salesforce/deploy.mjs and its test
 
 **s67, PII hold** (estimated run: 8m). Spec §9.8.
@@ -475,69 +487,90 @@ Also in s64, since it rewrites the shell parser's rules: fix the s51 guard false
 **s71, extension split** (estimated run: 12m). Switchboard's own Chrome extension with a fixed ID; the host manifest re-registered; the clipper stays in alfred-v5.
 - update: extension/, install.ps1 (new repo); extension/ (alfred-v5, bridge half deleted)
 
-**s72, cutover (alfred-v5 window)** (estimated run: 8m). Remove alfred-v5's hook settings, its sound entries, and the shims (moved from s61), then `tools/claude-sessions/`. Every worktree's `.claude/settings.local.json` must be done then too, not only main's: the settings are machine-local, so each is changed by hand or by a script Alex approves. The hook settings change is the step's last change. Before `scripts/overwatch-post.mjs` goes: the installed `claims-core` decides that a repo posts to Overwatch by finding the sender at its root (`SENDER_IN_REPO`), so deleting that shim silently stops alfred-v5's Overwatch events unless the check changes first.
-- update: .claude/CLAUDE.md, .claude/skills/cli-workflow/SKILL.md, .claude/settings.local.json
-- delete: the shims in scripts/ and scripts/lib/, .claude/hooks/, tools/claude-sessions/
+**The cutover, s76 to s79** (from the s75b plan, renumbered). `.claude/settings.local.json` is tracked and identical in every checkout: one edit, spread by checkpoint and gitsync. The user-level hooks stand back while a checkout's settings name any Switchboard hook, so the hook entries are removed in one write. `scripts/lib/claims-core.mjs`, `finish-summary.mjs` and `overwatch-post.mjs` stay, because `sql-queue` and `inventory` import them. The cli-workflow skill is cli_rules-v8m's (yielded at s75b); it carries the four rule changes and the `claims.cmd` and `clip.cmd` renames.
+
+**s76, Overwatch without the repo's sender (switchboard window)**. Done: `repos.json` `overwatch: true` posts through the installed sender, and alfred-v5 has it on.
+
+**s77, CLAUDE.md names the installed commands (alfred-v5 window)** (estimated run: 12m). `claims.cmd`, `clip.cmd`, the Switchboard install for the hooks; no shims wording.
+- update: .claude/CLAUDE.md
+
+**s78, settings handover (alfred-v5 window)** (estimated run: 5m). One write of `.claude/settings.local.json`, and the step's only change: every hook and sound entry removed, the seven claims permissions switched to `claims.cmd`, the `tools/claude-sessions/run-tests.ps1` permission dropped. Then Alex checkpoints it and runs gitsync in each worktree between turns; in each checkout the user-level guard writes `.clip/claims-guard.log`.
+- update: .claude/settings.local.json
+
+**s79, delete the shims and dead folders (alfred-v5 window)** (estimated run: 8m). Only after every checkout has s78. Then `gitpush switchboard2-h8r finish`.
+- update: .gitignore, supabase/config.toml, scripts/inventory.mjs (comments only)
+- delete: scripts/claims.mjs, scripts/clip.mjs, scripts/git-commit-claimed.mjs, scripts/git-new-worktree.mjs, scripts/git-push-worktrees.mjs, scripts/git-sync.mjs, scripts/overwatch-post.mjs, scripts/lib/session-status.mjs, scripts/powershell-profile-snippet.ps1, .claude/hooks/, tools/claude-sessions/, tools/switchboard-seed/, extension/
+
+Outside the repo, for Alex: the `~/.claude/settings.json` autoMode line that names `node scripts/claims.mjs yield`; on the Surface, install.ps1 before it pulls s78.
 
 ### Part 3, every git command by link
 
 The helper arrives here rather than with Phase 4. Every git link needs a click for the first two weeks (spec §11.1).
 
-**s73, queue changes** (database step; estimated run: 10m). `git` is already an allowed kind. Adds `needs_click` by action type and a pickup function.
+**s80, queue changes** (database step; estimated run: 10m). `git` is already an allowed kind. Adds `needs_click` by action type and a pickup function.
 - create: supabase/migrations/_pending_switchboard2-h8r_git_actions.sql, supabase/tests/switchboard2-h8r/5_verify_git.sql
 - SQL: switchboard_actions, switchboard_runs
 
-**s74, runner: git actions and pickup key** (estimated run: 12m).
+**s81, runner: git actions and pickup key** (estimated run: 12m).
 - update: supabase/functions/switchboard-runner/index.ts, supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs
 - deploy: switchboard-runner
 
-**s75, helper and allowlist** (estimated run: 15m). Spec §11.2; a visible terminal; git commands refuse rather than ask when run by link.
+**s82, helper and allowlist** (estimated run: 15m). Spec §11.2; a visible terminal; git commands refuse rather than ask when run by link.
 - create: helper/ and tests
 - update: git/
 
-**s76, MCP tool to queue a git action** (estimated run: 8m). Needs `mcp/index.ts`, held by warren_buffet at s48.
+**s83, MCP tool to queue a git action** (estimated run: 8m). Needs `mcp/index.ts`, held by warren_buffet at s48.
 - update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
 - deploy: mcp
 
-**s77, approve page and `git <id>` post** (estimated run: 10m). "Git ready" and "Git running" already exist from s54.
+**s84, approve page and `git <id>` post** (estimated run: 10m). "Git ready" and "Git running" already exist from s54.
 - update: src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, extension/, panel/
 
-**s78, skill, CLAUDE.md, live test of all four** (estimated run: 8m).
+**s85, skill, CLAUDE.md, live test of all four** (estimated run: 8m).
 - update: .claude/CLAUDE.md, .claude/skills/cli-workflow/SKILL.md
+
+**s86, sandbox sf checks and `sb client` answers by link** (estimated run: 12m). Read-only sf checks on a sandbox run as no-click links; the answers `sb client` setup asks for are sent by link. Production sf commands stay in Alex's terminal, never by link.
+- update: helper/, sb/, supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs
+- deploy: mcp
+
+**s87, panel snapshot in Supabase** (database step; estimated run: 12m). After git by link: the panel writes a snapshot of its tiles to Supabase, and an Alfred tool reads it.
+- create: supabase/migrations/_pending_switchboard2-h8r_panel_snapshot.sql, supabase/tests/switchboard2-h8r/7_verify_panel_snapshot.sql
+- update: panel/, supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts
+- deploy: mcp
 
 ### Part 4, Salesforce reads
 
-**s79, schema and purge** (database step; estimated run: 10m). Encrypted result storage, `sf_reads_enabled`, a 10-minute purge.
+**s88, schema and purge** (database step; estimated run: 10m). Encrypted result storage, `sf_reads_enabled`, a 10-minute purge.
 - create: supabase/migrations/_pending_switchboard2-h8r_sf_reads.sql, supabase/tests/switchboard2-h8r/6_verify_sf_reads.sql
 - SQL: switchboard_actions, switchboard_runs, switchboard_settings
 
-**s80, helper reads** (estimated run: 15m). GET only, the org check, level checks, `soql-parser-js`.
+**s89, helper reads** (estimated run: 15m). GET only, the org check, level checks, `soql-parser-js`.
 - create: salesforce/helper/ and tests
 
-**s81, runner: results** (estimated run: 10m).
+**s90, runner: results** (estimated run: 10m).
 - update: supabase/functions/switchboard-runner/index.ts, supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs
 - deploy: switchboard-runner
 
-**s82, `sf_read` tool** (estimated run: 8m).
+**s91, `sf_read` tool** (estimated run: 8m).
 - update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
 - deploy: mcp
 
-**s83, live on the client sandbox** (estimated run: 6m). Results checked by Alex, not pasted.
+**s92, live on the client sandbox** (estimated run: 6m). Results checked by Alex, not pasted.
 - update: fixes only
 
 ### Part 5, Salesforce actions by link
 
-**s84, `sf_deploy` and `sf_test` actions** (estimated run: 12m). A migration if the allowlist needs one; helper; runner.
+**s93, `sf_deploy` and `sf_test` actions** (estimated run: 12m). A migration if the allowlist needs one; helper; runner.
 - update: helper/, supabase/functions/switchboard-runner/index.ts, supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs
 - deploy: switchboard-runner
 
-**s85, click tier in the wrapper** (estimated run: 10m). Lifts s66's refusal.
+**s94, click tier in the wrapper** (estimated run: 10m). Lifts s66's refusal.
 - update: salesforce/deploy.mjs and its test
 
-**s86, approve page warnings and skill** (estimated run: 8m).
+**s95, approve page warnings and skill** (estimated run: 8m).
 - update: src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, .claude/skills/cli-workflow/SKILL.md
 
-**s87, live test** (estimated run: 6m). No-click and click deploys on a sandbox; production refused.
+**s96, live test** (estimated run: 6m). No-click and click deploys on a sandbox; production refused.
 - update: fixes only
 
 ### Database items (s50 onward)
@@ -547,12 +580,14 @@ Each is claimed at its step, never before, and released by Checkpoint.
 | Step | Items |
 |---|---|
 | s52 | `db:fn:switchboard_issue_link`, `db:table:switchboard_actions`, `db:deploy` |
-| s73 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_issue_link` |
-| s74 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` |
-| s76 | `db:table:switchboard_actions`, `db:deploy` |
-| s79 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:switchboard_settings` |
-| s81, s82 | `db:table:switchboard_runs`, `db:deploy` |
-| s84 | `db:table:switchboard_actions`, `db:deploy` |
+| s80 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_issue_link` |
+| s81 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` |
+| s83 | `db:table:switchboard_actions`, `db:deploy` |
+| s86 | `db:table:switchboard_actions`, `db:deploy` |
+| s87 | the snapshot table (named at s87), `db:deploy` |
+| s88 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:switchboard_settings` |
+| s90, s91 | `db:table:switchboard_runs`, `db:deploy` |
+| s93 | `db:table:switchboard_actions`, `db:deploy` |
 
 `switchboard-panel` needs no deploy in Part 1: the chat decides tan, so its `waiting_on_alex` just goes unread. It is removed the next time that function is deployed.
 
@@ -582,28 +617,28 @@ Alex gives at s70: whether `github.com/alexanderjameswarren/teamimpact` is the c
 | 2 | SQL queue, read-only queries (2.2-2.12, 2.3b, 2.4b, 2.7c to 2.7g, 2.9b and 2.9c, after the 2.1 plan) | 20 |
 | — | Plans, s48 and s49 | 2 |
 | — | Tile fixes (s50-s55) | 6 |
-| 3 | The move (s56-s72) | 17 |
-| 5 | Git by link (s73-s78) | 6 |
-| 4 | Salesforce reads (s79-s83) | 5 |
-| 5 | Salesforce actions by link (s84-s87) | 4 |
+| 3 | The move (s56-s79) | 24 |
+| 5 | Git by link (s80-s87) | 8 |
+| 4 | Salesforce reads (s88-s92) | 5 |
+| 5 | Salesforce actions by link (s93-s96) | 4 |
 | 6 | Spec files, archiving | 2 |
 | 7 | npm start per tile | 2 |
 | 8 | Remote devices | 4 |
-| | **total** | **86** |
+| | **total** | **95** |
 
-Run time from s49 to s87, by the estimates in the blocks:
+Run time from s49 to s96, by the estimates in the blocks:
 
 | part | steps | run time |
 |---|---|---|
 | s49 | 1 | 4m (the plan's figure) |
 | Tile fixes | 6 | 51m |
-| The move | 17 | 3h19m |
-| Git by link | 6 | 1h03m |
+| The move | 24 | 3h19m planned for s56-s72; s73-s79 not re-estimated |
+| Git by link | 8 | 1h27m |
 | Salesforce reads | 5 | 49m |
 | Salesforce actions | 4 | 36m |
-| **total** | **39** | **6h42m** |
+| **total** | **48** | **7h06m planned, plus the move's added steps** |
 
-s48 planned 35 steps and about 6h09m. Part 1 grew from 2 steps and 18m to 6 steps and 51m, so everything after it moved up by 4. Client work starts at s70.
+s48 planned 35 steps and about 6h09m. Part 1 grew from 2 steps and 18m to 6 steps and 51m, so everything after it moved up by 4. At s77 the plan was renumbered: the move ran to s79 (sub-steps in the switchboard repo, the cutover s76-s79), and git by link starts at s80 with two new steps (s86, s87). The first client gate passed on 2026-11-04.
 
 ## Decisions
 

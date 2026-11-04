@@ -9,18 +9,17 @@ deleting branches, and no `checkout` or `restore` of files.
 Read-only git is fine and wanted: `status`, `diff`, `log`, `show`, `blame`,
 `grep`.
 
-**`gitcom`, `gitsync` and `gitpush` are Alex's too.** They run from
-`scripts/git-commit-claimed.mjs`, `scripts/git-sync.mjs` and
-`scripts/git-push-worktrees.mjs`, and they do commit, merge and push — which is
-exactly why you never run them. Ask him to. Reading them is fine.
+**`gitcom`, `gitsync` and `gitpush` are Alex's too.** They run from the
+installed Switchboard, `%LOCALAPPDATA%\Switchboard\git\`, and they do commit,
+merge and push — which is exactly why you never run them. Ask him to. Reading
+them is fine.
 
-**`scripts/` and `.claude/hooks/` hold shims for Switchboard's files.** Since s61,
-`claims.mjs`, `clip.mjs`, the four git commands, `overwatch-post.mjs`, every hook,
-and the libraries alfred-v5 still imports from `scripts/lib/` are shims that run the
-installed Switchboard in `%LOCALAPPDATA%\Switchboard`. The code lives in the
-`C:\Users\Alex\projects\switchboard` repo. A change to claims, clip, the guards or the
-git commands is made there, not here. If Switchboard isn't installed, the guards
-block everything and say so. The rules in this file are unchanged.
+**Claims, clip, the guards and the git commands are Switchboard's.** They run from
+the installed copy in `%LOCALAPPDATA%\Switchboard`, as `claims.cmd`, `clip.cmd`
+and the user-level hooks. The code lives in the `C:\Users\Alex\projects\switchboard`
+repo, and a change to any of them is made there, not here. The hook entries move
+from this repo's `.claude/settings.local.json` to the user level at s78. If
+Switchboard isn't installed, the guards block everything and say so.
 
 When the work is done, leave every change in the working tree, uncommitted, and
 tell Alex exactly which files you changed. Committing and pushing are his
@@ -57,7 +56,7 @@ Several CLI threads work on this repo at once, each in its own git worktree,
 sharing one claims file. Follow this whether or not the prompt mentions it.
 
 **Owner.** Your name is the worktree folder name, or `main` in the main checkout.
-`node scripts/claims.mjs status` says which you are.
+`claims.cmd status` says which you are.
 
 **Step 0, before a worktree exists.** Alex runs `gitnewtree <project-code>`, which
 refuses until main is committed and pushed, then branches from `origin/main`,
@@ -74,8 +73,8 @@ in a run tag are always hyphens.
 **Project codes and which window you are in.** A worktree's project code is its
 folder name, and that is also its claims owner. The main checkout's code is
 recorded from the first prompt that carries a run tag, and cleared by `gitpush`
-Finish on main. Alex can also set or clear it directly with `claims.mjs bind
-<code>` and `claims.mjs unbind`, which touch no claim and refuse inside a
+Finish on main. Alex can also set or clear it directly with `claims.cmd bind
+<code>` and `claims.cmd unbind`, which touch no claim and refuse inside a
 worktree. A run tag's project code is everything before the step segment:
 `claims-wq7-s7d-u3rb` → `claims-wq7`.
 
@@ -91,12 +90,12 @@ than for you to work around it.
 - every database item it will need — `db:table:<name>`, `db:fn:<name>`,
   `db:deploy` — **each with the step that needs it.**
 
-Run `node scripts/claims.mjs check` on all of it. Report every conflict and
+Run `claims.cmd check` on all of it. Report every conflict and
 every warning. **Change nothing, claim nothing, and stop.** A plan that has
 already edited a file is not a plan.
 
 **Step 2, claim.** After Alex confirms, claim **all the files and folders in one
-command** — one `claims.mjs claim a b c`, not one per file. It re-checks inside
+command** — one `claims.cmd claim a b c`, not one per file. It re-checks inside
 the lock, so a file another thread took since you planned is caught here rather
 than halfway through. Then `reserve` each database item with its step. If the
 claim fails, stop and report; do not start on the part that did claim.
@@ -113,7 +112,7 @@ and ask.
 before. New SQL is written under `_pending_<owner>_<purpose>.sql` until step 5 —
 see the SQL section below for why.
 
-1. `claims.mjs check` the `db:table:*`, `db:fn:*` and `db:deploy` you need.
+1. `claims.cmd check` the `db:table:*`, `db:fn:*` and `db:deploy` you need.
 2. Stop and ask Alex to run `gitsync` in this worktree, so it has everything
    already live.
 3. **Drift check.** After the sync, look at what came in. If any migration or
@@ -135,7 +134,7 @@ see the SQL section below for why.
    main, so half-finished front-end work is not pushed with them. **Checkpoint
    releases the `db:` claims itself**, by default, all of them — so there is
    normally nothing for you to do here.
-9. Check with `claims.mjs status` that they went. If one is still held, release
+9. Check with `claims.cmd status` that they went. If one is still held, release
    it — `db:` claims are the one thing you do release. Never carry one into the
    next step: one held across steps blocked another thread's deploy for thirteen
    hours, and `status` now warns about any held for more than an hour.
@@ -211,7 +210,7 @@ for the whole job.
 
 **Never carry a `db:` claim into the next step.** Re-claim it there instead. One
 was held for thirteen hours across several steps and blocked another thread's
-deploy for all of them, and nothing said so — `claims.mjs status` now flags any
+deploy for all of them, and nothing said so — `claims.cmd status` now flags any
 `db:` claim older than an hour.
 
 So: `release` is for Alex, for cleaning up, and for a database claim Checkpoint
@@ -228,7 +227,7 @@ When a thread is refused a file you hold, it is recorded, and the `block-notice`
 hook tells you at the start of your next turn. **Do not change your plan.**
 
 **The one case a thread may release a file claim.** The notice says another
-thread is waiting on that file, and `node scripts/claims.mjs yield <file>`
+thread is waiting on that file, and `claims.cmd yield <file>`
 accepts it. Yield checks the conditions itself: the file is unchanged from main
 (nothing committed, staged, uncommitted or untracked) and claimed on its own, not
 through a folder. Alex has approved yield for exactly this case. It is the only
@@ -280,7 +279,7 @@ not a path to take.**
 
 **Every tagged prompt carries a "Scope of this step" block** (create, update,
 delete, deploy, SQL) and an `Estimated run:` line. The prompt hook records it in
-`.clip/scope.json`, and `.claude/hooks/plan-guard.mjs` refuses, beside the claims
+`.clip/scope.json`, and Switchboard's plan guard refuses, beside the claims
 guard, an Edit or Write to a file not under create or update, a delete not under
 delete, a deploy not under deploy, and SQL naming a table not under SQL. The
 project's own progress file is implied. A tagged prompt with no block lets
@@ -298,14 +297,14 @@ the test file in its block. In a Salesforce repo that includes every `*Test.cls`
 it will create or change, since the deploy wrapper runs only declared tests.
 
 **Every report ends with two sections, then the timing table:**
-1. **Scope vs changes.** Run `node scripts/clip.mjs --scope` and paste its
+1. **Scope vs changes.** Run `clip.cmd --scope` and paste its
    output: anything changed but not declared, and anything declared but not
    touched. Uncommitted work from earlier steps is listed on its own line.
 2. **Next step's scope.** The next step's block, copied from the progress file.
    If this step changed the plan, update that block in the progress file first
    and say so.
 
-`clip.mjs` warns when a pushed report has neither.
+`clip.cmd` warns when a pushed report has neither.
 
 ## Salesforce sandboxes and client repos
 
@@ -338,7 +337,7 @@ and this file disagree, this file wins.
 
 1. A tool edit shows Alex the exact before and after. A shell write shows him a
    command, and he has to reconstruct what it did.
-2. The claims guard (`.claude/hooks/claims-guard.mjs`) is what stops two CLI
+2. The claims guard (Switchboard's `claims-guard.mjs` hook) is what stops two CLI
    threads editing the same file. On 2026-09-28, asked to add one comment to
    `src/utils/recurrence.js`, a session did it with
    `{ printf ...; cat file; } > /tmp/x && mv /tmp/x file` and the guard allowed
@@ -470,12 +469,12 @@ correction), your closing message is pushed to Alfred first.
 
 **How.** Compose your complete closing message, everything you are about
 to say to Alex, and write it to .clip/last-report.md. Push that file with
-clip.mjs. Then print exactly that same text as your closing message. The
+clip.cmd. Then print exactly that same text as your closing message. The
 pushed text and the printed text must be identical: do not push a summary
 and then say more, and do not add anything after the push. If you realize
 you need to say more, write a new message, push it, and print it.
 
-Writing .clip/last-report.md and pushing it with clip.mjs is always allowed, even when a prompt says to write or change no files. It is how the report reaches Alex, not a change to the project.
+Writing .clip/last-report.md and pushing it with clip.cmd is always allowed, even when a prompt says to write or change no files. It is how the report reaches Alex, not a change to the project.
 
 **Titles** name the task and what this particular message is, for
 example "Clipboard Step 10: migration written, awaiting run", then
@@ -494,7 +493,7 @@ tool transcripts.
 **If the push fails,** say so in one line at the end of the printed
 message, naming the error, and carry on. Never hide a failed push.
 
-`clip.mjs` reads `CLIPBOARD_URL` and `CLIPBOARD_SECRET` from the environment,
+`clip.cmd` reads `CLIPBOARD_URL` and `CLIPBOARD_SECRET` from the environment,
 falling back to the Windows user registry when the shell predates `setx`. It
 never prints the secret, and neither should you.
 
