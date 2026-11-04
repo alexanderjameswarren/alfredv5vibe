@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-04 12:30, through migration 203 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-04 14:14, through migration 204 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -2108,6 +2108,21 @@ ALTER FUNCTION "public"."create_portfolio_plan"("p_portfolio_id" "uuid", "p_theo
 COMMENT ON FUNCTION "public"."create_portfolio_plan"("p_portfolio_id" "uuid", "p_theory" "text", "p_notes_for_next_review" "text", "p_review_by" "date", "p_reason" "text", "p_written_by" "text", "p_lanes" "jsonb") IS 'Overwatch: write a new version of the caller''s portfolio plan in one transaction: the active version goes inactive, the new one is inserted with supersedes_id, then its lanes and their slices with their given statuses. p_lanes is [{ name, position, note, slices: [{ position, group_id, phases, why, status, paused_reason }] }]. Any bad input (a group that is not the caller''s Project, duplicate positions or names, two slices in progress in a lane) refuses the whole call. Returns the new plan with lane and slice counts. Called by the tier-3 create_portfolio_plan tool.';
 
 
+
+CREATE OR REPLACE FUNCTION "public"."started_by_valid"("p" "text") RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $_$
+  select p ~ '^(alex|chat|task:[a-z0-9][a-z0-9_-]{0,99})$'
+$_$;
+
+
+ALTER FUNCTION "public"."started_by_valid"("p" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."started_by_valid"("p" "text") IS 'Shared: true when p is a started_by value: alex, chat, or task:<job> (lower case, digits, _ and -). Used by the signals and claude_notifications check constraints.';
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = "heap";
@@ -2126,10 +2141,12 @@ CREATE TABLE IF NOT EXISTS "public"."reminders" (
     "created_by" "text" DEFAULT 'app'::"text" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "started_by" "text" NOT NULL,
     CONSTRAINT "reminders_cancel_reason_check" CHECK ((("cancel_reason" IS NULL) OR ("cancel_reason" = ANY (ARRAY['manual'::"text", 'inbox_discarded'::"text", 'intent_status'::"text", 'intent_archived'::"text"])))),
     CONSTRAINT "reminders_cancel_reason_needs_cancelled" CHECK ((("cancel_reason" IS NULL) OR ("state" = 'cancelled'::"text"))),
     CONSTRAINT "reminders_created_by_check" CHECK (("created_by" = ANY (ARRAY['app'::"text", 'claude'::"text"]))),
     CONSTRAINT "reminders_one_link" CHECK (("num_nonnulls"("inbox_id", "intent_id") <= 1)),
+    CONSTRAINT "reminders_started_by_valid" CHECK ("public"."started_by_valid"("started_by")),
     CONSTRAINT "reminders_state_check" CHECK (("state" = ANY (ARRAY['scheduled'::"text", 'sent'::"text", 'cancelled'::"text", 'no_subscription'::"text"])))
 );
 
@@ -2186,6 +2203,10 @@ COMMENT ON COLUMN "public"."reminders"."created_at" IS 'Row creation.';
 
 
 COMMENT ON COLUMN "public"."reminders"."updated_at" IS 'Last change. Stamped by the reminders_touch_updated_at trigger.';
+
+
+
+COMMENT ON COLUMN "public"."reminders"."started_by" IS 'Who started it: alex, chat, or task:<job>. Filled from created_by when left out (app: alex, claude: chat). notify-dispatch copies it onto the claude_notifications row it logs for the push.';
 
 
 
@@ -6067,6 +6088,26 @@ COMMENT ON FUNCTION "public"."record_project_estimate"("p_group_id" "text", "p_k
 
 
 
+CREATE OR REPLACE FUNCTION "public"."reminders_default_started_by"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if new.started_by is null then
+    new.started_by := case when new.created_by = 'app' then 'alex' else 'chat' end;
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."reminders_default_started_by"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."reminders_default_started_by"() IS 'Alfred: fills reminders.started_by from created_by (app: alex, claude: chat) when an insert leaves it out.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."reminders_follow_intent_archive"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -7326,21 +7367,6 @@ ALTER FUNCTION "public"."stamp_songs_from_measure_statement"() OWNER TO "postgre
 
 
 COMMENT ON FUNCTION "public"."stamp_songs_from_measure_statement"() IS 'SAM analyzer (M6). Statement-level trigger function on sam_song_measures INSERT and DELETE: sets measures_edited_at = now() once for each song the statement touched, in the same transaction as the write, so no writer can change measures without invalidating stored scores. UPDATE is covered separately by the per-row bump_parent_edited_at trigger.';
-
-
-
-CREATE OR REPLACE FUNCTION "public"."started_by_valid"("p" "text") RETURNS boolean
-    LANGUAGE "sql" IMMUTABLE
-    SET "search_path" TO 'public', 'pg_temp'
-    AS $_$
-  select p ~ '^(alex|chat|task:[a-z0-9][a-z0-9_-]{0,99})$'
-$_$;
-
-
-ALTER FUNCTION "public"."started_by_valid"("p" "text") OWNER TO "postgres";
-
-
-COMMENT ON FUNCTION "public"."started_by_valid"("p" "text") IS 'Shared: true when p is a started_by value: alex, chat, or task:<job> (lower case, digits, _ and -). Used by the signals and claude_notifications check constraints.';
 
 
 
@@ -20581,6 +20607,10 @@ CREATE OR REPLACE TRIGGER "project_plans_check_group" BEFORE INSERT OR UPDATE ON
 
 
 
+CREATE OR REPLACE TRIGGER "reminders_default_started_by" BEFORE INSERT ON "public"."reminders" FOR EACH ROW EXECUTE FUNCTION "public"."reminders_default_started_by"();
+
+
+
 CREATE OR REPLACE TRIGGER "reminders_follow_intent_archive" AFTER UPDATE OF "archived" ON "public"."intents" FOR EACH ROW WHEN (("old"."archived" IS DISTINCT FROM "new"."archived")) EXECUTE FUNCTION "public"."reminders_follow_intent_archive"();
 
 
@@ -23497,6 +23527,12 @@ GRANT ALL ON FUNCTION "public"."create_portfolio_plan"("p_portfolio_id" "uuid", 
 
 
 
+REVOKE ALL ON FUNCTION "public"."started_by_valid"("p" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."started_by_valid"("p" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."started_by_valid"("p" "text") TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."reminders" TO "authenticated";
 GRANT ALL ON TABLE "public"."reminders" TO "service_role";
 
@@ -23999,6 +24035,12 @@ GRANT ALL ON FUNCTION "public"."record_project_estimate"("p_group_id" "text", "p
 
 
 
+REVOKE ALL ON FUNCTION "public"."reminders_default_started_by"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."reminders_default_started_by"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."reminders_default_started_by"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."reminders_follow_intent_archive"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."reminders_follow_intent_archive"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."reminders_follow_intent_archive"() TO "service_role";
@@ -24121,12 +24163,6 @@ GRANT ALL ON FUNCTION "public"."stamp_song_edited"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."stamp_songs_from_measure_statement"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."stamp_songs_from_measure_statement"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."stamp_songs_from_measure_statement"() TO "service_role";
-
-
-
-REVOKE ALL ON FUNCTION "public"."started_by_valid"("p" "text") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."started_by_valid"("p" "text") TO "authenticated";
-GRANT ALL ON FUNCTION "public"."started_by_valid"("p" "text") TO "service_role";
 
 
 
