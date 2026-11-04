@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-04 14:14, through migration 204 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-04 14:44, through migration 205 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -6366,6 +6366,64 @@ $_$;
 
 
 ALTER FUNCTION "public"."resolve_record"("p_id" "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."resolve_signal"("p_app" "text", "p_subject_key" "text", "p_started_by" "text", "p_user_id" "uuid" DEFAULT NULL::"uuid") RETURNS "jsonb"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $_$
+declare
+  v_user     uuid;
+  v_subjects text[];
+  v_dropped  int;
+begin
+  -- The same rule as raise_signal: only the service role names the user.
+  if current_user = 'service_role' then
+    v_user := p_user_id;
+    if v_user is null then
+      raise exception 'resolve_signal: p_user_id is required under the service role.' using errcode = '22023';
+    end if;
+  else
+    v_user := auth.uid();
+    if v_user is null then
+      raise exception 'resolve_signal: not authenticated.';
+    end if;
+    if p_user_id is not null and p_user_id <> v_user then
+      raise exception 'resolve_signal: p_user_id is for the service role only.' using errcode = '22023';
+    end if;
+  end if;
+  if p_subject_key is null or btrim(p_subject_key) !~ '^[a-z0-9][a-z0-9:_.-]{0,199}$' then
+    raise exception 'resolve_signal: subject_key must be a subject key or a prefix of one, e.g. wb-sync:failure.'
+      using errcode = '22023';
+  end if;
+
+  -- Subjects with anything since their last resolved: those are the ones to reset. Already-resolved ones are left.
+  select coalesce(array_agg(distinct sg.subject_key), '{}') into v_subjects
+    from signals sg
+   where sg.user_id = v_user and sg.app = p_app and sg.state <> 'resolved'
+     and (sg.subject_key = btrim(p_subject_key) or starts_with(sg.subject_key, btrim(p_subject_key) || ':'))
+     and sg.created_at > coalesce((select max(rs.created_at) from signals rs
+                                    where rs.user_id = v_user and rs.subject_key = sg.subject_key
+                                      and rs.state = 'resolved'), '-infinity'::timestamptz);
+
+  update signals set state = 'dropped', reason = 'resolved before it was delivered', decided_at = now()
+   where user_id = v_user and state = 'queued' and subject_key = any (v_subjects);
+  get diagnostics v_dropped = row_count;
+
+  insert into signals (user_id, app, job, severity, subject_key, title, started_by, state)
+  select v_user, p_app, 'resolve_signal', 'low', k, 'Resolved', btrim(p_started_by), 'resolved'
+    from unnest(v_subjects) k;
+
+  return jsonb_build_object('resolved', to_jsonb(v_subjects), 'dropped', v_dropped);
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."resolve_signal"("p_app" "text", "p_subject_key" "text", "p_started_by" "text", "p_user_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."resolve_signal"("p_app" "text", "p_subject_key" "text", "p_started_by" "text", "p_user_id" "uuid") IS 'Shared: mark a subject healthy again. p_subject_key is a subject or a prefix of subjects (before a ":"). Every matching subject with signals since its last resolved gets a resolved row, which resets its escalation count, and its queued signals are dropped. Returns {resolved: [subject keys], dropped: n}. p_user_id is required under the service role (wb-sync) and refused for anyone else. Called by the resolve_signal tool.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."sam_create_practice_plan"("p_plan" "jsonb") RETURNS "uuid"
@@ -24067,6 +24125,12 @@ GRANT ALL ON FUNCTION "public"."replace_sam_song_scores"("p_song_id" "uuid", "p_
 REVOKE ALL ON FUNCTION "public"."resolve_record"("p_id" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."resolve_record"("p_id" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."resolve_record"("p_id" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."resolve_signal"("p_app" "text", "p_subject_key" "text", "p_started_by" "text", "p_user_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."resolve_signal"("p_app" "text", "p_subject_key" "text", "p_started_by" "text", "p_user_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."resolve_signal"("p_app" "text", "p_subject_key" "text", "p_started_by" "text", "p_user_id" "uuid") TO "service_role";
 
 
 

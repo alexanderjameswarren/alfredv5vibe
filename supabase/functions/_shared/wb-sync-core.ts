@@ -316,7 +316,7 @@ export function pendingRowsToDelete(
 }
 
 // ---------------------------------------------------------------------------
-// Inbox alerts (Step 4)
+// Failure alerts (Step 4), raised as signals since notification routing step 7
 // ---------------------------------------------------------------------------
 
 /** Header that turns a run into a simulated blocking error. Honoured only after the secret gate. */
@@ -353,15 +353,25 @@ export interface AlertInput {
 
 export interface Alert {
   key: string;
+  /** What the problem is about, stable between runs whatever the message says; the signal's subject comes from it. */
+  subject: string;
   title: string;
   text: string;
   failureKind: string | null;
+}
+
+/** Lower case, letters and digits joined by hyphens: safe inside a subject key. */
+export function slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "unknown";
 }
 
 /** One plain-language line, then what SimpleFIN or the sync actually said. */
 export function alertFor(input: AlertInput, institutions: string[], runId: string, runDate: string): Alert {
   const said = stripUrls(input.message).trim();
   let title: string;
+  // A failed run is one problem per failure kind; a SimpleFIN error is one per bank, and only an unnamed one
+  // falls back to the message's hash. So a reworded message about the same thing still repeats the same subject.
+  let subject: string;
   if (input.failureKind === null) {
     const lower = said.toLowerCase();
     const inst = institutions
@@ -371,6 +381,7 @@ export function alertFor(input: AlertInput, institutions: string[], runId: strin
     title = inst
       ? `${inst.trim()} connection needs attention in SimpleFIN`
       : "A bank connection needs attention in SimpleFIN";
+    subject = inst ? `bank:${slug(inst)}` : `msg:${errorKey(input.message).replace(/^wb-sync:/, "")}`;
   } else if (input.failureKind === "auth") {
     title = "SimpleFIN refused the money sync's access — the access URL may need renewing";
   } else if (input.failureKind === "config") {
@@ -381,9 +392,10 @@ export function alertFor(input: AlertInput, institutions: string[], runId: strin
   const source = input.failureKind === null ? "SimpleFIN said" : "The sync said";
   const text =
     `${title}\n\n${source}: "${said}"\n\n` +
-    `wb-sync run ${runId} on ${runDate}. This item stays the only alert for this problem while it is open; ` +
+    `wb-sync run ${runId} on ${runDate}. Repeats of this problem join this item while it is open; ` +
     `archive it once the connection is fixed.`;
-  return { key: errorKey(input.message), title, text, failureKind: input.failureKind };
+  if (input.failureKind !== null) subject = `kind:${slug(input.failureKind)}`;
+  return { key: errorKey(input.message), subject: subject!, title, text, failureKind: input.failureKind };
 }
 
 // ── Phase 2 processing (docs/technical-spec-warren_buffet_p2-m4t.md §5) ──────
@@ -460,13 +472,42 @@ export function detectResult(result: Obj | null, error: string | null): DetectRe
 }
 
 /** Alerts to create: one per distinct key, none whose key already has an open item. */
-export function planAlerts(alerts: Alert[], openKeys: Set<string>): Alert[] {
-  const seen = new Set(openKeys);
-  const out: Alert[] = [];
+// ── Signals (notification routing, docs/technical-spec-notification_routing-d7v.md §8) ──────
+
+/** Every failure subject sits under this prefix, so one resolve_signal after an ok run resets them all. */
+export const FAILURE_SUBJECT = "wb-sync:failure";
+export const STARTED_BY = "task:wb-sync";
+
+/** wb-sync:failure:<alert subject>: kind:<kind>, bank:<bank> or msg:<hash>. */
+export function failureSubject(alert: Pick<Alert, "subject">): string {
+  return `${FAILURE_SUBJECT}:${alert.subject}`;
+}
+
+/**
+ * raise_signal parameters, one per distinct problem in this run. Raised every time it happens: the dispatcher
+ * holds the first and merges repeats. Severity low, so the delivery rules' escalation turns the second in a row
+ * into an inbox item.
+ */
+export function signalParams(alerts: Alert[], userId: string, runId: string, runDate: string) {
+  const seen = new Set<string>();
+  const out = [];
   for (const a of alerts) {
-    if (seen.has(a.key)) continue;
-    seen.add(a.key);
-    out.push(a);
+    const subject = failureSubject(a);
+    if (seen.has(subject)) continue;
+    seen.add(subject);
+    out.push({
+      p_app: APP,
+      p_job: JOB,
+      p_severity: "low",
+      p_subject_key: subject,
+      p_title: a.title.slice(0, 200),
+      p_started_by: STARTED_BY,
+      p_body: a.text,
+      p_link: null,
+      p_source_ref: `wb-sync:${runId}:${subject}`,
+      p_details: { run_id: runId, run_date: runDate, error_key: a.key, failure_kind: a.failureKind ?? "simplefin_errors" },
+      p_user_id: userId,
+    });
   }
   return out;
 }

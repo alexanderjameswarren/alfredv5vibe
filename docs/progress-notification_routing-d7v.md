@@ -257,7 +257,84 @@ Scope of this step (write and test; numbering, queuing and deploys follow as 6b)
 - SQL: reminders, claude_notifications
 Estimated run: 45m
 
-### 7. wb-sync raises signals (45m)
+**Step 6 verified live (2026-11-04):** step 6 is checkpointed. notify-dispatch v17 logged a test
+reminder (job reminder, started_by chat) and a step timer (job step_timer, started_by alex).
+
+### 7. wb-sync raises signals, resolve_signal, short links — WRITTEN 2026-11-04 (`s7-m3qe`)
+- **`_pending_notification_routing-d7v_resolve_signal.sql`:** `resolve_signal(p_app, p_subject_key, p_started_by, p_user_id)`.
+  - p_subject_key is a subject or a prefix of subjects (before a `:`).
+  - Each matching subject with signals since its last resolved gets a `resolved` row, and its queued signals are dropped.
+  - The service-role rule is the same as raise_signal's.
+- **resolve_signal tool:** in signals.ts and registered in mcp/index.ts (194 tools).
+- **wb-sync:**
+  - It no longer writes inbox rows or checks open items.
+  - Each distinct blocking error raises a signal: subject `wb-sync:failure:<hash>`, severity low (held first; the seeded escalation makes the second in a row an inbox item), started_by `task:wb-sync`, source_ref `wb-sync:<run>:<subject>`.
+  - A fully ok, non-simulated run calls `resolve_signal(warren_buffet, wb-sync:failure)`. A partial run doesn't resolve, because a connection still needs attention.
+  - `planAlerts` is gone, replaced by `signalParams` in wb-sync-core.
+- **Short links:** notify-dispatch's tap target and log link are now `/<id>`: the execution for a step timer; the intention, else the inbox item, for a reminder.
+  - The app's record route takes any UUID or app id, and recordRoutes opens an inbox row and an execution at their own screens.
+  - Real ids all match the route.
+  - An id that doesn't match keeps its page path. No bug to log.
+- **Test** `4_resolve_signal_verify.sql`: two failures in a row escalate to inbox; a resolve drops the queued one and resets the count.
+- **Tests:** signals and mcp 58 of 58, wb-sync-core 44 of 44. `deno check --no-lock` is clean for wb-sync and notify-dispatch.
+
+### 7b. Escalation check, number and queue 205 — DONE 2026-11-04 (`s7b-w5ra`)
+Alex committed step 7 (2ec2bff) and ran gitsync: only 1771236 came in, so there is no drift.
+- **Check:** the seeded rule matches by prefix: dispatch_signals uses `starts_with(subject, key || ':')`. But the
+  step 7 hash was not stable. It came from the raw message, with only case, spacing and digits normalised. A db
+  failure's error text, a request id with letters in it, or a reworded message about the same bank would each give
+  a new subject, so they would never escalate.
+- **Fix (wb-sync-core.ts only; index.ts needed no change):** each alert now carries a stable `subject`.
+  - A failed run: `kind:<failure kind>`.
+  - A SimpleFIN error that names a bank: `bank:<bank slug>`.
+  - Otherwise: `msg:<hash>`.
+  The signal's subject is `wb-sync:failure:<subject>`, still under the prefix, so no rule change was needed. Two
+  errors about one bank in one run raise one signal. New tests: 46 of 46. `deno check --no-lock` on wb-sync is clean.
+  Test 4 gains a check that two different messages for the same failure escalate to inbox.
+- 205_resolve_signal.sql was written from the pending file (its code is identical; only comments changed), and the
+  pending file is deleted.
+- Claimed 205, db:table:signals, db:fn:resolve_signal and db:deploy.
+- Queued 205: action 62f43512-d86c-4168-ad7f-f63a95ce376a.
+
+Order from here: 205 runs → test 4 with `--test` → deploy mcp → deploy wb-sync and notify-dispatch (re-check
+verify_jwt) → check_platform_conformance → Checkpoint.
+**205 ran** through the queue: run 56b6082c-9c4c-4ac7-b737-df131012f7a9, CONFORMANT.
+
+### 7c. Queue test 4 — DONE 2026-11-04 (`s7c-k9tv`)
+4_resolve_signal_verify.sql queued with `--test`: action 204f336b-629d-4dfb-b853-3addc3907bbd.
+**Test 4 ran:** run 0a87030c-d58a-416c-933d-87de540e556c, ok true, 15 of 15.
+
+### 7d/7e. Deploy — DONE 2026-11-04 (`s7d-r6pm` blocked, `s7e-t2hw`). STEP 7 DONE.
+In 7d, the plan guard refused a single deploy loop: it read the function name as `$f`. Nothing
+deployed then; the tests (104 of 104) and deno checks passed. In 7e the deploys ran one command
+each:
+- mcp **v196**
+- wb-sync **v15**
+- notify-dispatch **v18**
+
+All three have verify_jwt false. check_platform_conformance came back CONFORMANT (103 tables).
+wb-sync now raises signals and resolves them on an ok run, and notify-dispatch links are /<id>.
+Waiting on Alex: Checkpoint, which releases db:table:signals, db:fn:resolve_signal and db:deploy.
+
+Original 7b plan (30m):
+In this order:
+1. gitsync and drift check on signals.
+2. Claim db:table:signals, db:fn:resolve_signal and db:deploy.
+3. Number the migration and queue it.
+4. Run test 4 with `--test`.
+5. Deploy mcp, wb-sync and notify-dispatch. wb-sync needs resolve_signal live first. Re-check verify_jwt is false on wb-sync and notify-dispatch after deploying.
+6. check_platform_conformance, then Checkpoint.
+
+Scope of this step:
+- create: supabase/migrations/<next>_resolve_signal.sql
+- update: docs/progress-notification_routing-d7v.md
+- delete: supabase/migrations/_pending_notification_routing-d7v_resolve_signal.sql
+- deploy: nothing
+- SQL: signals
+Estimated run: 10m
+(Queuing test 4 and the three deploys follow as their own steps, as in 6c and 6d.)
+
+Original plan for step 7 (45m):
 `raise_signal` on blocking errors, `resolve_signal` on ok; its open-item check goes. This step
 also writes `resolve_signal` (function and tool), moved here from step 3.
 
@@ -281,6 +358,14 @@ Files: docs/overwatch-nightly-task-prompt.md, docs/overwatch-weekly-task-prompt.
 docs/arnold-morning-review-task-prompt.md, .claude/skills/overwatch/SKILL.md,
 .claude/skills/arnold/SKILL.md.
 DB: none.
+
+Scope of this step:
+- create: nothing
+- update: docs/overwatch-nightly-task-prompt.md, docs/overwatch-weekly-task-prompt.md, docs/arnold-morning-review-task-prompt.md, .claude/skills/overwatch/SKILL.md, .claude/skills/arnold/SKILL.md, docs/progress-notification_routing-d7v.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+Estimated run: 50m
 
 ### 9. The other apps (60m)
 DJ daily and weekly, Ken seed check, SAM daily review, Drive Mix, then Money cleanup last. Alex
@@ -364,4 +449,9 @@ Files: this file. DB: none.
 | 6 | 10m | 2m 56s | reminders started_by, notify-dispatch logging |
 | 6b | 10m | 1m 28s | cap check, numbered and queued 204 |
 | 6c | 5m | 7s | queued test 3 |
-| 6d | 10m | see report | deploy notify-dispatch and mcp, conformance |
+| 6d | 10m | 1m 22s | deploy notify-dispatch and mcp, conformance |
+| 7 | 10m | 4m 54s | resolve_signal, wb-sync signals, short links |
+| 7b | 10m | 1m 36s | stable wb-sync subjects, numbered and queued 205 |
+| 7c | 5m | 8s | queued test 4 |
+| 7d | 10m | 17s | blocked by the plan guard (deploy loop) |
+| 7e | 10m | see report | three deploys, conformance |

@@ -343,9 +343,9 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_ARNOLD_8 = ["get_claude_notification_settings", "update_claude_notification_settings"];
   // Switchboard 2.5, +2.
   const EXPECTED_ADDED_SWITCHBOARD_25 = ["get_switchboard_run", "issue_switchboard_link", "get_sql_read"];
-  // Notification routing steps 3 and 4, +5.
+  // Notification routing steps 3 and 4, +5; step 7, +1.
   const EXPECTED_ADDED_NOTIFICATION_ROUTING = ["raise_signal", "get_signals", "get_dispatch_plan", "deliver_signals",
-    "get_delivery_rules"];
+    "get_delivery_rules", "resolve_signal"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
@@ -365,10 +365,10 @@ test("the tool count is 72 after the job-search tools", () => {
   assert.ok(registered.some((r) => r.name === "get_overwatch_nightly_counts"), "get_overwatch_nightly_counts is not registered");
   // 2026-11-02, +1 for Warren Buffet Phase 4 Step 8b: Amazon and Whole Foods items. +2 for Step 8f: item tags and splits.
   // +1 for nightly counts. 2026-11-03, +1 for the Warren Buffet money chat: record_wb_subscription_review.
-  // +5 for notification routing (signals, dispatcher, delivery rules).
+  // +5 for notification routing (signals, dispatcher, delivery rules). 2026-11-04, +1: resolve_signal.
   assert.ok(registered.some((r) => r.name === "record_wb_subscription_review"), "record_wb_subscription_review is not registered");
-  assert.equal(registered.length, 193,
-    `expected 193 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 194,
+    `expected 194 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -430,8 +430,8 @@ test("Notification routing: signal tools and started_by schemas match their hand
     addSharedRead(b, read, t);
     assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
   }
-  assert.deepEqual(names, ["raise_signal", "get_signals", "get_dispatch_plan", "deliver_signals", "send_alfred_push",
-    "log_claude_notification"]);
+  assert.deepEqual(names, ["raise_signal", "resolve_signal", "get_signals", "get_dispatch_plan", "deliver_signals",
+    "send_alfred_push", "log_claude_notification"]);
   for (const name of ["send_alfred_push", "log_claude_notification"]) {
     assert.ok("started_by" in registered.find((r) => r.name === name).cfg.inputSchema, name);
   }
@@ -799,8 +799,8 @@ test("the platform tools take any app id, not a fixed list", () => {
   // Overwatch Step 5: apps(id) is the list, enforced by a foreign key.
   const src = readFileSync(join(HERE, "index.ts"), "utf-8");
   assert.equal(src.match(/^\s+app: z\.enum\(/gm), null);
-  // +1 for raise_signal (notification routing).
-  assert.equal(src.match(/^\s+app: z\.string\(\)(\.optional\(\))?\.describe\("[^"]*get_apps/gm).length, 7);
+  // +2 for raise_signal and resolve_signal (notification routing).
+  assert.equal(src.match(/^\s+app: z\.string\(\)(\.optional\(\))?\.describe\("[^"]*get_apps/gm).length, 8);
 });
 
 test("create_job_application stays UNGATED", () => {

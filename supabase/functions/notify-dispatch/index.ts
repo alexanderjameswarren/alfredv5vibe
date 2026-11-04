@@ -19,6 +19,8 @@ import {
   executionPath,
   inboxDetailPath,
   intentionDetailPath,
+  isRecordId,
+  recordPath,
   viewToPath,
 } from "../../../src/viewPaths.js";
 
@@ -182,10 +184,19 @@ function sendDetail(endpoints: { ok: boolean; removed?: boolean }[], extra: Reco
   };
 }
 
+// Every Alfred link is /<id>: the app's record route opens any UUID or app id at its own screen. An id that
+// route cannot read keeps its page path, so a tap never lands on the record-not-found page.
+const shortLink = (id: string, pagePath: (id: string) => string) => (isRecordId(id) ? recordPath(id) : pagePath(id));
+
+/** Step tap target: the execution. */
+export function stepPath(executionId: string): string {
+  return shortLink(executionId, executionPath);
+}
+
 /** Tap target: the intention, else the inbox item, else the inbox list. */
-function reminderPath(r: ReminderRow): string {
-  if (r.intent_id) return intentionDetailPath(r.intent_id);
-  if (r.inbox_id) return inboxDetailPath(r.inbox_id);
+export function reminderPath(r: Pick<ReminderRow, "intent_id" | "inbox_id">): string {
+  if (r.intent_id) return shortLink(r.intent_id, intentionDetailPath);
+  if (r.inbox_id) return shortLink(r.inbox_id, inboxDetailPath);
   return viewToPath("inbox");
 }
 
@@ -383,7 +394,7 @@ Deno.serve(async (req) => {
     if (subs.length === 0) {
       logs.push(logRow({
         user_id: step.user_id, job: "step_timer", title: "Alfred", body: step.text,
-        link: executionPath(step.execution_id), dedupe_key: `step:${step.id}:${step.due_at}`,
+        link: stepPath(step.execution_id), dedupe_key: `step:${step.id}:${step.due_at}`,
         started_by: "alex", status: NO_SUBSCRIPTION,
         detail: { step_id: step.id, execution_id: step.execution_id, devices: 0 },
       }));
@@ -419,7 +430,7 @@ Deno.serve(async (req) => {
 
     // A relative path, resolved by the service worker against its own origin.
     // No APP_BASE_URL secret, and no way to send a link to the wrong host.
-    const url = executionPath(step.execution_id);
+    const url = stepPath(step.execution_id);
     const payload = JSON.stringify({
       title: "Alfred",
       body: step.text,

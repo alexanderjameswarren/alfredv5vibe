@@ -415,13 +415,21 @@ Deno.serve(async (req) => {
     if (error) console.error("[wb-sync] Could not close the run.");
   };
 
-  // Alerts never fail the run: an inbox problem is logged and reported, not thrown.
+  // Alerts never fail the run: a signal problem is logged and reported, not thrown.
   const alert = async (inputs: core.AlertInput[], extraInstitutions: string[]) => {
     try {
-      return await raiseAlerts(db, owner, runId, coveredTo, inputs, extraInstitutions);
+      return await raiseSignals(db, owner, runId, coveredTo, inputs, extraInstitutions);
     } catch {
-      console.error("[wb-sync] stage=alert: could not raise the inbox alert.");
-      return { created: 0, already_open: 0, alert_failed: true };
+      console.error("[wb-sync] stage=alert: could not raise the failure signal.");
+      return { raised: 0, duplicate: 0, alert_failed: true };
+    }
+  };
+  const resolve = async () => {
+    try {
+      return await resolveFailures(db, owner);
+    } catch {
+      console.error("[wb-sync] stage=resolve: could not resolve the failure signals.");
+      return { resolved: 0, resolve_failed: true };
     }
   };
 
@@ -469,7 +477,9 @@ Deno.serve(async (req) => {
     const orgNames = ((body.accounts ?? []) as Obj[]).map((a) => ((a.org ?? {}) as Obj).name as string);
     const alerts = blockingSafe.length
       ? await alert(blockingSafe.map((message) => ({ message, failureKind: null })), orgNames)
-      : { created: 0, already_open: 0 };
+      : { raised: 0, duplicate: 0 };
+    // Only a fully ok run clears them: a partial run still has a connection that needs attention.
+    const resolved = status === "ok" && !simulate ? await resolve() : { resolved: 0 };
     console.log(
       `[wb-sync] ${status}${simulate ? " (simulated)" : ""}: accounts=${counts.accounts} snapshots=${counts.snapshots_written} ` +
         `skipped_manual=${counts.snapshots_skipped_manual} holdings=${counts.holdings} ` +
@@ -479,7 +489,7 @@ Deno.serve(async (req) => {
         `processing_errors=${processing.errors.length} ` +
         `subscriptions_detected=${detection?.created ?? 0} detection_error=${detection?.error ? "yes" : "no"} ` +
         `errors=${blocking.length} ` +
-        `alerts_created=${alerts.created} alerts_open=${alerts.already_open}`,
+        `signals_raised=${alerts.raised} signals_duplicate=${alerts.duplicate} resolved=${resolved.resolved}`,
     );
     return json({
       ok: true,
@@ -491,6 +501,7 @@ Deno.serve(async (req) => {
       detection_error: Boolean(detection?.error),
       simplefin_errors: blocking.length,
       alerts,
+      resolved,
       ...(simulate ? { simulated: true } : {}),
     });
   } catch (err) {
@@ -500,23 +511,24 @@ Deno.serve(async (req) => {
     const message = core.redact(err instanceof Error ? err.message : String(err), secrets);
     await close({ status, error_message: message, details: { failure_kind: kind } });
     const alerts = await alert([{ message, failureKind: kind }], []);
-    console.error(`[wb-sync] ${status}: failure_kind=${kind} alerts_created=${alerts.created} alerts_open=${alerts.already_open}`);
+    console.error(`[wb-sync] ${status}: failure_kind=${kind} signals_raised=${alerts.raised} signals_duplicate=${alerts.duplicate}`);
     return json({ ok: false, run_id: runId, status, failure_kind: kind, error: message, alerts }, 500);
   }
 });
 
 /**
- * One inbox item per distinct blocking error, never a second while one with the
- * same error_key is still open (not archived). Then stamps notified_at.
+ * One signal per distinct blocking error, raised every run it happens. The dispatcher decides whether it is held,
+ * becomes an inbox item or merges into an open one; wb-sync no longer checks the inbox itself. Then stamps
+ * notified_at, which records that this run reported a problem.
  */
-async function raiseAlerts(
+async function raiseSignals(
   db: SupabaseClient,
   owner: core.Owner,
   runId: string,
   runDate: string,
   inputs: core.AlertInput[],
   extraInstitutions: string[],
-): Promise<{ created: number; already_open: number }> {
+): Promise<{ raised: number; duplicate: number }> {
   const { data: instRows, error: instErr } = await db
     .from("wb_accounts")
     .select("institution")
@@ -527,53 +539,30 @@ async function raiseAlerts(
   ];
 
   const alerts = inputs.map((i) => core.alertFor(i, institutions, runId, runDate));
-  const keys = [...new Set(alerts.map((a) => a.key))];
-  const { data: openRows, error: openErr } = await db
-    .from("inbox")
-    .select("source_metadata")
-    .eq("user_id", owner.user_id)
-    .eq("source_type", "task")
-    .or("archived.is.null,archived.eq.false")
-    .in("source_metadata->>error_key", keys);
-  if (openErr) throw new Error(openErr.message);
-  const openKeys = new Set(
-    (openRows ?? []).map((r) => ((r.source_metadata ?? {}) as Obj).error_key as string).filter(Boolean),
-  );
-  const toCreate = core.planAlerts(alerts, openKeys);
-
-  if (toCreate.length) {
-    // Every field explicit, matching clip-capture: no auth.uid() under the service role.
-    const { error } = await db.from("inbox").insert(
-      toCreate.map((a) => ({
-        id: crypto.randomUUID(),
-        user_id: owner.user_id,
-        archived: false,
-        triaged_at: null,
-        captured_text: a.text,
-        source_type: "task",
-        source_metadata: {
-          task_name: "wb-sync",
-          run_date: runDate,
-          app: core.APP,
-          job: core.JOB,
-          run_id: runId,
-          error_key: a.key,
-          failure_kind: a.failureKind ?? "simplefin_errors",
-        },
-        ai_status: "not_started",
-        suggest_item: false,
-        suggest_intent: false,
-        suggest_event: false,
-        suggested_tags: [],
-        suggested_status: "active",
-      })),
-    );
+  let raised = 0;
+  let duplicate = 0;
+  // p_user_id explicit: no auth.uid() under the service role.
+  for (const params of core.signalParams(alerts, owner.user_id, runId, runDate)) {
+    const { data, error } = await db.rpc("raise_signal", params);
     if (error) throw new Error(error.message);
+    if ((data as Obj | null)?.created === true) raised++;
+    else duplicate++;
   }
 
-  const alreadyOpen = keys.filter((k) => openKeys.has(k)).length;
-  if (toCreate.length + alreadyOpen > 0) {
+  if (raised + duplicate > 0) {
     await db.from("platform_runs").update({ notified_at: new Date().toISOString() }).eq("id", runId);
   }
-  return { created: toCreate.length, already_open: alreadyOpen };
+  return { raised, duplicate };
+}
+
+/** After an ok run: every wb-sync failure subject is healthy again, so escalation starts over. */
+async function resolveFailures(db: SupabaseClient, owner: core.Owner): Promise<{ resolved: number }> {
+  const { data, error } = await db.rpc("resolve_signal", {
+    p_app: core.APP,
+    p_subject_key: core.FAILURE_SUBJECT,
+    p_started_by: core.STARTED_BY,
+    p_user_id: owner.user_id,
+  });
+  if (error) throw new Error(error.message);
+  return { resolved: (((data as Obj | null)?.resolved ?? []) as unknown[]).length };
 }
