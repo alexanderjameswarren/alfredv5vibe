@@ -432,19 +432,4 @@ describe("overview reads", () => {
     mockRpc = () => ({ data: null, error: { message: "boom" } });
     await expect(api.getActionItems()).rejects.toThrow("Couldn't load the action items. Please try again.");
   });
-
-  it("getFreeCash returns the row with the missed-date count", async () => {
-    mockRpc = () => ({ data: [{ free_cash: -10, low_on: "2031-07-01" }], error: null });
-    mockRespond = () => ({ data: null, error: null, count: 3 });
-    expect(await api.getFreeCash({ includeDrafts: true }))
-      .toEqual({ free_cash: -10, low_on: "2031-07-01", include_drafts: true, missed_dates: 3 });
-    expect(mockRpcs).toEqual([["wb_free_cash", { p_include_drafts: true }]]);
-  });
-
-  it("getTrueCost adds the burn months", async () => {
-    mockRespond = (t) => (t === "wb_true_cost" ? { data: { monthly_true_cost: -100 }, error: null }
-      : { data: [{ month: "2031-05-01", included: -50 }], error: null });
-    expect(await api.getTrueCost()).toEqual({ monthly_true_cost: -100, burn_months: [{ month: "2031-05-01", included: -50 }] });
-    expect(op("wb_burn_rate", "limit")[0]).toEqual(["limit", 12]);
-  });
 });

@@ -364,9 +364,11 @@ test("the tool count is 72 after the job-search tools", () => {
   }
   assert.ok(registered.some((r) => r.name === "get_overwatch_nightly_counts"), "get_overwatch_nightly_counts is not registered");
   // 2026-11-02, +1 for Warren Buffet Phase 4 Step 8b: Amazon and Whole Foods items. +2 for Step 8f: item tags and splits.
-  // +1 for nightly counts. +5 for notification routing (signals, dispatcher, delivery rules).
-  assert.equal(registered.length, 192,
-    `expected 192 registered tools, found ${registered.length}: ` +
+  // +1 for nightly counts. 2026-11-03, +1 for the Warren Buffet money chat: record_wb_subscription_review.
+  // +5 for notification routing (signals, dispatcher, delivery rules).
+  assert.ok(registered.some((r) => r.name === "record_wb_subscription_review"), "record_wb_subscription_review is not registered");
+  assert.equal(registered.length, 193,
+    `expected 193 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -507,6 +509,24 @@ test("Warren Buffet schemas advertise exactly the args their handlers read", () 
     get_wb_accounts: 1, get_wb_balance_history: 1, get_wb_net_worth: 1, get_wb_transactions: 1,
     get_wb_holdings: 1, update_wb_account: 2, create_wb_manual_account: 1, record_wb_balance: 2,
   });
+});
+
+test("Warren Buffet Phase 4 schemas advertise exactly the args their handlers read, at the agreed tiers", () => {
+  const src = readFileSync(join(TOOLS, "warren-buffet-p4.ts"), "utf-8");
+  const desc = (n) => registered.find((r) => r.name === n).cfg.description;
+  const tiers = {};
+  for (const b of src.split("defineTool({").slice(1)) {
+    const name = /name:\s*"([^"]+)"/.exec(b)[1];
+    tiers[name] = Number(/tier:\s*(\d)/.exec(b)[1]);
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
+    assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
+  }
+  assert.deepEqual(tiers, { set_wb_order_item_tags: 2, split_wb_order_charges: 2, record_wb_subscription_review: 2 });
+  assert.match(desc("record_wb_subscription_review"), /changes nothing else on the subscription/);
+  assert.match(desc("record_wb_subscription_review"), /required unless the verdict is cancel/);
+  assert.match(desc("get_wb_subscriptions"), /usage_clues.*last_reviewed_on and last_verdict/);
 });
 
 test("Warren Buffet Phase 2 schemas advertise exactly the args their handlers read, at the agreed tiers", () => {

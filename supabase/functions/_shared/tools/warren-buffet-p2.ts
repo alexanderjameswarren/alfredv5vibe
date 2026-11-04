@@ -79,7 +79,12 @@ const SUB_COLUMNS =
   "id, name, plan, status, cadence, merchant_id, merchant_name, merchant_not_subscription, billed_through_id, " +
   "billed_through_name, bundle_id, bundle_name, current_price, previous_price, last_change_on, price_count, " +
   "expected_amount, amount_tolerance, term_end_date, auto_renew, review_date, last_charged_on, next_expected_on, " +
-  "charge_count, overdue, days_past_expected, owner, notes, interval_count, interval_unit";
+  "charge_count, overdue, days_past_expected, owner, notes, interval_count, interval_unit, usage_clues, " +
+  "last_reviewed_on, last_verdict";
+export const REVIEW_COLUMNS =
+  "id, subscription_id, reviewed_on, period_from, period_to, uses, amount_paid, cost_per_use, verdict, market_check, " +
+  "next_review_on, notes, created_at";
+export const MAX_REVIEWS_PER_SUBSCRIPTION = 10;
 const PRICE_COLUMNS = "id, subscription_id, effective_on, amount, source, transaction_id, notes, created_at";
 const RULE_COLUMNS =
   "id, name, priority, active, match, set_kind, set_merchant_id, set_project_id, add_tag_ids, created_by, " +
@@ -183,7 +188,7 @@ function optIdList(T: string, key: string, v: unknown, max: number): string[] {
   return idList(T, key, v, max);
 }
 
-function optInt(T: string, key: string, v: unknown, min: number, max: number): number | null {
+export function optInt(T: string, key: string, v: unknown, min: number, max: number): number | null {
   if (absent(v)) return null;
   if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max) {
     throw new Error(`${T}: ${key} must be a whole number from ${min} to ${max}.`);
@@ -1137,7 +1142,7 @@ function positiveMoney(T: string, key: string, v: unknown): number | null {
 export const getWbSubscriptionsTool = defineTool({
   name: "get_wb_subscriptions",
   tier: 1,
-  tables: { reads: ["wb_subscription_overview", "wb_subscription_prices"], writes: [] },
+  tables: { reads: ["wb_subscription_overview", "wb_subscription_prices", "wb_subscription_reviews"], writes: [] },
   handler: async (args: Obj, ctx) => {
     const T = "get_wb_subscriptions";
     const status = oneOf(T, "status", args.status, SUB_STATUSES);
@@ -1145,6 +1150,7 @@ export const getWbSubscriptionsTool = defineTool({
     const search = searchTerm(T, args.search);
     const overdueOnly = optBool(T, "overdue_only", args.overdue_only) ?? false;
     const includePrices = optBool(T, "include_prices", args.include_prices) ?? false;
+    const includeReviews = optBool(T, "include_reviews", args.include_reviews) ?? false;
     const LIMIT = limitOf(T, args.limit);
     let q = ctx.db.from("wb_subscription_overview").select(SUB_COLUMNS, { count: "exact" });
     if (status) q = q.eq("status", status);
@@ -1164,6 +1170,20 @@ export const getWbSubscriptionsTool = defineTool({
         bySub.set(k, [...(bySub.get(k) ?? []), p]);
       }
       rows = rows.map((r) => ({ ...r, prices: bySub.get(r.id as string) ?? [] }));
+    }
+    if (includeReviews && rows.length) {
+      const { data: reviews, error: re } = await ctx.db.from("wb_subscription_reviews").select(REVIEW_COLUMNS)
+        .in("subscription_id", rows.map((r) => r.id))
+        .order("reviewed_on", { ascending: false }).order("created_at", { ascending: false })
+        .limit(rows.length * MAX_REVIEWS_PER_SUBSCRIPTION);
+      if (re) throw new Error(dbError(T, re));
+      // Newest first, at most MAX_REVIEWS_PER_SUBSCRIPTION each.
+      const bySub = new Map<string, Obj[]>();
+      for (const r of (reviews ?? []) as Obj[]) {
+        const list = bySub.get(r.subscription_id as string) ?? [];
+        if (list.length < MAX_REVIEWS_PER_SUBSCRIPTION) bySub.set(r.subscription_id as string, [...list, r]);
+      }
+      rows = rows.map((r) => ({ ...r, reviews: bySub.get(r.id as string) ?? [] }));
     }
     return listResult(rows, count, LIMIT);
   },
@@ -1243,6 +1263,7 @@ export const upsertWbSubscriptionTool = defineTool({
     if (args.status !== undefined) fields.status = oneOf(T, "status", args.status, SUB_STATUSES) ?? "active";
     if (args.owner !== undefined) fields.owner = oneOf(T, "owner", args.owner, SUB_OWNERS);
     if (args.notes !== undefined) fields.notes = optText(T, "notes", args.notes);
+    if (args.usage_clues !== undefined) fields.usage_clues = optText(T, "usage_clues", args.usage_clues);
 
     let before: Obj | null = null;
     let savedId: string;

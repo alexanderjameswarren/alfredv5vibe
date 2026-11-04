@@ -1,11 +1,14 @@
 ---
 name: wb-planning
-description: "Plan money with Warren Buffet (the Money app's Alfred tools): add or change planned bills, income, one-offs and projects; backdate repeating items; answer \"can we afford X\"; work through missed dates and suggested matches. Load this whenever Alex wants to plan, budget, add a future payment or income, set up a project (a remodel, a trip, an insurance claim), asks whether he can afford something, or asks about free cash, missed dates or planned matches."
+description: "Plan money with Warren Buffet (the Money app's Alfred tools): add or change planned bills, income, one-offs and projects; backdate repeating items; answer \"can we afford X\"; work through missed dates and suggested matches. Load this whenever Alex wants to plan, budget, add a future payment or income, set up a project (a remodel, a trip, an insurance claim), asks whether he can afford something, or asks about free cash, missed dates or planned matches. For what has already happened (what needs attention, tagging, rules, subscriptions and reviews, reports) use wb-money."
 ---
 
 # Planning with Warren Buffet
 
-Skill version: 2026-10-27a
+Skill version: 2026-11-03c
+
+What is coming and whether we can afford it. For what has happened and what to fix, including
+"what needs my attention?", load **wb-money**.
 
 Sign rule everywhere: **money in is positive, money out is negative.**
 
@@ -21,7 +24,7 @@ project, tax_year) and wait for Alex's OK. One OK covers the rows in that table,
 
 Before adding a bill, look for it:
 - `get_wb_subscriptions`: a subscription is already counted in free cash and true cost. Never add
-  one as a planned item too. Adding QuickBooks as a planned bill while it is an active
+  one as a planned item too. Adding an accounting app as a planned bill while it is an active
   subscription counts it twice.
 - `get_wb_planned_items` (drafts are included by default): an item with the same payee, amount or
   date may already exist. Edit it (`upsert_wb_planned_item` with `id`) instead of adding a second.
@@ -40,6 +43,8 @@ Before adding a bill, look for it:
 - **Amounts that vary** (fuel, utilities, a card's statement): suggest a wider `amount_tolerance`
   before creating, and say why. A payment only matches when its amount is within the tolerance, so
   a tight one matches only some months, and the rest stay in the burn rate.
+- **A repeating date that is due but not yet paid counts on day 1** of the projection, like a
+  subscription, until a payment is matched to it.
 
 ## 3. Drafts and stages
 
@@ -57,6 +62,8 @@ Before adding a bill, look for it:
 | `cancelled` | not happening; kept for the record |
 
 - Move the stage on as the quote and invoice arrive.
+- A one-off at `paid` no longer counts as coming due anywhere (coming up, major expenses, the
+  projection), even with no matched payment.
 
 ## 4. tax_year
 
@@ -74,6 +81,8 @@ year. If it is unclear which year a payment counts for, ask Alex; do not guess.
 - **Be careful with generic bill-pay merchants**, such as a bank's online bill pay or a payment
   app that pays many payees. Linking one would suggest every bill paid through it. Prefer the real
   payee's merchant; if only the generic one exists, say so and ask, or leave the merchant empty.
+- **Something paid by card** is planned on the day it is charged: WB counts card spending as gone
+  that day, not on the card's due date.
 
 ## 6. "Can we afford X?"
 
@@ -106,6 +115,7 @@ Use `get_wb_free_cash` with `what_if`. It writes nothing.
   `planned_match`. Answer with `update_wb_planned_match`; for a part-payment, confirm with a lower `amount`.
 - **By hand:** `create_wb_planned_match` (tier 3). Show the proposal first: `amount_applied` and
   `would_mark_paid`. Pass `transaction_id` for a single-part payment, or `split_id`. A repeating item needs `occurrence_on`.
+- **Confirming a match clears the other suggestions** for that date and for that payment.
 - **A wrong confirmed match:** `unconfirm_wb_planned_match` with `match_id`. It never changes the stage.
   - **If `paid_not_covered` is true, ask Alex whether to set the item back to `invoiced`.** Only after a yes, use `upsert_wb_planned_item` with `stage: "invoiced"`.
 - **Within tolerance counts as covered (A45).** A date or one-off whose confirmed payments leave no
@@ -128,18 +138,3 @@ There is no delete tool, on purpose: deleting would lose matches and history.
   draft and nothing is paid yet).
 - **Putting payments on a project:** `set_wb_transaction_project` (up to 25 single-part payments).
 - **A single future cost needs no project:** just a planned item.
-
-## 11. "What needs my attention?"
-
-- Use `get_wb_action_items`. Lead with the red flags and `below_floor`, then the rest by section.
-  - **The amount to move is `shortfall_30d`, and no other figure:** the floor less the lowest balance
-    in the next 30 days (`low_30d_balance` on `low_30d_on`), moved by `first_below_on`. A dip later
-    than 30 days is not in it.
-  - **A past-due card bill is a red flag only**, not a card bill to pay.
-- Give each row's link (`link_kind`, `link_id`) and its `todo`.
-- **It only reads.** Never mark, match, confirm or change anything from it without asking Alex first.
-- **To close a fee flag:** ask Alex for the note, then call `mark_wb_reviewed` with that one charge's
-  `transaction_ids` and `note`. Reviewed plus a note is the only thing that clears a flag; a refund only turns it green.
-- **Card bills come from the card's statement and due days** (`update_wb_account`:
-  `statement_close_day`, `payment_due_day`, `autopay`, taken from the statement), never from a
-  planned item: free cash already counts card balances.
