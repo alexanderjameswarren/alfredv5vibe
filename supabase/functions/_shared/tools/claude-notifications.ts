@@ -23,6 +23,8 @@ export const KINDS = ["nudge", "encouragement", "flag", "info"];
 export const CHANNELS = ["alfred_push", "claude_push", "inbox_item"];
 export const DELIVERY_STATUSES = ["pending", "sent", "failed", "no_subscription"];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Who started a notification or signal; the same rule as public.started_by_valid(). */
+export const STARTED_BY_RE = /^(alex|chat|task:[a-z0-9][a-z0-9_-]{0,99})$/;
 
 export function fail(tool: string, message: string): Error {
   return new Error(`${tool}: ${message}`);
@@ -70,6 +72,28 @@ export function optionalDate(tool: string, name: string, v: unknown): string | n
   return v as string;
 }
 
+/** An Alfred path, /<id>. The service worker resolves it against its own origin. */
+export function requireAlfredPath(tool: string, v: unknown): string | null {
+  const link = optionalText(tool, "link", v);
+  if (link === null) return null;
+  if (!link.startsWith("/") || link.startsWith("//") || /\s/.test(link)) {
+    throw fail(tool, `\`link\` must be an Alfred path starting with "/", e.g. "/<id>", got ${JSON.stringify(link)}.`);
+  }
+  return link;
+}
+
+export function requireStartedBy(tool: string, v: unknown): string {
+  if (typeof v !== "string" || !STARTED_BY_RE.test(v.trim())) {
+    throw fail(tool, `\`started_by\` must be "alex", "chat" or "task:<job>", got ${JSON.stringify(v)}.`);
+  }
+  return v.trim();
+}
+
+/** Optional until cutover (step 13), when every sender passes it. */
+export function optionalStartedBy(tool: string, v: unknown): string | null {
+  return v === undefined || v === null ? null : requireStartedBy(tool, v);
+}
+
 const PT_DATE = new Intl.DateTimeFormat("en-CA", {
   timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit",
 });
@@ -84,6 +108,7 @@ export async function logNotification(db: Db, tool: string, p: {
   app: string; job: string; kind: string; channel: string; title: string; dedupe_key: string;
   body: string | null; link: string | null; local_date?: string | null;
   delivery_status?: string; delivery_detail?: Row | null;
+  started_by?: string | null; signal_id?: string | null;
 }): Promise<{ created: boolean; id: string; duplicate_of?: Row }> {
   const { data, error } = await db.rpc("log_claude_notification", {
     p_app: p.app,
@@ -97,6 +122,8 @@ export async function logNotification(db: Db, tool: string, p: {
     p_local_date: p.local_date ?? null,
     p_delivery_status: p.delivery_status ?? "pending",
     p_delivery_detail: p.delivery_detail ?? null,
+    p_started_by: p.started_by ?? null,
+    p_signal_id: p.signal_id ?? null,
   });
   if (error) throw dbError(tool, "log_claude_notification", error);
   const row = (Array.isArray(data) ? data[0] : data) as Row | null;
@@ -136,6 +163,7 @@ export const logClaudeNotificationTool = defineTool({
         ? "sent"
         : requireEnum(tool, "delivery_status", args.delivery_status, DELIVERY_STATUSES),
       delivery_detail: (detail as Row | null | undefined) ?? null,
+      started_by: optionalStartedBy(tool, args.started_by),
     });
   },
 });

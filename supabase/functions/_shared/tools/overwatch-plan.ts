@@ -6,6 +6,7 @@
 //   get_overwatch_plan       tier 1 — the active plan whole; history on request.
 //   create_overwatch_plan    tier 3 — supersede the active plan (propose shows what changes).
 //   update_overwatch_checks  tier 2 — replace checks_next_run on the active plan.
+//   get_delivery_rules       tier 1 — the active plan's delivery section (notification routing spec §5).
 //   get_overwatch_watch      tier 1 — watch items, current ones by default.
 //   create_overwatch_watch   tier 2 — add a dated focus, ease_off or keep_an_eye_on.
 //   update_overwatch_watch   tier 2 — change one, or note that its expiry was mentioned.
@@ -113,6 +114,8 @@ export const getOverwatchPlanTool = defineTool({
 export function planInput(T: string, args: Record<string, unknown>) {
   const instructions = text(T, "instructions", args.instructions, { required: true })!;
   const settings = object(T, "settings", args.settings);
+  // The database checks the rest (overwatch_delivery_problem).
+  if (given(settings, "delivery")) object(T, "settings.delivery", settings.delivery);
   const reason = text(T, "reason", args.reason, { required: true })!;
   const writtenBy = given(args, "written_by") ? oneOf(T, "written_by", args.written_by, AUTHORS) : "alex";
   let checks: unknown[] | null = null;
@@ -193,6 +196,26 @@ export const updateOverwatchChecksTool = defineTool({
     const { data, error } = await ctx.db.rpc("update_overwatch_checks", { p_checks: args.checks });
     if (error) throw new Error(describeDbError(T, error));
     return data;
+  },
+});
+
+// ---------------------------------------------------------------------------
+// get_delivery_rules — tier 1
+// ---------------------------------------------------------------------------
+
+export const getDeliveryRulesTool = defineTool({
+  name: "get_delivery_rules",
+  tables: { reads: ["overwatch_plans"], writes: [] },
+  tier: 1,
+  handler: async (_args: Record<string, unknown>, ctx) => {
+    const T = "get_delivery_rules";
+    const plan = await activePlan(T, ctx);
+    const delivery = (plan?.settings?.delivery ?? null) as Record<string, unknown> | null;
+    if (!delivery) {
+      return { plan_id: plan?.id ?? null, delivery: null,
+        note: "The active Overwatch plan has no delivery section; the dispatcher sends nothing until it has one." };
+    }
+    return { plan_id: plan!.id, plan_created_at: (plan as { created_at?: string }).created_at ?? null, delivery };
   },
 });
 
