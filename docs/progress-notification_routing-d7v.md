@@ -37,11 +37,85 @@ mcp/index.ts registers `raise_signal`, `get_signals`, `get_dispatch_plan`, `deli
 schema-against-handler test for the signal tools and the two started_by schemas, and 7 app-id
 schemas (raise_signal added). The db items were all free at check time.
 
-### 3e. Number, queue and deploy steps 3 and 4 together (30m)
-After Alex's gitsync: drift check on `signals`, `claude_notifications`, `overwatch_plans`, `inbox`
-and `claude_notification_settings`, db claims, number both migrations (signals first, then
-dispatcher), queue them, queue tests 1 and 2 with `--test`, deploy mcp,
-`check_platform_conformance`, Checkpoint.
+### 3e. Resolve the gitsync conflict — DONE 2026-11-03 (`s3e-q7lf`)
+Alex committed steps 3 and 4 locally (28b9d33). Then gitsync brought in 10 warren_buffet_p4-r6d
+commits (finish merge fbf1039), and they conflicted in mcp/index.test.mjs on the tool count. Both
+sides were kept: 193 tools, plus Warren Buffet's record_wb_subscription_review assertion.
+index.ts auto-merged cleanly, with 193 registrations and no duplicates. Drift check: the only new
+migration is 199_wb_subscription_reviews.sql, which touches none of signals,
+claude_notifications, overwatch_plans, inbox or claude_notification_settings. Next free numbers:
+200 and 201.
+
+### 3f. Number and claim; queue 200 — IN PROGRESS 2026-11-03 (`s3f-c8wd`)
+Merge done (eee47a0). 200 and 201 were still free: 200_signals.sql and 201_dispatcher.sql are
+written, the pending files are deleted, and the ten db items are claimed. The queue refused 200
+("may exceed the time limit"), because of `create index ... claude_notifications_signal` on an
+existing table. **200 was run by hand** by Alex in the SQL editor, whole and index included
+(`s3g`): CONFORMANT, 103 tables. Claude confirmed signals, started_by and signal_id on
+claude_notifications, raise_signal and started_by_valid are live.
+
+### 3g. Queue 201 — DONE 2026-11-03 (`s3g-n2rb`)
+201_dispatcher.sql queued: action 7cca87fd-4d7f-4ca0-8b0c-5b8b93717c85. No `--expect`: its only
+data change is the seed, which runs inside a do block and so reports no count. The describe says
+1 plan version. **201 ran** through the queue: run e6715325-4572-4752-9609-87547bc0c0dd,
+CONFORMANT. Claude confirmed one active Overwatch plan version carries the delivery section
+(05:00-20:00, 3 pops an hour, no daily cap, no minimum gap).
+
+### 3h. Queue test 1 — DONE 2026-11-03 (`s3h-t4mg`)
+1_verify_signals.sql queued with `--test`: action 30ff5b45-9992-4cf7-8b2d-b68bd41420a8. Only one
+approval link can be live per project, so 2_verify_dispatcher.sql is queued after it has run.
+**Test 1 ran:** run e4254789-c151-4734-a883-489906992e42, ok true, 36 of 36 checks, none failed.
+
+### 3i. Queue test 2 — DONE 2026-11-03 (`s3i-b6xr`)
+2_verify_dispatcher.sql queued with `--test`: action 1458c614-12f7-494e-9cd8-2a9ca827df0c.
+**Test 2 failed:** run 1cb79725-bbcc-4977-a000-f1677c6628ae, ok false, "column reference "i" is
+ambiguous" (42702), at the first dispatch_signals call with delivery rules. The 25 checks before
+it passed. **201's dispatch_signals had the bug:** two query aliases named `i` clashed with the
+plpgsql loop variable `i` (generate_subscripts in bundling, inbox in merge), so it failed on
+every run with rules. Nothing called it yet; mcp was not deployed.
+
+### 3j. Fix dispatch_signals — DONE 2026-11-03 (`s3j-y3kc`)
+202_dispatcher_fix.sql replaces dispatch_signals with the two aliases renamed (`gs(n)`, `ib`).
+A diff against 201 shows no other change. Queued: action 71e8d796-f5ac-4435-8282-1870b84df788.
+Test 2 reruns after 202, then deploy mcp, check_platform_conformance, Checkpoint (202 joins the
+checkpoint paths). **202 ran** through the queue: run 5b6ade05-18dc-4b8e-88d8-15f68600c9e4,
+CONFORMANT.
+
+### 3k. Re-queue test 2 — DONE 2026-11-03 (`s3k-w9fh`)
+2_verify_dispatcher.sql queued again with `--test`: action f83e9c3c-8d0b-45fa-807a-04601d16b8e8.
+**Test 2 failed again:** run cddebd96-8165-40ad-b5ef-f39bf9c335d0, "malformed array literal: "same
+subject as another signal delivered in this run"". **202 left this second bug:** the same-run
+merge branch appended an untyped literal to the text[] `a_why`, which Postgres read as an array.
+
+### 3l. Second dispatch_signals fix — DONE 2026-11-03 (`s3l-j5pd`)
+203_dispatcher_fix_2.sql replaces dispatch_signals with that literal cast to `::text`. I scanned
+every array append: the rest are typed (record fields, `null::uuid`, `null::text`, `false`, `0`,
+`'...'::text`, `format()` and variables). A diff against 202 shows only that one line changed.
+No local Supabase was running, so nothing was tested before queuing. Queued: action
+e224ac17-a4bd-4f31-838f-c72e229e4335. Test 2 reruns after 203. **203 ran** through the queue:
+run 61514e25-e242-4cb3-8169-f32a9365cfd6, CONFORMANT.
+
+### 3m. Re-queue test 2 after 203 — DONE 2026-11-04 (`s3m-r7hq`)
+2_verify_dispatcher.sql queued again with `--test`: action dbbe025f-45f6-4c9f-a2da-d6cfb3fd1982.
+**Third run completed:** run 3a627e89-d1b9-43c5-b6ae-4159e84b18bf, 50 of 52 checks pass. Failed:
+counts_pops_sent and hour_cap_urgent_waits.
+
+### 3n. Diagnose the last two failures — DONE 2026-11-04 (`s3n-x6tb`)
+The test was wrong, not the function. The spec counts pops by clock hour (section 5, `pace`).
+The test pins its clock at exactly 10:00, but stamped its sample pop at 09:50, which is the
+previous hour. So this_hour was 0 (counts_pops_sent), and the hourly cap of 1 still had room,
+so the urgent signal popped instead of waiting (hour_cap_urgent_waits). The spec's rule 6 says
+urgent waits at a cap, and the function does that. Fix: the sample pop is stamped at v_at. No 204.
+Test 2 re-queued: action 7841cbdb-eaab-4788-bebc-af5cd569189f. **Fourth run passed:** run
+f7ef704b-38c6-448f-b810-54554db5c562, ok true, 52 of 52.
+
+### 3o. Deploy mcp — DONE 2026-11-04 (`s3o-k8vn`). STEPS 3 AND 4 DONE.
+mcp/index.test.mjs passed 41 of 41. mcp was deployed as version 194, verify_jwt false.
+check_platform_conformance came back CONFORMANT (103 tables). Migrations 200-203 are live.
+Waiting on Alex: gitpush Checkpoint, which releases the ten db claims.
+
+Order from here, one at a time: 200 approved → queue 201 → approved → queue tests 1 and 2 with
+`--test` → deploy mcp → `check_platform_conformance` → Checkpoint (releases the db claims).
 
 Scope of this step:
 - create: supabase/migrations/<next>_signals.sql, supabase/migrations/<next+1>_dispatcher.sql
@@ -74,8 +148,16 @@ Rewrite the hourly prompt as stages A (watch) and B (dispatch); new `PROMPT VERS
 row notes. Alex pastes the prompt into the task.
 
 Files: docs/claude-hourly-notifications-task-prompt.md.
-DB: `db:table:platform_schedules` (notes, via `create_platform_schedule` in chat or a data
-migration), `db:table:claude_notification_settings` (stop reading; rows kept).
+DB: none from the CLI. The schedule row's notes change in chat with `create_platform_schedule`.
+claude_notification_settings stops being read; its rows stay.
+
+Scope of this step:
+- create: nothing
+- update: docs/claude-hourly-notifications-task-prompt.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+Estimated run: 40m
 
 ### Phase C — Senders and apps
 
@@ -168,4 +250,15 @@ Files: this file. DB: none.
 | 3b | 35m | 3m 46s | migration, test, tools, tests |
 | 4 | 8m | 10m 6s | dispatcher migration, test, tools, tests |
 | 3c | 5m | not measured | stopped: Switchboard reinstall blocked every guard |
-| 3d | 5m | see report | registration, index tests |
+| 3d | 5m | 1m 44s | registration, index tests |
+| 3e | 5m | 42s | gitsync conflict in index.test.mjs |
+| 3f | 5m | 3m 6s | numbered 200/201, db claims; queue refused 200 (index) |
+| 3g | 5m | 8s | queued 201 (200 run by hand) |
+| 3h | 5m | 7s | queued test 1 |
+| 3i | 5m | 8s | queued test 2 |
+| 3j | 5m | 1m 5s | 202: ambiguous alias i |
+| 3k | 5m | 16s | re-queued test 2 |
+| 3l | 5m | 1m 11s | 203: untyped literal into text[] |
+| 3m | 5m | 15s | re-queued test 2 |
+| 3n | 10m | 18s | test fix: sample pop in the wrong clock hour |
+| 3o | 10m | see report | mcp deploy, conformance |

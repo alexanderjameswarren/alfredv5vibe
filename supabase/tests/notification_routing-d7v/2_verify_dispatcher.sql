@@ -248,7 +248,8 @@ begin
 
     insert into public.claude_notifications (app, job, kind, channel, title, dedupe_key, local_date, delivery_status,
                                              created_at)
-    values ('alfred', 'nrd_test', 'flag', 'alfred_push', 'T', 'nrd-test:pop', v_day, 'sent', v_at - interval '10 minutes');
+    -- At v_at itself: v_at is 10:00, so anything earlier falls in the previous clock hour.
+    values ('alfred', 'nrd_test', 'flag', 'alfred_push', 'T', 'nrd-test:pop', v_day, 'sent', v_at);
     with ins as (
       insert into public.signals (app, job, severity, subject_key, title, started_by, created_at)
       values ('alfred', 'nrd_test', 'urgent', 'nrd-cap:2', 'T', 'chat', v_at - interval '4 minutes') returning id)

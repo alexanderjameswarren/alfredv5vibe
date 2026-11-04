@@ -5,11 +5,11 @@
 -- claude_notifications.started_by on the rows already logged
 -- Applied: NO
 --
--- Spec: docs/technical-spec-notification_routing-d7v.md sections 4 and 8. Numbered and queued in step 3c, then run
--- supabase/tests/notification_routing-d7v/1_verify_signals.sql with --test.
+-- Spec: docs/technical-spec-notification_routing-d7v.md sections 4 and 8. Queued in step 3f; then
+-- 201_dispatcher.sql, then supabase/tests/notification_routing-d7v/1_verify_signals.sql with --test.
 -- Safe to re-run: creates are if-not-exists or create-or-replace, triggers and the old function signature are
 -- dropped first, and the backfill only touches rows with no started_by.
--- supabase/migrations/_pending_notification_routing-d7v_signals.sql
+-- supabase/migrations/200_signals.sql
 
 begin;
 
@@ -346,7 +346,6 @@ select platform.register_table(
 commit;
 
 -- ============================================================================
--- 7. Result: must say CONFORMANT (check_platform_conformance, step 3c). Then run
---    supabase/tests/notification_routing-d7v/1_verify_signals.sql with --test.
+-- 7. Result: must say CONFORMANT. Then queue 201_dispatcher.sql.
 -- ============================================================================
 select public.platform_check_conformance() as conformance;

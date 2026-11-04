@@ -5,11 +5,11 @@
 -- with notification settings, superseding the active one, in a do block)
 -- Applied: NO
 --
--- Spec: docs/technical-spec-notification_routing-d7v.md sections 5 and 6. Needs the signals migration first. Numbered
--- and queued in step 3c, then run supabase/tests/notification_routing-d7v/2_verify_dispatcher.sql with --test.
+-- Spec: docs/technical-spec-notification_routing-d7v.md sections 5 and 6. Needs 200_signals.sql first. Then run
+-- supabase/tests/notification_routing-d7v/1_verify_signals.sql and 2_verify_dispatcher.sql with --test.
 -- Safe to re-run: functions are create-or-replace, the constraint is dropped first, and the seed skips a user whose
 -- active plan already has a delivery section.
--- supabase/migrations/_pending_notification_routing-d7v_dispatcher.sql
+-- supabase/migrations/201_dispatcher.sql
 
 begin;
 
@@ -433,7 +433,7 @@ $$;
 commit;
 
 -- ============================================================================
--- 4. Result: must say CONFORMANT (check_platform_conformance, step 3c). Then run
---    supabase/tests/notification_routing-d7v/2_verify_dispatcher.sql with --test.
+-- 4. Result: must say CONFORMANT. Then run supabase/tests/notification_routing-d7v/1_verify_signals.sql and
+--    2_verify_dispatcher.sql with --test.
 -- ============================================================================
 select public.platform_check_conformance() as conformance;
