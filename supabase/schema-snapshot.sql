@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-03 13:21, through migration 199 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-04 12:30, through migration 203 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -1931,10 +1931,10 @@ CREATE OR REPLACE FUNCTION "public"."claude_notifications_guard_update"() RETURN
     AS $$
 begin
   if (new.id, new.user_id, new.app, new.job, new.kind, new.channel, new.title, new.body, new.link, new.local_date,
-      new.dedupe_key, new.created_at)
+      new.dedupe_key, new.created_at, new.started_by, new.signal_id)
      is distinct from
      (old.id, old.user_id, old.app, old.job, old.kind, old.channel, old.title, old.body, old.link, old.local_date,
-      old.dedupe_key, old.created_at) then
+      old.dedupe_key, old.created_at, old.started_by, old.signal_id) then
     raise exception 'claude_notifications: only delivery_status and delivery_detail may change. Log a new notification instead.'
       using errcode = '23514';
   end if;
@@ -2251,6 +2251,237 @@ ALTER FUNCTION "public"."create_reminder"("p_text" "text", "p_due_at" timestamp 
 
 
 COMMENT ON FUNCTION "public"."create_reminder"("p_text" "text", "p_due_at" timestamp with time zone, "p_inbox_id" "text", "p_intent_id" "text", "p_created_by" "text") IS 'Alfred: create a standalone reminder. With neither p_inbox_id nor p_intent_id, first creates a backing inbox item (captured_text = text) in the same transaction, so every reminder is visible in Alfred. Rejects blank text, a past due_at, both links at once, and links the caller cannot see. Returns the reminders row.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."dispatch_signals"("p_now" timestamp with time zone DEFAULT "now"()) RETURNS "jsonb"
+    LANGUAGE "plpgsql" STABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  c_tz      constant text := 'America/Los_Angeles';
+  v_user    uuid := auth.uid();
+  v_plan    uuid;
+  v_d       jsonb;
+  v_local   time;
+  v_today   date;
+  v_sev_order text[];
+  v_app_order text[];
+  v_hour_pops int;
+  v_day_pops  int;
+  v_last_pop  timestamptz;
+  v_hour_left int;
+  v_day_left  int;
+  v_gap_ok    boolean;
+  r           record;
+  v_rule      jsonb;
+  v_out       text;
+  v_why       text;
+  v_rep       int;
+  v_resolved  timestamptz;
+  v_open_sig  uuid;
+  v_open_inbox text;
+  v_pop_sig   uuid;
+  v_first     int;
+  v_n         int := 0;
+  v_digest    int[] := '{}';
+  v_unit      boolean;
+  i           int;
+  -- One slot per queued signal, in priority order.
+  a_id     uuid[] := '{}';
+  a_app    text[] := '{}';
+  a_sev    text[] := '{}';
+  a_subj   text[] := '{}';
+  a_dec    text[] := '{}';
+  a_why    text[] := '{}';
+  a_rep    int[] := '{}';
+  a_target uuid[] := '{}';
+  a_inbox  text[] := '{}';
+  a_bundle boolean[] := '{}';
+  v_decisions jsonb := '[]';
+begin
+  if v_user is null then
+    raise exception 'dispatch_signals: not authenticated.';
+  end if;
+
+  select id, settings -> 'delivery' into v_plan, v_d from overwatch_plans where user_id = v_user and active;
+  if v_d is null then
+    return jsonb_build_object('at', p_now, 'stopped', 'no delivery rules in the active Overwatch plan',
+                              'plan_id', v_plan, 'decisions', '[]'::jsonb);
+  end if;
+
+  v_local := (p_now at time zone c_tz)::time;
+  v_today := (p_now at time zone c_tz)::date;
+  v_sev_order := array(select jsonb_array_elements_text(v_d -> 'priority' -> 'severity_order'));
+  v_app_order := array(select jsonb_array_elements_text(v_d -> 'priority' -> 'app_order'));
+
+  -- Pops already sent. Alex's own reminders and step timers always fire and are not counted.
+  select count(*) filter (where created_at >= date_trunc('hour', p_now)),
+         count(*) filter (where local_date = v_today),
+         max(created_at)
+    into v_hour_pops, v_day_pops, v_last_pop
+    from claude_notifications
+   where user_id = v_user and channel = 'alfred_push' and delivery_status in ('pending', 'sent')
+     and job not in ('reminder', 'step_timer') and created_at <= p_now;
+  v_hour_left := (v_d -> 'pace' ->> 'max_pops_per_hour')::int - v_hour_pops;
+  v_day_left := coalesce((v_d -> 'pace' ->> 'max_pops_per_day')::int - v_day_pops, 1000000);
+  v_gap_ok := v_last_pop is null
+              or p_now >= v_last_pop + make_interval(mins => (v_d -> 'pace' ->> 'min_gap_minutes')::int);
+
+  for r in
+    select s.id, s.app, s.severity, s.subject_key, s.created_at
+      from signals s
+     where s.user_id = v_user and s.state = 'queued' and s.created_at <= p_now
+     order by coalesce(array_position(v_sev_order, s.severity), 99),
+              coalesce(array_position(v_app_order, s.app), 999),
+              s.created_at, s.id
+  loop
+    v_n := v_n + 1;
+    a_id := a_id || r.id; a_app := a_app || r.app; a_sev := a_sev || r.severity; a_subj := a_subj || r.subject_key;
+    a_target := a_target || null::uuid; a_inbox := a_inbox || null::text; a_bundle := a_bundle || false;
+
+    -- (1) Quiet hours.
+    if not (v_local >= (v_d -> 'window' ->> 'start')::time and v_local < (v_d -> 'window' ->> 'end')::time) then
+      a_dec := a_dec || 'wait'::text; a_rep := a_rep || 0;
+      a_why := a_why || format('outside the window %s-%s', v_d -> 'window' ->> 'start', v_d -> 'window' ->> 'end');
+      continue;
+    end if;
+
+    -- An earlier signal for the same subject in this run that will be delivered takes this one with it.
+    v_first := null;
+    for i in 1 .. v_n - 1 loop
+      if a_subj[i] = r.subject_key and a_dec[i] in ('inbox', 'pop') then v_first := i; exit; end if;
+    end loop;
+    if v_first is not null then
+      a_dec := a_dec || 'merge'::text; a_rep := a_rep || 0;
+      a_target[v_n] := a_id[v_first]; a_inbox[v_n] := a_inbox[v_first];
+      a_why := a_why || 'same subject as another signal delivered in this run'::text;
+      continue;
+    end if;
+
+    -- (2) The severity's default.
+    v_out := v_d -> 'defaults' ->> r.severity;
+    v_why := format('%s signals default to %s', r.severity, v_out);
+
+    -- (3) Escalation: earlier held or delivered signals for the subject since it was last resolved, this run's
+    -- held ones included. The first rule whose subject_key matches (exact, a prefix before ":", or "*") applies.
+    select max(created_at) into v_resolved from signals
+     where user_id = v_user and subject_key = r.subject_key and state = 'resolved' and created_at <= p_now;
+    select count(*) into v_rep from signals
+     where user_id = v_user and subject_key = r.subject_key and id <> r.id
+       and state in ('held', 'delivered', 'merged') and created_at <= p_now
+       and created_at > coalesce(v_resolved, '-infinity'::timestamptz);
+    for i in 1 .. v_n - 1 loop
+      if a_subj[i] = r.subject_key and a_dec[i] = 'hold' then v_rep := v_rep + 1; end if;
+    end loop;
+    v_rule := null;
+    select e.value into v_rule from jsonb_array_elements(v_d -> 'escalation') with ordinality e(value, ord)
+     where e.value ->> 'subject_key' = '*' or e.value ->> 'subject_key' = r.subject_key
+        or starts_with(r.subject_key, (e.value ->> 'subject_key') || ':')
+     order by e.ord limit 1;
+    if v_out = 'hold' and v_rule ->> 'hold_repeats' is not null and v_rep >= (v_rule ->> 'hold_repeats')::int then
+      v_out := 'inbox';
+      v_why := format('escalated to inbox: %s earlier since last resolved (rule %s)', v_rep, v_rule ->> 'subject_key');
+    end if;
+    if v_out = 'inbox' and v_rule ->> 'inbox_repeats' is not null and v_rep >= (v_rule ->> 'inbox_repeats')::int then
+      v_out := 'pop';
+      v_why := format('escalated to pop: %s earlier since last resolved (rule %s)', v_rep, v_rule ->> 'subject_key');
+    end if;
+
+    -- (4) Merge into an open inbox item for the subject, or a recent pop of it.
+    if v_out in ('inbox', 'pop') then
+      v_open_sig := null; v_open_inbox := null; v_pop_sig := null;
+      select s.id, s.inbox_id into v_open_sig, v_open_inbox
+        from signals s join inbox ib on ib.id = s.inbox_id
+       where s.user_id = v_user and s.subject_key = r.subject_key and s.state = 'delivered'
+         and coalesce(ib.archived, false) = false
+       order by s.decided_at desc nulls last limit 1;
+      if v_open_inbox is not null and (v_d -> 'merge' ->> 'into_open_inbox')::boolean then
+        a_target[v_n] := v_open_sig; a_inbox[v_n] := v_open_inbox;
+        if v_out = 'inbox' then
+          v_out := 'merge';
+          v_why := v_why || '; merged into the open inbox item';
+        else
+          v_why := v_why || '; the pop points at the open inbox item';
+        end if;
+      elsif v_out = 'pop' then
+        select s.id into v_pop_sig from signals s
+         where s.user_id = v_user and s.subject_key = r.subject_key and s.state = 'delivered' and s.outcome = 'pop'
+           and s.decided_at >= p_now - make_interval(hours => (v_d -> 'merge' ->> 'pop_merge_hours')::int)
+         order by s.decided_at desc limit 1;
+        if v_pop_sig is not null then
+          v_out := 'merge'; a_target[v_n] := v_pop_sig;
+          v_why := v_why || format('; popped within %s hours, merged', v_d -> 'merge' ->> 'pop_merge_hours');
+        end if;
+      end if;
+    end if;
+
+    a_dec := a_dec || v_out; a_why := a_why || v_why; a_rep := a_rep || v_rep;
+  end loop;
+
+  -- (5) Bundling: enough low-priority pops in one run become one digest pop.
+  select array_agg(gs.n order by gs.n) into v_digest from generate_subscripts(a_id, 1) gs(n)
+   where a_dec[gs.n] = 'pop' and a_inbox[gs.n] is null
+     and a_sev[gs.n] in (select jsonb_array_elements_text(v_d -> 'bundling' -> 'digest_severities'));
+  if coalesce(array_length(v_digest, 1), 0) >= (v_d -> 'bundling' ->> 'min_signals')::int then
+    foreach i in array v_digest loop
+      a_dec[i] := 'digest'; a_bundle[i] := true;
+      a_why[i] := a_why[i] || format('; bundled with %s others into one digest', array_length(v_digest, 1) - 1);
+    end loop;
+  else
+    v_digest := '{}';
+  end if;
+
+  -- (6) Pace. Each pop, and the digest as a whole, is one unit, in priority order.
+  v_unit := false;   -- whether the digest has been paced yet
+  for i in 1 .. v_n loop
+    if a_dec[i] = 'pop' or (a_dec[i] = 'digest' and not v_unit) then
+      if v_gap_ok and v_hour_left > 0 and v_day_left > 0 then
+        v_hour_left := v_hour_left - 1; v_day_left := v_day_left - 1;
+        if a_dec[i] = 'digest' then v_unit := true; end if;
+      elsif a_dec[i] = 'digest' then
+        foreach v_first in array v_digest loop
+          a_dec[v_first] := 'inbox'; a_bundle[v_first] := false;
+          a_why[v_first] := a_why[v_first] || '; the digest is held back by pace, so each becomes an inbox item';
+        end loop;
+        v_unit := true;
+      else
+        v_why := case when not v_gap_ok then 'the minimum gap since the last pop'
+                      when v_hour_left <= 0 then 'the hourly cap' else 'the daily cap' end;
+        if a_sev[i] = 'urgent' then
+          a_dec[i] := 'wait'; a_why[i] := a_why[i] || '; waits for ' || v_why;
+        elsif a_inbox[i] is not null then
+          a_dec[i] := 'merge'; a_why[i] := a_why[i] || '; ' || v_why || ' stops the pop, merged into the open item';
+        else
+          a_dec[i] := 'inbox'; a_why[i] := a_why[i] || '; ' || v_why || ' stops the pop, an inbox item instead';
+        end if;
+      end if;
+    end if;
+  end loop;
+
+  for i in 1 .. v_n loop
+    v_decisions := v_decisions || jsonb_build_object(
+      'signal_id', a_id[i], 'app', a_app[i], 'severity', a_sev[i], 'subject_key', a_subj[i],
+      'decision', a_dec[i], 'reason', a_why[i], 'repeats', a_rep[i],
+      'merge_target_signal_id', a_target[i], 'inbox_id', a_inbox[i], 'bundle', a_bundle[i]);
+  end loop;
+
+  return jsonb_build_object(
+    'at', p_now, 'local_time', to_char(v_local, 'HH24:MI'), 'local_date', v_today, 'plan_id', v_plan,
+    'in_window', v_local >= (v_d -> 'window' ->> 'start')::time and v_local < (v_d -> 'window' ->> 'end')::time,
+    'pops', jsonb_build_object('this_hour', v_hour_pops, 'today', v_day_pops, 'last_at', v_last_pop,
+                               'hour_left_after', greatest(v_hour_left, 0),
+                               'day_left_after', case when v_d -> 'pace' ->> 'max_pops_per_day' is null then null
+                                                      else greatest(v_day_left, 0) end),
+    'decisions', v_decisions);
+end;
+$$;
+
+
+ALTER FUNCTION "public"."dispatch_signals"("p_now" timestamp with time zone) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."dispatch_signals"("p_now" timestamp with time zone) IS 'Shared: compute only, writes nothing. For each of the caller''s queued signals, what the dispatcher would do at p_now under the delivery rules in the active Overwatch plan: wait, hold, inbox, pop, merge or digest, with the reason, the repeat count, and the signal or inbox item it merges into. Pops counted against the caps exclude Alex''s own reminders and step timers. Called by the get_dispatch_plan and deliver_signals tools.';
 
 
 
@@ -4290,7 +4521,7 @@ COMMENT ON FUNCTION "public"."last_completed_guard"() IS 'Restructure P2. BEFORE
 
 
 
-CREATE OR REPLACE FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text" DEFAULT NULL::"text", "p_link" "text" DEFAULT NULL::"text", "p_local_date" "date" DEFAULT NULL::"date", "p_delivery_status" "text" DEFAULT 'pending'::"text", "p_delivery_detail" "jsonb" DEFAULT NULL::"jsonb") RETURNS "jsonb"
+CREATE OR REPLACE FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text" DEFAULT NULL::"text", "p_link" "text" DEFAULT NULL::"text", "p_local_date" "date" DEFAULT NULL::"date", "p_delivery_status" "text" DEFAULT 'pending'::"text", "p_delivery_detail" "jsonb" DEFAULT NULL::"jsonb", "p_started_by" "text" DEFAULT NULL::"text", "p_signal_id" "uuid" DEFAULT NULL::"uuid") RETURNS "jsonb"
     LANGUAGE "plpgsql"
     SET "search_path" TO 'public', 'pg_temp'
     AS $$
@@ -4306,10 +4537,11 @@ begin
   end if;
 
   insert into claude_notifications (app, job, kind, channel, title, body, link, local_date, dedupe_key,
-                                    delivery_status, delivery_detail)
+                                    delivery_status, delivery_detail, started_by, signal_id)
   values (p_app, btrim(p_job), p_kind, p_channel, btrim(p_title), nullif(btrim(p_body), ''), nullif(btrim(p_link), ''),
           coalesce(p_local_date, (now() at time zone 'America/Los_Angeles')::date), btrim(p_dedupe_key),
-          coalesce(p_delivery_status, 'pending'), coalesce(p_delivery_detail, '{}'::jsonb))
+          coalesce(p_delivery_status, 'pending'), coalesce(p_delivery_detail, '{}'::jsonb),
+          nullif(btrim(p_started_by), ''), p_signal_id)
   on conflict (user_id, dedupe_key) do nothing
   returning id into v_id;
 
@@ -4325,10 +4557,10 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb") OWNER TO "postgres";
+ALTER FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb", "p_started_by" "text", "p_signal_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb") IS 'Shared: log one notification in claude_notifications. Returns {created: true, id} for a new row, or {created: false, id, duplicate_of} when the caller already has a row with this dedupe_key, in which case nothing is written and the notification must not be sent. local_date defaults to today in Pacific time. Called by the log_claude_notification and send_alfred_push tools.';
+COMMENT ON FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb", "p_started_by" "text", "p_signal_id" "uuid") IS 'Shared: log one notification in claude_notifications. Returns {created: true, id} for a new row, or {created: false, id, duplicate_of} when the caller already has a row with this dedupe_key, in which case nothing is written and the notification must not be sent. local_date defaults to today in Pacific time. started_by is alex, chat or task:<job>; signal_id the signal it delivers. Called by the log_claude_notification and send_alfred_push tools.';
 
 
 
@@ -4365,6 +4597,137 @@ ALTER FUNCTION "public"."notes_touch_updated_at"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."notes_touch_updated_at"() IS 'Alfred: stamps notes.updated_at.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."overwatch_delivery_problem"("p" "jsonb") RETURNS "text"
+    LANGUAGE "plpgsql" IMMUTABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $_$
+declare
+  c_sev  constant text[] := array['low', 'normal', 'high', 'urgent'];
+  c_hhmm constant text := '^([01][0-9]|2[0-3]):[0-5][0-9]$';
+  v      jsonb;
+  v_e    jsonb;
+  v_key  text;
+  v_problem text;
+begin
+  if p is null then return null; end if;   -- a plan without a delivery section is valid
+  if jsonb_typeof(p) <> 'object' then return 'delivery must be an object.'; end if;
+  for v_key in select jsonb_object_keys(p) loop
+    if v_key <> all (array['window', 'pace', 'priority', 'defaults', 'bundling', 'escalation', 'merge', 'watchers']) then
+      return format('delivery has an unknown key "%s".', v_key);
+    end if;
+  end loop;
+
+  v := p -> 'window';
+  if jsonb_typeof(v) is distinct from 'object' or coalesce(v ->> 'start', '') !~ c_hhmm
+     or coalesce(v ->> 'end', '') !~ c_hhmm then
+    return 'delivery.window must be {"start": "HH:MM", "end": "HH:MM"}, Pacific.';
+  end if;
+  if v ->> 'start' >= v ->> 'end' then return 'delivery.window.start must be before end.'; end if;
+
+  v := p -> 'pace';
+  if jsonb_typeof(v) is distinct from 'object' then
+    return 'delivery.pace must be {"max_pops_per_hour", "max_pops_per_day", "min_gap_minutes"}.';
+  end if;
+  if not public.overwatch_delivery_whole(v -> 'max_pops_per_hour', 0, 24, false) then
+    return 'delivery.pace.max_pops_per_hour must be a whole number from 0 to 24.';
+  end if;
+  if not public.overwatch_delivery_whole(v -> 'max_pops_per_day', 0, 200, true) then
+    return 'delivery.pace.max_pops_per_day must be null (no daily cap) or a whole number from 0 to 200.';
+  end if;
+  if not public.overwatch_delivery_whole(v -> 'min_gap_minutes', 0, 240, false) then
+    return 'delivery.pace.min_gap_minutes must be a whole number from 0 to 240.';
+  end if;
+
+  -- Each shape is checked before anything that would fail on the wrong one.
+  v := p -> 'priority';
+  if jsonb_typeof(v) is distinct from 'object' or jsonb_typeof(v -> 'severity_order') is distinct from 'array'
+     or jsonb_typeof(v -> 'app_order') is distinct from 'array' then
+    return 'delivery.priority must be {"severity_order": [...], "app_order": [...]}.';
+  end if;
+  if (select array_agg(e #>> '{}' order by e #>> '{}') from jsonb_array_elements(v -> 'severity_order') e)
+     is distinct from array['high', 'low', 'normal', 'urgent'] then
+    return 'delivery.priority.severity_order must list low, normal, high and urgent once each.';
+  end if;
+  if exists (select 1 from jsonb_array_elements(v -> 'app_order') e where jsonb_typeof(e) <> 'string') then
+    return 'delivery.priority.app_order must be a list of app ids.';
+  end if;
+
+  v := p -> 'defaults';
+  if jsonb_typeof(v) is distinct from 'object' then
+    return 'delivery.defaults must give low, normal, high and urgent each one of hold, inbox or pop.';
+  end if;
+  if (select array_agg(k order by k) from jsonb_object_keys(v) k) is distinct from array['high', 'low', 'normal', 'urgent']
+     or exists (select 1 from jsonb_each(v) e where e.value not in ('"hold"', '"inbox"', '"pop"')) then
+    return 'delivery.defaults must give low, normal, high and urgent each one of hold, inbox or pop.';
+  end if;
+
+  v := p -> 'bundling';
+  if jsonb_typeof(v) is distinct from 'object' or jsonb_typeof(v -> 'digest_severities') is distinct from 'array'
+     or not public.overwatch_delivery_whole(v -> 'min_signals', 2, 20, false) then
+    return 'delivery.bundling must be {"digest_severities": [severities], "min_signals": 2 to 20}.';
+  end if;
+  if exists (select 1 from jsonb_array_elements(v -> 'digest_severities') e
+              where jsonb_typeof(e) <> 'string' or e #>> '{}' <> all (c_sev)) then
+    return 'delivery.bundling.digest_severities must list only low, normal, high or urgent.';
+  end if;
+
+  v := p -> 'escalation';
+  if jsonb_typeof(v) is distinct from 'array' then return 'delivery.escalation must be a list.'; end if;
+  for v_e in select value from jsonb_array_elements(v) loop
+    if jsonb_typeof(v_e) <> 'object' or jsonb_typeof(v_e -> 'subject_key') is distinct from 'string'
+       or (v_e ->> 'subject_key' <> '*' and v_e ->> 'subject_key' !~ '^[a-z0-9][a-z0-9:_.-]{0,199}$') then
+      return 'each delivery.escalation entry needs a subject_key: a subject key, a prefix of one, or "*".';
+    end if;
+    for v_key in select unnest(array['hold_repeats', 'inbox_repeats']) loop
+      if not public.overwatch_delivery_whole(v_e -> v_key, 0, 100, true) then
+        return format('delivery.escalation %s: %s must be null (never) or a whole number from 0 to 100.',
+                      v_e ->> 'subject_key', v_key);
+      end if;
+    end loop;
+  end loop;
+
+  v := p -> 'merge';
+  if jsonb_typeof(v) is distinct from 'object' or jsonb_typeof(v -> 'into_open_inbox') is distinct from 'boolean'
+     or not public.overwatch_delivery_whole(v -> 'pop_merge_hours', 0, 168, false) then
+    return 'delivery.merge must be {"into_open_inbox": true or false, "pop_merge_hours": a whole number 0 to 168}.';
+  end if;
+
+  -- Same shape as claude_notification_settings.apps, which watchers replaces.
+  v_problem := public.claude_notification_settings_problem('05:00', '20:00', 0, null, p -> 'watchers');
+  if v_problem is not null then return 'delivery.watchers: ' || v_problem; end if;
+
+  return null;
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."overwatch_delivery_problem"("p" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."overwatch_delivery_problem"("p" "jsonb") IS 'Overwatch: null when p is a valid delivery section of an Overwatch plan (or null: no section), else a plain message. Keys: window, pace, priority, defaults, bundling, escalation, merge, watchers. Used by the overwatch_plans check constraint, so create_overwatch_plan refuses an invalid one.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."overwatch_delivery_whole"("p" "jsonb", "p_lo" integer, "p_hi" integer, "p_null_ok" boolean) RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+  select case
+    when p is null then false
+    when jsonb_typeof(p) = 'null' then p_null_ok
+    when jsonb_typeof(p) <> 'number' then false
+    else (p::text)::numeric between p_lo and p_hi and (p::text)::numeric % 1 = 0
+  end
+$$;
+
+
+ALTER FUNCTION "public"."overwatch_delivery_whole"("p" "jsonb", "p_lo" integer, "p_hi" integer, "p_null_ok" boolean) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."overwatch_delivery_whole"("p" "jsonb", "p_lo" integer, "p_hi" integer, "p_null_ok" boolean) IS 'Overwatch: true when p is a whole JSON number from p_lo to p_hi, or JSON null when p_null_ok. Used by overwatch_delivery_problem.';
 
 
 
@@ -5478,6 +5841,59 @@ ALTER FUNCTION "public"."project_plans_check_group"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."project_plans_check_group"() IS 'Overwatch: refuses a project_plans or project_links row whose group is not the same user''s Project group (group_types.kind = project); stamps project_plans.updated_at, and status_written_at when the status line changes.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."raise_signal"("p_app" "text", "p_job" "text", "p_severity" "text", "p_subject_key" "text", "p_title" "text", "p_started_by" "text", "p_body" "text" DEFAULT NULL::"text", "p_link" "text" DEFAULT NULL::"text", "p_source_ref" "text" DEFAULT NULL::"text", "p_details" "jsonb" DEFAULT NULL::"jsonb", "p_user_id" "uuid" DEFAULT NULL::"uuid") RETURNS "jsonb"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_user     uuid;
+  v_id       uuid;
+  v_existing public.signals%rowtype;
+begin
+  -- Only a server sender (the service role, no auth.uid()) names the user; anyone else is themselves.
+  if current_user = 'service_role' then
+    v_user := p_user_id;
+    if v_user is null then
+      raise exception 'raise_signal: p_user_id is required under the service role.' using errcode = '22023';
+    end if;
+  else
+    v_user := auth.uid();
+    if v_user is null then
+      raise exception 'raise_signal: not authenticated.';
+    end if;
+    if p_user_id is not null and p_user_id <> v_user then
+      raise exception 'raise_signal: p_user_id is for the service role only.' using errcode = '22023';
+    end if;
+  end if;
+  if not exists (select 1 from apps where id = p_app) then
+    raise exception 'raise_signal: unknown app "%". Use an id from get_apps.', p_app using errcode = '22023';
+  end if;
+
+  insert into signals (user_id, app, job, severity, subject_key, title, body, link, started_by, source_ref, details)
+  values (v_user, p_app, btrim(p_job), p_severity, btrim(p_subject_key), btrim(p_title), nullif(btrim(p_body), ''),
+          nullif(btrim(p_link), ''), btrim(p_started_by), nullif(btrim(p_source_ref), ''),
+          coalesce(p_details, '{}'::jsonb))
+  on conflict (user_id, source_ref) where source_ref is not null do nothing
+  returning id into v_id;
+
+  if v_id is not null then
+    return jsonb_build_object('created', true, 'id', v_id);
+  end if;
+
+  select * into v_existing from signals where user_id = v_user and source_ref = btrim(p_source_ref);
+  return jsonb_build_object('created', false, 'id', v_existing.id, 'duplicate_of', jsonb_build_object(
+    'created_at', v_existing.created_at, 'title', v_existing.title, 'state', v_existing.state));
+end;
+$$;
+
+
+ALTER FUNCTION "public"."raise_signal"("p_app" "text", "p_job" "text", "p_severity" "text", "p_subject_key" "text", "p_title" "text", "p_started_by" "text", "p_body" "text", "p_link" "text", "p_source_ref" "text", "p_details" "jsonb", "p_user_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."raise_signal"("p_app" "text", "p_job" "text", "p_severity" "text", "p_subject_key" "text", "p_title" "text", "p_started_by" "text", "p_body" "text", "p_link" "text", "p_source_ref" "text", "p_details" "jsonb", "p_user_id" "uuid") IS 'Shared: raise one signal. Returns {created: true, id}, or {created: false, id, duplicate_of} when the user already has a signal with this source_ref, in which case nothing is written. p_user_id is required under the service role (server senders such as wb-sync) and refused for anyone else. Called by the raise_signal tool.';
 
 
 
@@ -6843,6 +7259,35 @@ COMMENT ON FUNCTION "public"."set_archived_at"() IS 'Restructure P5. BEFORE INSE
 
 
 
+CREATE OR REPLACE FUNCTION "public"."signals_guard_update"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if (new.id, new.user_id, new.app, new.job, new.severity, new.subject_key, new.title, new.body, new.link,
+      new.started_by, new.source_ref, new.details, new.created_at)
+     is distinct from
+     (old.id, old.user_id, old.app, old.job, old.severity, old.subject_key, old.title, old.body, old.link,
+      old.started_by, old.source_ref, old.details, old.created_at) then
+    raise exception 'signals: only the state columns may change. Raise a new signal instead.' using errcode = '23514';
+  end if;
+  if old.state in ('delivered', 'merged', 'dropped', 'resolved') and new.state is distinct from old.state then
+    raise exception 'signals: a % signal is final; its state cannot change to %.', old.state, new.state
+      using errcode = '23514';
+  end if;
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."signals_guard_update"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."signals_guard_update"() IS 'Shared: what a signal''s sender wrote never changes, and delivered, merged, dropped and resolved are final. Stamps updated_at.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."stamp_song_edited"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $$
@@ -6881,6 +7326,21 @@ ALTER FUNCTION "public"."stamp_songs_from_measure_statement"() OWNER TO "postgre
 
 
 COMMENT ON FUNCTION "public"."stamp_songs_from_measure_statement"() IS 'SAM analyzer (M6). Statement-level trigger function on sam_song_measures INSERT and DELETE: sets measures_edited_at = now() once for each song the statement touched, in the same transaction as the write, so no writer can change measures without invalidating stored scores. UPDATE is covered separately by the per-row bump_parent_edited_at trigger.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."started_by_valid"("p" "text") RETURNS boolean
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $_$
+  select p ~ '^(alex|chat|task:[a-z0-9][a-z0-9_-]{0,99})$'
+$_$;
+
+
+ALTER FUNCTION "public"."started_by_valid"("p" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."started_by_valid"("p" "text") IS 'Shared: true when p is a started_by value: alex, chat, or task:<job> (lower case, digits, _ and -). Used by the signals and claude_notifications check constraints.';
 
 
 
@@ -11748,12 +12208,15 @@ CREATE TABLE IF NOT EXISTS "public"."claude_notifications" (
     "delivery_detail" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "started_by" "text",
+    "signal_id" "uuid",
     CONSTRAINT "claude_notifications_channel_values" CHECK (("channel" = ANY (ARRAY['alfred_push'::"text", 'claude_push'::"text", 'inbox_item'::"text"]))),
     CONSTRAINT "claude_notifications_dedupe_key_present" CHECK ((("length"("btrim"("dedupe_key")) >= 1) AND ("length"("btrim"("dedupe_key")) <= 300))),
     CONSTRAINT "claude_notifications_delivery_detail_object" CHECK (("jsonb_typeof"("delivery_detail") = 'object'::"text")),
     CONSTRAINT "claude_notifications_delivery_status_values" CHECK (("delivery_status" = ANY (ARRAY['pending'::"text", 'sent'::"text", 'failed'::"text", 'no_subscription'::"text"]))),
     CONSTRAINT "claude_notifications_job_present" CHECK ((("length"("btrim"("job")) >= 1) AND ("length"("btrim"("job")) <= 100))),
     CONSTRAINT "claude_notifications_kind_values" CHECK (("kind" = ANY (ARRAY['nudge'::"text", 'encouragement'::"text", 'flag'::"text", 'info'::"text"]))),
+    CONSTRAINT "claude_notifications_started_by_valid" CHECK ((("started_by" IS NULL) OR "public"."started_by_valid"("started_by"))),
     CONSTRAINT "claude_notifications_title_present" CHECK ((("length"("btrim"("title")) >= 1) AND ("length"("btrim"("title")) <= 200)))
 );
 
@@ -11822,6 +12285,14 @@ COMMENT ON COLUMN "public"."claude_notifications"."created_at" IS 'Row creation.
 
 
 COMMENT ON COLUMN "public"."claude_notifications"."updated_at" IS 'Last delivery update. Stamped by the guard trigger.';
+
+
+
+COMMENT ON COLUMN "public"."claude_notifications"."started_by" IS 'Who started it: alex, chat, or task:<job>. Null only on rows from senders not yet passing it.';
+
+
+
+COMMENT ON COLUMN "public"."claude_notifications"."signal_id" IS 'The signal this notification delivered, or null.';
 
 
 
@@ -13721,6 +14192,7 @@ CREATE TABLE IF NOT EXISTS "public"."overwatch_plans" (
     "supersedes_id" "uuid",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     CONSTRAINT "overwatch_plans_checks_array" CHECK (("jsonb_typeof"("checks_next_run") = 'array'::"text")),
+    CONSTRAINT "overwatch_plans_delivery_valid" CHECK (("public"."overwatch_delivery_problem"(("settings" -> 'delivery'::"text")) IS NULL)),
     CONSTRAINT "overwatch_plans_settings_object" CHECK (("jsonb_typeof"("settings") = 'object'::"text")),
     CONSTRAINT "overwatch_plans_written_by_values" CHECK (("written_by" = ANY (ARRAY['alex'::"text", 'overwatch'::"text"])))
 );
@@ -15640,6 +16112,144 @@ sam_warmup_ladder_is_valid(). Ladder progress is never stored.';
 
 
 COMMENT ON COLUMN "public"."sam_songs"."archived_at" IS 'When this row was archived; null while it is not. Set only by the set_archived_at trigger. Archived lists sort by it, newest first.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."signals" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "app" "text" NOT NULL,
+    "job" "text" NOT NULL,
+    "severity" "text" NOT NULL,
+    "subject_key" "text" NOT NULL,
+    "title" "text" NOT NULL,
+    "body" "text",
+    "link" "text",
+    "started_by" "text" NOT NULL,
+    "source_ref" "text",
+    "state" "text" DEFAULT 'queued'::"text" NOT NULL,
+    "outcome" "text",
+    "reason" "text",
+    "decided_at" timestamp with time zone,
+    "decided_run_id" "uuid",
+    "inbox_id" "text",
+    "notification_id" "uuid",
+    "merged_into" "uuid",
+    "bundle_id" "uuid",
+    "details" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "signals_details_object" CHECK (("jsonb_typeof"("details") = 'object'::"text")),
+    CONSTRAINT "signals_job_present" CHECK ((("length"("btrim"("job")) >= 1) AND ("length"("btrim"("job")) <= 100))),
+    CONSTRAINT "signals_link_path" CHECK ((("link" IS NULL) OR (("link" ~ '^/'::"text") AND ("link" !~ '^//'::"text") AND ("link" !~ '\s'::"text")))),
+    CONSTRAINT "signals_merged_has_target" CHECK ((("state" = 'merged'::"text") = ("merged_into" IS NOT NULL))),
+    CONSTRAINT "signals_outcome_values" CHECK ((("outcome" IS NULL) OR ("outcome" = ANY (ARRAY['inbox'::"text", 'pop'::"text"])))),
+    CONSTRAINT "signals_outcome_when_delivered" CHECK ((("state" = 'delivered'::"text") = ("outcome" IS NOT NULL))),
+    CONSTRAINT "signals_severity_values" CHECK (("severity" = ANY (ARRAY['low'::"text", 'normal'::"text", 'high'::"text", 'urgent'::"text"]))),
+    CONSTRAINT "signals_source_ref_present" CHECK ((("source_ref" IS NULL) OR (("length"("btrim"("source_ref")) >= 1) AND ("length"("btrim"("source_ref")) <= 300)))),
+    CONSTRAINT "signals_started_by_valid" CHECK ("public"."started_by_valid"("started_by")),
+    CONSTRAINT "signals_state_values" CHECK (("state" = ANY (ARRAY['queued'::"text", 'held'::"text", 'delivered'::"text", 'merged'::"text", 'dropped'::"text", 'resolved'::"text"]))),
+    CONSTRAINT "signals_subject_key_format" CHECK (("subject_key" ~ '^[a-z0-9][a-z0-9:_.-]{0,199}$'::"text")),
+    CONSTRAINT "signals_title_present" CHECK ((("length"("btrim"("title")) >= 1) AND ("length"("btrim"("title")) <= 200)))
+);
+
+
+ALTER TABLE "public"."signals" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."signals" IS 'SHARED. Something an app or task thinks is worth knowing, raised every time it happens. Apps never pick a channel or check for an existing inbox item: the dispatcher decides whether each signal is held, becomes an inbox item, pops (an Alfred push) or merges into one already delivered, under the delivery rules in Overwatch''s plan. What the sender wrote never changes; only the state columns do. Write through raise_signal().';
+
+
+
+COMMENT ON COLUMN "public"."signals"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."user_id" IS 'Owner. Owner RLS. Server senders under the service role pass it to raise_signal.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."app" IS 'The app it is about (apps.id), e.g. warren_buffet.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."job" IS 'What raised it, e.g. wb-sync, overwatch_nightly.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."severity" IS 'low, normal, high or urgent. The delivery rules map each to a default outcome.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."subject_key" IS 'Ties repeats together, e.g. wb-sync:failure. Lower case; letters, digits, colon, underscore, dot, hyphen. Escalation and merging count by it.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."title" IS 'Short title, as the sender wrote it.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."body" IS 'The text, as the sender wrote it, or null.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."link" IS 'An Alfred path, /<id>, or null.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."started_by" IS 'Who started it: alex, chat, or task:<job>.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."source_ref" IS 'Optional idempotency key, unique per user: a retried run passing the same value cannot raise twice.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."state" IS 'queued (waiting for the dispatcher), held (silenced, counted for escalation), delivered, merged, dropped, or resolved (a marker that the subject is healthy again, resetting its escalation count).';
+
+
+
+COMMENT ON COLUMN "public"."signals"."outcome" IS 'inbox or pop when delivered; null otherwise.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."reason" IS 'The rule that decided, in plain words.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."decided_at" IS 'When the dispatcher (or Alex) decided.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."decided_run_id" IS 'The dispatcher''s platform_runs row that decided, or null.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."inbox_id" IS 'The inbox item it became or merged into, or null.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."notification_id" IS 'The claude_notifications row of its pop, or null.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."merged_into" IS 'The signal it was merged into. Set exactly when state is merged.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."bundle_id" IS 'Shared by the signals delivered together in one digest pop, or null.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."details" IS 'Anything else the sender wants kept. An object.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."created_at" IS 'When it was raised.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."updated_at" IS 'Last state change. Stamped by the guard trigger.';
 
 
 
@@ -18463,6 +19073,11 @@ ALTER TABLE ONLY "public"."sam_songs"
 
 
 
+ALTER TABLE ONLY "public"."signals"
+    ADD CONSTRAINT "signals_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."switchboard_actions"
     ADD CONSTRAINT "switchboard_actions_pkey" PRIMARY KEY ("id");
 
@@ -18735,6 +19350,10 @@ CREATE INDEX "arnold_plans_user_created" ON "public"."arnold_plans" USING "btree
 
 
 CREATE INDEX "claim_blocks_pair_idx" ON "public"."claim_blocks" USING "btree" ("user_id", "waiter_code", "holder_code", "blocked_at" DESC);
+
+
+
+CREATE INDEX "claude_notifications_signal" ON "public"."claude_notifications" USING "btree" ("signal_id") WHERE ("signal_id" IS NOT NULL);
 
 
 
@@ -19314,6 +19933,18 @@ CREATE UNIQUE INDEX "sam_song_fingerings_coord_source_key" ON "public"."sam_song
 
 
 
+CREATE UNIQUE INDEX "signals_user_source_ref" ON "public"."signals" USING "btree" ("user_id", "source_ref") WHERE ("source_ref" IS NOT NULL);
+
+
+
+CREATE INDEX "signals_user_state_created" ON "public"."signals" USING "btree" ("user_id", "state", "created_at");
+
+
+
+CREATE INDEX "signals_user_subject_created" ON "public"."signals" USING "btree" ("user_id", "subject_key", "created_at" DESC);
+
+
+
 CREATE UNIQUE INDEX "switchboard_actions_link_hash_key" ON "public"."switchboard_actions" USING "btree" ("link_hash") WHERE ("link_hash" IS NOT NULL);
 
 
@@ -19734,6 +20365,10 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."signals" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."switchboard_actions" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -20070,6 +20705,10 @@ CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."sam_songs"
 
 
 
+CREATE OR REPLACE TRIGGER "signals_guard_update" BEFORE UPDATE ON "public"."signals" FOR EACH ROW EXECUTE FUNCTION "public"."signals_guard_update"();
+
+
+
 CREATE OR REPLACE TRIGGER "stamp_song_on_measures_delete" AFTER DELETE ON "public"."sam_song_measures" REFERENCING OLD TABLE AS "old_rows" FOR EACH STATEMENT EXECUTE FUNCTION "public"."stamp_songs_from_measure_statement"();
 
 
@@ -20284,6 +20923,11 @@ ALTER TABLE ONLY "public"."claude_notification_settings"
 
 ALTER TABLE ONLY "public"."claude_notifications"
     ADD CONSTRAINT "claude_notifications_app_fkey" FOREIGN KEY ("app") REFERENCES "public"."apps"("id");
+
+
+
+ALTER TABLE ONLY "public"."claude_notifications"
+    ADD CONSTRAINT "claude_notifications_signal_id_fkey" FOREIGN KEY ("signal_id") REFERENCES "public"."signals"("id");
 
 
 
@@ -20929,6 +21573,36 @@ ALTER TABLE ONLY "public"."sam_songs"
 
 ALTER TABLE ONLY "public"."sam_songs"
     ADD CONSTRAINT "sam_songs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."signals"
+    ADD CONSTRAINT "signals_app_fkey" FOREIGN KEY ("app") REFERENCES "public"."apps"("id");
+
+
+
+ALTER TABLE ONLY "public"."signals"
+    ADD CONSTRAINT "signals_decided_run_id_fkey" FOREIGN KEY ("decided_run_id") REFERENCES "public"."platform_runs"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."signals"
+    ADD CONSTRAINT "signals_inbox_id_fkey" FOREIGN KEY ("inbox_id") REFERENCES "public"."inbox"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."signals"
+    ADD CONSTRAINT "signals_merged_into_fkey" FOREIGN KEY ("merged_into") REFERENCES "public"."signals"("id");
+
+
+
+ALTER TABLE ONLY "public"."signals"
+    ADD CONSTRAINT "signals_notification_id_fkey" FOREIGN KEY ("notification_id") REFERENCES "public"."claude_notifications"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."signals"
+    ADD CONSTRAINT "signals_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
 
 
@@ -21754,6 +22428,10 @@ CREATE POLICY "claude_reader_read" ON "public"."sam_songs" FOR SELECT TO "claude
 
 
 
+CREATE POLICY "claude_reader_read" ON "public"."signals" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
 CREATE POLICY "claude_reader_read" ON "public"."switchboard_actions" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
 
 
@@ -22385,6 +23063,13 @@ ALTER TABLE "public"."sam_song_scores" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."sam_songs" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."signals" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "signals_owner_access" ON "public"."signals" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
 ALTER TABLE "public"."switchboard_actions" ENABLE ROW LEVEL SECURITY;
 
 
@@ -22871,6 +23556,12 @@ GRANT ALL ON FUNCTION "public"."create_reminder"("p_text" "text", "p_due_at" tim
 
 
 
+REVOKE ALL ON FUNCTION "public"."dispatch_signals"("p_now" timestamp with time zone) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."dispatch_signals"("p_now" timestamp with time zone) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."dispatch_signals"("p_now" timestamp with time zone) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."dj_album_coverage"("p_status" "text", "p_tag" "text", "p_limit" integer, "p_album_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."dj_album_coverage"("p_status" "text", "p_tag" "text", "p_limit" integer, "p_album_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."dj_album_coverage"("p_status" "text", "p_tag" "text", "p_limit" integer, "p_album_id" "uuid") TO "service_role";
@@ -23161,9 +23852,9 @@ GRANT ALL ON FUNCTION "public"."last_completed_guard"() TO "service_role";
 
 
 
-REVOKE ALL ON FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb") TO "authenticated";
-GRANT ALL ON FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb") TO "service_role";
+REVOKE ALL ON FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb", "p_started_by" "text", "p_signal_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb", "p_started_by" "text", "p_signal_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb", "p_started_by" "text", "p_signal_id" "uuid") TO "service_role";
 
 
 
@@ -23175,6 +23866,18 @@ GRANT ALL ON FUNCTION "public"."notes_delete_for_target"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."notes_touch_updated_at"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."notes_touch_updated_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."notes_touch_updated_at"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."overwatch_delivery_problem"("p" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."overwatch_delivery_problem"("p" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."overwatch_delivery_problem"("p" "jsonb") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."overwatch_delivery_whole"("p" "jsonb", "p_lo" integer, "p_hi" integer, "p_null_ok" boolean) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."overwatch_delivery_whole"("p" "jsonb", "p_lo" integer, "p_hi" integer, "p_null_ok" boolean) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."overwatch_delivery_whole"("p" "jsonb", "p_lo" integer, "p_hi" integer, "p_null_ok" boolean) TO "service_role";
 
 
 
@@ -23259,6 +23962,12 @@ GRANT ALL ON FUNCTION "public"."project_estimates_guard"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."project_plans_check_group"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."project_plans_check_group"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."project_plans_check_group"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."raise_signal"("p_app" "text", "p_job" "text", "p_severity" "text", "p_subject_key" "text", "p_title" "text", "p_started_by" "text", "p_body" "text", "p_link" "text", "p_source_ref" "text", "p_details" "jsonb", "p_user_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."raise_signal"("p_app" "text", "p_job" "text", "p_severity" "text", "p_subject_key" "text", "p_title" "text", "p_started_by" "text", "p_body" "text", "p_link" "text", "p_source_ref" "text", "p_details" "jsonb", "p_user_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."raise_signal"("p_app" "text", "p_job" "text", "p_severity" "text", "p_subject_key" "text", "p_title" "text", "p_started_by" "text", "p_body" "text", "p_link" "text", "p_source_ref" "text", "p_details" "jsonb", "p_user_id" "uuid") TO "service_role";
 
 
 
@@ -23397,6 +24106,12 @@ GRANT ALL ON FUNCTION "public"."set_archived_at"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."signals_guard_update"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."signals_guard_update"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."signals_guard_update"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."stamp_song_edited"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."stamp_song_edited"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."stamp_song_edited"() TO "service_role";
@@ -23406,6 +24121,12 @@ GRANT ALL ON FUNCTION "public"."stamp_song_edited"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."stamp_songs_from_measure_statement"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."stamp_songs_from_measure_statement"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."stamp_songs_from_measure_statement"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."started_by_valid"("p" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."started_by_valid"("p" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."started_by_valid"("p" "text") TO "service_role";
 
 
 
@@ -27321,6 +28042,103 @@ GRANT SELECT("warmup_ladder") ON TABLE "public"."sam_songs" TO "claude_reader";
 
 
 GRANT SELECT("archived_at") ON TABLE "public"."sam_songs" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."signals" TO "authenticated";
+GRANT ALL ON TABLE "public"."signals" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("app") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("job") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("severity") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("subject_key") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("body") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("link") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("started_by") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("source_ref") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("state") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("outcome") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("reason") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("decided_at") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("decided_run_id") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("inbox_id") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("notification_id") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("merged_into") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("bundle_id") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("details") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."signals" TO "claude_reader";
 
 
 
