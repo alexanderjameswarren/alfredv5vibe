@@ -1,13 +1,14 @@
 -- Purpose: notification routing step 7. resolve_signal(): records that a subject (or every subject under a prefix,
--- e.g. wb-sync:failure covers wb-sync:failure:<error_key>) is healthy again, so the dispatcher's escalation count for
--- it starts over. Queued signals for a resolved subject are dropped: the problem went away before Alex was told.
+-- e.g. wb-sync:failure covers wb-sync:failure:kind:<kind> and wb-sync:failure:bank:<bank>) is healthy again, so the
+-- dispatcher's escalation count for it starts over. Queued signals for a resolved subject are dropped: the problem
+-- went away before Alex was told.
 -- Kind: schema change (one function)
 -- Applied: NO
 --
--- Spec: docs/technical-spec-notification_routing-d7v.md sections 4.2 and 6. Numbered and queued in step 7b, then run
+-- Spec: docs/technical-spec-notification_routing-d7v.md sections 4.2 and 6. Then run
 -- supabase/tests/notification_routing-d7v/4_resolve_signal_verify.sql with --test. Deploy wb-sync after this.
 -- Safe to re-run: create or replace.
--- supabase/migrations/_pending_notification_routing-d7v_resolve_signal.sql
+-- supabase/migrations/205_resolve_signal.sql
 
 begin;
 
@@ -77,6 +78,5 @@ grant execute on function public.resolve_signal(text, text, text, uuid) to authe
 
 commit;
 
--- Result: must say CONFORMANT (check_platform_conformance, step 7b). Then run
--- supabase/tests/notification_routing-d7v/4_resolve_signal_verify.sql with --test.
+-- Result: must say CONFORMANT. Then run supabase/tests/notification_routing-d7v/4_resolve_signal_verify.sql with --test.
 select public.platform_check_conformance() as conformance;

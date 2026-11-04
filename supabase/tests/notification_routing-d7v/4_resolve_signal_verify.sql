@@ -66,6 +66,20 @@ begin
     c := c || jsonb_build_object('after_resolve_held_again', v_dec ->> 'decision' = 'hold'
                                                            and (v_dec ->> 'repeats')::int = 0);
 
+    -- The same failure with a different message each run: wb-sync keeps the subject (kind:<kind> or bank:<bank>),
+    -- so the second still escalates.
+    v_first := (public.raise_signal('warren_buffet', 'wb-sync', 'low', 'wb-sync:failure:kind:nrrtest', 'TEST nrr http',
+      'task:wb-sync', p_body => 'The sync said: "SimpleFIN returned HTTP 524."') ->> 'id')::uuid;
+    v_dec := (select d from jsonb_array_elements(public.dispatch_signals(v_at) -> 'decisions') d
+               where d ->> 'signal_id' = v_first::text);
+    c := c || jsonb_build_object('reworded_first_held', v_dec ->> 'decision' = 'hold');
+    update public.signals set state = 'held', reason = 'test' where id = v_first;
+    v_second := (public.raise_signal('warren_buffet', 'wb-sync', 'low', 'wb-sync:failure:kind:nrrtest', 'TEST nrr http',
+      'task:wb-sync', p_body => 'The sync said: "SimpleFIN request failed: network error, ref 7be0d4."') ->> 'id')::uuid;
+    v_dec := (select d from jsonb_array_elements(public.dispatch_signals(v_at) -> 'decisions') d
+               where d ->> 'signal_id' = v_second::text);
+    c := c || jsonb_build_object('reworded_second_inbox', v_dec ->> 'decision' = 'inbox');
+
     -- Refusals.
     begin
       perform public.resolve_signal('warren_buffet', 'Bad Key', 'task:wb-sync');

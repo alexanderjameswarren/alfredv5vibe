@@ -353,15 +353,25 @@ export interface AlertInput {
 
 export interface Alert {
   key: string;
+  /** What the problem is about, stable between runs whatever the message says; the signal's subject comes from it. */
+  subject: string;
   title: string;
   text: string;
   failureKind: string | null;
+}
+
+/** Lower case, letters and digits joined by hyphens: safe inside a subject key. */
+export function slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "unknown";
 }
 
 /** One plain-language line, then what SimpleFIN or the sync actually said. */
 export function alertFor(input: AlertInput, institutions: string[], runId: string, runDate: string): Alert {
   const said = stripUrls(input.message).trim();
   let title: string;
+  // A failed run is one problem per failure kind; a SimpleFIN error is one per bank, and only an unnamed one
+  // falls back to the message's hash. So a reworded message about the same thing still repeats the same subject.
+  let subject: string;
   if (input.failureKind === null) {
     const lower = said.toLowerCase();
     const inst = institutions
@@ -371,6 +381,7 @@ export function alertFor(input: AlertInput, institutions: string[], runId: strin
     title = inst
       ? `${inst.trim()} connection needs attention in SimpleFIN`
       : "A bank connection needs attention in SimpleFIN";
+    subject = inst ? `bank:${slug(inst)}` : `msg:${errorKey(input.message).replace(/^wb-sync:/, "")}`;
   } else if (input.failureKind === "auth") {
     title = "SimpleFIN refused the money sync's access — the access URL may need renewing";
   } else if (input.failureKind === "config") {
@@ -383,7 +394,8 @@ export function alertFor(input: AlertInput, institutions: string[], runId: strin
     `${title}\n\n${source}: "${said}"\n\n` +
     `wb-sync run ${runId} on ${runDate}. Repeats of this problem join this item while it is open; ` +
     `archive it once the connection is fixed.`;
-  return { key: errorKey(input.message), title, text, failureKind: input.failureKind };
+  if (input.failureKind !== null) subject = `kind:${slug(input.failureKind)}`;
+  return { key: errorKey(input.message), subject: subject!, title, text, failureKind: input.failureKind };
 }
 
 // ── Phase 2 processing (docs/technical-spec-warren_buffet_p2-m4t.md §5) ──────
@@ -466,9 +478,9 @@ export function detectResult(result: Obj | null, error: string | null): DetectRe
 export const FAILURE_SUBJECT = "wb-sync:failure";
 export const STARTED_BY = "task:wb-sync";
 
-/** wb-sync:failure:<hash>, from errorKey's wb-sync:<hash>: one subject per distinct problem. */
-export function failureSubject(key: string): string {
-  return `${FAILURE_SUBJECT}:${key.replace(/^wb-sync:/, "")}`;
+/** wb-sync:failure:<alert subject>: kind:<kind>, bank:<bank> or msg:<hash>. */
+export function failureSubject(alert: Pick<Alert, "subject">): string {
+  return `${FAILURE_SUBJECT}:${alert.subject}`;
 }
 
 /**
@@ -480,7 +492,7 @@ export function signalParams(alerts: Alert[], userId: string, runId: string, run
   const seen = new Set<string>();
   const out = [];
   for (const a of alerts) {
-    const subject = failureSubject(a.key);
+    const subject = failureSubject(a);
     if (seen.has(subject)) continue;
     seen.add(subject);
     out.push({

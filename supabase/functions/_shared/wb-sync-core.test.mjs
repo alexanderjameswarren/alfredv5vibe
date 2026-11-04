@@ -258,8 +258,8 @@ test("signalParams: one per distinct error in a run, under the failure prefix, h
   const a2 = core.alertFor({ message: "login required for example bank", failureKind: null }, [], RUN, "d");
   const out = core.signalParams([a, b, a2], "u1", RUN, "2026-11-04");
   assert.equal(out.length, 2);
-  assert.equal(out[0].p_subject_key, core.failureSubject(a.key));
-  assert.match(out[0].p_subject_key, /^wb-sync:failure:[0-9a-f]{8}$/);
+  assert.equal(out[0].p_subject_key, core.failureSubject(a));
+  assert.match(out[0].p_subject_key, /^wb-sync:failure:msg:[0-9a-f]{8}$/);
   assert.ok(out[0].p_subject_key.startsWith(`${core.FAILURE_SUBJECT}:`), "resolve_signal's prefix covers it");
   assert.equal(out[0].p_severity, "low");
   assert.equal(out[0].p_started_by, "task:wb-sync");
@@ -280,6 +280,34 @@ test("signalParams: the same problem gets the same subject on another day, so re
   assert.notEqual(day1[0].p_source_ref, day2[0].p_source_ref);
   assert.equal(core.signalParams([core.alertFor({ message: "x", failureKind: "auth" }, [], RUN, "d")], "u1", RUN, "d")[0]
     .p_details.failure_kind, "auth");
+});
+
+test("subject: a failed run is one subject per kind, whatever the message says", () => {
+  const a = core.alertFor({ message: "SimpleFIN returned HTTP 524.", failureKind: "http" }, [], RUN, "d");
+  const b = core.alertFor({ message: "SimpleFIN returned HTTP 502.", failureKind: "http" }, [], "r2", "d2");
+  const c = core.alertFor({ message: 'duplicate key value violates "wb_x" req a1f9c2', failureKind: "db" }, [], RUN, "d");
+  const d = core.alertFor({ message: "permission denied for table wb_y, req 7be0d4", failureKind: "db" }, [], RUN, "d");
+  assert.equal(core.failureSubject(a), "wb-sync:failure:kind:http");
+  assert.equal(core.failureSubject(a), core.failureSubject(b));
+  assert.equal(core.failureSubject(c), "wb-sync:failure:kind:db");
+  assert.equal(core.failureSubject(c), core.failureSubject(d));
+  assert.notEqual(core.failureSubject(a), core.failureSubject(c));
+});
+
+test("subject: a SimpleFIN error is one subject per named bank, reworded or not; unnamed ones fall back to the hash", () => {
+  const banks = ["City National Bank", "Example Bank"];
+  const a = core.alertFor({ message: "City National Bank: login required", failureKind: null }, banks, RUN, "d");
+  const b = core.alertFor({ message: "Connection to City National Bank needs re-authentication (ref ab12cd)",
+    failureKind: null }, banks, "r2", "d2");
+  const other = core.alertFor({ message: "Example Bank: login required", failureKind: null }, banks, RUN, "d");
+  const unnamed = core.alertFor({ message: "Something odd happened", failureKind: null }, banks, RUN, "d");
+  assert.equal(core.failureSubject(a), "wb-sync:failure:bank:city-national-bank");
+  assert.equal(core.failureSubject(a), core.failureSubject(b));
+  assert.notEqual(core.failureSubject(a), core.failureSubject(other));
+  assert.match(core.failureSubject(unnamed), /^wb-sync:failure:msg:[0-9a-f]{8}$/);
+  for (const s of [a, b, other, unnamed].map(core.failureSubject)) assert.match(s, /^[a-z0-9][a-z0-9:_.-]{0,199}$/);
+  const once = core.signalParams([a, b], "u1", RUN, "d");
+  assert.equal(once.length, 1, "two errors about one bank in one run raise one signal");
 });
 
 test("simulated message classifies as blocking", () => {
