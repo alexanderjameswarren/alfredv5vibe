@@ -12,7 +12,7 @@ import { loadTool, settingsFor, withSettings } from "./test-platform.mjs";
 
 const m = await loadTool("reminders.ts");
 const REMINDER_SETTINGS = settingsFor("reminders", ["id", "user_id", "text", "due_at", "state", "cancel_reason",
-  "sent_at", "inbox_id", "intent_id", "created_by", "created_at", "updated_at"]);
+  "sent_at", "inbox_id", "intent_id", "created_by", "started_by", "created_at", "updated_at"]);
 
 const FUTURE = new Date(Date.now() + 3600_000).toISOString().replace(/\.\d+Z$/, "Z");
 const PAST = "2020-01-01T09:00:00-08:00";
@@ -59,6 +59,29 @@ test("create_reminder calls the database function as claude", async () => {
   const [, name, p] = db.calls[0];
   assert.equal(name, "create_reminder");
   assert.deepEqual(p, { p_text: "Call Bob", p_due_at: new Date(FUTURE).toISOString(), p_inbox_id: null, p_intent_id: null, p_created_by: "claude" });
+});
+
+test("create_reminder: no started_by, or chat, leaves it to the insert trigger", async () => {
+  for (const args of [{}, { started_by: "chat" }]) {
+    const db = fakeDb();
+    await m.createReminderTool.handler({ text: "x", due_at: FUTURE, ...args }, { db });
+    assert.ok(!db.calls.some(([, k]) => k === "update"));
+  }
+});
+
+test("create_reminder: another started_by is set on the new row", async () => {
+  const db = fakeDb({ data: { id: "r1", started_by: "task:overwatch_nightly" }, error: null });
+  const out = await m.createReminderTool.handler({ text: "x", due_at: FUTURE, started_by: "task:overwatch_nightly" }, { db });
+  assert.equal(out.started_by, "task:overwatch_nightly");
+  assert.ok(db.calls.some(([t, k, p]) => t === "reminders" && k === "update" && p.started_by === "task:overwatch_nightly"));
+  assert.ok(db.calls.some(([t, k, c, v]) => t === "reminders" && k === "eq" && c === "id" && v === "r1"));
+});
+
+test("create_reminder: a bad started_by is refused before anything is written", async () => {
+  const db = fakeDb();
+  await assert.rejects(m.createReminderTool.handler({ text: "x", due_at: FUTURE, started_by: "cron" }, { db }),
+    /`started_by` must be "alex", "chat" or "task:<job>"/);
+  assert.equal(db.calls.length, 0);
 });
 
 test("create_reminder rejects both links, and writes nothing", async () => {

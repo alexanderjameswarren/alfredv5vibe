@@ -143,7 +143,21 @@ signals.ts, `get_delivery_rules` in overwatch-plan.ts, with tests. Registration 
 `update_signal` moved to step 11. Spec sections 4.2, 4.3, 5 and 6 updated: the rule order now puts
 escalation before merge, and the seed copies today's settings.
 
-### 5. The dispatcher task (40m)
+### 5. The dispatcher task — WRITTEN 2026-11-04 (`s5-g3mz`)
+Steps 3 and 4 are checkpointed (main b3673a3) and the db claims are released.
+docs/claude-hourly-notifications-task-prompt.md has been rewritten as the dispatcher, PROMPT
+VERSION 2026-11-04a. Stage A watches each enabled watcher from get_delivery_rules and calls
+raise_signal (started_by task:claude-hourly-notifications, a stable subject_key with no date, and
+source_ref subject:date:hour). Stage B calls get_dispatch_plan, words only the pops, inbox items
+and the digest, and calls deliver_signals; outside the window it delivers nothing. The run ends
+with one line of counts. No Claude app push, no reminders.
+**Alex, next:** paste it into the "Claude hourly notifications" task, turn off that task's Claude
+app push, run it once by hand, and update the schedule row's notes in chat.
+**LIVE 2026-11-04:** Claude updated the task to prompt 2026-11-04a and turned its Claude app push
+off. Its first run (13:11) closed ok: it watched arnold and raised nothing. Alex chose no global
+daily cap for now, so the delivery rules stay as seeded.
+
+Original plan for this step (40m):
 Rewrite the hourly prompt as stages A (watch) and B (dispatch); new `PROMPT VERSION`; schedule
 row notes. Alex pastes the prompt into the task.
 
@@ -161,7 +175,38 @@ Estimated run: 40m
 
 ### Phase C — Senders and apps
 
-### 6. started_by on reminders; notify-dispatch logs every pop (60m)
+### 6. started_by on reminders; notify-dispatch logs every pop — WRITTEN 2026-11-04 (`s6-p4wc`)
+- `_pending_notification_routing-d7v_started_by.sql`:
+  - adds reminders.started_by and backfills it (alex where created_by is app, chat where it is claude), then sets it not null;
+  - adds a check using started_by_valid;
+  - adds a before-insert trigger that fills it from created_by, so the app and create_reminder() need no change.
+- create_reminder takes an optional started_by, set on the new row after the RPC; chat and absent are left to the trigger. Its schema in mcp/index.ts has it.
+- notify-dispatch now:
+  - reads started_by and created_by;
+  - logs every push in claude_notifications (sent, failed and no_subscription), as app alfred, job reminder or step_timer, kind info, channel alfred_push, with link = the tap target;
+  - uses dedupe keys `reminder:<id>:<due_at>` and `step:<id>:<due_at>`, started_by from the reminder, and `alex` for step timers;
+  - writes one upsert per run, ignoring duplicates. Logging never blocks a send.
+- Test `3_started_by_verify.sql` written.
+- Tests: reminders and mcp 55 of 55; `deno check` on notify-dispatch is clean.
+
+### 6b. Number, queue, test, deploy (30m)
+In this order:
+1. gitsync, drift check on reminders and claude_notifications, db claims.
+2. Number the migration and queue it.
+3. Run test 3 with `--test`.
+4. Deploy mcp and notify-dispatch. Deploy them only after the migration, because both read reminders.started_by. Re-check notify-dispatch's verify_jwt is false after the deploy.
+5. check_platform_conformance, then Checkpoint.
+
+Scope of this step:
+- create: supabase/migrations/<next>_reminders_started_by.sql
+- update: nothing
+- delete: supabase/migrations/_pending_notification_routing-d7v_started_by.sql
+- deploy: mcp, notify-dispatch
+- SQL: reminders, claude_notifications
+Estimated run: 30m
+DB: `db:table:reminders`, `db:table:claude_notifications`, `db:deploy`.
+
+Original plan for step 6 (60m):
 `reminders.started_by` with backfill; `create_reminder` requires it and refuses `task:*`;
 `notify-dispatch` writes a `claude_notifications` row per reminder and step pop. Re-check
 `verify_jwt = false` after the deploy.
@@ -170,6 +215,14 @@ Files: supabase/migrations/_pending_notification_routing-d7v_started_by.sql (the
 supabase/tests/notification_routing-d7v/3_started_by_verify.sql,
 supabase/functions/notify-dispatch/index.ts, reminders.ts +test.
 DB: `db:table:reminders`, `db:table:claude_notifications`, `db:deploy`.
+
+Scope of this step (write and test; numbering, queuing and deploys follow as 6b):
+- create: supabase/migrations/_pending_notification_routing-d7v_started_by.sql, supabase/tests/notification_routing-d7v/3_started_by_verify.sql
+- update: supabase/functions/notify-dispatch/index.ts, supabase/functions/_shared/tools/reminders.ts, supabase/functions/_shared/tools/reminders.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
+- delete: nothing
+- deploy: nothing
+- SQL: reminders, claude_notifications
+Estimated run: 45m
 
 ### 7. wb-sync raises signals (45m)
 `raise_signal` on blocking errors, `resolve_signal` on ok; its open-item check goes. This step
@@ -234,6 +287,10 @@ DB: `db:fn:overwatch_nightly_counts`, `db:deploy`.
 Alex turns off the Claude app push on every scheduled task. End-to-end check: one signal of each
 decision, one reminder, one step timer, each logged. Then `gitpush` Finish.
 
+`create_reminder` changes here too: started_by becomes required, and `task:*` callers are refused (decision 3). It
+stays optional until then, because the Overwatch nightly and weekly prompts still call
+create_reminder until step 8 moves them to signals.
+
 `started_by` becomes required here: `claude_notifications.started_by` not null (after checking no
 null rows since step 3c), and required on `send_alfred_push` and `log_claude_notification`. Until
 then it is nullable and optional, so the live hourly task keeps working.
@@ -261,4 +318,6 @@ Files: this file. DB: none.
 | 3l | 5m | 1m 11s | 203: untyped literal into text[] |
 | 3m | 5m | 15s | re-queued test 2 |
 | 3n | 10m | 18s | test fix: sample pop in the wrong clock hour |
-| 3o | 10m | see report | mcp deploy, conformance |
+| 3o | 10m | 1m 15s | mcp deploy, conformance |
+| 5 | 8m | 52s | dispatcher prompt |
+| 6 | 10m | see report | reminders started_by, notify-dispatch logging |

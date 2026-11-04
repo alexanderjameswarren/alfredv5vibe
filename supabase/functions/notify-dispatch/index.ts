@@ -49,6 +49,11 @@ const EXECUTIONS_TABLE = "executions";
 // no execution, so they skip the active-execution filter entirely.
 const REMINDERS_TABLE = "reminders";
 
+// Every push this sends is logged here too (notification routing, spec §8),
+// with who started it. Logging never blocks or fails a send: Alex's own
+// reminders and step timers always fire.
+const LOG_TABLE = "claude_notifications";
+
 // A bounded read. A minute's worth of due steps is normally a handful; a
 // runaway query returning thousands would blow the function's time budget and
 // send a flood. Anything beyond this waits for the next tick sixty seconds
@@ -136,6 +141,45 @@ interface ReminderRow {
   due_at: string;
   inbox_id: string | null;
   intent_id: string | null;
+  created_by: string;
+  started_by: string | null;
+}
+
+const PT_DATE = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit",
+});
+
+/** One claude_notifications row for a push this run sent (or could not). */
+function logRow(p: {
+  user_id: string; job: "reminder" | "step_timer"; title: string; body: string; link: string;
+  dedupe_key: string; started_by: string; status: string; detail: Record<string, unknown>;
+}) {
+  return {
+    user_id: p.user_id,
+    app: "alfred",
+    job: p.job,
+    kind: "info",
+    channel: "alfred_push",
+    title: p.title,
+    body: p.body,
+    link: p.link,
+    local_date: PT_DATE.format(new Date()),
+    dedupe_key: p.dedupe_key,
+    delivery_status: p.status,
+    delivery_detail: p.detail,
+    started_by: p.started_by,
+  };
+}
+
+/** Endpoint counts only: the log is read by Claude, and endpoints are secret. */
+function sendDetail(endpoints: { ok: boolean; removed?: boolean }[], extra: Record<string, unknown>) {
+  return {
+    ...extra,
+    devices: endpoints.length,
+    sent_to: endpoints.filter((e) => e.ok).length,
+    removed: endpoints.filter((e) => e.removed).length,
+    sent_at: new Date().toISOString(),
+  };
 }
 
 /** Tap target: the intention, else the inbox item, else the inbox list. */
@@ -207,7 +251,7 @@ Deno.serve(async (req) => {
 
   const { data: dueRemindersData, error: remindersError } = await db
     .from(REMINDERS_TABLE)
-    .select("id, user_id, text, due_at, inbox_id, intent_id")
+    .select("id, user_id, text, due_at, inbox_id, intent_id, created_by, started_by")
     .eq("state", "scheduled")
     .lte("due_at", nowIso)
     .order("due_at", { ascending: true })
@@ -332,10 +376,17 @@ Deno.serve(async (req) => {
     );
 
   const results = [];
+  const logs: ReturnType<typeof logRow>[] = [];
 
   for (const step of steps) {
     const subs = subsByUser.get(step.user_id) ?? [];
     if (subs.length === 0) {
+      logs.push(logRow({
+        user_id: step.user_id, job: "step_timer", title: "Alfred", body: step.text,
+        link: executionPath(step.execution_id), dedupe_key: `step:${step.id}:${step.due_at}`,
+        started_by: "alex", status: NO_SUBSCRIPTION,
+        detail: { step_id: step.id, execution_id: step.execution_id, devices: 0 },
+      }));
       // No device to send to, ever — this user has no subscription at all.
       //
       // Taken OUT of the send queue rather than left `scheduled`. Left
@@ -384,6 +435,12 @@ Deno.serve(async (req) => {
     // deduplication is out of scope; what matters is that the step is not
     // retried every sixty seconds forever because one stale device failed.
     const anySucceeded = endpoints.some((e) => e.ok);
+    // Step timers are Alex's own: he set the item's chain.
+    logs.push(logRow({
+      user_id: step.user_id, job: "step_timer", title: "Alfred", body: step.text, link: url,
+      dedupe_key: `step:${step.id}:${step.due_at}`, started_by: "alex", status: anySucceeded ? "sent" : "failed",
+      detail: sendDetail(endpoints, { step_id: step.id, execution_id: step.execution_id }),
+    }));
 
     if (anySucceeded) {
       const { error: markError } = await db
@@ -416,7 +473,16 @@ Deno.serve(async (req) => {
 
   for (const reminder of reminders) {
     const subs = subsByUser.get(reminder.user_id) ?? [];
+    // started_by is filled on insert; created_by is the fallback for a row that predates it.
+    const startedBy = reminder.started_by ?? (reminder.created_by === "app" ? "alex" : "chat");
+    const reminderLog = (status: string, link: string, detail: Record<string, unknown>) =>
+      logRow({
+        user_id: reminder.user_id, job: "reminder", title: "Alfred reminder", body: reminder.text, link,
+        dedupe_key: `reminder:${reminder.id}:${reminder.due_at}`, started_by: startedBy, status,
+        detail: { reminder_id: reminder.id, inbox_id: reminder.inbox_id, intent_id: reminder.intent_id, ...detail },
+      });
     if (subs.length === 0) {
+      logs.push(reminderLog(NO_SUBSCRIPTION, reminderPath(reminder), { devices: 0 }));
       const { error: markError } = await db
         .from(REMINDERS_TABLE)
         .update({ state: NO_SUBSCRIPTION })
@@ -445,6 +511,7 @@ Deno.serve(async (req) => {
 
     const endpoints = await sendToAll(subs, payload);
     const anySucceeded = endpoints.some((e) => e.ok);
+    logs.push(reminderLog(anySucceeded ? "sent" : "failed", url, sendDetail(endpoints, {})));
 
     if (anySucceeded) {
       const { error: markError } = await db
@@ -467,6 +534,21 @@ Deno.serve(async (req) => {
     });
   }
 
+  // One write for the run. A repeat of the same push (same row, same due time) is skipped, not doubled.
+  let logged = 0;
+  let logError: string | null = null;
+  if (logs.length > 0) {
+    const { data: loggedRows, error } = await db.from(LOG_TABLE)
+      .upsert(logs, { onConflict: "user_id,dedupe_key", ignoreDuplicates: true })
+      .select("id");
+    if (error) {
+      logError = error.message;
+      console.error("[dispatch] Sent, but could not log to claude_notifications:", error);
+    } else {
+      logged = (loggedRows ?? []).length;
+    }
+  }
+
   const sent = results.filter((r) => r.sent).length;
   const remindersSent = reminderResults.filter((r) => r.sent).length;
   const summary = {
@@ -485,6 +567,8 @@ Deno.serve(async (req) => {
     reminders_sent: remindersSent,
     reminders_failed: reminders.length - remindersSent,
     reminder_results: reminderResults,
+    logged,
+    ...(logError ? { log_error: logError } : {}),
   };
 
   // Logged as well as returned: pg_net stores the response body, but the
