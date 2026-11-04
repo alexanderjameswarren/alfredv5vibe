@@ -5,12 +5,12 @@
 -- reminders rows
 -- Applied: NO
 --
--- Spec: docs/technical-spec-notification_routing-d7v.md section 8. Needs 200_signals.sql (started_by_valid). Numbered
--- and queued in step 6b, then run supabase/tests/notification_routing-d7v/3_started_by_verify.sql with --test.
--- Deploy notify-dispatch only after this has run: it reads reminders.started_by.
+-- Spec: docs/technical-spec-notification_routing-d7v.md section 8. Needs 200_signals.sql (started_by_valid). Then
+-- run supabase/tests/notification_routing-d7v/3_started_by_verify.sql with --test.
+-- Deploy notify-dispatch and mcp only after this has run: both read reminders.started_by.
 -- Safe to re-run: add column if not exists, the constraint and trigger are dropped first, the backfill only touches
 -- rows with no started_by.
--- supabase/migrations/_pending_notification_routing-d7v_started_by.sql
+-- supabase/migrations/204_reminders_started_by.sql
 
 begin;
 
@@ -58,6 +58,5 @@ create trigger reminders_default_started_by
 
 commit;
 
--- Result: must say CONFORMANT (check_platform_conformance, step 6b). Then run
--- supabase/tests/notification_routing-d7v/3_started_by_verify.sql with --test.
+-- Result: must say CONFORMANT. Then run supabase/tests/notification_routing-d7v/3_started_by_verify.sql with --test.
 select public.platform_check_conformance() as conformance;
