@@ -91,6 +91,7 @@ import {
   getDispatchPlanTool,
   getSignalsTool,
   raiseSignalTool,
+  resolveSignalTool,
 } from "../_shared/tools/signals.ts";
 import { getAppsTool, checkSourceApp } from "../_shared/tools/apps.ts";
 import { checkSuggestedGroupId, suggestedGroupError, withSuggestedGroups } from "../_shared/tools/inbox-groups.ts";
@@ -3261,6 +3262,22 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(raiseSignalTool, args, token),
+  );
+
+  server.registerTool(
+    "resolve_signal",
+    {
+      title: "Resolve Signal",
+      description:
+        "Say a subject is healthy again, e.g. after a sync that failed now succeeds. subject_key is one subject or a prefix of several (wb-sync:failure covers wb-sync:failure:<error_key>). " +
+        "Each matching subject with signals since it was last resolved gets a resolved marker, so the dispatcher's escalation count for it starts over, and any of its signals still queued are dropped. Returns { resolved: [subject keys], dropped }. Tier 1.",
+      inputSchema: {
+        app: z.string().describe("App id from get_apps, e.g. warren_buffet."),
+        subject_key: z.string().describe("A subject key or a prefix of one, e.g. wb-sync:failure."),
+        started_by: z.string().describe("Who resolved it: \"alex\", \"chat\", or \"task:<job>\"."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(resolveSignalTool, args, token),
   );
 
   server.registerTool(

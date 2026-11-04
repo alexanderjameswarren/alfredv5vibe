@@ -6,6 +6,7 @@
 // Spec: docs/technical-spec-notification_routing-d7v.md §4.
 //
 //   raise_signal       tier 1  raise one signal (append-only, like create_inbox_item)
+//   resolve_signal     tier 1  a subject is healthy again: its escalation count starts over
 //   get_signals        tier 1  read signals, newest first
 //   get_dispatch_plan  tier 1  what the dispatcher would do now (dispatch_signals, writes nothing)
 //   deliver_signals    tier 1  do it: hold, inbox items, pops, merges; Claude only words what gets through
@@ -79,6 +80,30 @@ export const raiseSignalTool = defineTool({
     const row = (Array.isArray(data) ? data[0] : data) as Row | null;
     if (!row || typeof row.created !== "boolean") {
       throw fail(tool, `raise_signal returned an unexpected result: ${JSON.stringify(data)}.`);
+    }
+    return row;
+  },
+});
+
+// ---------------------------------------------------------------------------
+// resolve_signal — tier 1 (append)
+// ---------------------------------------------------------------------------
+
+export const resolveSignalTool = defineTool({
+  name: "resolve_signal",
+  tables: { reads: ["signals"], writes: ["signals"] },
+  tier: 1,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "resolve_signal";
+    const { data, error } = await ctx.db.rpc("resolve_signal", {
+      p_app: requireText(tool, "app", args.app, 100),
+      p_subject_key: requireSubjectKey(tool, args.subject_key),
+      p_started_by: requireStartedBy(tool, args.started_by),
+    });
+    if (error) throw dbError(tool, "resolve_signal", error);
+    const row = (Array.isArray(data) ? data[0] : data) as Row | null;
+    if (!row || !Array.isArray(row.resolved)) {
+      throw fail(tool, `resolve_signal returned an unexpected result: ${JSON.stringify(data)}.`);
     }
     return row;
   },

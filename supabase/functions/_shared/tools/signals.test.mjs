@@ -128,6 +128,26 @@ test("raise: the database's refusal is a validation error", async () => {
     /validation error: raise_signal: unknown app "wb"/);
 });
 
+test("resolve: tier 1; passes app, subject or prefix, and started_by; returns what was resolved", async () => {
+  assert.equal(m.resolveSignalTool.tier, 1);
+  const db = fakeDb({ rpcs: { resolve_signal: { data: { resolved: ["wb-sync:failure:wb-sync:1a2b3c4d"], dropped: 1 },
+    error: null } } });
+  const out = await m.resolveSignalTool.handler({ app: "warren_buffet", subject_key: "wb-sync:failure",
+    started_by: "task:wb-sync" }, { db });
+  assert.deepEqual(out.resolved, ["wb-sync:failure:wb-sync:1a2b3c4d"]);
+  const [, , p] = db.calls.find(([t, n]) => t === "rpc" && n === "resolve_signal");
+  assert.deepEqual(p, { p_app: "warren_buffet", p_subject_key: "wb-sync:failure", p_started_by: "task:wb-sync" });
+});
+
+test("resolve: bad input is refused before the database", async () => {
+  const db = fakeDb();
+  await assert.rejects(m.resolveSignalTool.handler({ app: "warren_buffet", subject_key: "Bad Key", started_by: "chat" }, { db }),
+    /`subject_key` must be/);
+  await assert.rejects(m.resolveSignalTool.handler({ app: "warren_buffet", subject_key: "x", started_by: "bot" }, { db }),
+    /`started_by` must be/);
+  assert.equal(db.calls.length, 0);
+});
+
 test("get: filters, newest first", async () => {
   const db = fakeDb({ rows: [{ id: "s1", state: "held" }] });
   const out = await m.getSignalsTool.handler({ app: "warren_buffet", state: "held", severity: "high",

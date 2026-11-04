@@ -316,7 +316,7 @@ export function pendingRowsToDelete(
 }
 
 // ---------------------------------------------------------------------------
-// Inbox alerts (Step 4)
+// Failure alerts (Step 4), raised as signals since notification routing step 7
 // ---------------------------------------------------------------------------
 
 /** Header that turns a run into a simulated blocking error. Honoured only after the secret gate. */
@@ -381,7 +381,7 @@ export function alertFor(input: AlertInput, institutions: string[], runId: strin
   const source = input.failureKind === null ? "SimpleFIN said" : "The sync said";
   const text =
     `${title}\n\n${source}: "${said}"\n\n` +
-    `wb-sync run ${runId} on ${runDate}. This item stays the only alert for this problem while it is open; ` +
+    `wb-sync run ${runId} on ${runDate}. Repeats of this problem join this item while it is open; ` +
     `archive it once the connection is fixed.`;
   return { key: errorKey(input.message), title, text, failureKind: input.failureKind };
 }
@@ -460,13 +460,42 @@ export function detectResult(result: Obj | null, error: string | null): DetectRe
 }
 
 /** Alerts to create: one per distinct key, none whose key already has an open item. */
-export function planAlerts(alerts: Alert[], openKeys: Set<string>): Alert[] {
-  const seen = new Set(openKeys);
-  const out: Alert[] = [];
+// ── Signals (notification routing, docs/technical-spec-notification_routing-d7v.md §8) ──────
+
+/** Every failure subject sits under this prefix, so one resolve_signal after an ok run resets them all. */
+export const FAILURE_SUBJECT = "wb-sync:failure";
+export const STARTED_BY = "task:wb-sync";
+
+/** wb-sync:failure:<hash>, from errorKey's wb-sync:<hash>: one subject per distinct problem. */
+export function failureSubject(key: string): string {
+  return `${FAILURE_SUBJECT}:${key.replace(/^wb-sync:/, "")}`;
+}
+
+/**
+ * raise_signal parameters, one per distinct problem in this run. Raised every time it happens: the dispatcher
+ * holds the first and merges repeats. Severity low, so the delivery rules' escalation turns the second in a row
+ * into an inbox item.
+ */
+export function signalParams(alerts: Alert[], userId: string, runId: string, runDate: string) {
+  const seen = new Set<string>();
+  const out = [];
   for (const a of alerts) {
-    if (seen.has(a.key)) continue;
-    seen.add(a.key);
-    out.push(a);
+    const subject = failureSubject(a.key);
+    if (seen.has(subject)) continue;
+    seen.add(subject);
+    out.push({
+      p_app: APP,
+      p_job: JOB,
+      p_severity: "low",
+      p_subject_key: subject,
+      p_title: a.title.slice(0, 200),
+      p_started_by: STARTED_BY,
+      p_body: a.text,
+      p_link: null,
+      p_source_ref: `wb-sync:${runId}:${subject}`,
+      p_details: { run_id: runId, run_date: runDate, error_key: a.key, failure_kind: a.failureKind ?? "simplefin_errors" },
+      p_user_id: userId,
+    });
   }
   return out;
 }

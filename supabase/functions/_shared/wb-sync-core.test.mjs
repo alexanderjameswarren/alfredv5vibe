@@ -252,13 +252,34 @@ test("errorKey: ignores case, spacing and numbers; differs for different problem
   assert.match(core.errorKey("x"), /^wb-sync:[0-9a-f]{8}$/);
 });
 
-test("planAlerts: one per distinct error, none while one is open", () => {
+test("signalParams: one per distinct error in a run, under the failure prefix, held first (low)", () => {
   const a = core.alertFor({ message: "Login required for Example Bank", failureKind: null }, [], RUN, "d");
   const b = core.alertFor({ message: "Login required for Other Bank", failureKind: null }, [], RUN, "d");
   const a2 = core.alertFor({ message: "login required for example bank", failureKind: null }, [], RUN, "d");
-  assert.deepEqual(core.planAlerts([a, b, a2], new Set()).map((x) => x.key), [a.key, b.key]);
-  assert.deepEqual(core.planAlerts([a, b], new Set([a.key])).map((x) => x.key), [b.key]);
-  assert.deepEqual(core.planAlerts([a], new Set([a.key])), []);
+  const out = core.signalParams([a, b, a2], "u1", RUN, "2026-11-04");
+  assert.equal(out.length, 2);
+  assert.equal(out[0].p_subject_key, core.failureSubject(a.key));
+  assert.match(out[0].p_subject_key, /^wb-sync:failure:[0-9a-f]{8}$/);
+  assert.ok(out[0].p_subject_key.startsWith(`${core.FAILURE_SUBJECT}:`), "resolve_signal's prefix covers it");
+  assert.equal(out[0].p_severity, "low");
+  assert.equal(out[0].p_started_by, "task:wb-sync");
+  assert.equal(out[0].p_user_id, "u1");
+  assert.equal(out[0].p_app, core.APP);
+  assert.equal(out[0].p_link, null);
+  assert.equal(out[0].p_source_ref, `wb-sync:${RUN}:${out[0].p_subject_key}`);
+  assert.deepEqual(out[0].p_details, { run_id: RUN, run_date: "2026-11-04", error_key: a.key, failure_kind: "simplefin_errors" });
+  assert.equal(out[0].p_body, a.text);
+});
+
+test("signalParams: the same problem gets the same subject on another day, so repeats tie together", () => {
+  const day1 = core.signalParams([core.alertFor({ message: "Not updated in 3 days", failureKind: null }, [], RUN, "d1")],
+    "u1", RUN, "d1");
+  const day2 = core.signalParams([core.alertFor({ message: "Not updated in 4 days", failureKind: null }, [], "r2", "d2")],
+    "u1", "r2", "d2");
+  assert.equal(day1[0].p_subject_key, day2[0].p_subject_key);
+  assert.notEqual(day1[0].p_source_ref, day2[0].p_source_ref);
+  assert.equal(core.signalParams([core.alertFor({ message: "x", failureKind: "auth" }, [], RUN, "d")], "u1", RUN, "d")[0]
+    .p_details.failure_kind, "auth");
 });
 
 test("simulated message classifies as blocking", () => {

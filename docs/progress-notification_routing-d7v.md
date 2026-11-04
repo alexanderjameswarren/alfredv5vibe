@@ -257,7 +257,46 @@ Scope of this step (write and test; numbering, queuing and deploys follow as 6b)
 - SQL: reminders, claude_notifications
 Estimated run: 45m
 
-### 7. wb-sync raises signals (45m)
+**Step 6 verified live (2026-11-04):** step 6 is checkpointed. notify-dispatch v17 logged a test
+reminder (job reminder, started_by chat) and a step timer (job step_timer, started_by alex).
+
+### 7. wb-sync raises signals, resolve_signal, short links — WRITTEN 2026-11-04 (`s7-m3qe`)
+- **`_pending_notification_routing-d7v_resolve_signal.sql`:** `resolve_signal(p_app, p_subject_key, p_started_by, p_user_id)`.
+  - p_subject_key is a subject or a prefix of subjects (before a `:`).
+  - Each matching subject with signals since its last resolved gets a `resolved` row, and its queued signals are dropped.
+  - The service-role rule is the same as raise_signal's.
+- **resolve_signal tool:** in signals.ts and registered in mcp/index.ts (194 tools).
+- **wb-sync:**
+  - It no longer writes inbox rows or checks open items.
+  - Each distinct blocking error raises a signal: subject `wb-sync:failure:<hash>`, severity low (held first; the seeded escalation makes the second in a row an inbox item), started_by `task:wb-sync`, source_ref `wb-sync:<run>:<subject>`.
+  - A fully ok, non-simulated run calls `resolve_signal(warren_buffet, wb-sync:failure)`. A partial run doesn't resolve, because a connection still needs attention.
+  - `planAlerts` is gone, replaced by `signalParams` in wb-sync-core.
+- **Short links:** notify-dispatch's tap target and log link are now `/<id>`: the execution for a step timer; the intention, else the inbox item, for a reminder.
+  - The app's record route takes any UUID or app id, and recordRoutes opens an inbox row and an execution at their own screens.
+  - Real ids all match the route.
+  - An id that doesn't match keeps its page path. No bug to log.
+- **Test** `4_resolve_signal_verify.sql`: two failures in a row escalate to inbox; a resolve drops the queued one and resets the count.
+- **Tests:** signals and mcp 58 of 58, wb-sync-core 44 of 44. `deno check --no-lock` is clean for wb-sync and notify-dispatch.
+
+### 7b. Number, queue, test, deploy (30m)
+In this order:
+1. gitsync and drift check on signals.
+2. Claim db:table:signals, db:fn:resolve_signal and db:deploy.
+3. Number the migration and queue it.
+4. Run test 4 with `--test`.
+5. Deploy mcp, wb-sync and notify-dispatch. wb-sync needs resolve_signal live first. Re-check verify_jwt is false on wb-sync and notify-dispatch after deploying.
+6. check_platform_conformance, then Checkpoint.
+
+Scope of this step:
+- create: supabase/migrations/<next>_resolve_signal.sql
+- update: docs/progress-notification_routing-d7v.md
+- delete: supabase/migrations/_pending_notification_routing-d7v_resolve_signal.sql
+- deploy: nothing
+- SQL: signals
+Estimated run: 10m
+(Queuing test 4 and the three deploys follow as their own steps, as in 6c and 6d.)
+
+Original plan for step 7 (45m):
 `raise_signal` on blocking errors, `resolve_signal` on ok; its open-item check goes. This step
 also writes `resolve_signal` (function and tool), moved here from step 3.
 
@@ -364,4 +403,5 @@ Files: this file. DB: none.
 | 6 | 10m | 2m 56s | reminders started_by, notify-dispatch logging |
 | 6b | 10m | 1m 28s | cap check, numbered and queued 204 |
 | 6c | 5m | 7s | queued test 3 |
-| 6d | 10m | see report | deploy notify-dispatch and mcp, conformance |
+| 6d | 10m | 1m 22s | deploy notify-dispatch and mcp, conformance |
+| 7 | 10m | see report | resolve_signal, wb-sync signals, short links |
