@@ -143,7 +143,21 @@ signals.ts, `get_delivery_rules` in overwatch-plan.ts, with tests. Registration 
 `update_signal` moved to step 11. Spec sections 4.2, 4.3, 5 and 6 updated: the rule order now puts
 escalation before merge, and the seed copies today's settings.
 
-### 5. The dispatcher task (40m)
+### 5. The dispatcher task — WRITTEN 2026-11-04 (`s5-g3mz`)
+Steps 3 and 4 are checkpointed (main b3673a3) and the db claims are released.
+docs/claude-hourly-notifications-task-prompt.md has been rewritten as the dispatcher, PROMPT
+VERSION 2026-11-04a. Stage A watches each enabled watcher from get_delivery_rules and calls
+raise_signal (started_by task:claude-hourly-notifications, a stable subject_key with no date, and
+source_ref subject:date:hour). Stage B calls get_dispatch_plan, words only the pops, inbox items
+and the digest, and calls deliver_signals; outside the window it delivers nothing. The run ends
+with one line of counts. No Claude app push, no reminders.
+**Alex, next:** paste it into the "Claude hourly notifications" task, turn off that task's Claude
+app push, run it once by hand, and update the schedule row's notes in chat.
+**LIVE 2026-11-04:** Claude updated the task to prompt 2026-11-04a and turned its Claude app push
+off. Its first run (13:11) closed ok: it watched arnold and raised nothing. Alex chose no global
+daily cap for now, so the delivery rules stay as seeded.
+
+Original plan for this step (40m):
 Rewrite the hourly prompt as stages A (watch) and B (dispatch); new `PROMPT VERSION`; schedule
 row notes. Alex pastes the prompt into the task.
 
@@ -161,7 +175,71 @@ Estimated run: 40m
 
 ### Phase C — Senders and apps
 
-### 6. started_by on reminders; notify-dispatch logs every pop (60m)
+### 6. started_by on reminders; notify-dispatch logs every pop — WRITTEN 2026-11-04 (`s6-p4wc`)
+- `_pending_notification_routing-d7v_started_by.sql`:
+  - adds reminders.started_by and backfills it (alex where created_by is app, chat where it is claude), then sets it not null;
+  - adds a check using started_by_valid;
+  - adds a before-insert trigger that fills it from created_by, so the app and create_reminder() need no change.
+- create_reminder takes an optional started_by, set on the new row after the RPC; chat and absent are left to the trigger. Its schema in mcp/index.ts has it.
+- notify-dispatch now:
+  - reads started_by and created_by;
+  - logs every push in claude_notifications (sent, failed and no_subscription), as app alfred, job reminder or step_timer, kind info, channel alfred_push, with link = the tap target;
+  - uses dedupe keys `reminder:<id>:<due_at>` and `step:<id>:<due_at>`, started_by from the reminder, and `alex` for step timers;
+  - writes one upsert per run, ignoring duplicates. Logging never blocks a send.
+- Test `3_started_by_verify.sql` written.
+- Tests: reminders and mcp 55 of 55; `deno check` on notify-dispatch is clean.
+
+### 6b. Number and queue 204 — DONE 2026-11-04 (`s6b-f8nt`)
+Alex committed step 6 (ecac849) and ran gitsync: nothing came in but b3673a3, so there is no drift.
+- **Cap check:** reminder and step-timer pushes do not count toward the caps or the gap. In
+  dispatch_signals (203), a single query gives the hour count, the day count and the last pop
+  time, and it filters `job not in ('reminder', 'step_timer')`. Those are exactly the jobs
+  notify-dispatch now logs. Test 2's reminders_not_counted already inserts that row shape (app
+  alfred, job reminder, alfred_push, sent). No fix was needed.
+- 204_reminders_started_by.sql was written from the pending file, comments only changed.
+- The pending file and notify-dispatch/deno.lock are deleted. deno.lock was claimed first,
+  because it was unclaimed and the guard blocked the delete.
+- Claimed db:table:reminders, db:table:claude_notifications and db:deploy.
+- Queued 204 with `--expect unknown`: there are 46 reminders now, and more can be added before
+  approval. Action 91c8e1ab-fbbd-4adc-a317-c9d959cb2bfe.
+
+**204 ran** through the queue: run 17bc3b30-06e8-4f8e-afe3-0aadb779755b, CONFORMANT. Claude's
+read-only role is refused on reminders, so test 3 is the check on the backfill.
+
+### 6c. Queue test 3 — DONE 2026-11-04 (`s6c-h7dk`)
+3_started_by_verify.sql queued with `--test`: action 2f2effc2-6e1a-4294-b5d0-ee23f4fd4c18.
+
+**Test 3 ran:** run 66d7c410-f28d-4ce8-9835-14e6ca7f8a2a, ok true, 17 of 17.
+
+### 6d. Deploy — DONE 2026-11-04 (`s6d-b2zy`). STEP 6 DONE.
+reminders and mcp tests passed 55 of 55. `deno check --no-lock` on notify-dispatch was clean,
+with no lock file left. notify-dispatch was deployed as v17 and mcp as v195, both with
+verify_jwt false. check_platform_conformance came back CONFORMANT (103 tables). Waiting on
+Alex: Checkpoint, which releases db:table:reminders, db:table:claude_notifications and
+db:deploy.
+
+Original plan for 6d (20m):
+Order: 204 runs → queue test 3 with `--test` → deploy mcp and notify-dispatch, and re-check
+notify-dispatch's verify_jwt is false → check_platform_conformance → Checkpoint.
+
+Original 6b plan (30m):
+In this order:
+1. gitsync, drift check on reminders and claude_notifications, db claims.
+2. Number the migration and queue it.
+3. Run test 3 with `--test`.
+4. Deploy mcp and notify-dispatch. Deploy them only after the migration, because both read reminders.started_by. Re-check notify-dispatch's verify_jwt is false after the deploy.
+5. check_platform_conformance, then Checkpoint.
+
+Scope of this step:
+- create: supabase/migrations/<next>_reminders_started_by.sql
+- update: nothing
+- delete: supabase/migrations/_pending_notification_routing-d7v_started_by.sql
+- deploy: mcp, notify-dispatch
+- SQL: reminders, claude_notifications
+Estimated run: 30m
+DB: `db:table:reminders`, `db:table:claude_notifications`, `db:deploy`.
+
+Original plan for step 6 (60m):
 `reminders.started_by` with backfill; `create_reminder` requires it and refuses `task:*`;
 `notify-dispatch` writes a `claude_notifications` row per reminder and step pop. Re-check
 `verify_jwt = false` after the deploy.
@@ -171,12 +249,28 @@ supabase/tests/notification_routing-d7v/3_started_by_verify.sql,
 supabase/functions/notify-dispatch/index.ts, reminders.ts +test.
 DB: `db:table:reminders`, `db:table:claude_notifications`, `db:deploy`.
 
+Scope of this step (write and test; numbering, queuing and deploys follow as 6b):
+- create: supabase/migrations/_pending_notification_routing-d7v_started_by.sql, supabase/tests/notification_routing-d7v/3_started_by_verify.sql
+- update: supabase/functions/notify-dispatch/index.ts, supabase/functions/_shared/tools/reminders.ts, supabase/functions/_shared/tools/reminders.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
+- delete: nothing
+- deploy: nothing
+- SQL: reminders, claude_notifications
+Estimated run: 45m
+
 ### 7. wb-sync raises signals (45m)
 `raise_signal` on blocking errors, `resolve_signal` on ok; its open-item check goes. This step
 also writes `resolve_signal` (function and tool), moved here from step 3.
 
 Files: supabase/functions/wb-sync/index.ts, supabase/functions/_shared/wb-sync-core.ts +test.
 DB: `db:table:signals`, `db:deploy`.
+
+Scope of this step (write and test; numbering, queuing and deploys follow as 7b):
+- create: supabase/migrations/_pending_notification_routing-d7v_resolve_signal.sql, supabase/tests/notification_routing-d7v/4_resolve_signal_verify.sql
+- update: supabase/functions/wb-sync/index.ts, supabase/functions/_shared/wb-sync-core.ts, supabase/functions/_shared/wb-sync-core.test.mjs, supabase/functions/_shared/tools/signals.ts, supabase/functions/_shared/tools/signals.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
+- delete: nothing
+- deploy: nothing
+- SQL: signals
+Estimated run: 45m
 
 ### 8. Overwatch and Arnold onto signals (50m)
 Overwatch nightly and weekly raise signals instead of reminders; `pushes_per_day` and `push_time`
@@ -234,6 +328,10 @@ DB: `db:fn:overwatch_nightly_counts`, `db:deploy`.
 Alex turns off the Claude app push on every scheduled task. End-to-end check: one signal of each
 decision, one reminder, one step timer, each logged. Then `gitpush` Finish.
 
+`create_reminder` changes here too: started_by becomes required, and `task:*` callers are refused (decision 3). It
+stays optional until then, because the Overwatch nightly and weekly prompts still call
+create_reminder until step 8 moves them to signals.
+
 `started_by` becomes required here: `claude_notifications.started_by` not null (after checking no
 null rows since step 3c), and required on `send_alfred_push` and `log_claude_notification`. Until
 then it is nullable and optional, so the live hourly task keeps working.
@@ -261,4 +359,9 @@ Files: this file. DB: none.
 | 3l | 5m | 1m 11s | 203: untyped literal into text[] |
 | 3m | 5m | 15s | re-queued test 2 |
 | 3n | 10m | 18s | test fix: sample pop in the wrong clock hour |
-| 3o | 10m | see report | mcp deploy, conformance |
+| 3o | 10m | 1m 15s | mcp deploy, conformance |
+| 5 | 8m | 52s | dispatcher prompt |
+| 6 | 10m | 2m 56s | reminders started_by, notify-dispatch logging |
+| 6b | 10m | 1m 28s | cap check, numbered and queued 204 |
+| 6c | 5m | 7s | queued test 3 |
+| 6d | 10m | see report | deploy notify-dispatch and mcp, conformance |

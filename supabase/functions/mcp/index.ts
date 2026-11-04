@@ -2999,6 +2999,7 @@ export function createMcpServer(token: string) {
         due_at: z.string().describe("When to fire: ISO 8601 WITH a UTC offset, e.g. 2026-10-01T09:00:00-07:00. A time with no offset is rejected. Must be in the future."),
         inbox_id: z.string().optional().describe("Link to this existing inbox item (get_inbox, field id). Omit when linking an intention."),
         intent_id: z.string().optional().describe("Link to this existing intention (get_intents, field id). Omit when linking an inbox item."),
+        started_by: z.string().optional().describe("Who started it: \"alex\" when Alex asked for it, \"chat\" (the default), or \"task:<job>\" for a scheduled task."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(createReminderTool, args, token),

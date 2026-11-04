@@ -12,11 +12,12 @@
 // ============================================================================
 
 import { defineTool, describeDbError, readTable } from "../platform.ts";
+import { requireStartedBy } from "./claude-notifications.ts";
 
 export const REMINDER_STATES = ["scheduled", "sent", "cancelled", "no_subscription"] as const;
 
 const COLUMNS =
-  "id, text, due_at, state, cancel_reason, sent_at, inbox_id, intent_id, created_by, created_at, updated_at";
+  "id, text, due_at, state, cancel_reason, sent_at, inbox_id, intent_id, created_by, started_by, created_at, updated_at";
 
 // ISO 8601 with an explicit offset: Z or ±HH:MM. A bare local time is refused,
 // because Postgres would silently read it in the session time zone (UTC).
@@ -84,6 +85,11 @@ export const createReminderTool = defineTool({
       throw new Error(`${T}: give inbox_id OR intent_id, not both. Nothing was created.`);
     }
 
+    // Optional until cutover (step 13); left out, the insert trigger records "chat".
+    const startedBy = args.started_by === undefined || args.started_by === null
+      ? null
+      : requireStartedBy(T, args.started_by);
+
     const { data, error } = await ctx.db.rpc("create_reminder", {
       p_text: text,
       p_due_at: dueAt,
@@ -92,7 +98,16 @@ export const createReminderTool = defineTool({
       p_created_by: "claude",
     });
     if (error) throw new Error(describeDbError(T, error));
-    return data;
+    const id = (data as { id?: string } | null)?.id;
+    if (!startedBy || startedBy === "chat" || !id) return data;
+
+    const { data: updated, error: upError } = await ctx.db.from("reminders")
+      .update({ started_by: startedBy }).eq("id", id).select(COLUMNS).maybeSingle();
+    if (upError) {
+      throw new Error(`${T}: the reminder was created (id ${id}) but started_by could not be set: ` +
+        describeDbError(T, upError));
+    }
+    return updated ?? data;
   },
 });
 
