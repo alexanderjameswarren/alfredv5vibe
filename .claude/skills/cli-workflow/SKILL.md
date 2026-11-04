@@ -5,7 +5,7 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
-Skill version: 2026-11-03a
+Skill version: 2026-11-04a
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -35,6 +35,9 @@ before-sending check for the details.
 proposal a tool returned, a summary, the wording a screen should show) goes in a
 plain quote (`>`), not a copy box. A reply word he must send ("yes", "approve")
 is something he types, so it gets its own copy box.
+
+**Links he clicks (the SQL approve link, Send to CLI) are labelled markdown links
+on their own line**: never in a copy box and never a bare URL.
 
 ## The step format
 
@@ -67,10 +70,13 @@ in a table. It sits on top of the copy-box rule; it does not replace it.
   differ from where he would normally be. The first step in a new thread says
   START NEW CLAUDE AI THREAD; every later step in it says IN THAT SAME CLAUDE AI
   THREAD. Every other location is plain text. For a worktree, name it when more
-  than one is open.
+  than one is open. In repos other than alfred-v5, a location is named by its
+  folder (for example "Terminal at C:\Users\Alex\projects\team-impact"), not
+  "MAIN".
 - **Under the step line comes the copy box**, if there is one. **A terminal copy
   box is a single line**: several PowerShell commands are chained with
-  semicolons, never put on separate lines.
+  semicolons, never put on separate lines. **After any install, the PATH reload
+  goes at the start of the next command's copy box.**
 - **Then an "Expected:" line**, only when there is something specific to see.
   **Every terminal step has one**, so a command that fails silently shows.
 - **Then a "Feedback:" line**, only when he must send something back. Use
@@ -275,6 +281,12 @@ Alfred base: https://alfredv5vibe.vercel.app
 This line is the only place the address appears in this rule; `<base>` below
 means it. If Alfred moves, change this line.
 
+**A link to an Alfred record is always `<base>/<id>`**, never a page-specific path
+such as `/inbox/detail/` or `/groups/detail/`. A record that doesn't open that way
+is filed as a bug, not worked around with a longer path. Approve links from
+`issue_switchboard_link` are the exception and stay whole ("SQL goes through the
+queue").
+
 - **Every reply carrying a CLI prompt ends with this markdown link**, on its own
   line directly under the prompt block, nothing after it:
 
@@ -322,6 +334,14 @@ Estimated run: 12m
   as shown; a folder entry ends in `/` and covers everything under it.
 - **List everything the step will touch**, including test files and any spec doc
   it updates. The project's progress file is implied.
+- **A step that writes a `_pending_` migration declares under SQL every table the
+  file creates, alters or grants on**, even though nothing runs yet. The plan guard
+  counts the tables any written SQL file touches; "SQL: none" got a drafting step
+  refused.
+- **No placeholders.** Never write `<NNN>` or any placeholder in a file name: the
+  plan guard matches names literally. At the numbering step, declare the exact
+  numbered file; if its number isn't known when the prompt is written, have the CLI
+  number first and declare the exact file in a letter follow-up (`s3b`).
 - **Widening the scope** is a new tagged follow-up prompt (`s8b`) with the wider
   block. An untagged reply cannot widen it. When the CLI reports "PLAN GUARD",
   say what it wanted and write that follow-up only if Alex agrees.
@@ -479,20 +499,22 @@ three characters. The name can be short (`claims`, `ken`, `sam`, `dj`, `jobs`,
 `inbox`) or a readable snake_case phrase (`parallel_threads`, `job_search`) —
 **prefer the readable one**, because this string names the worktree folder and
 every claim that thread holds, and it is what you will be reading in
-`claims.mjs status` six months from now. It must be lower case letters, digits,
+`claims.cmd status` six months from now. It must be lower case letters, digits,
 hyphens and underscores. If the same project is picked
 up in a new claude.ai thread later, keep the *original* project code — the
 worktree and its claims are named after it, and a new thread code would strand
 them.
 
 In the Alfred repo (alfred-v5), the `CLAUDE.md` rule makes the CLI push its
-closing message to the clipboard with `node scripts/clip.mjs --tag <tag>` EVERY
+closing message to the clipboard with `clip.cmd --tag <tag>` EVERY
 TIME it hands the turn back — finishing, waiting for something to be run or
 verified, or asking a question — so the prompt only needs the tag line. Expect
 several messages under one tag for a task that stops more than once. For a repo that does
-not have `scripts/clip.mjs` and that rule, add this line to the prompt after the
+not have `clip.cmd` and that rule, add this line to the prompt after the
 tag: "When you finish, print your full report; Alex will paste it back." The
 return leg then works from the pasted text as before.
+
+Switchboard's commands are `claims.cmd` and `clip.cmd`, never plain `clip`.
 
 ## alfred-v5: windows, worktrees and claims
 
@@ -600,7 +622,7 @@ In this order:
 2. **Main or a worktree.** For a job that is one prompt, Claude asks whether to
    do it in the main checkout instead of a worktree, with a recommendation, and
    only when main is free (`main: free` on Switchboard, or nothing bound in
-   `claims.mjs status`).
+   `claims.cmd status`).
 3. **Worktree.** For a worktree project, the `gitnewtree <project-code>` step.
 4. **Files.** Claude names every file it generates with the project code. Alex
    downloads the zip and drags the files into the new worktree's `docs\` folder
@@ -620,7 +642,7 @@ Switchboard can find it.
 - list every file and folder the work will touch,
 - list every database item it will need — `db:table:<name>`, `db:fn:<name>`,
   `db:deploy` — **each with the step that needs it**,
-- run `node scripts/claims.mjs check` on all of it,
+- run `claims.cmd check` on all of it,
 - give a step estimate broken down by phase, with the total,
 - report conflicts and warnings, change nothing, claim nothing, and stop.
 
@@ -670,6 +692,8 @@ cost three sessions of work in one day.
   changed." and does nothing. The refusal is quiet and easy to miss — Alex can
   read it as a push that happened. Never write that command.
 - **Checkpoint on main is refused** the same way: main takes Push or Finish.
+- **Before suggesting a Checkpoint**, check what the worktree holds and say what
+  it shows (see bind and unbind, below).
 - **Checkpoint has nothing to do with database work.** It is simply how a
   worktree commits mid-project. The database step uses it because that is the
   mid-project moment that most needs a commit, not because it is a database mode.
@@ -683,11 +707,17 @@ gitpush always acts on the main checkout whichever terminal it starts in, so
 "run it from" is about not sitting inside a worktree that Finish is removing.
 Saying main's terminal for every gitpush is the simple, always-safe answer.
 
-**Two more, for the main checkout's project code.** `claims.mjs bind <code>`
-points main's window at a project and `claims.mjs unbind` clears it. Neither
+**Two more, for the main checkout's project code.** `claims.cmd bind <code>`
+points main's window at a project and `claims.cmd unbind` clears it. Neither
 touches a claim. They are the answer when main is still bound to a finished
 project and a prompt for the next one is being blocked as the wrong window —
 the guard's own message names them now.
+
+**Before suggesting unbind or a Checkpoint, find out what main or the worktree
+holds now**: its claims and uncommitted work, from `get_claim_blocks`, or
+`claims.cmd status` and `git status` from Alex or the CLI. Say what it shows. If
+main holds another project's unfinished work, say so and recommend a worktree
+instead of unbind.
 
 ### Git commands are steps
 
@@ -784,6 +814,10 @@ other mid-project work; Checkpoint is not a database mode.
 so — and then the Why line says the database claims are kept, and why. `--all`
 commits every uncommitted path, which is rarely what Checkpoint is for.
 
+**Never have Alex run `gitcom` on paths right before a Checkpoint of those same
+paths.** Checkpoint commits the named paths itself, and finds nothing to do if
+they're already committed.
+
 **Finishing a worktree.** The claims, the branch and the worktree all go.
 
 ````
@@ -820,7 +854,7 @@ report and tell Alex to start the next one fresh.
 
 At the step that needs the database, not before:
 
-1. `claims.mjs check` the `db:table:*`, `db:fn:*` and `db:deploy` needed.
+1. `claims.cmd check` the `db:table:*`, `db:fn:*` and `db:deploy` needed.
 2. Alex runs `gitsync`.
 3. **Drift check.** If the sync brought in a migration or function change
    touching the same tables or function, stop and re-plan that step.
@@ -830,7 +864,10 @@ At the step that needs the database, not before:
 5. **Number the migration now.** New SQL is written under
    `supabase/migrations/_pending_<owner>_<purpose>.sql` and only gets its real
    number here, after the sync, when the folder listing is current. Then the
-   numbered file is written and the `_pending_` one deleted.
+   numbered file is written and the `_pending_` one deleted. This step's scope
+   block declares the exact numbered file, never `<NNN>` or any placeholder; if
+   the number isn't known when the prompt is written, the CLI numbers first and a
+   letter follow-up (`s3b`) declares the exact file.
 6. The thread queues the migration with `scripts/sql-queue.mjs`, and Alex approves
    it by a link (next section). Function deploys the thread runs itself — **but
    only while holding `db:deploy`.** The guard blocks `supabase functions deploy`
@@ -839,7 +876,7 @@ At the step that needs the database, not before:
 8. Alex runs `gitpush` → that worktree → **Checkpoint**, naming the migration and
    function paths, so only those reach main. **Checkpoint releases the `db:`
    claims itself, all of them, by default.**
-9. The thread confirms with `claims.mjs status` that they went, and releases any
+9. The thread confirms with `claims.cmd status` that they went, and releases any
    Checkpoint left behind. `db:` claims are the only ones a thread releases.
    Never write a prompt that carries one into the next step: one held across
    steps blocked another thread's deploy for thirteen hours, and `status` now
@@ -868,8 +905,8 @@ deliberate final error. The rules are in alfred-v5's `CLAUDE.md`.
 3. Call `issue_switchboard_link` with the fingerprint you reviewed. One link is live
    at a time per thread (project code), and it lasts 30 minutes, so issue it when he
    can click.
-4. In chat, show the headline, the description and the approve link, with its URL
-   whole: the `kind` and `exp` on the end drive his tile. Only that link: never a
+4. In chat, show the headline, the description and the approve link, as a
+   labelled markdown link on its own line with its URL whole: the `kind` and `exp` on the end drive his tile. Only that link: never a
    link to the action as an Alfred record.
 5. **For anything where the dry run must be checked first** (platform changes,
    coverage lists), tell him to open the link and wait for the dry run before
@@ -905,7 +942,7 @@ and `gitpush` Checkpoint releases those itself at step 8 above.
 **The one exception for files is `yield`.** When another thread is refused a file
 this thread holds, a hook tells the holder at the start of its next turn. If the
 file is unchanged from main and claimed on its own (not through a folder),
-`node scripts/claims.mjs yield <file>` releases that one claim; the script checks
+`claims.cmd yield <file>` releases that one claim; the script checks
 those conditions itself and refuses otherwise. Alex approved it for that case
 only. If yield refuses or is denied, the thread reports it and does not retry. A
 prompt never needs to ask for a yield; the hook covers it.
@@ -913,7 +950,7 @@ prompt never needs to ask for a yield; the hook covers it.
 **Switchboard shows blocks.** A waiting tile is striped and shows a padlock and the
 holder's name. A deadlocked tile shows "⇄" and the other thread's name. A holder's
 tile shows "Blocking N". The clipboard button under the arrows opens a window
-running `claims.mjs status`.
+running `claims.cmd status`.
 
 ## Getting the report back
 
@@ -1043,7 +1080,9 @@ in the TLDR in plain words: which thread is waiting on which file.
 left open that needs a decision. Each one gets: the question restated in full,
 what is actually being asked, the recommendation, and one line of why. **Each
 decision he must make is then its own numbered step, with each answer in its own
-copy box**, never folded into another step's Feedback line.
+copy box**, never folded into another step's Feedback line. **When a question or
+decision touches notifications**, name the job that sends them, the app they
+arrive in, and where tapping one goes.
 
 **3. Your to-dos.** Everything the user must do by hand — run SQL, edit a file,
 set a variable, deploy, install. Steps in the step format, one action per step
@@ -1157,7 +1196,7 @@ open or set? If yes, and it is not alone in a fenced code block, rewrite it.
 Things that most often slip through:
 
 - a command inside backticks in a sentence ("run `npm test`")
-- a file path inside a sentence ("open `%APPDATA%\...\settings.ini`")
+- a file path inside a sentence ("open `%LOCALAPPDATA%\...\panel.ini`")
 - a setting he must type ("set `touchmode=main` under `[panel]`")
 - "ask the CLI to run `…`" — this is a paste, so it becomes a paste-ready block
   that also says what to report back
@@ -1312,9 +1351,9 @@ search box confirms he's in the right place.
 A second example, from real testing steps that broke this rule:
 
 Bad:
-  1. Open `%APPDATA%\claude-sessions\settings.ini`, set `touchmode=main`
+  1. Open `%LOCALAPPDATA%\Switchboard\config\panel.ini`, set `touchmode=main`
      under `[panel]`, and save.
-  2. In PowerShell at the repo root, run: `powershell.exe -NoProfile ...`
+  2. In PowerShell at the repo root, run: `node --test ...`
   3. In a CLI session in main, ask it to run: `git archive HEAD ...`
   4. Ask it to run `rm src/App.js`. Expect a block. If the file does get
      deleted, run `git restore src/App.js` to bring it back.
@@ -1326,7 +1365,7 @@ Good:
 
 **1.** Text editor: open
 ```
-%APPDATA%\claude-sessions\settings.ini
+%LOCALAPPDATA%\Switchboard\config\panel.ini
 ```
 and under [panel], set the touchmode line to
 ```
@@ -1340,16 +1379,16 @@ then save.
 
 **2.** **MAIN** terminal: run
 ```
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/claude-sessions/run-tests.ps1
+node --test "scripts/lib/*.test.mjs"
 ```
-Expected: "all Switchboard tests passed."
+Expected: "fail 0" in the summary.
 Feedback: pass or fail
 
 ---
 
 **3.** **MAIN** CLI: paste
 ```
-Run this command and report only whether it was blocked: git archive HEAD tools/claude-sessions | tar -x -C "$TEMP/sb"
+Run this command and report only whether it was blocked: git archive HEAD scripts/lib | tar -x -C "$TEMP/sb"
 ```
 Expected: not blocked.
 Feedback: pass or fail
@@ -1679,7 +1718,7 @@ Only proceed to the next step after I confirm verification is successful.
 # Important
 - Mark steps complete in the progress file as you finish them
 - Add notes about any decisions or issues encountered
-- End the report with "Scope vs changes" (node scripts/clip.mjs --scope), then
+- End the report with "Scope vs changes" (clip.cmd --scope), then
   "Next step's scope" with the next step's block, then the timing table
 - Never commit, push, merge, or run any git command that changes state
 - If you need clarification, stop and ask
