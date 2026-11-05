@@ -483,6 +483,25 @@ The two weeks (decided in s49) count from the day git links first go live. **The
 
 The helper runs approved actions in a visible terminal. The click is the yes: a command run by link never stops to ask a question. Where it would have asked, it refuses and says why.
 
+### 11.3 The git payload contract
+
+Claude queues a git action with `queue_switchboard_git` (tier 2, in `_shared/tools/switchboard.ts`). It returns the approval link, as `issue_switchboard_link` does. `project_code` (and an optional `chat_url`) goes in the action's columns; everything else is the payload, and only these keys are accepted:
+
+| Command | Keys besides `command` |
+|---|---|
+| `gitcom` | `message`; `include_unclaimed`: all or none |
+| `gitsync` | none |
+| `gitnewtree` | `install`: true or false |
+| `gitpush` | `mode`: push, checkpoint or finish. `finish`: phase or project-done (required for a Finish, refused otherwise). `paths` (a list) or `all: true` (Checkpoint only, exactly one). `db`: release or keep (Checkpoint only). `message`. `include_unclaimed` (main only, so never with checkpoint) |
+
+`message` is one line, at most 200 characters, with no double quote, and doesn't start with `-`. A path is a plain relative path with no `..`. Any other key or value is refused before anything is queued.
+
+The headline names the command, the project and what the click changes, for example `GITPUSH FINISH switchboard2-h8r: MERGES INTO MAIN, PUSHES, REMOVES THE WORKTREE`. `project-done` adds `, MOVES THE DOCS TO HISTORY`.
+
+The tool checks the same rules as the helper's `planAction` (switchboard `helper/lib/core.mjs`). The helper checks them again when it runs, plus what only the machine knows: projects.json, whether the project has a worktree or is main's, and the modes each checkout takes. A refusal there is posted to `/result` as failed.
+
+Authenticated can't insert into `switchboard_actions` (migration 189), so the tool queues through `switchboard_queue_git(p_project_code, p_payload, p_headline, p_chat_url)`. This is a SECURITY DEFINER function, granted to authenticated only, that inserts a `kind: git` row for `auth.uid()` with `created_by: 'claude'` and returns `{action_id}`. The table's checks and the guard trigger still apply. **The function doesn't exist yet;** s84's database step adds it.
+
 ## 12. Phase 6 — spec files and archiving
 
 Claude's spec and progress text is written into the project's `docsDir` by link: a `docs` action whose payload is the file contents and whose fingerprint is checked. Finish moves the project's docs to `docs/history/`.

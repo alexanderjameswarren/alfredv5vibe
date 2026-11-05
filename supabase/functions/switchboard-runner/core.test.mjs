@@ -597,3 +597,87 @@ test("helper routes: POST only, and no browser preflight", async () => {
   const pre = await handle(new Request("https://x/switchboard-runner/pickup", { method: "OPTIONS" }), deps);
   assert.equal(pre.headers.get("access-control-allow-origin"), null);
 });
+
+// --- git links (spec 11.3) ---
+
+const GIT_PAYLOAD = { command: "gitpush", mode: "finish", finish: "phase" };
+function gitFakes(over = {}) {
+  const f = fakes({ hasCleanDryRun: async () => false, latestDryRun: async () => null, ...over });
+  Object.assign(f.action, { kind: "git", payload: GIT_PAYLOAD });
+  return f;
+}
+const nothingRan = (calls) => {
+  assert.equal(calls.runSql.length, 0);
+  assert.equal(calls.runs.length, 0);
+};
+
+test("git preview: kind and payload, no SQL, nothing spent", async () => {
+  const { deps, calls } = gitFakes();
+  const out = await (await handle(post("preview", { token: TOKEN }, jwt()), deps)).json();
+  assert.equal(out.kind, "git");
+  assert.deepEqual(out.payload, GIT_PAYLOAD);
+  assert.equal(out.sql, undefined);
+  assert.equal(out.fingerprint, "fp-1");
+  assert.equal(out.project_code, "p-x");
+  assert.equal(calls.consumed.length, 0);
+  nothingRan(calls);
+});
+
+test("git approve: no dry run needed; spends the link with the fingerprint and runs nothing", async () => {
+  const { deps, calls } = gitFakes();
+  const res = await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), deps);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, action_id: "act-1", sent: true });
+  assert.deepEqual(calls.consumed, [{ jwt: "good", token: TOKEN, fp: "fp-1" }]);
+  assert.deepEqual(calls.status, []);
+  nothingRan(calls);
+});
+
+test("git approve: no fingerprint, a mismatch, an expired or a used link is refused", async () => {
+  const a = gitFakes();
+  assert.equal((await handle(post("approve", { token: TOKEN }, jwt()), a.deps)).status, 400);
+  assert.equal(a.calls.consumed.length, 0);
+
+  const b = gitFakes({ consume: async () => { throw new Error("switchboard_consume_link: the SQL does not match what this link approved."); } });
+  const mis = await handle(post("approve", { token: TOKEN, fingerprint: "other" }, jwt()), b.deps);
+  assert.equal(mis.status, 409);
+  assert.match((await mis.json()).error, /does not match/);
+
+  const c = gitFakes();
+  c.action.link_expires_at = new Date(Date.now() - 1000).toISOString();
+  assert.equal((await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), c.deps)).status, 410);
+  c.action.link_expires_at = new Date(Date.now() + 60000).toISOString();
+  c.action.link_used_at = new Date().toISOString();
+  const used = await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), c.deps);
+  assert.equal(used.status, 410);
+  assert.match((await used.json()).error, /already been used/);
+  assert.equal(c.calls.consumed.length, 0);
+  for (const x of [a, b, c]) nothingRan(x.calls);
+});
+
+test("git cancel: no dry run needed; spends the link and marks it cancelled", async () => {
+  const { deps, calls } = gitFakes();
+  const out = await (await handle(post("cancel", { token: TOKEN, reason: " not  now " }, jwt()), deps)).json();
+  assert.deepEqual(out, { ok: true, action_id: "act-1", cancelled: true, reason: "not now" });
+  assert.deepEqual(calls.consumed, [{ jwt: "good", token: TOKEN, fp: "fp-1" }]);
+  assert.deepEqual(calls.status, [{ id: "act-1", status: "cancelled" }]);
+  nothingRan(calls);
+});
+
+test("git dry run: refused, nothing spent", async () => {
+  const { deps, calls } = gitFakes();
+  assert.equal((await handle(post("dry-run", { token: TOKEN }, jwt()), deps)).status, 409);
+  assert.equal(calls.consumed.length, 0);
+  nothingRan(calls);
+});
+
+test("sql with kind sql keeps its clean-dry-run rule, and cancel still needs a dry run", async () => {
+  const { deps, calls, action } = fakes({ hasCleanDryRun: async () => false, latestDryRun: async () => null });
+  action.kind = "sql";
+  assert.equal((await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), deps)).status, 409);
+  assert.equal((await handle(post("cancel", { token: TOKEN }, jwt()), deps)).status, 409);
+  assert.equal(calls.consumed.length, 0);
+  const preview = await (await handle(post("preview", { token: TOKEN }, jwt()), deps)).json();
+  assert.equal(preview.sql, "delete from wb_rules where id = 1;");
+  assert.equal(preview.kind, undefined);
+});

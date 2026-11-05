@@ -23,7 +23,9 @@ export type RunOutcome = {
 export type Action = {
   id: string;
   user_id: string;
-  payload: { sql?: string; description?: string; expected?: Expected[]; test?: boolean };
+  /** sql, or git (spec 11.3); a row read before kind was selected counts as sql. */
+  kind?: string;
+  payload: { sql?: string; description?: string; expected?: Expected[]; test?: boolean; [key: string]: unknown };
   fingerprint: string;
   headline: string;
   status: string;
@@ -388,6 +390,8 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
   if (!action.link_expires_at || Date.parse(action.link_expires_at) <= Date.now()) {
     return reply({ ok: false, error: "this link has expired." }, 410);
   }
+  if (action.kind === "git") return handleGitRun(route, body, action, jwt, token, deps, reply);
+
   const sql = action.payload?.sql ?? "";
   const test = action.payload?.test === true;
 
@@ -457,6 +461,48 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
   });
   if (commit || test) await deps.setStatus(action.id, outcome.ok ? "succeeded" : "failed");
   return reply({ ok, run_id: runId, summary, conformance, counts, mismatch, ...(test ? { test } : {}) });
+}
+
+/**
+ * A git link (spec 11.3). Nothing runs here: Approve spends the link, which marks the action consumed, and
+ * switchboard_pickup_git hands it to the desktop helper. No dry run exists, so none is asked for.
+ */
+async function handleGitRun(
+  route: string, body: Record<string, unknown> | null, action: Action, jwt: string, token: string, deps: Deps,
+  reply: (body: unknown, status?: number) => Response,
+): Promise<Response> {
+  if (route === "preview") {
+    return reply({
+      ok: true, kind: "git", action_id: action.id, headline: action.headline, payload: action.payload,
+      fingerprint: action.fingerprint, project_code: action.project_code, expires_at: action.link_expires_at,
+    });
+  }
+  if (route === "dry-run") return reply({ ok: false, error: "a git action has no dry run." }, 409);
+
+  const spend = async (fingerprint: string): Promise<Response | null> => {
+    try {
+      await deps.consume(jwt, token, fingerprint);
+      return null;
+    } catch (e) {
+      return reply({ ok: false, error: e instanceof Error ? e.message : String(e) }, 409);
+    }
+  };
+
+  if (route === "cancel") {
+    const reason = typeof body?.reason === "string" ? body.reason.replace(/\s+/g, " ").trim() : "";
+    if (reason.length > MAX_REASON) return reply({ ok: false, error: `the reason is over ${MAX_REASON} characters.` }, 400);
+    const refused = await spend(action.fingerprint);
+    if (refused) return refused;
+    await deps.setStatus(action.id, "cancelled");
+    return reply({ ok: true, action_id: action.id, cancelled: true, reason });
+  }
+
+  // approve
+  const fingerprint = body?.fingerprint;
+  if (typeof fingerprint !== "string" || !fingerprint) return reply({ ok: false, error: "fingerprint is missing." }, 400);
+  const refused = await spend(fingerprint);
+  if (refused) return refused;
+  return reply({ ok: true, action_id: action.id, sent: true });
 }
 
 // ---------------------------------------------------------------------------

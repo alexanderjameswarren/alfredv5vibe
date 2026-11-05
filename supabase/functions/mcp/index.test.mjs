@@ -343,6 +343,8 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_ARNOLD_8 = ["get_claude_notification_settings", "update_claude_notification_settings"];
   // Switchboard 2.5, +2.
   const EXPECTED_ADDED_SWITCHBOARD_25 = ["get_switchboard_run", "issue_switchboard_link", "get_sql_read"];
+  // Switchboard s84d, +1.
+  const EXPECTED_ADDED_SWITCHBOARD_84 = ["queue_switchboard_git"];
   // Notification routing steps 3 and 4, +5; step 7, +1.
   const EXPECTED_ADDED_NOTIFICATION_ROUTING = ["raise_signal", "get_signals", "get_dispatch_plan", "deliver_signals",
     "get_delivery_rules", "resolve_signal"];
@@ -353,7 +355,7 @@ test("the tool count is 72 after the job-search tools", () => {
                       ...EXPECTED_ADDED_READ, ...EXPECTED_ADDED_OVERWATCH_13, ...EXPECTED_ADDED_OVERWATCH_14,
                       ...EXPECTED_ADDED_OVERWATCH_22, ...EXPECTED_ADDED_OVERWATCH_46, ...EXPECTED_ADDED_OVERWATCH_54,
                       ...EXPECTED_ADDED_ARNOLD_5, ...EXPECTED_ADDED_ARNOLD_8, ...EXPECTED_ADDED_SWITCHBOARD_25,
-                      ...EXPECTED_ADDED_NOTIFICATION_ROUTING]) {
+                      ...EXPECTED_ADDED_SWITCHBOARD_84, ...EXPECTED_ADDED_NOTIFICATION_ROUTING]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
   const orderItems = registered.find((r) => r.name === "get_wb_order_items");
@@ -366,9 +368,10 @@ test("the tool count is 72 after the job-search tools", () => {
   // 2026-11-02, +1 for Warren Buffet Phase 4 Step 8b: Amazon and Whole Foods items. +2 for Step 8f: item tags and splits.
   // +1 for nightly counts. 2026-11-03, +1 for the Warren Buffet money chat: record_wb_subscription_review.
   // +5 for notification routing (signals, dispatcher, delivery rules). 2026-11-04, +1: resolve_signal.
+  // 2026-11-05, +1: queue_switchboard_git.
   assert.ok(registered.some((r) => r.name === "record_wb_subscription_review"), "record_wb_subscription_review is not registered");
-  assert.equal(registered.length, 194,
-    `expected 194 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 195,
+    `expected 195 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
