@@ -471,13 +471,78 @@ to main.
 
 ### Phase D — Dispatcher screen
 
-### 10. Dispatcher screen, read-only (75m)
+### 10. Dispatcher screen, read-only (75m) — WRITTEN 2026-11-05 (`s10-v3qa`)
 `/overwatch/dispatcher`: Queued, Held, Delivered, Merged, History, Reminders, Step timers; a
 Dispatcher row on the Overwatch tab.
 
 Files: src/overwatch/DispatcherPage.jsx +test, src/overwatch/dispatcherModel.js +test,
 src/overwatch/overwatchApi.js +test, src/overwatch/OverwatchPage.jsx +test, src/viewPaths.js +test.
 DB: none.
+
+Done:
+- `OVERWATCH_DISPATCHER_PATH` is `/overwatch/dispatcher`, served by OverwatchPage.
+- The Dispatcher row sits under the status line and has its own read (`getDispatcherSummary`: head counts of queued and held signals, and alfred_push rows for the Pacific day). If it fails, the row says "Summary unavailable" and the rest of the tab still loads.
+- `getDispatcher` reads the following, all through owner RLS, with no writes and no RPC:
+  - signals in queued, held, delivered and merged (newest 200);
+  - claude_notifications (newest 100);
+  - scheduled reminders;
+  - step timers that are scheduled or waiting;
+  - the active plan's settings.delivery;
+  - app names.
+- `dispatcherModel.js` holds the plain-words rules, the inside-the-window check (end exclusive), Pacific times, and the rows. Each row's title links to `/<id>`, and a second link opens the inbox item (the inbox_id column, else details.inbox_id), the notification's own link, the reminder's target, or the step's execution.
+- Dropped and resolved signals are not shown.
+- Queued and Held start open; the other sections start collapsed.
+- The only buttons are the section toggles.
+
+Tests: the affected files pass 188/188; the full suite passes 3224, with 7 skipped; scripts pass 54/54.
+
+#### 10b. Rework after Alex's review — WRITTEN 2026-11-05 (`s10b-k8wf`)
+The sections are now Queued, "Unprocessed – next run <time>", Held and History.
+- **Queued:** scheduled reminders, plus step timers with a due_at, soonest first. A step's title is its execution's name (the intention text, else the group's, else the first item's), and it links to the execution page.
+- **Unprocessed:** signals still queued. The next run is the next top of the hour from 5 AM to 7 PM Pacific, else "tomorrow 5:00 AM".
+- **History:** sent rows from claude_notifications ("Sent <time>", how, who started it) and merged signals ("Not sent: an item already exists in the Inbox", with the inbox link), newest first. A send with a signal_id gets a coloured edge, a bell, and "Dispatcher: <the signal's reason>".
+
+Other changes:
+- Times are 12-hour everywhere, and every label says "notification" or "notify", never "pop".
+- The tab line reads "N queued · N unprocessed · N held · N notifications today".
+- The page heading uses the BellRing icon, as the tab row does.
+- Overlap fix: the rows' `relative z-10` links stacked above the app's sticky header (`z-10`, src/shared/AppChrome.jsx:63 and :180). The page root now has `isolate`. PlanPage and the other Overwatch screens use the same pattern and were not changed.
+
+Tests: the affected files pass 190/190; the full suite passes 3226, with 7 skipped; scripts pass 54/54.
+
+#### 10c. Round 2 after Alex's review — WRITTEN 2026-11-05 (`s10c-r2hy`)
+- The Dispatcher icon is Radio on the tab row and the page heading; BellRing is gone from both.
+- Every card is one link, and all the "Open …" lines are gone. A card opens:
+  - its inbox item, if it has one;
+  - otherwise what a reminder is for, the execution for a step, or the signal (for a sent row with no link, its log row).
+- Each card starts with one icon:
+  - BellRing: sent, or will be sent, as a notification;
+  - Inbox: sent as an inbox item;
+  - Ban: held, or not sent;
+  - Hourglass: unprocessed.
+- The coloured left bar is gone.
+- Held cards read "Held", then "Dispatcher: <reason>".
+- Merged cards read "Not sent", then "Dispatcher: an item already exists in the Inbox".
+- "Dispatcher: <reason>" shows only when there is a reason. A stored "pop" or "pops" displays as "notification" or "notifications" (`reasonWords` in dispatcherModel.js). Stored data is unchanged.
+
+Tests: the affected Overwatch files pass 114/114. The full suite's first run had 1 failure, which I didn't capture; the two reruns passed 3227 with 7 skipped. Scripts pass 54/54.
+
+#### 10d. History paged — WRITTEN 2026-11-05 (`s10d-n5tq`)
+- History shows the newest 50 cards (sent rows and merged signals together). Its heading reads "History (N shown)".
+- "Show older" loads the next 50 and appends them, and is hidden when nothing older is left.
+- `getDispatcherHistory(before)` pages in the read itself:
+  - It reads claude_notifications and merged signals, each by `created_at desc, id desc`, past the cursor `{at, id}` (the oldest card shown), 51 rows each.
+  - It merges them and keeps the 50 newest. The extra row says whether there is more.
+  - It reads the reasons for the page's sent rows by signal id.
+  - The first page comes with getDispatcher. The signals read there is now queued and held only.
+- Merged cards now sort and show on created_at, not decided_at, which can be null.
+- `timeKey` compares to the microsecond whatever fraction width PostgREST returns, so rows with the same time break on id, the same as the database.
+- The API test pages 130 rows with groups of six on one instant through a fake store, and checks that every card appears exactly once and in order.
+- Live now: 27 sent rows and 14 merged signals, 41 cards, so Show older does not appear yet.
+
+Tests: the Overwatch files pass 118/118. The full suite ran twice, and both runs passed 3231 with 7 skipped and no failures. Scripts pass 54/54.
+
+Next: step 10e, the High and Urgent limit change (a migration to dispatch_signals plus its test), then step 11.
 
 ### 11. Dispatcher actions (75m)
 Hold, drop, deliver now on signals; edit and cancel reminders; reschedule and cancel step timers.
@@ -552,4 +617,8 @@ Files: this file. DB: none.
 | 9b | 8m | 3m 32s | snapshot SAM, Drive Mix and DJ daily live prompts |
 | 9c | 25m | 4m 37s | six prompts onto signals, 2026-11-05a |
 | 9d | 5m | 5m 46s | six prompts into inbox items for Claude, md5 checked |
-| 9e | 5m | see report | source_app back on Ken and DJ weekly items, 2026-11-05b |
+| 9e | 5m | 2m 44s | source_app back on Ken and DJ weekly items, 2026-11-05b |
+| 10 | 75m | 6m 16s | read-only Dispatcher screen and tab row |
+| 10b | 15m | 3m 41s | sections reworked, plain words, 12-hour times, header overlap |
+| 10c | 10m | 4m 34s | whole-card links, one icon per card, Radio icon, reasons without "pop" |
+| 10d | 10m | 4m 30s | History paged 50 at a time with a cursor, Show older |

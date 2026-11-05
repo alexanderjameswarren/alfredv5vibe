@@ -440,9 +440,13 @@ export function overwatchSlicePath(portfolioId, sliceId) {
   return `${OVERWATCH_PLAN_PATH}/${encodeURIComponent(portfolioId)}/slice/${encodeURIComponent(sliceId)}`;
 }
 
+// The Dispatcher screen (notification_routing-d7v, step 10): signals, the delivery log, reminders and step timers.
+export const OVERWATCH_DISPATCHER_PATH = "/overwatch/dispatcher";
+
 export function overwatchRouteFromPath(pathname) {
   const path = normalizePath(pathname);
   if (path === OVERWATCH_PATH) return { screen: "tab" };
+  if (path === OVERWATCH_DISPATCHER_PATH) return { screen: "dispatcher" };
   if (path === OVERWATCH_BRIEFING_PATH) return { screen: "briefing", noteId: null };
   const id = path.startsWith(`${OVERWATCH_BRIEFING_PATH}/`) ? path.slice(OVERWATCH_BRIEFING_PATH.length + 1) : "";
   if (id && !id.includes("/")) return { screen: "briefing", noteId: decodeURIComponent(id) };
