@@ -1,9 +1,9 @@
 # Weekly DJ review — RUN THIS
 
-`PROMPT VERSION: 2026-11-05a`. The run's details record it (see "The run"). Bump the date-letter
+`PROMPT VERSION: 2026-11-05b`. The run's details record it (see "The run"). Bump the date-letter
 whenever this file changes, and paste it into the task: the task runs the pasted text, not this
 file. 2026-11-05a, the first version line: the inbox item is followed by one `raise_signal` for it,
-and the dispatcher decides what reaches Alex.
+and the dispatcher decides what reaches Alex. 2026-11-05b restores `source_app: "dj"` on the item.
 
 🛑 **YOU NEVER NOTIFY.** Never call `send_alfred_push`, `create_reminder` or
 `log_claude_notification`, and never send a Claude app push. The inbox item is followed by one
@@ -35,6 +35,7 @@ first version of this prompt got critiqued instead of run (§14.30).
 create_inbox_item
   captured_text:    the body above
   source_type:      "task"
+  source_app:       "dj"
   source_metadata:  { "task_name": "Weekly DJ review", "run_date": "<YYYY-MM-DD>" }
 ```
 
@@ -100,9 +101,9 @@ failure permanently.
 executor `"claude"`, status `"running"`. Keep the run id.
 
 **Last, after the inbox item and its signal, and also if the run stops early:** call `update_platform_run` with that id:
-- `"ok"` when the inbox item was written, with details `{ "prompt_version": "2026-11-05a", "inbox_item_id": "<id>", "signal_id": "<id>", "concerts": <n> }` (`signal_error` in place of `signal_id` if `raise_signal` failed);
+- `"ok"` when the inbox item was written, with details `{ "prompt_version": "2026-11-05b", "inbox_item_id": "<id>", "signal_id": "<id>", "concerts": <n> }` (`signal_error` in place of `signal_id` if `raise_signal` failed);
 - `"partial"` when the report says it is partial, with the same details;
-- `"failed"` otherwise, with a one-line `error_message` and details `{ "prompt_version": "2026-11-05a", "failure_kind": "<short slug>" }`.
+- `"failed"` otherwise, with a one-line `error_message` and details `{ "prompt_version": "2026-11-05b", "failure_kind": "<short slug>" }`.
 
 A run with no row means the task never fired; that is what the schedule row is for.
 
@@ -141,7 +142,7 @@ partial report that says so beats a complete one that guessed.
 |---|---|---|
 | the run stamp | first (open) and last (close) | `create_platform_run`, `update_platform_run` |
 | derived tag facts (`derivable_as` non-null) | **immediately, without asking** — they are facts, not proposals | `record_dj_artist_tag` |
-| the inbox item | last, once the report is written | `create_inbox_item`, `source_type: "task"`, no suggestions |
+| the inbox item | last, once the report is written | `create_inbox_item`, `source_type: "task"`, `source_app: "dj"`, no suggestions |
 | its signal | straight after the inbox item | `raise_signal` |
 
 🛑 **THIS JOB DOES NOT ACT ON THE REPORT. IT WRITES IT.** Concert statuses, tagging answers and
