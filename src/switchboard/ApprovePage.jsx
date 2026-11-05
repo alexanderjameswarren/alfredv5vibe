@@ -9,6 +9,8 @@ import CopyButton from '../shared/CopyButton';
 // reads that and data-switchboard-project, posts the result to the chat and closes this tab. Where it can't,
 // the line is here to copy. data-switchboard-running, with the link's kind, is there only while a run is under
 // way (approved, or a test, which runs on open), so the panel can say so.
+// A git action (preview.kind 'git', spec §11.3) has no dry run: the page says what will run, Approve hands it to the
+// desktop helper, and the action id is the run mark, since the helper opens its run only when it picks the action up.
 
 // As on OAuthConsent (primary) and ItemAddToCollection (secondary).
 const BUTTON = 'w-full sm:w-auto px-4 py-3 min-h-[44px] bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50';
@@ -23,6 +25,39 @@ export function linkEnded(status, error) {
   if (/has expired/i.test(e)) return 'This link has expired. Links last 30 minutes. Nothing ran. Ask Claude for a new one.';
   if (/does not match/i.test(e)) return 'The SQL does not match what this link approved. Nothing ran. Ask Claude to review it again.';
   return null;
+}
+
+/** What a git action will do, in plain words, one line each (spec §11.3). */
+export function gitLines(payload, projectCode) {
+  const p = payload ?? {};
+  const lines = [];
+  if (p.command === 'gitpush') {
+    lines.push(`Runs gitpush ${p.mode ?? '(no mode)'} for ${projectCode}.`);
+    if (p.mode === 'checkpoint') {
+      lines.push(p.all ? 'Commits every uncommitted path, merges it into main and pushes.'
+        : `Commits these paths, merges them into main and pushes: ${(p.paths ?? []).join(', ')}.`);
+      lines.push(p.db === 'keep' ? 'Keeps the database claims.' : 'Releases the database claims.');
+    } else if (p.mode === 'finish') {
+      lines.push(p.finish === 'project-done'
+        ? 'Finishes the whole project: merges into main, pushes, removes the worktree and moves the spec and progress to docs/history/.'
+        : 'Finishes this phase only: merges into main, pushes and removes the worktree. The docs stay in docs/.');
+    } else if (p.mode === 'push') {
+      lines.push('Commits main and pushes it.');
+    }
+  } else if (p.command === 'gitcom') {
+    lines.push(`Runs gitcom for ${projectCode}: commits its claimed files.`);
+    if (p.include_unclaimed === 'all') lines.push('Also commits every unclaimed change.');
+  } else if (p.command === 'gitsync') {
+    lines.push(`Runs gitsync for ${projectCode}: merges main into its worktree.`);
+  } else if (p.command === 'gitnewtree') {
+    lines.push(`Runs gitnewtree for ${projectCode}: creates its worktree from origin/main.`);
+    lines.push(p.install === false ? 'Skips npm install.' : 'Runs npm install.');
+  } else {
+    lines.push(`Runs ${p.command ?? 'an unknown command'} for ${projectCode}.`);
+  }
+  if (p.message) lines.push(`Commit message: ${p.message}`);
+  if (p.command === 'gitpush' && p.include_unclaimed === 'all') lines.push('Also commits every unclaimed change.');
+  return lines;
 }
 
 async function callRunner(route, body) {
@@ -159,8 +194,12 @@ export default function ApprovePage() {
     setBusy(false);
   }
 
+  // Git has no dry run: the page shows what will run and offers Approve straight away. The runner's kind decides;
+  // the address's kind is for display only.
+  const isGit = preview?.kind === 'git';
+
   useEffect(() => {
-    if (!preview || dryStarted.current) return;
+    if (!preview || dryStarted.current || isGit) return;
     dryStarted.current = true;
     runDry();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -172,7 +211,7 @@ export default function ApprovePage() {
     setNote(null);
     try {
       const out = await callRunner('approve', { token, fingerprint: preview.fingerprint });
-      if (out.body.run_id) setReal(out.body);
+      if (out.body.run_id || (isGit && out.body.sent)) setReal(out.body);
       else refusal(out);
     } catch {
       setEnded('The connection was lost after Approve, so this may have run. Ask Claude to check before doing anything else.');
@@ -221,6 +260,57 @@ export default function ApprovePage() {
     );
   }
   if (!preview) return <Shell><p className="text-muted">Loading…</p></Shell>;
+
+  if (isGit) {
+    // The action id is the chat's handle: the helper's run row only exists once it picks the action up.
+    const id = preview.action_id;
+    return (
+      <Shell>
+        {approving && <span hidden data-switchboard-running="git" />}
+        <p className="font-bold text-dark mb-2 break-words">{preview.headline}</p>
+        <p className="text-sm text-dark">Project</p>
+        <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code} data-switchboard-kind="git">{preview.project_code}</p>
+        <ul data-testid="approve-git" className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">
+          {gitLines(preview.payload, preview.project_code).map((l) => <li key={l}>{l}</li>)}
+        </ul>
+
+        {note && (
+          <>
+            <p className="mb-4 text-sm text-dark break-words">{note}</p>
+            <CopyDetails actionId={id} error={note} />
+          </>
+        )}
+
+        {cancelled ? (
+          <>
+            <RunResult title="Not run" summary={cancelled.reason || 'No reason given.'} runId={id}
+              marks={{ 'data-switchboard-cancelled': '', 'data-switchboard-reason': cancelled.reason }} />
+            <ResultLine line={`git ${id} cancelled${cancelled.reason ? `: ${cancelled.reason}` : ''}`} />
+          </>
+        ) : real ? (
+          <>
+            <RunResult title="Sent to the desktop helper"
+              summary="It runs in a terminal window on your computer. The result comes back to the chat when it finishes."
+              runId={id} />
+            <ResultLine line={`git ${id}`} />
+          </>
+        ) : (
+          <>
+            <p className="mb-4 text-sm text-dark">Git has no dry run. Approve runs this once, on your computer.</p>
+            <div className="mb-4">
+              <label htmlFor="dont-run-reason" className="block text-sm text-dark mb-1">Reason for not running (optional)</label>
+              <input id="dont-run-reason" type="text" maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)}
+                className="w-full px-3 py-2 min-h-[44px] rounded-lg border border-border text-dark" />
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button className={BUTTON} disabled={busy} onClick={runReal}>Approve and run</button>
+              <button className={SECOND_BUTTON} disabled={busy} onClick={dontRun}>Don't run</button>
+            </div>
+          </>
+        )}
+      </Shell>
+    );
+  }
 
   const mismatch = Boolean(dry?.mismatch);
   const dryTitle = dry?.test

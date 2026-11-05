@@ -359,3 +359,57 @@ test('a lost connection at Approve warns it may have run and offers no retry', a
   expect(await screen.findByText(/may have run/i)).toBeInTheDocument();
   await waitFor(() => expect(screen.queryByRole('button', { name: /^approve/i })).not.toBeInTheDocument());
 });
+
+// --- git actions (spec §11.3) ---
+
+const GIT = { ok: true, kind: 'git', action_id: 'g1', headline: 'GITPUSH FINISH switchboard2-h8r: MERGES INTO MAIN, PUSHES, REMOVES THE WORKTREE',
+  fingerprint: 'fpg', project_code: 'switchboard2-h8r', payload: { command: 'gitpush', mode: 'finish', finish: 'phase' } };
+
+test('git: says what will run, no dry run, Approve sends it to the helper', async () => {
+  runner({ preview: reply(GIT), approve: reply({ ok: true, action_id: 'g1', sent: true }) });
+  const { container } = openAt('/approve/tok1?kind=git&exp=2000000000');
+  expect(await screen.findByText(/finishes this phase only/i)).toHaveTextContent('removes the worktree');
+  expect(screen.queryByTestId('approve-sql')).not.toBeInTheDocument();
+  expect(screen.getByText(/git has no dry run/i)).toBeInTheDocument();
+  expect(called('dry-run')).toHaveLength(0);
+  expect(container.querySelector('[data-switchboard-run-id]')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /^approve and run$/i }));
+  expect(await screen.findByText('Sent to the desktop helper')).toBeInTheDocument();
+  expect(screen.getByText(/result comes back to the chat/i)).toBeInTheDocument();
+  expect(JSON.parse(called('approve')[0][1].body)).toEqual({ token: 'tok1', fingerprint: 'fpg' });
+  expect(container.querySelector('[data-switchboard-run-id]')).toHaveAttribute('data-switchboard-run-id', 'g1');
+  expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'git');
+  expect(screen.getByText('git g1')).toBeInTheDocument();
+  expect(called('dry-run')).toHaveLength(0);
+});
+
+test('git: Don\'t run cancels without a dry run', async () => {
+  runner({ preview: reply(GIT), cancel: reply({ ok: true, cancelled: true, reason: 'later' }) });
+  const { container } = open();
+  fireEvent.change(await screen.findByLabelText(/reason for not running/i), { target: { value: 'later' } });
+  fireEvent.click(screen.getByRole('button', { name: /don't run/i }));
+  expect(await screen.findByText('git g1 cancelled: later')).toBeInTheDocument();
+  expect(container.querySelector('[data-switchboard-cancelled]')).not.toBeNull();
+  expect(called('dry-run')).toHaveLength(0);
+});
+
+test('git: a refusal at Approve is shown and nothing is marked sent', async () => {
+  runner({ preview: reply(GIT), approve: reply({ ok: false, error: 'switchboard is switched off.' }, 409) });
+  const { container } = open();
+  fireEvent.click(await screen.findByRole('button', { name: /^approve and run$/i }));
+  expect(await screen.findByText(/switched off/)).toBeInTheDocument();
+  expect(container.querySelector('[data-switchboard-run-id]')).toBeNull();
+});
+
+test('git: plain words for each command', () => {
+  const { gitLines } = jest.requireActual('./ApprovePage');
+  const w = (p) => gitLines(p, 'p-a1').join(' ');
+  expect(w({ command: 'gitpush', mode: 'checkpoint', paths: ['a.sql', 'docs/'] })).toMatch(/these paths.*a\.sql, docs\/.*Releases the database claims/);
+  expect(w({ command: 'gitpush', mode: 'checkpoint', all: true, db: 'keep' })).toMatch(/every uncommitted path.*Keeps the database claims/);
+  expect(w({ command: 'gitpush', mode: 'finish', finish: 'project-done' })).toMatch(/whole project.*removes the worktree.*docs\/history/);
+  expect(w({ command: 'gitpush', mode: 'push', message: 'm1' })).toMatch(/gitpush push.*Commit message: m1/);
+  expect(w({ command: 'gitcom', message: 'fix x', include_unclaimed: 'all' })).toMatch(/claimed files.*every unclaimed change.*Commit message: fix x/);
+  expect(w({ command: 'gitsync' })).toMatch(/merges main into its worktree/);
+  expect(w({ command: 'gitnewtree', install: false })).toMatch(/Skips npm install/);
+  expect(w({ command: 'gitnewtree' })).toMatch(/Runs npm install/);
+});

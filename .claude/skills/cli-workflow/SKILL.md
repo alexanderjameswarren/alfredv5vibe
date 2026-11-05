@@ -5,7 +5,7 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
-Skill version: 2026-11-04a
+Skill version: 2026-11-05a
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -76,7 +76,15 @@ in a table. It sits on top of the copy-box rule; it does not replace it.
 - **Under the step line comes the copy box**, if there is one. **A terminal copy
   box is a single line**: several PowerShell commands are chained with
   semicolons, never put on separate lines. **After any install, the PATH reload
-  goes at the start of the next command's copy box.**
+  goes at the start of the next command's copy box.** **A command that deletes
+  or moves files starts with `Set-Location` to an absolute folder, or names
+  every path absolutely**, so it can't act on whatever folder the terminal
+  happens to be in.
+- **A Chrome extension reload goes in the same step as the reinstall** that
+  copies the new version in, with an Expected line naming the new version (for
+  example "Expected: chrome://extensions shows Alfred's Clipboard 1.2.11").
+  Reloaded before the reinstall, Chrome keeps the old version; split into two
+  steps, the reload gets skipped.
 - **Then an "Expected:" line**, only when there is something specific to see.
   **Every terminal step has one**, so a command that fails silently shows.
 - **Then a "Feedback:" line**, only when he must send something back. Use
@@ -665,6 +673,13 @@ place Alex sees the list.** Only `claim db:deploy` and `cleanup <another thread>
 still interrupt him. He used to get several popups per project and approved them
 without reading, which taught him not to read the one that mattered. Write the
 plan prompt knowing its file list is the real approval, not a preview of one.
+
+**A file another thread holds: send the prompt anyway.** Don't hold back a step
+because a file in its scope is claimed elsewhere. Write the prompt to try the
+claim anyway, so the block is recorded and the holder is told at its next turn;
+to build what the free files allow; then to stop at the block and report it.
+Never wait on a release that no claim has asked for: the holder can't know
+anyone is waiting until a claim attempt says so.
 
 ### Alex's commands
 
@@ -1317,6 +1332,10 @@ inline in a sentence, never inside backticks in prose.
 
 A find-and-replace is two blocks, labelled "Find:" and "Replace with:". One
 block per string, so each has its own copy button.
+
+A copy box that deletes or moves files (`Remove-Item`, `Move-Item`, `rm`, `mv`)
+starts with `Set-Location` to an absolute folder, or uses absolute paths
+throughout. Never a relative path that depends on where the terminal is.
 
 Bad:
   Go to line 350. Change
