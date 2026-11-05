@@ -8,6 +8,8 @@ import { readFileSync } from "node:fs";
 import { buildHeadline, editorReasons, handle, prepare, splitStatements, summarise } from "./core.ts";
 
 const SECRET = "q".repeat(40);
+const PICKUP = "k".repeat(48);
+const PICKED = { action_id: "git-1", run_id: "run-g", project_code: "p-x", payload: { command: "gitsync" }, fingerprint: "fp", headline: "H", chat_url: null };
 const USER = "26f0707f-b586-4a3e-841c-8c313d6ab1e5";
 const TOKEN = "a".repeat(64);
 const hash = (t) => createHash("sha256").update(t).digest("hex");
@@ -35,6 +37,14 @@ function fakes(over = {}) {
     recordRun: async (run) => (calls.runs.push(run), "run-1"),
     setStatus: async (id, status) => calls.status.push({ id, status }),
     conformance: async () => "CONFORMANT (97 tables)",
+    pickupKey: PICKUP,
+    pickupGit: async (u) => (calls.picked = u, PICKED),
+    stalePicks: async (u, before) => (calls.staleBefore = before, []),
+    findPicked: async (a, r) => (a === "git-1" && r === "run-g" ? {
+      action: { id: "git-1", user_id: USER, kind: "git", status: "consumed", picked_up_at: "2026-11-05T08:00:00Z" },
+      run: { id: "run-g", action_id: "git-1", mode: "real", finished_at: null },
+    } : null),
+    finishRun: async (id, fields) => (calls.finished ??= []).push({ id, ...fields }),
     ...over,
   };
   return { deps, calls, action };
@@ -489,4 +499,101 @@ test("browser calls: a preflight passes on the run routes only", async () => {
   assert.match(ok.headers.get("access-control-allow-headers"), /authorization/i);
   const no = await handle(new Request("https://x/switchboard-runner/queue", { method: "OPTIONS" }), deps);
   assert.equal(no.headers.get("access-control-allow-origin"), null);
+});
+
+const helper = (route, body = {}, key = PICKUP) => post(route, body, key ? { "x-switchboard-pickup-key": key } : {});
+const result = (over = {}) => ({ action_id: "git-1", run_id: "run-g", ok: true, summary: "gitsync: merged main", ...over });
+
+test("pickup and result: refused with no key, a wrong or short one, the queue key, or an unset server key", async () => {
+  for (const route of ["pickup", "result"]) {
+    for (const key of [null, "wrong", PICKUP.slice(1), SECRET]) {
+      const { deps, calls } = fakes();
+      const res = await handle(helper(route, result(), key), deps);
+      assert.equal(res.status, 401, `${route} ${key}`);
+      assert.equal(calls.picked, undefined);
+      assert.equal(calls.finished, undefined);
+    }
+    const { deps } = fakes({ pickupKey: "" });
+    assert.equal((await handle(helper(route, result(), null), deps)).status, 401);
+    assert.equal((await handle(helper(route, result(), PICKUP), deps)).status, 401);
+  }
+  const { deps } = fakes();
+  assert.equal((await handle(queue({ project_code: "p-x", sql: "select 1", description: "d" }, PICKUP), deps)).status, 401);
+});
+
+test("pickup: returns the next git action for Alex's user, or null", async () => {
+  const { deps, calls } = fakes();
+  const body = await (await handle(helper("pickup"), deps)).json();
+  assert.deepEqual(body, { ok: true, action: PICKED, timed_out: [] });
+  assert.equal(calls.picked, USER);
+  const none = fakes({ pickupGit: async () => null });
+  assert.equal((await (await handle(helper("pickup"), none.deps)).json()).action, null);
+});
+
+test("pickup: a pick with no result for 30 minutes is failed first, so its project's queue moves", async () => {
+  const now = Date.parse("2026-11-05T09:00:00Z");
+  const { deps, calls } = fakes({ stalePicks: async (u, before) => (calls.staleBefore = before, [
+    { action_id: "old-1", run_id: "run-old" }, { action_id: "old-2", run_id: null },
+  ]) });
+  const body = await (await handle(helper("pickup"), deps, now)).json();
+  assert.equal(calls.staleBefore, "2026-11-05T08:30:00.000Z");
+  assert.deepEqual(body.timed_out, ["old-1", "old-2"]);
+  assert.deepEqual(calls.status, [{ id: "old-1", status: "failed" }, { id: "old-2", status: "failed" }]);
+  assert.equal(calls.finished.length, 1);
+  assert.equal(calls.finished[0].id, "run-old");
+  assert.match(calls.finished[0].summary, /timed out/);
+  assert.equal(calls.finished[0].result.ok, false);
+  assert.equal(body.action.action_id, "git-1");
+});
+
+test("result: closes the run and marks the action succeeded or failed", async () => {
+  for (const ok of [true, false]) {
+    const { deps, calls } = fakes();
+    const res = await handle(helper("result", result({ ok, exit_code: ok ? 0 : 1, output: "x".repeat(9000) })), deps);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).status, ok ? "succeeded" : "failed");
+    assert.deepEqual(calls.status, [{ id: "git-1", status: ok ? "succeeded" : "failed" }]);
+    assert.equal(calls.finished[0].id, "run-g");
+    assert.equal(calls.finished[0].summary, "gitsync: merged main");
+    assert.equal(calls.finished[0].result.ok, ok);
+    assert.equal(calls.finished[0].result.output.length, 8000);
+    assert.ok(calls.finished[0].finished_at);
+  }
+});
+
+test("result: bad input is refused and changes nothing", async () => {
+  for (const body of [result({ action_id: "" }), result({ run_id: undefined }), result({ ok: "yes" }),
+    result({ summary: "" }), result({ summary: "a\nb" }), result({ summary: "s".repeat(301) }), result({ exit_code: 1.5 })]) {
+    const { deps, calls } = fakes();
+    assert.equal((await handle(helper("result", body), deps)).status, 400);
+    assert.deepEqual(calls.status, []);
+  }
+});
+
+test("result: only for a pick still waiting, with its own run", async () => {
+  const base = { id: "git-1", user_id: USER, kind: "git", status: "consumed", picked_up_at: "t" };
+  const run = { id: "run-g", action_id: "git-1", mode: "real", finished_at: null };
+  for (const [picked, status] of [
+    [null, 404],
+    [{ action: { ...base, kind: "sql" }, run }, 404],
+    [{ action: { ...base, user_id: "someone-else" }, run }, 404],
+    [{ action: base, run: null }, 404],
+    [{ action: base, run: { ...run, action_id: "other" } }, 404],
+    [{ action: { ...base, status: "failed" }, run }, 409],
+    [{ action: { ...base, picked_up_at: null }, run }, 409],
+    [{ action: base, run: { ...run, finished_at: "t" } }, 409],
+    [{ action: base, run: { ...run, mode: "dry_run" } }, 409],
+  ]) {
+    const { deps, calls } = fakes({ findPicked: async () => picked });
+    assert.equal((await handle(helper("result", result()), deps)).status, status);
+    assert.deepEqual(calls.status, []);
+    assert.equal(calls.finished, undefined);
+  }
+});
+
+test("helper routes: POST only, and no browser preflight", async () => {
+  const { deps } = fakes();
+  assert.equal((await handle(new Request("https://x/switchboard-runner/pickup", { method: "GET" }), deps)).status, 405);
+  const pre = await handle(new Request("https://x/switchboard-runner/pickup", { method: "OPTIONS" }), deps);
+  assert.equal(pre.headers.get("access-control-allow-origin"), null);
 });

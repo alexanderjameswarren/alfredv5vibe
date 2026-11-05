@@ -86,7 +86,8 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 3 | s77 | CLAUDE.md names the installed commands | — | built (s77-k8dz) | 2026-11-04 |
 | 3 | s78, s79, s79b | Settings handover, then deleting the shims and dead folders; then Finish | — | done: s79b deleted the shims and dead folders; Finish merged as cb42ff8. Phase 3 complete | 2026-11-05 |
 | 5 git | s80, s80b, s80c | Queue changes: git payload check, `picked_up_at`, needs_click by type, no link for no-click actions, `switchboard_pickup_git` | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:clips`, `db:fn:switchboard_issue_link` | migration 206 succeeded (action 56a7cf70-fc54-4285-922a-017b506fc06c, run 305cba34-1598-4c26-9dec-8a1d68ec8882), CONFORMANT (103 tables); `6_verify_git.sql` passed 17 of 18 (run 529be5c5-7de1-4ab7-b619-7968180ac5cf). The failure, a gitpush with no mode let through by a null check, is fixed by migration 207 (action 0035347d-ff7e-442e-b644-538cbdea09b7) and the test re-queued (action 3b2cfdd4-fc23-4a00-8fe5-8834d820960a); both awaiting approval. clips.source comment names clip.cmd | 2026-11-05 |
-| 5 git | s81-s87 | Every git command by link: spec §11, plus sandbox sf checks, `sb client` answers and the panel snapshot | see below | todo | |
+| 5 git | s81 | Runner: helper pickup and result, pickup key | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` | deployed (s81-c9wt): `/pickup` and `/result` behind `x-switchboard-pickup-key` (`SWITCHBOARD_PICKUP_KEY`, constant-time, separate from the queue key). A pick with no result for 30 minutes is failed at the next pickup. No key: 401 on `/pickup`, `/result` and `/queue`. Runner tests 51 pass. Waiting on Alex to set the key | 2026-11-05 |
+| 5 git | s82-s87 | Every git command by link: spec §11, plus sandbox sf checks, `sb client` answers and the panel snapshot | see below | todo | |
 | 4 | s88-s92 | Salesforce reads: spec §10 | see below | todo | |
 | 5 SF | s93-s96 | Salesforce actions by link: spec §11 | see below | todo | |
 | 6-8 | | Spec §12-§14 | | todo | |
@@ -512,7 +513,9 @@ The helper arrives here rather than with Phase 4. Every git link needs a click f
 - create: supabase/migrations/_pending_switchboard2-h8r_git_actions.sql, supabase/tests/switchboard2-h8r/6_verify_git.sql
 - SQL: switchboard_actions, switchboard_runs
 
-**s81, runner: git actions and pickup key** (estimated run: 12m). The runner must mark every picked run, and its action, `succeeded` or `failed`: `switchboard_pickup_git` hands out one git action at a time per project, so a picked action left `consumed` stalls that project's queue.
+**s81, runner: git actions and pickup key** (estimated run: 12m). The runner must mark every picked run, and its action, `succeeded` or `failed`: `switchboard_pickup_git` hands out one git action at a time per project, so a picked action left `consumed` stalls that project's queue. Done (s81-c9wt): `/result` closes it; a pick older than 30 minutes is failed at the next `/pickup`.
+
+  For s82: the helper reads the key from `%LOCALAPPDATA%\Switchboard\config\pickup.key` (one line, outside every repo; protected like the rest of config), posts `/pickup` with header `x-switchboard-pickup-key`, and always posts `/result` with `ok`, a one-line `summary` and the `exit_code`, even when the command fails or is refused. A run longer than 30 minutes would be failed under it, so the helper should refuse anything it can't finish in that time.
 - update: supabase/functions/switchboard-runner/index.ts, supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs
 - deploy: switchboard-runner
 
