@@ -443,6 +443,18 @@ Scope of part 3:
 - deploy: nothing
 - SQL: none
 
+#### 9 part 3. Six prompts onto signals — DONE 2026-11-05 (`s9c-w7rd`)
+All six are at 2026-11-05a. Each has a never-notify rule, and each inbox item is followed by one
+`raise_signal` (started_by `task:<slug>`; high for a failure item, normal otherwise; details
+`inbox_id`, kind flag, or info for the DJ weekly report; source_ref `<subject_key>:<date>`).
+Money, Drive Mix and the DJ weekly record `signal_id` in the run details. SAM, DJ daily and Ken
+failure items are made after the close, which accepts only `notified_at`, so their `signal_id` goes
+in the report. The DJ daily header schedule is now 3:30. App ids and started_by values were checked
+against raise_signal and started_by_valid: all accepted.
+
+Next: Alex runs gitcom. Then Claude updates the six scheduled tasks from these files, and turns
+off each one's Claude app push.
+
 ### Phase D — Dispatcher screen
 
 ### 10. Dispatcher screen, read-only (75m)
@@ -523,4 +535,5 @@ Files: this file. DB: none.
 | 8 | 10m | 3m 45s | Overwatch and Arnold prompts and skills onto signals |
 | 8b | 10m | 1m 58s | deliver_signals uses the task's own item; mcp v197 |
 | 9 | 3m | 10s | which repo prompts are stale (read only) |
-| 9b | 8m | see report | snapshot SAM, Drive Mix and DJ daily live prompts |
+| 9b | 8m | 3m 32s | snapshot SAM, Drive Mix and DJ daily live prompts |
+| 9c | 25m | see report | six prompts onto signals, 2026-11-05a |

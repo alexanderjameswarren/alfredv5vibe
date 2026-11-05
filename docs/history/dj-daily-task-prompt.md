@@ -5,12 +5,12 @@ entire program. It is written to be read cold, months later, by someone debuggin
 that misbehaved. Length here is deliberate — compression would cost exactly the context a
 cold reader needs.
 
-- **Schedule:** daily, **4:30 am Pacific** (11:30 or 12:30 UTC), so it lands before the Drive Mix
-  refresh at 4:54. Moved from 17:00 UTC on 2026-10-11. Still far from the UTC midnight boundary
+- **Schedule:** daily, **3:30 am Pacific** (10:30 or 11:30 UTC), so it lands before the Drive Mix
+  refresh at 3:54. Moved from 17:00 UTC on 2026-10-11, and from 4:30 to 3:30 on 2026-10-25. Still far from the UTC midnight boundary
   that governs how YouTube buckets history — a run near 00:00 UTC risks the feed rolling
   over mid-request, with some entries answered under one UTC day and some under the next
   and no way to tell which afterwards.
-- **App / job:** `dj` / `daily_history_sync`, registered in `platform_schedules` (expected by 04:30
+- **App / job:** `dj` / `daily_history_sync`, registered in `platform_schedules` (expected by 03:30
   Pacific, 6 hours' grace) since Overwatch Step 8.
 - **Edit rule:** change this file, then paste it into the task. Never edit the task alone,
   or this file becomes a description of something that no longer exists.
@@ -28,7 +28,10 @@ cold reader needs.
 >
 > **So the prompt now carries a version, and the task must echo it.**
 >
-> ### `PROMPT VERSION: 2026-10-13a`
+> ### `PROMPT VERSION: 2026-11-05a`
+>
+> 2026-11-05a: every inbox item the run creates (failed or partial) is followed by one
+> `raise_signal` for it; the dispatcher decides what reaches Alex, and the task never sends a push.
 >
 > 2026-10-13a: a quiet day (no `Today` or `Yesterday` plays) is a normal `ok` run that skips
 > the write and never raises an item; confirmed quiet days are recorded as `empty_days` and
@@ -66,10 +69,10 @@ notification channel** — assume nobody reads it.
 
 ---
 
-You are running the DJ daily history sync. Follow these steps in order. **Do not
-improvise.**
+You are running the DJ daily history sync. `prompt version: 2026-11-05a`. Follow these steps
+in order. **Do not improvise.**
 
-### The three rules that override everything else
+### The rules that override everything else
 
 1. **NEVER IMPROVISE.** If you hit anything this prompt does not explicitly cover, **STOP**
    and report what you saw. Do not invent a recovery, do not retry with different
@@ -91,6 +94,10 @@ improvise.**
    empty property, and the resulting blank message cost hours of investigation into batch
    files, character encodings and HTTP transports — to find an expired token that the
    server had been naming in every single response.
+
+4. **YOU NEVER NOTIFY.** Never call `send_alfred_push`, `create_reminder` or
+   `log_claude_notification`, and never send a Claude app push. Each inbox item you create is
+   followed by one `raise_signal` for it (Step 7); the dispatcher decides what reaches Alex.
 
 **Whenever a step below says STOP: go to Step 7, then Step 8, then finish.** Stopping still
 means stamping the run and raising an inbox item. It does not mean going quiet.
@@ -454,6 +461,23 @@ source_type "task", source_app "dj", and source_metadata {"task_name": "<this ta
 name>", "run_date": "<today, YYYY-MM-DD>"}. Do not suggest a context,
 item or intention for it.
 
+**Then raise its signal.** Straight after `create_inbox_item`, call `raise_signal` once, with the
+new inbox id:
+- `app: "dj"`, `job: "daily_history_sync"`, `started_by: "task:dj-daily"`;
+- `severity`: `"high"` for a failed run, `"normal"` for a `partial` run (days lost);
+- `subject_key`: `"dj:daily_history_sync:failure:<failure_kind>"` for a failed run,
+  `"dj:daily_history_sync:lost_days"` for a `partial` run;
+- `title`: the item's title; `body`: one plain line saying what it holds; `link: "/<inbox id>"`;
+- `details: { "inbox_id": "<inbox id>", "kind": "flag" }`. The inbox id tells the dispatcher the
+  item already exists, so it points at it instead of making another;
+- `source_ref: "<subject_key>:<today_utc>"`.
+
+Keep the returned `signal_id` for Step 8: the run is already closed, so it cannot go in the run's
+`details`. If it says `created: false`, it was already raised today; say so. **A failed
+`raise_signal` never fails the run:** quote its error verbatim in Step 8 and carry on. The item
+stands either way. The rules above decide whether an item exists (quiet days, the 7-day de-dup);
+the signal only follows an item.
+
 ### Step 8 — Report to the chat
 
 Nobody may read this; the inbox item from Step 7 is the real channel. Write it anyway, in
@@ -462,7 +486,7 @@ and comparable:
 
 ```
 DJ daily sync — <today_utc>
-  prompt version: 2026-10-13a
+  prompt version: 2026-11-05a
   host: surface           run id: <id>
   held through:  <newest played_on from get_dj_plays>   (extended over quiet days to <D>)
   log claimed:   <covered_to from the previous ok run>   [AGREES | DISAGREES]
@@ -481,13 +505,14 @@ DJ daily sync — <today_utc>
   status stamped: <ok | partial | failed>
   inbox item raised: <yes, new | yes, repeat (still failing, N runs) |
                       no — clean run | no — already notified, <n> day(s) ago>
+  signal: <none — no item | <signal_id> | not created — already raised today | FAILED — <error>>
 ```
 
 Every number above comes from a tool response. If you do not have one, write `unknown` —
 never a guess, and never a number you expected.
 
 ⚠️ **Print `prompt version` exactly as written at the top of this prompt.** It is how a
-forgotten paste becomes visible. If you are reading this, the version is `2026-10-13a`.
+forgotten paste becomes visible. If you are reading this, the version is `2026-11-05a`.
 
 ⚠️ **The `known disagreements` line is not decoration — it is what makes a silent run
 verifiable.** A run that raises nothing because everything was decided and a run that raises

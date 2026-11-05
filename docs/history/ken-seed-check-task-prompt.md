@@ -19,9 +19,12 @@ no Workshop code for this job. The prompt below is the whole program.
 > version and Step 8 echoes it. An older version (or none) in a report means the task is running
 > stale text.
 >
-> ### `PROMPT VERSION: 2026-09-25a`
+> ### `PROMPT VERSION: 2026-11-05a`
 >
 > Bump the date-letter whenever this file changes below the line.
+>
+> 2026-11-05a: every inbox item the run creates (a nudge or a failure item) is followed by one
+> `raise_signal` for it; the dispatcher decides what reaches Alex. The task never sends a push.
 
 ## The record and the notification are SEPARATE
 
@@ -44,9 +47,10 @@ job would look alive indefinitely.
 
 ---
 
-You are running the Ken seed check. Follow these steps in order. **Do not improvise.**
+You are running the Ken seed check. `prompt version: 2026-11-05a`. Follow these steps in order.
+**Do not improvise.**
 
-### The three rules that override everything else
+### The rules that override everything else
 
 1. **NEVER IMPROVISE.** If you hit anything this prompt does not explicitly cover, **STOP** and
    report what you saw. Do not invent a recovery, and do not retry with different arguments.
@@ -55,10 +59,31 @@ You are running the Ken seed check. Follow these steps in order. **Do not improv
    `unknown`.
 3. **WHEN A CALL FAILS, QUOTE THE ERROR VERBATIM**, with the HTTP status if there is one. Never
    write "the call failed".
+4. **YOU NEVER NOTIFY.** The only writes are `create_platform_run`, `update_platform_run`,
+   `create_inbox_item` and `raise_signal`. Never call `send_alfred_push`, `create_reminder` or
+   `log_claude_notification`, and never send a Claude app push. Each inbox item you create is
+   followed by one `raise_signal` for it; the dispatcher decides what reaches Alex.
 
 **Whenever a step below says STOP: go to Step 6 and close the run as `failed`, then Step 7,
 then Step 8.** Stopping still means stamping the run and raising a failure item. It does not
 mean going quiet.
+
+**Raising a signal for an item.** Straight after each `create_inbox_item`, call `raise_signal`
+once, with the new inbox id:
+- `app: "ken"`, `job: "ken_seed_check"`, `started_by: "task:ken-seed-check"`;
+- `severity`: `"normal"` for a nudge, `"high"` for a failure item;
+- `subject_key`: `"ken:ken_seed_check:nudge"` for a nudge,
+  `"ken:ken_seed_check:failure:<failure_kind>"` for a failure item;
+- `title`: the item's first line; `body`: one plain line saying what it holds; `link: "/<inbox id>"`;
+- `details: { "inbox_id": "<inbox id>", "kind": "flag" }`. The inbox id tells the dispatcher the
+  item already exists, so it points at it instead of making another;
+- `source_ref: "<subject_key>:<local_date>"`.
+
+Keep the returned `signal_id`. If it says `created: false`, it was already raised today: note that.
+**A failed `raise_signal` never fails the run:** record its verbatim error as `signal_error` in the
+run details (or, for a failure item, in the report) and carry on. The item stands either way.
+Whether an item exists is decided by the steps below (zero, a pending nudge, the weekly de-dup);
+the signal only follows an item.
 
 ---
 
@@ -177,6 +202,8 @@ areas returned in 3.2. A seed with no area simply does not come back, and that a
 
    **Keep the returned inbox id.** If the call errors, STOP with `failure_kind: "inbox_write"`.
 
+3. Raise its signal ("Raising a signal for an item", above), as a nudge.
+
 ### Step 6 — Close the run
 
 Call `update_platform_run` with the run id from Step 1. **One call.** A closed run cannot be
@@ -186,7 +213,8 @@ re-stamped, and `details` can only be written while closing.
   `failed` **only** when a step said STOP.
 - **`details`**, always: `run_day`, `local_date`, `weekday`. On a run day, also `seeds_read`,
   `areas_matched` (the number of areas 3.2 returned), `unseeded_count` (N), and `unseeded_ids`. Then **one** of `inbox_item_id`
-  (nudged), `suppressed_by` (pending nudge found), or neither (N = 0). Add
+  (nudged), `suppressed_by` (pending nudge found), or neither (N = 0). With `inbox_item_id`, also
+  `signal_id`, or `signal_error` when `raise_signal` failed. Add
   `inbox_read_truncated: true` if Step 5 set it. If this run was started by hand rather than by
   the schedule, add `manual: true`.
 - **On `failed`:** `error_message` holds the **verbatim** error, and `details.failure_kind` is
@@ -273,6 +301,9 @@ de-dup has nothing to read or write:
 > *"No run row exists for this failure, so the once-per-week de-duplication does not apply.
 > Every run will raise this item until the cause is fixed."*
 
+Then raise its signal ("Raising a signal for an item", above), as a failure item. The run is
+already closed, so its `signal_id` goes in the Step 8 report, not the run details.
+
 #### 7.3 — Stamp `notified_at`
 
 If the item was created and a run row exists, call `update_platform_run` with this run's id and
@@ -289,7 +320,7 @@ Nobody may read this. Write it anyway, in exactly this shape:
 
 ```
 Ken seed check — <local_date> (<weekday>)
-  prompt version: 2026-09-25a
+  prompt version: 2026-11-05a
   run id: <id | none — run_open failed>
   run day: <yes | no — skipped>
   seeds read: <n>   areas matched: <n>
@@ -300,6 +331,7 @@ Ken seed check — <local_date> (<weekday>)
   failure item: <n/a — ok run | raised, new <id> | raised, repeat (N runs) <id> |
                  suppressed — notified <n> day(s) ago | FAILED TO RAISE — <error>>
   notified_at stamped: <yes | no — <why>>
+  signal: <none — no item | <signal_id> | not created — already raised today | FAILED — <error>>
 ```
 
 Print `prompt version` exactly as written at the top of this prompt.

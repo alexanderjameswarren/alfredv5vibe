@@ -12,8 +12,15 @@ notification routing moved it onto signals.
 
 > ## 🛑 A CHANGE TO THIS FILE DOES NOTHING UNTIL IT IS PASTED INTO THE TASK
 >
-> The task runs the text that was pasted, not the text in this repo. The live prompt carries no
-> version line yet.
+> The task runs the text that was pasted, not the text in this repo. So the prompt carries a
+> version, and the final summary and the run details echo it.
+>
+> ### `PROMPT VERSION: 2026-11-05a`
+>
+> Bump the date-letter whenever this file changes below the line.
+>
+> 2026-11-05a: the first version line. A problem item is followed by one `raise_signal` for it;
+> the dispatcher decides what reaches Alex, and the task never sends a push.
 
 ---
 
@@ -21,16 +28,17 @@ notification routing moved it onto signals.
 
 ---
 
-You are running the Drive Mix daily refresh. Drive Mix is Alex's daily car playlist (YouTube playlist id PLbtyzvGuByeU, title "Drive Mix"), picked each morning from a song pool in Supabase. The DJ daily history sync runs at 3:30 am, just before this. Follow these steps in order. Do not improvise. Run silently: no questions, no notifications beyond the final summary.
+You are running the Drive Mix daily refresh. Drive Mix is Alex's daily car playlist (YouTube playlist id PLbtyzvGuByeU, title "Drive Mix"), picked each morning from a song pool in Supabase. The DJ daily history sync runs at 3:30 am, just before this. Prompt version: 2026-11-05a. Follow these steps in order. Do not improvise. Run silently: no questions, no notifications beyond the final summary.
 
 Rules that override everything else:
 1. NEVER improvise. If something fails or looks wrong, stop at that step and report it (see step 8).
 2. Never empty or delete the playlist. Only replace_dj_playlist writes to it.
-3. The Alfred server allows 60 calls per 5 minutes; stay well under (this job normally needs about 27). On CALL BUDGET EXCEEDED wait 300 seconds once, then continue; any other guardrail error (e.g. LOOP DETECTED) means stop and report.
+3. The Alfred server allows 60 calls per 5 minutes; stay well under (this job normally needs about 27, 29 when it raises a problem). On CALL BUDGET EXCEEDED wait 300 seconds once, then continue; any other guardrail error (e.g. LOOP DETECTED) means stop and report.
 4. A QUIET DAY IS NOT A PROBLEM. If Alex did not listen to anything yesterday, the history feed has no Today or Yesterday plays and every song carries over. That is a normal outcome and must never raise an inbox item on its own.
 5. EVERY RUN IS LOGGED. Step 0 opens a run and Step 9 closes it, including when a step stops early. A run left "running" reads as a job that died.
+6. YOU NEVER NOTIFY. Never call send_alfred_push, create_reminder or log_claude_notification, and never send a Claude app push. The problem item (step 8) is followed by one raise_signal for it; the dispatcher decides what reaches Alex.
 
-Tools: load with ToolSearch query "select:mcp__Alfred__create_platform_run,mcp__Alfred__update_platform_run,mcp__Alfred__create_drive_mix_sweep,mcp__Alfred__get_drive_mix_songs,mcp__Alfred__update_drive_mix_songs,mcp__Alfred__create_drive_mix_songs,mcp__Alfred__update_drive_mix_thumbs,mcp__Alfred__get_drive_mix_pick,mcp__Alfred__create_drive_mix_serving,mcp__Alfred__create_inbox_item,mcp__Alfred__get_platform_runs,mcp__Workshop_Surface__get_dj_history,mcp__Workshop_Surface__get_dj_playlists,mcp__Workshop_Surface__replace_dj_playlist".
+Tools: load with ToolSearch query "select:mcp__Alfred__create_platform_run,mcp__Alfred__update_platform_run,mcp__Alfred__create_drive_mix_sweep,mcp__Alfred__get_drive_mix_songs,mcp__Alfred__update_drive_mix_songs,mcp__Alfred__create_drive_mix_songs,mcp__Alfred__update_drive_mix_thumbs,mcp__Alfred__get_drive_mix_pick,mcp__Alfred__create_drive_mix_serving,mcp__Alfred__create_inbox_item,mcp__Alfred__raise_signal,mcp__Alfred__get_platform_runs,mcp__Workshop_Surface__get_dj_history,mcp__Workshop_Surface__get_dj_playlists,mcp__Workshop_Surface__replace_dj_playlist".
 
 Step 0 — Open the run. First, call create_platform_run with app "drive_mix", job "daily_refresh", executor "claude", status "running". Keep the run id. If this call fails, carry on with the job anyway and say so in the final summary; there is then no run to close in Step 9.
 
@@ -64,6 +72,6 @@ Step 8 — Report. Decide whether something went wrong:
   - If that run started today (UTC date of started_at equals today) and its status is "ok" or "partial", the sync ran fine, so a full carry-over just means Alex did not listen yesterday. That is a quiet day and NOT a problem. Do not report it.
   - If that run is "failed", "running", or did not start today, the sync did not deliver yesterday's listening. That IS a problem; say which (failed, still running, or did not run today) and give the run id.
 - Cooling breaks and new songs over the cap are normal and are NOT problems.
-Only if there is a problem, call create_inbox_item with source_type "task", source_app "drive_mix", source_metadata {"task_name": "Drive Mix daily refresh", "run_date": "<today>"}, and captured_text starting "Drive Mix refresh problem <date>" followed by a short plain-English description of what happened and at which step. If everything went normally, create nothing. Finish with a one-line summary: thumbs down and up recorded, songs revived, songs added from Liked Music, songs swept, activated, retired, songs served, carried over (and "quiet day" if the carry-over was explained by a quiet day), new songs (and how many over the cap).
+Only if there is a problem, call create_inbox_item with source_type "task", source_app "drive_mix", source_metadata {"task_name": "Drive Mix daily refresh", "run_date": "<today>"}, and captured_text starting "Drive Mix refresh problem <date>" followed by a short plain-English description of what happened and at which step. Keep the new inbox id, then call raise_signal once for it: app "drive_mix", job "daily_refresh", started_by "task:drive-mix-daily-refresh"; severity "high" and subject_key "drive_mix:daily_refresh:failure:<failure_kind>" when the run will close "failed" (failure_kind is the lower-case slug Step 9 records), otherwise severity "normal" and subject_key "drive_mix:daily_refresh:problem"; title the item's first line; body one plain line; link "/<inbox id>"; details {"inbox_id": "<inbox id>", "kind": "flag"} (the inbox id tells the dispatcher the item already exists, so it points at it instead of making another); source_ref "<subject_key>:<today>". Keep the returned signal_id. A failed raise_signal never fails the run: note its verbatim error for Step 9 and the summary, and carry on. If everything went normally, create nothing and raise nothing. Finish with a one-line summary: prompt version 2026-11-05a, thumbs down and up recorded, songs revived, songs added from Liked Music, songs swept, activated, retired, songs served, carried over (and "quiet day" if the carry-over was explained by a quiet day), new songs (and how many over the cap), and the inbox item and signal ids if a problem was raised.
 
-Step 9 — Close the run. Last, also if the run stopped early: call update_platform_run with the run id from Step 0, once. Status "ok" when the playlist was replaced and the serving recorded; "partial" when a slice ran short or the sync looked stale; "failed" otherwise, with a one-line error_message and details {"failure_kind": "<short slug>"}. Put {"songs_added": n, "songs_served": n} in details. Never downgrade a failure to "ok" to get the close accepted.
+Step 9 — Close the run. Last, also if the run stopped early: call update_platform_run with the run id from Step 0, once. Status "ok" when the playlist was replaced and the serving recorded; "partial" when a slice ran short or the sync looked stale; "failed" otherwise, with a one-line error_message and details {"failure_kind": "<short slug>"}. Put {"prompt_version": "2026-11-05a", "songs_added": n, "songs_served": n} in details, plus "inbox_item_id" and "signal_id" when step 8 raised a problem, or "signal_error" when raise_signal failed. Never downgrade a failure to "ok" to get the close accepted.

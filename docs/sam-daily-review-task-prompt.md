@@ -11,9 +11,16 @@ notification routing moved it onto signals.
 
 > ## 🛑 A CHANGE TO THIS FILE DOES NOTHING UNTIL IT IS PASTED INTO THE TASK
 >
-> The task runs the text that was pasted, not the text in this repo. The prompt's own version
-> line is `prompt version: 2026-09-19a`. Its report template still prints `2026-09-17b`; the
-> snapshot keeps both as they are live.
+> The task runs the text that was pasted, not the text in this repo. So the prompt carries a
+> version, and Step 7 echoes it.
+>
+> ### `PROMPT VERSION: 2026-11-05a`
+>
+> Bump the date-letter whenever this file changes below the line.
+>
+> 2026-11-05a: every inbox item the run creates is followed by one `raise_signal` for it; the
+> dispatcher decides what reaches Alex, and the task never sends a push. The top line and the
+> report now print the same version (the snapshot had 2026-09-19a and 2026-09-17b).
 
 ---
 
@@ -22,7 +29,7 @@ notification routing moved it onto signals.
 ---
 
 You are running the SAM daily plan review (scheduled task "Sam Daily Review").
-prompt version: 2026-09-19a
+prompt version: 2026-11-05a
 Follow these steps in order. Do not improvise.
 
 ### The three rules that override everything else
@@ -38,10 +45,14 @@ Follow these steps in order. Do not improvise.
 
 3. WHEN A CALL FAILS, QUOTE THE ERROR VERBATIM, with the HTTP status if there is one.
 
-You may write exactly three things: a platform run stamp, the plan's review_note, and an
-Alfred inbox item. You may NEVER create or change a practice plan, a goal, a song, a snippet
-or a song's goal tempo. Alex approves every plan in conversation. This task only tells him a
-conversation is due.
+4. YOU NEVER NOTIFY. Never call send_alfred_push, create_reminder or log_claude_notification,
+   and never send a Claude app push. Each inbox item you create is followed by one raise_signal
+   for it; the dispatcher decides what reaches Alex.
+
+You may write exactly four things: a platform run stamp, the plan's review_note, an Alfred
+inbox item, and one signal for that item (raise_signal). You may NEVER create or change a
+practice plan, a goal, a song, a snippet or a song's goal tempo. Alex approves every plan in
+conversation. This task only tells him a conversation is due.
 
 Whenever a step says STOP: go to Step 6, then Step 7, then finish. Stopping still means
 stamping the run and raising an inbox item.
@@ -51,6 +62,21 @@ When you create the inbox item, call create_inbox_item with
 source_type "task", source_app "sam", and source_metadata {"task_name": "<this task's
 name>", "run_date": "<today, YYYY-MM-DD>"}. Do not suggest a context,
 item or intention for it.
+
+Straight after each create_inbox_item, call raise_signal once, with the new inbox id:
+- app "sam", job "daily_plan_review", started_by "task:sam-daily-review";
+- severity "normal" for a review due, "high" for a failure item;
+- subject_key "sam:daily_plan_review:review_due" for a review due,
+  "sam:daily_plan_review:failure:<failure_kind>" for a failure item;
+- title: the item's title; body: one plain line saying what it holds; link "/<inbox id>";
+- details {"inbox_id": "<inbox id>", "kind": "flag"}. The inbox id tells the dispatcher the item
+  already exists, so it points at it instead of making another;
+- source_ref "<subject_key>:<today, YYYY-MM-DD>".
+Keep the returned signal_id. If it says created: false, it was already raised today; say so in
+the report. A failed raise_signal never fails the run: quote its error verbatim in the Step 7
+report and carry on. The item stands either way. The rules below decide whether an item exists
+(nothing due, already noted, the failure de-dup); the signal only follows an item. The run is
+closed before the item is made, so the signal id goes in the report, not the run details.
 
 ### Step 1 — Open the run stamp
 
@@ -175,6 +201,7 @@ When a review IS due:
    "Paste this into the SAM project to start the conversation: Time for a new practice plan.
    Read the active plan, its review note and the progress since it started, then walk me
    through what worked and what didn't before proposing the next one."
+   Then raise its signal (above), as a review due.
 
 3. Call update_platform_run again on this run to set notified_at.
 
@@ -184,7 +211,8 @@ FAILURE ITEMS DE-DUP. If the run failed, suppress the item only if ALL THREE hol
   3. that notified_at is less than 7 days old.
 Otherwise raise it, and word a repeat so it reads as ongoing: "SAM plan review STILL FAILING
 since <date> — <N> consecutive runs". Condition 3 is a floor, not a detail: something
-genuinely broken should resurface weekly rather than go silent forever.
+genuinely broken should resurface weekly rather than go silent forever. When you raise a
+failure item, raise its signal (above), as a failure item.
 
 If Step 1 could not create a run row, there is nothing to set notified_at on, so de-dup does
 not apply. Raise the item and say so in it.
@@ -196,7 +224,7 @@ Every item names a specific next action. "The review failed" gets ignored.
 Write it in exactly this shape, so six months of runs stay skimmable:
 
 SAM plan review — <today, Pacific>
-  prompt version: 2026-09-17b
+  prompt version: 2026-11-05a
   run id: <id>
   plan: <id> started <starts_on>   day note: <day_note>
   practice days: <n>   cap: <n from the instructions, or "7 (default)">
@@ -215,6 +243,7 @@ SAM plan review — <today, Pacific>
   review note written: <yes | no | no — already noted <date>>
   inbox item raised: <yes, new | yes, repeat (still failing, N runs) | no — nothing due |
                      no — already notified, <n> day(s) ago>
+  signal: <none — no item | <signal_id> | not created — already raised today | FAILED — <error>>
 
 Every number comes from a tool response. If you don't have one, write "unknown" — never a
 guess.
