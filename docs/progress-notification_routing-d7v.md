@@ -616,7 +616,33 @@ Main was at c92873a, with 209 and the 10e files checkpointed. 210 was free (orig
 - **Test 1 re-run:** `0be66877-e2a2-4d38-ab77-6440d403a156`. Run it after 210.
 - Renumbered: the override tools, the rules card and the skill are now **10i**.
 
-#### Step 10i scope (planned; was "10f", "10g", then "10h")
+#### 10i. Override tools, Exceptions on the rules card, the skill — BUILT, NOT REGISTERED OR DEPLOYED 2026-11-05 (`s10i-p7c3`)
+- **Part A:** 211_started_by_arnold_morning_review.sql queued as `d9b7d725-9a8f-468a-b49d-cc479b15dc2f`, expect 2. It renames `task:arnold_morning_review` to `task:arnold-morning-review`, with the guard off for that one update, as in 210.
+- **Part B:**
+  - overwatch-plan.ts has `add_delivery_override` and `end_delivery_override`, both tier 3, dry run by default; spec §4.3 has the details.
+  - end sets ends_at to now rather than removing the entry, so the screen shows it as ended and old reasons still name it.
+  - overwatch-plan.test.mjs has 5 new tests and passes 21/21.
+  - dispatcherModel `overrideLines` drives the Exceptions list on the rules card; the model and page tests pass, 120/120 for src/overwatch.
+  - The overwatch SKILL.md is at 2026-11-05a, with a "Notification exceptions" section.
+- **Blocked:** supabase/functions/mcp/index.ts and db:deploy are both held by switchboard2-h8r. The claim was refused and recorded as a block. So the tools are **not registered** and **mcp is not deployed**.
+  - mcp/index.test.mjs ("Overwatch Steps 13 and 14 schemas…") fails with `add_delivery_override not registered` until they are.
+  - That test's tier map also needs the two tools, and index.test.mjs is not in this step's scope.
+- **Tests:** shared and mcp function tests 936/937, the one being that expected failure; the app suite 3237 pass, 7 skipped; scripts 54/54.
+- **Next:** 10i-b, once switchboard2-h8r releases mcp/index.ts and db:deploy. Register both tools in mcp/index.ts, add them to index.test.mjs's tier map, deploy mcp, run check_platform_conformance. Then 10j.
+
+#### 10j. Override tools registered and deployed — DONE 2026-11-05 (`s10j-w5n1`)
+- Worktree at 8e18df7, after a gitsync that brought in Switchboard 2's tools. switchboard2-h8r had released mcp/index.ts.
+- **mcp/index.ts:** registers `add_delivery_override` and `end_delivery_override`. Their descriptions give the override fields and the guardrails, and say the dry run is an estimate in which "an override's own hourly and daily limits are not replayed". The tool's own result note says the same ("an override's own hourly or daily caps are not replayed"); overwatch-plan.ts was not in this step's scope, so its wording is unchanged.
+- **index.test.mjs:** both tools are in the Overwatch tier map and the notification routing list, and the tool count goes from 195 to 197.
+- **Tests:** overwatch-plan 21/21; shared and mcp function tests 943/943.
+- **Deploy:** mcp deployed at 15:44. check_platform_conformance: CONFORMANT, all 103 non-exempt public tables. db:deploy released; no db: claims held.
+- Alex adds the first override from chat: High and Urgent notifications exempt from the hourly limit.
+- Renumbered: the task prompts and the nightly checks are now **10k**.
+
+#### Step 10k scope (planned; was "10j")
+Every task prompt raises signals only, using details.item, with no repeat logic of its own. The hourly dispatcher prompt drops "in_window false deliver nothing". Overwatch nightly gets the silence, importance and failure checks.
+
+#### Step 10i scope (as planned; was "10f", "10g", then "10h")
 - create: nothing
 - update: supabase/functions/_shared/tools/overwatch-plan.ts, supabase/functions/_shared/tools/overwatch-plan.test.mjs, supabase/functions/mcp/index.ts (register the tools), src/overwatch/dispatcherModel.js, src/overwatch/dispatcherModel.test.js, src/overwatch/DispatcherPage.jsx, src/overwatch/DispatcherPage.test.jsx, .claude/skills/overwatch/SKILL.md, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
 - delete: nothing
@@ -705,4 +731,6 @@ Files: this file. DB: none.
 | 10e | 45m | 14m 28s | overrides, inbox at any hour, items from signals; stopped before queueing (plan guard) |
 | 10f | 10m | 3m 05s | 209 numbered and queued with five tests; mcp deploy waits for 209 live |
 | 10g | 6m | 1m 29s | mcp deployed, conformant; started_by repair blocked by the plan guard |
-| 10h | 3m | see report | 210 started_by backfill (15 rows) and test 1 queued |
+| 10h | 3m | 48s | 210 started_by backfill (15 rows) and test 1 queued |
+| 10i | 25m | 6m 36s | 211 queued; override tools, Exceptions card, skill built; registration and deploy blocked by switchboard2-h8r |
+| 10j | 5m | see report | override tools registered, tool count 197, mcp deployed, conformant |

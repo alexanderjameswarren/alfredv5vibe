@@ -7,6 +7,8 @@
 //   create_overwatch_plan    tier 3 — supersede the active plan (propose shows what changes).
 //   update_overwatch_checks  tier 2 — replace checks_next_run on the active plan.
 //   get_delivery_rules       tier 1 — the active plan's delivery section (notification routing spec §5).
+//   add_delivery_override    tier 3 — add one override to delivery.overrides; dry-runs unless dry_run is false.
+//   end_delivery_override    tier 3 — end one by label (ends_at now); dry-runs unless dry_run is false.
 //   get_overwatch_watch      tier 1 — watch items, current ones by default.
 //   create_overwatch_watch   tier 2 — add a dated focus, ease_off or keep_an_eye_on.
 //   update_overwatch_watch   tier 2 — change one, or note that its expiry was mentioned.
@@ -216,6 +218,262 @@ export const getDeliveryRulesTool = defineTool({
         note: "The active Overwatch plan has no delivery section; the dispatcher sends nothing until it has one." };
     }
     return { plan_id: plan!.id, plan_created_at: (plan as { created_at?: string }).created_at ?? null, delivery };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// add_delivery_override, end_delivery_override — tier 3 (notification routing spec §5.1)
+// ---------------------------------------------------------------------------
+// Each saves a new plan version that changes only delivery.overrides. Saving supersedes the plan, so both are
+// tier 3; and both dry-run by default: an unconfirmed call, or any call without dry_run: false, checks the new
+// delivery section with overwatch_delivery_problem, estimates which of the last 7 days' signals would have been
+// decided differently, and saves nothing. The database (209) is the authority on the override's shape and guardrails.
+//
+// end sets when.ends_at to now rather than removing the entry: the rules card can show it as ended, and old signals'
+// reasons, which name overrides by label, still match an entry. One that has not started yet is removed instead.
+
+const OVERRIDE_KEYS = ["label", "reason", "match", "when", "effect", "confirm_broad"];
+const REPLAY_DAYS = 7;
+const REPLAY_LIMIT = 500;
+const SEVS = ["low", "normal", "high", "urgent"];
+
+type Override = Record<string, unknown> & { label: string; when?: Record<string, unknown> };
+type Signal = Record<string, unknown>;
+
+const DECISION_WORDS: Record<string, string> = {
+  hold: "held", inbox: "inbox item", pop: "notification", merge: "merged into an open item", drop: "dropped",
+  wait: "waiting", queued: "not decided yet",
+};
+
+function overridesOf(delivery: Record<string, unknown>): Override[] {
+  return Array.isArray(delivery.overrides) ? (delivery.overrides as Override[]) : [];
+}
+
+/** Whether an override has ended at `now` (its ends_at has passed). */
+export function overrideEnded(o: Override, now: Date): boolean {
+  const end = o.when?.ends_at;
+  return typeof end === "string" && Date.parse(end) <= now.getTime();
+}
+
+function sameLabel(a: unknown, b: string): boolean {
+  return typeof a === "string" && a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/** The override as the caller gave it, with created_at and created_by set; shape is checked by the database. */
+export function overrideInput(T: string, v: unknown, now: Date): Override {
+  const o = object(T, "override", v);
+  const extra = Object.keys(o).filter((k) => !OVERRIDE_KEYS.includes(k));
+  if (extra.length) {
+    throw new Error(`${T}: override has unknown keys: ${extra.join(", ")}. Give ${OVERRIDE_KEYS.join(", ")}; created_at is set for you.`);
+  }
+  const label = text(T, "override.label", o.label, { required: true })!;
+  return { ...o, label, created_at: now.toISOString(), created_by: "chat" } as Override;
+}
+
+/** The plan's recorded decision for a signal, as dispatch_signals would name it. */
+export function recordedDecision(s: Signal): string {
+  if (s.state === "delivered") return s.outcome === "pop" ? "pop" : "inbox";
+  return ({ held: "hold", merged: "merge", dropped: "drop", queued: "queued" } as Record<string, string>)[s.state as string]
+    ?? String(s.state);
+}
+
+function kindOf(s: Signal): string {
+  const k = (s.details as Record<string, unknown> | null)?.kind;
+  if (typeof k === "string" && k !== "") return k;
+  return s.severity === "high" || s.severity === "urgent" ? "flag" : "info";
+}
+
+/** The same test as overwatch_override_applies: match fields, then (when `at` is given) the when block, Pacific. */
+export function overrideApplies(o: Override, s: Signal, at: Date | null): boolean {
+  const m = (o.match ?? {}) as Record<string, unknown>;
+  for (const k of ["app", "job", "started_by"]) if (k in m && m[k] !== s[k]) return false;
+  if (typeof m.subject_key === "string") {
+    const key = m.subject_key;
+    if (key.endsWith("*") ? !String(s.subject_key ?? "").startsWith(key.slice(0, -1)) : key !== s.subject_key) return false;
+  }
+  if (Array.isArray(m.severity) && !m.severity.includes(s.severity)) return false;
+  if (Array.isArray(m.kind) && !m.kind.includes(kindOf(s))) return false;
+  if (!at) return true;
+  const w = (o.when ?? {}) as Record<string, unknown>;
+  if (typeof w.starts_at === "string" && at.getTime() < Date.parse(w.starts_at)) return false;
+  if (typeof w.ends_at === "string" && at.getTime() >= Date.parse(w.ends_at)) return false;
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "America/Los_Angeles", weekday: "short", hour: "2-digit",
+    minute: "2-digit", hourCycle: "h23" }).formatToParts(at);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  if (Array.isArray(w.days_of_week) && !w.days_of_week.includes(get("weekday").toLowerCase().slice(0, 3))) return false;
+  if (typeof w.time_from === "string" && typeof w.time_to === "string") {
+    const t = `${get("hour")}:${get("minute")}`;
+    const inside = w.time_from < w.time_to ? t >= w.time_from && t < w.time_to : t >= w.time_from || t < w.time_to;
+    if (!inside) return false;
+  }
+  return true;
+}
+
+/**
+ * An estimate of what the override would have decided for a signal the plan already decided: its decision, or the
+ * severity default after a severity change, merge false undoing a merge, and the window or pace no longer holding
+ * back a notification. Per-override caps are not replayed. Returns the decision name, or null for no change.
+ */
+export function decisionWith(o: Override, s: Signal, defaults: Record<string, string>): string | null {
+  const e = (o.effect ?? {}) as Record<string, unknown>;
+  const before = recordedDecision(s);
+  const reason = String(s.reason ?? "");
+  let sev = String(s.severity);
+  if (typeof e.severity === "string") sev = e.severity;
+  if (typeof e.severity === "number") sev = SEVS[Math.min(3, Math.max(0, SEVS.indexOf(sev) + e.severity))];
+  let after = typeof e.decision === "string" ? (e.decision === "notify" ? "pop" : e.decision)
+    : e.severity !== undefined ? defaults[sev] ?? before : before;
+  if (before === "merge" && after !== "hold" && after !== "drop" && e.merge !== false) after = "merge";
+  if (before === "merge" && e.merge === false && after === "merge") after = defaults[sev] ?? "inbox";
+  const window = e.window as Record<string, unknown> | undefined;
+  const pace = e.pace as Record<string, unknown> | undefined;
+  if (after === "inbox" || after === "queued" || after === "wait") {
+    if (window?.ignore === true && /outside the window/.test(reason)) after = "pop";
+    if (pace?.exempt === true && /stops the pop|waits for/.test(reason)) after = "pop";
+  }
+  return after === before ? null : after;
+}
+
+function pacificShort(iso: unknown): string {
+  if (typeof iso !== "string") return "";
+  return new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit" }).format(new Date(iso));
+}
+
+/** The last 7 days of signals whose decision `change` would alter, before and after in plain words. */
+async function replay(T: string, ctx: { db: any }, change: (s: Signal) => string | null, now: Date) {
+  const since = new Date(now.getTime() - REPLAY_DAYS * 86400000).toISOString();
+  const { data, error } = await ctx.db.from("signals")
+    .select("id, app, job, severity, subject_key, title, started_by, state, outcome, reason, details, created_at")
+    .gte("created_at", since).neq("state", "resolved").order("created_at", { ascending: false }).limit(REPLAY_LIMIT + 1);
+  if (error) throw new Error(describeDbError(T, error));
+  const rows = ((data ?? []) as Signal[]).slice(0, REPLAY_LIMIT);
+  const changed = rows.flatMap((s) => {
+    const after = change(s);
+    if (!after) return [];
+    return [{ signal_id: s.id, title: s.title, app: s.app, raised: pacificShort(s.created_at),
+      before: DECISION_WORDS[recordedDecision(s)] ?? recordedDecision(s), after: DECISION_WORDS[after] ?? after }];
+  });
+  return {
+    checked: rows.length,
+    changed,
+    note: `Estimated from each signal's recorded decision over the last ${REPLAY_DAYS} days, not a full re-run: ` +
+      "an override's own hourly or daily caps are not replayed." +
+      ((data ?? []).length > REPLAY_LIMIT ? ` Only the newest ${REPLAY_LIMIT} signals were checked.` : ""),
+  };
+}
+
+async function checkDelivery(T: string, ctx: { db: any }, delivery: Record<string, unknown>) {
+  const { data, error } = await ctx.db.rpc("overwatch_delivery_problem", { p: delivery });
+  if (error) throw new Error(describeDbError(T, error));
+  if (typeof data === "string" && data !== "") throw new Error(`${T}: ${data}`);
+}
+
+async function planWithDelivery(T: string, ctx: { db: any }) {
+  const plan = await activePlan(T, ctx);
+  const delivery = plan?.settings?.delivery as Record<string, unknown> | undefined;
+  if (!plan || !delivery || typeof delivery !== "object") {
+    throw new Error(`${T}: the active Overwatch plan has no delivery section, so there is nothing to add an override to.`);
+  }
+  return { plan, delivery };
+}
+
+async function savePlan(T: string, ctx: { db: any }, plan: NonNullable<Awaited<ReturnType<typeof activePlan>>>,
+  delivery: Record<string, unknown>, reason: string) {
+  const { data, error } = await ctx.db.rpc("create_overwatch_plan", {
+    p_instructions: plan.instructions,
+    p_settings: { ...plan.settings, delivery },
+    p_reason: reason,
+    p_written_by: "alex",
+    p_checks: null,
+  });
+  if (error) throw new Error(describeDbError(T, error));
+  return data as Record<string, unknown>;
+}
+
+/** The new delivery section with the override added; an ended one with the same label is replaced. */
+// The helpers take the tools' arguments by name, so each tool block shows exactly what it reads.
+async function addPlanned(input: { override: unknown; reason: unknown }, ctx: { db: any }, now: Date) {
+  const T = "add_delivery_override";
+  const reason = text(T, "reason", input.reason, { required: true })!;
+  const override = overrideInput(T, input.override, now);
+  const { plan, delivery } = await planWithDelivery(T, ctx);
+  const current = overridesOf(delivery);
+  const clash = current.find((o) => sameLabel(o.label, override.label));
+  if (clash && !overrideEnded(clash, now)) {
+    throw new Error(`${T}: an override called '${override.label}' is already in the plan and has not ended. ` +
+      "End it first with end_delivery_override, or choose another label.");
+  }
+  const next = { ...delivery, overrides: [...current.filter((o) => o !== clash), override] };
+  await checkDelivery(T, ctx, next);
+  const defaults = (delivery.defaults ?? {}) as Record<string, string>;
+  const impact = await replay(T, ctx, (s) =>
+    overrideApplies(override, s, new Date(String(s.created_at))) ? decisionWith(override, s, defaults) : null, now);
+  return { T, reason, plan, next, override, impact };
+}
+
+/** The new delivery section with the override ended (or removed, when it has not started). */
+async function endPlanned(input: { label: unknown; reason: unknown }, ctx: { db: any }, now: Date) {
+  const T = "end_delivery_override";
+  const reason = text(T, "reason", input.reason, { required: true })!;
+  const label = text(T, "label", input.label, { required: true })!;
+  const { plan, delivery } = await planWithDelivery(T, ctx);
+  const current = overridesOf(delivery);
+  const found = current.find((o) => sameLabel(o.label, label));
+  if (!found) {
+    const labels = current.map((o) => `'${o.label}'`).join(", ") || "none";
+    throw new Error(`${T}: there is no override called '${label}'. The plan's overrides: ${labels}.`);
+  }
+  if (overrideEnded(found, now)) throw new Error(`${T}: '${found.label}' has already ended.`);
+  const starts = found.when?.starts_at;
+  const notStarted = typeof starts === "string" && Date.parse(starts) > now.getTime();
+  const ended = notStarted ? null : { ...found, when: { ...(found.when ?? {}), ends_at: now.toISOString() } };
+  const next = { ...delivery, overrides: current.flatMap((o) => (o === found ? (ended ? [ended] : []) : [o])) };
+  await checkDelivery(T, ctx, next);
+  const defaults = (delivery.defaults ?? {}) as Record<string, string>;
+  const named = new RegExp(`override '${found.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'`);
+  // Signals this override changed would go back to what the plan's own rules give for their severity.
+  const impact = await replay(T, ctx, (s) => {
+    if (!named.test(String(s.reason ?? ""))) return null;
+    const plain = defaults[String(s.severity)];
+    return plain && plain !== recordedDecision(s) ? plain : null;
+  }, now);
+  return { T, reason, plan, next, override: ended ?? found, removed: !ended, impact };
+}
+
+export const addDeliveryOverrideTool = defineTool({
+  name: "add_delivery_override",
+  tables: { reads: ["overwatch_plans", "signals"], writes: ["overwatch_plans"] },
+  tier: 3,
+  propose: async (args: Record<string, unknown>, ctx) => {
+    const p = await addPlanned({ override: args.override, reason: args.reason }, ctx, new Date());
+    return { dry_run: true, saved: false, override: p.override, reason: p.reason, ...p.impact };
+  },
+  handler: async (args: Record<string, unknown>, ctx) => {
+    if (given(args, "dry_run") && typeof args.dry_run !== "boolean") throw new Error("add_delivery_override: dry_run must be true or false.");
+    const p = await addPlanned({ override: args.override, reason: args.reason }, ctx, new Date());
+    if (args.dry_run !== false) return { dry_run: true, saved: false, override: p.override, reason: p.reason, ...p.impact };
+    const saved = await savePlan(p.T, ctx, p.plan, p.next, p.reason);
+    return { dry_run: false, saved: true, plan_id: saved?.id ?? null, override: p.override, ...p.impact };
+  },
+});
+
+export const endDeliveryOverrideTool = defineTool({
+  name: "end_delivery_override",
+  tables: { reads: ["overwatch_plans", "signals"], writes: ["overwatch_plans"] },
+  tier: 3,
+  propose: async (args: Record<string, unknown>, ctx) => {
+    const p = await endPlanned({ label: args.label, reason: args.reason }, ctx, new Date());
+    return { dry_run: true, saved: false, override: p.override, removed: p.removed, reason: p.reason, ...p.impact };
+  },
+  handler: async (args: Record<string, unknown>, ctx) => {
+    if (given(args, "dry_run") && typeof args.dry_run !== "boolean") throw new Error("end_delivery_override: dry_run must be true or false.");
+    const p = await endPlanned({ label: args.label, reason: args.reason }, ctx, new Date());
+    if (args.dry_run !== false) {
+      return { dry_run: true, saved: false, override: p.override, removed: p.removed, reason: p.reason, ...p.impact };
+    }
+    const saved = await savePlan(p.T, ctx, p.plan, p.next, p.reason);
+    return { dry_run: false, saved: true, plan_id: saved?.id ?? null, override: p.override, removed: p.removed, ...p.impact };
   },
 });
 

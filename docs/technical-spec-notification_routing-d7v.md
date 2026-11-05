@@ -123,6 +123,17 @@ Indexes: `(user_id, state, created_at)`, `(user_id, subject_key, created_at desc
 | `get_dispatch_plan` | 1 | `dispatch_signals()`: each queued signal's decision and reason, and pops sent and left this hour and today; optional `at` to preview another time |
 | `deliver_signals` | 1 | recompute the plan and apply it: hold, create inbox items, send pops (shared `web-push-send.ts`), merge, one digest; logs every inbox item and pop in `claude_notifications` with `signal_id` and `started_by`; takes only `wording` and `digest` text and an optional `run_id` |
 | `update_signal` | 2 | hold, drop, or deliver now (chat and the screen). Step 11, with the screen's actions |
+| `add_delivery_override` | 3 | add one override (§5.1) as a new plan version, changing only `delivery.overrides`. Takes `override` (label, match, when, effect, confirm_broad) and a one-line `reason`; sets `created_at` now and `created_by: "chat"`; refuses a label already in use unless that override has ended (it is then replaced). In `overwatch-plan.ts` (step 10i) |
+| `end_delivery_override` | 3 | end one by `label`, with a `reason`: sets `when.ends_at` to now and keeps the entry, so the screen shows it as ended and old reasons still name a real override. One that has not started yet is removed instead |
+
+Both dry-run unless called with `dry_run: false` (and, being tier 3, `confirmed: true`).
+- A dry run checks the new delivery section with `overwatch_delivery_problem`, so the guardrails
+  refuse in plain words before anything is saved.
+- It then lists the last 7 days' signals (up to 500) whose decision would change, before and after
+  in plain words.
+- The list is estimated from each signal's recorded decision, not a full re-run of
+  `dispatch_signals`: it covers a decision, a severity change, `merge: false`, and the window or
+  pace no longer holding back a notification. An override's own caps are not replayed.
 
 Apps never check for an existing inbox item and never pick a channel. They raise a signal every
 time something is worth knowing; the dispatcher merges.
@@ -327,6 +338,12 @@ reminder, Monty Don freeze warning.
 - The dispatcher's own runs are watched by the Overwatch nightly (section 11).
 
 ## 10. The Dispatcher screen
+
+**Exceptions (step 10i).** The rules card lists each override in plain words, with 12-hour Pacific
+times, for example "Arnold notifications: any hour, until Nov 12, 3:00 PM" or "DJ: inbox instead of
+a notification". Under each: "In force", "Not started yet" or "Ended", and its label. An ended one
+reads "… Ended Nov 12, 3:00 PM" in muted text. The daily limit reads `max_per_day_all` before
+`max_pops_per_day`.
 
 `/overwatch/dispatcher` (`OVERWATCH_DISPATCHER_PATH` in `src/viewPaths.js`), a route screen like
 Plan and Briefing, opened from a Dispatcher row on the Overwatch tab. Files:

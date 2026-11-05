@@ -5,7 +5,7 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
-Skill version: 2026-11-04a
+Skill version: 2026-11-05a
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
@@ -135,6 +135,38 @@ in its group, out of fading. `update_overwatch_watch` changes one; a null `inten
 `get_overwatch_plan` reads it whole. To change it, see rule 3: pass the whole
 instructions and the whole settings, with a reason; show Alex the proposal; confirm only
 after he approves.
+
+### Notification exceptions (delivery overrides)
+
+Alex says what he wants in his own words: "DJ is too chatty", "let Arnold reach me at any hour this
+week", "High and Urgent shouldn't be held back by the hourly limit", "mute the Ken failures till
+Monday". Each becomes one override in `delivery.overrides` of Overwatch's plan (spec
+`docs/technical-spec-notification_routing-d7v.md` §5.1). `get_delivery_rules` shows the ones there
+now. Never add or end one in a scheduled run.
+
+1. **Restate it in plain words first**, the way the Dispatcher screen will show it: who it is for
+   (app, severity, kind such as failures), what changes (inbox instead of a notification, held,
+   dropped, any hour, no hourly limit, at most N an hour), and until when, in 12-hour Pacific times.
+   Say "notification", never "pop". Give it a short label in his words, e.g. "DJ is too chatty".
+2. **Dry run.** Call `add_delivery_override` with `override` (`label`, `match`, `when`, `effect`,
+   and `confirm_broad` if needed) and a one-line `reason`. It saves nothing: it checks the override
+   and lists the last 7 days' signals whose decision would change, before and after. Show him that
+   list as it comes ("New DJ album, Nov 5, 8:10 AM: notification → inbox item"), or say that nothing
+   would have changed. It is an estimate from recorded decisions; say so if he asks why a cap did
+   not show.
+3. **Save only after he says yes.** Call it again with the same arguments, `dry_run: false`, and
+   `confirmed: true`. That writes a new plan version that changes only the overrides.
+4. **Ending one:** `end_delivery_override` with its `label` and a `reason`, dry run first, then
+   `dry_run: false` and `confirmed: true` after he agrees. It sets the end to now, so the screen
+   shows it as ended. To change an override, end it and add a new one.
+
+**When the plan refuses one**, put the guardrail in words and offer the fix:
+- **A hold or a drop must end, within 14 days.** "Muting can't be open-ended: shall I make it until
+  Nov 12?" Then give `when.ends_at`.
+- **A hold or drop that names nothing in particular would silence everything.** Ask if that is
+  really what he means. Only then set `confirm_broad: true`.
+- **Anything else** (a mistyped day, a start time without an end time): fix it and dry-run again.
+  Don't pass the database's message on as it is.
 
 ### Friction
 
