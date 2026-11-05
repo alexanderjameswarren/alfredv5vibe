@@ -19,9 +19,11 @@ no Workshop code for this job. The prompt below is the whole program.
 > version and Step 8 echoes it. An older version (or none) in a report means the task is running
 > stale text.
 >
-> ### `PROMPT VERSION: 2026-11-05a`
+> ### `PROMPT VERSION: 2026-11-05b`
 >
 > Bump the date-letter whenever this file changes below the line.
+>
+> 2026-11-05b: the nudge and the failure item carry `source_app: "ken"` again.
 >
 > 2026-11-05a: every inbox item the run creates (a nudge or a failure item) is followed by one
 > `raise_signal` for it; the dispatcher decides what reaches Alex. The task never sends a push.
@@ -47,7 +49,7 @@ job would look alive indefinitely.
 
 ---
 
-You are running the Ken seed check. `prompt version: 2026-11-05a`. Follow these steps in order.
+You are running the Ken seed check. `prompt version: 2026-11-05b`. Follow these steps in order.
 **Do not improvise.**
 
 ### The rules that override everything else
@@ -181,6 +183,7 @@ areas returned in 3.2. A seed with no area simply does not come back, and that a
      ⚠️ **The first line is the dedupe marker.** It must begin `Ken seed check —`, with an em
      dash, character for character. The next run finds it by that prefix and nothing else.
    - `source_type: "task"`
+   - `source_app: "ken"`
    - `source_metadata: { "task_name": "Ken seed check", "run_date": "<local_date>" }`
    - `ai_reasoning: "Created by the ken_seed_check scheduled task, run <run id>."`
 
@@ -260,7 +263,7 @@ worded as new.
 
 #### 7.2 — Raise it
 
-Call `create_inbox_item` with `source_type: "task"`,
+Call `create_inbox_item` with `source_type: "task"`, `source_app: "ken"`,
 `source_metadata: { "task_name": "Ken seed check", "run_date": "<local_date>" }`, **no
 `suggested_*` field of any kind**, and a `captured_text` of exactly this shape:
 
@@ -320,7 +323,7 @@ Nobody may read this. Write it anyway, in exactly this shape:
 
 ```
 Ken seed check — <local_date> (<weekday>)
-  prompt version: 2026-11-05a
+  prompt version: 2026-11-05b
   run id: <id | none — run_open failed>
   run day: <yes | no — skipped>
   seeds read: <n>   areas matched: <n>

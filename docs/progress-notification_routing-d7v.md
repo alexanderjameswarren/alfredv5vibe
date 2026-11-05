@@ -455,6 +455,20 @@ against raise_signal and started_by_valid: all accepted.
 Next: Alex runs gitcom. Then Claude updates the six scheduled tasks from these files, and turns
 off each one's Claude app push.
 
+#### 9 part 4. Hand Claude the six prompts — DONE 2026-11-05 (`s9d-h4tn`)
+The files matched main (b4dbb64). Each prompt's text below THE PROMPT (the whole file for the
+DJ weekly review, which has no marker) is in an Overwatch task inbox item, and its md5 is checked
+against the file: Money cleanup 50c8adbc, Daily DJ 183b7006, Weekly DJ review 2ecf2915, Ken seed
+check 1a0bab33, SAM Daily Review 5a65ed8d, Drive Mix daily refresh fe022f90. They are left
+unarchived. Next: Claude updates the six tasks and archives each item once its task is updated.
+
+#### 9 part 5. Restore source_app on Ken and DJ weekly items — DONE 2026-11-05 (`s9e-p6jc`)
+The Ken seed check nudge and failure item get `source_app: "ken"`; the Weekly DJ review item gets
+`source_app: "dj"`. Both prompts are at 2026-11-05b. New inbox items, md5 checked: Ken seed check
+e0cd30d4, Weekly DJ review 231898d0 (they replace the 05a items 1a0bab33 and 2ecf2915).
+Next: Claude updates those two tasks. Then Alex checkpoints the two prompt files and this file
+to main.
+
 ### Phase D — Dispatcher screen
 
 ### 10. Dispatcher screen, read-only (75m)
@@ -536,4 +550,6 @@ Files: this file. DB: none.
 | 8b | 10m | 1m 58s | deliver_signals uses the task's own item; mcp v197 |
 | 9 | 3m | 10s | which repo prompts are stale (read only) |
 | 9b | 8m | 3m 32s | snapshot SAM, Drive Mix and DJ daily live prompts |
-| 9c | 25m | see report | six prompts onto signals, 2026-11-05a |
+| 9c | 25m | 4m 37s | six prompts onto signals, 2026-11-05a |
+| 9d | 5m | 5m 46s | six prompts into inbox items for Claude, md5 checked |
+| 9e | 5m | see report | source_app back on Ken and DJ weekly items, 2026-11-05b |
