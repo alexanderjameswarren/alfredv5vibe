@@ -89,7 +89,9 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 5 git | s81 | Runner: helper pickup and result, pickup key | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` | deployed (s81-c9wt): `/pickup` and `/result` behind `x-switchboard-pickup-key` (`SWITCHBOARD_PICKUP_KEY`, constant-time, separate from the queue key). A pick with no result for 30 minutes is failed at the next pickup. No key: 401 on `/pickup`, `/result` and `/queue`. Runner tests 51 pass. Waiting on Alex to set the key | 2026-11-05 |
 | 5 git | s82, s82b | Helper and by-link mode (switchboard repo, as switchboard_repo-k7m) | — | done (s82-x4mb, s82b-n2fy), uncommitted there until Alex's `gitpush main push`. The helper runs allowlisted git actions in a visible window and posts `/result`; it picks up on an approval trigger, not a timer; `helper.mjs --status`. By link, a question becomes exit 3. Finish takes `--phase` or `--project-done`, and only `--project-done` archives the docs | 2026-11-05 |
 | docs | s83, s83b | docs/ tidy: only open projects' docs stay in docs/ | — | done. s83 (s83-d6lt) was a read-only audit of the 24 files. s83b (s83b-h3vq) moved 10 to docs/history/, each confirmed byte-identical before its source was deleted: progress-gmail-capture, progress-email-capture, technical-spec-email-capture, progress-record_links-r7k, progress-sam-rail, lyrics-paste-progress, oauth_consent-progress, restructure-p1-progress, restructure-p2-progress, review-warren_buffet_p2-m4t. technical-spec-gmail-capture's two links now point at history. Kept by Alex's decision: Drive Mix's spec and progress, and the gmail capture spec (code comments name both specs). Also kept: the eight task prompts, which are live automations; skills read four of them, and inventory.mjs would mark one in history as retired | 2026-11-05 |
-| 5 git | s84-s87 | Every git command by link: spec §11, plus sandbox sf checks, `sb client` answers and the panel snapshot | see below | todo | |
+| 5 git | s84 | MCP tool `queue_switchboard_git` (spec §11.3) | `db:table:switchboard_actions`, `db:deploy` | partly done (s84-m6qr): the tool, its payload checks and headlines in switchboard.ts, 7 new tests (45 pass), spec §11.3. **Waiting:** (1) mcp/index.ts and index.test.mjs, held by notification_routing-d7v (block recorded), for registration and the deploy; (2) a database step for `switchboard_queue_git`, because authenticated can't insert into switchboard_actions | 2026-11-05 |
+| 5 git | s84c | `switchboard_queue_git` (database half) | `db:table:switchboard_actions`, `db:fn:switchboard_queue_git` | migration 208 queued (action fed21064-9ed7-4d47-9715-960012a16305): security definer, needs a signed-in caller, inserts kind git as created_by claude, returns `{action_id}`, execute for authenticated only. Test `7_verify_queue_git.sql` queued (action 1a707c7f-8c3b-4a9a-9e67-d8dcd7335a73), to run after 208. Conformance before 208: CONFORMANT (103). **Remaining, as s84d:** register the tool in mcp/index.ts (held by notification_routing-d7v), the deploy, the bad-payload check | 2026-11-05 |
+| 5 git | s84b-s87 | Approve page, then sandbox sf checks, `sb client` answers and the panel snapshot | see below | todo | |
 | 4 | s88-s92 | Salesforce reads: spec §10 | see below | todo | |
 | 5 SF | s93-s96 | Salesforce actions by link: spec §11 | see below | todo | |
 | 6-8 | | Spec §12-§14 | | todo | |
@@ -535,6 +537,23 @@ The helper arrives here rather than with Phase 4. Every git link needs a click f
 - update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, docs/technical-spec-switchboard2-h8r.md (§11)
 - deploy: mcp
 
+  s84 found (s84-m6qr): authenticated can't insert into switchboard_actions, so the tool calls `switchboard_queue_git`, which needs its own database step (**s84c**, below). The tool is written and tested against fakes; registration and the deploy wait for mcp/index.ts.
+
+**s84c, `switchboard_queue_git`** (database step; estimated run: 10m). A SECURITY DEFINER function, granted to authenticated only: it inserts a `kind: git` row for `auth.uid()` (`created_by: 'claude'`) and returns `{action_id}`. Then register the tool in mcp/index.ts, deploy mcp, and check that a bad payload is refused.
+- create: supabase/migrations/_pending_switchboard2-h8r_queue_git.sql, supabase/tests/switchboard2-h8r/7_verify_queue_git.sql
+- update: supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
+- deploy: mcp
+- SQL: switchboard_actions
+- db items: `db:table:switchboard_actions`, `db:fn:switchboard_queue_git`, `db:deploy`
+
+  s84c's database half is done (s84c-t9vk): migration 208 and the test are queued. The registration and deploy move to s84d.
+
+**s84d, register `queue_switchboard_git` and deploy mcp** (estimated run: 8m). Waits for notification_routing-d7v to release mcp/index.ts and index.test.mjs, and for 208 to be live.
+- update: supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
+- deploy: mcp
+- db items: `db:deploy`
+- check: a call with a bad payload is refused
+
 **s84b, approve page and `git <id>` post** (estimated run: 10m). "Git ready" and "Git running" already exist from s54.
 - update: src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, extension/, panel/
 
@@ -546,7 +565,7 @@ The helper arrives here rather than with Phase 4. Every git link needs a click f
 - deploy: mcp
 
 **s87, panel snapshot in Supabase** (database step; estimated run: 12m). After git by link: the panel writes a snapshot of its tiles to Supabase, and an Alfred tool reads it.
-- create: supabase/migrations/_pending_switchboard2-h8r_panel_snapshot.sql, supabase/tests/switchboard2-h8r/7_verify_panel_snapshot.sql
+- create: supabase/migrations/_pending_switchboard2-h8r_panel_snapshot.sql, supabase/tests/switchboard2-h8r/8_verify_panel_snapshot.sql
 - update: panel/, supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts
 - deploy: mcp
 
