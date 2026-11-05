@@ -11,9 +11,9 @@ about goals; change those in the plan, through the `arnold` skill.
 - **Schedule row**, written in chat with `create_platform_schedule`: `app: "arnold"`,
   `job: "arnold_morning_review"`, `executor: "claude"`, `cadence: "daily"`, `expected_by: "05:05"`,
   `grace_hours: 3`.
-- **Tools:** the **Alfred** connector only (mcp v180 or later): `get_arnold_plan`,
-  `get_arnold_progress`, `get_execution_history`, `get_inbox`, `get_claude_notifications`,
-  `create_inbox_item`, `log_claude_notification`, `create_platform_run`, `update_platform_run`.
+- **Tools:** the **Alfred** connector only (mcp v196 or later): `get_arnold_plan`,
+  `get_arnold_progress`, `get_execution_history`, `get_inbox`, `get_signals`,
+  `create_inbox_item`, `raise_signal`, `create_platform_run`, `update_platform_run`.
 - **Call budget:** about 8 Alfred calls a run, 10 when it raises an item. Well under the
   connector's 60 calls in 5 minutes.
 - **Spec:** `docs/arnold_v1-technical-spec.md` section 6.2.
@@ -24,7 +24,7 @@ about goals; change those in the plan, through the `arnold` skill.
 > The task runs the text that was pasted, not the text in this repo. So the prompt carries a
 > version, and the run record echoes it.
 >
-> ### `PROMPT VERSION: 2026-10-31a`
+> ### `PROMPT VERSION: 2026-11-04a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -34,10 +34,10 @@ about goals; change those in the plan, through the `arnold` skill.
 2. **The schedule row** above, written in chat with `create_platform_schedule`.
 3. **The scheduled task in claude.ai:** daily, **5:05 AM, Pacific**, with the **Alfred** connector
    and no others, named "Arnold morning review", with everything below "THE PROMPT" line as its
-   instructions. Its completion notification is the Claude push: the run's final summary is that
-   push's text.
+   instructions. **Its Claude app push is off.** A raised item reaches Alex through its signal and
+   the dispatcher.
 4. **Run it once by hand.** Check: a `platform_runs` row for `arnold` / `arnold_morning_review`
-   closed `ok`, with `prompt_version: "2026-10-31a"` in its details.
+   closed `ok`, with `prompt_version: "2026-11-04a"` in its details.
 
 ## What it writes
 
@@ -45,8 +45,8 @@ about goals; change those in the plan, through the `arnold` skill.
 |---|---|---|
 | **Record** | every run | `platform_runs` |
 | **Inbox item** | only when the plan's `review_instructions` say a plan conversation is due, and no review item is already open | Alfred inbox, `source_app: "arnold"`, `source_type: "task"` |
-| **Log row** | with every inbox item | `claude_notifications`, channel `inbox_item` |
-| **Claude push** | every run (the task's own completion notification) | a short summary, worth reading only when an item was raised |
+| **Signal** | with every inbox item | `raise_signal`, linking to the item; the dispatcher decides whether it pops, and logs what it delivers |
+| **Claude push** | never | off: the run ends with one log line |
 
 ---
 
@@ -54,7 +54,7 @@ about goals; change those in the plan, through the `arnold` skill.
 
 ---
 
-You are running Arnold's morning review for Alex. `PROMPT VERSION: 2026-10-31a`. Arnold is his
+You are running Arnold's morning review for Alex. `PROMPT VERSION: 2026-11-04a`. Arnold is his
 workout and wellbeing coach. You decide whether the active plan says a plan conversation is due,
 and if so you raise exactly one inbox item for it. Follow these steps in order. Do not improvise.
 
@@ -68,8 +68,9 @@ and if so you raise exactly one inbox item for it. Follow these steps in order. 
 3. **AT MOST ONE ITEM, AND NEVER A SECOND.** If an Arnold review item is already open, raise
    nothing.
 4. **THE ONLY WRITES ALLOWED** are `create_platform_run`, `update_platform_run`,
-   `create_inbox_item` (Step 5 only) and `log_claude_notification` (Step 5 only). Never change a plan,
-   archive or update an inbox item, log an execution, or send an Alfred push.
+   `create_inbox_item` (Step 5 only) and `raise_signal` (Step 5 only). Never change a plan, archive
+   or update an inbox item, or log an execution. Never call `send_alfred_push`, `create_reminder`
+   or `log_claude_notification`, and never send a Claude app push.
 5. **EVERY NUMBER COMES FROM A TOOL RESPONSE MADE IN THIS RUN.**
 6. **EVERY LINK IS `/<id>`**: `/` followed by the record's id. Never a longer path.
 7. **WHEN A CALL FAILS, QUOTE THE ERROR VERBATIM**, and close the run `failed` (Step 6).
@@ -98,8 +99,9 @@ Call `get_arnold_plan`. If `plan` is null, close the run `ok` with `details.stop
    about (for example the sleep check-in notes), for the same period.
 3. `get_inbox` with `source_app: "arnold"`: Arnold's open items. Note any open review item: one
    whose `source_type` is `task` and whose `source_metadata.job` is `arnold_morning_review`.
-4. `get_claude_notifications` with `app: "arnold"`, `date_from` 7 days before `local_date`,
-   `date_to` `local_date`: what Arnold has already raised and sent.
+4. `get_signals` with `app: "arnold"`, `job: "arnold_morning_review"`, and `since` 7 days before
+   `local_date` at 00:00 Pacific (an ISO timestamp with its offset): the reviews Arnold has already
+   raised.
 
 ### Step 4 — Decide
 
@@ -111,7 +113,8 @@ Apply `review_instructions` to what you read. Decide one of:
   `details.reason: "review item already open"` and its id.
 - **A plan conversation is due.** Pick the one template `review_instructions` name for it (if they
   name none, the closest key in `prompt_templates`; if none fits, close `failed`). If the same
-  reason was raised in the last 7 days (Step 3.4, same dedupe key below), treat it as nothing due.
+  reason was raised in the last 7 days (Step 3.4, a signal with the same `subject_key` below), treat
+  it as nothing due.
 
 ### Step 5 — Raise it (only when a conversation is due)
 
@@ -127,11 +130,16 @@ Apply `review_instructions` to what you read. Decide one of:
      The inbox card shows `task_name` and the run date as the item's title, so the title goes
      there.
    Keep the new item's id.
-4. Call `log_claude_notification` with `app: "arnold"`, `job: "arnold_morning_review"`,
-   `kind: "flag"`, `channel: "inbox_item"`, `title` the title, `body` the filled prompt's first line,
-   `link: "/<inbox id>"`, `local_date`, `delivery_detail: { "inbox_id": "<inbox id>" }`, and
-   `dedupe_key: "arnold:<local_date>:review:<template key>"`. If it says the key was already used,
-   say so in `details`; the item stands.
+4. Call `raise_signal` with:
+   - `app: "arnold"`, `job: "arnold_morning_review"`, `started_by: "task:arnold-morning-review"`;
+   - `severity: "normal"`;
+   - `subject_key: "arnold:review:<template key>"`, lower case;
+   - `title`: the title; `body`: the filled prompt's first line; `link: "/<inbox id>"`;
+   - `details: { "inbox_id": "<inbox id>", "kind": "flag" }`. The inbox id tells the dispatcher the
+     item already exists, so it points at it instead of making another;
+   - `source_ref: "arnold:<local_date>:review:<template key>"`.
+
+   If it says `created: false`, it was already raised today: say so in `details`. The item stands.
 
 ### Step 6 — Close the run
 
@@ -139,12 +147,15 @@ Call `update_platform_run` with the run id, **once**:
 
 - `status: "ok"`, or `"failed"` (then `error_message` verbatim and `details.failure_kind`).
 - `finished_at` now, `covered_from` the period's first day, `covered_to` `yesterday`.
-- `details`: `prompt_version: "2026-10-31a"`, `stopped` (when Step 2 stopped), `raised` (true or
-  false), `reason`, `template`, `inbox_id` and `title` when raised.
+- `details`: `prompt_version: "2026-11-04a"`, `stopped` (when Step 2 stopped), `raised` (true or
+  false), `reason`, `template`, `inbox_id`, `title` and `signal_id` when raised.
 
-### Step 7 — The final summary (it becomes the Claude push)
+### Step 7 — Report (one log line)
 
-- **Raised:** one line, the title, then `/<inbox id>`. Nothing else.
-- **Not raised:** one short line, "Arnold: nothing due today." Nothing else: no progress, no
-  praise, no numbers.
-- **Failed:** "Arnold morning review FAILED: <the error, verbatim>".
+This line is the run's report, not a notification. Nothing is sent from here.
+
+- **Raised:** `arnold morning review 2026-11-04a: raised <template key>, /<inbox id>`.
+- **Not raised:** `arnold morning review 2026-11-04a: nothing due`.
+- **Failed:** `arnold morning review 2026-11-04a: FAILED: <the error, verbatim>`.
+
+Nothing else.

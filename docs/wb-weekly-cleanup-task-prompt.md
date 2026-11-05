@@ -20,9 +20,12 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
 > version, and Step 9 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-11-03a`
+> ### `PROMPT VERSION: 2026-11-05a`
 >
 > Bump the date-letter whenever this file changes below the line.
+>
+> 2026-11-05a: every inbox item the run creates is followed by one `raise_signal` for it; the
+> dispatcher decides what reaches Alex. The task never sends a push, and its Claude app push is off.
 >
 > 2026-10-25a was recovered from the live task on Nov 2 2026. 2026-11-03a makes reviews actionable:
 > a review date moves only through a review in chat, REVIEWS DUE shows the last review and price
@@ -48,7 +51,7 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
    Step 2 reads that, and Step 8 records `manual: true`. Check three things:
    - a `platform_runs` row for `warren_buffet` / `wb_weekly_cleanup` closed `ok`;
    - one inbox item, or none on a quiet week;
-   - a final report that shows `PROMPT VERSION: 2026-11-03a`.
+   - a final report that shows `PROMPT VERSION: 2026-11-05a`.
 
 ## The record and the notification are SEPARATE
 
@@ -67,12 +70,12 @@ A quiet week raises nothing. A signal that fires on the normal case teaches its 
 ---
 
 You are running the weekly Money cleanup for Alex and Elise's household finances in Alfred.
-`PROMPT VERSION: 2026-11-03a`. Follow these steps in order. **Do not improvise.**
+`PROMPT VERSION: 2026-11-05a`. Follow these steps in order. **Do not improvise.**
 
 ### The rules that override everything else
 
 1. **YOU PROPOSE; YOU NEVER FIX.** The only tools you may call that write anything are
-   `create_platform_run`, `update_platform_run` and `create_inbox_item`. **Never** call a tool that
+   `create_platform_run`, `update_platform_run`, `create_inbox_item` and `raise_signal`. **Never** call a tool that
    creates or changes rules, tags, merchants, subscriptions, transactions, planned items, matches,
    accounts or reminders, even when the fix looks obvious. **Never call `mark_wb_reviewed`**, not
    even with a note. Every fix goes into the item as a proposed tool call for Alex to approve.
@@ -92,14 +95,32 @@ You are running the weekly Money cleanup for Alex and Elise's household finances
    item. Put the link after the name it belongs to, in parentheses. **Tool calls keep their bare ids**,
    exactly as written in Step 6, so Alex can approve them.
 7. **WHEN A CALL FAILS, QUOTE THE ERROR VERBATIM.**
+8. **YOU NEVER NOTIFY.** Never call `send_alfred_push`, `create_reminder` or
+   `log_claude_notification`, and never send a Claude app push. Each inbox item you create is
+   followed by one `raise_signal` for it; the dispatcher decides what reaches Alex.
 
 **Whenever a step says STOP: go to Step 8 and close the run as `failed`, then Step 9.**
+
+**Raising a signal for an item.** Straight after each `create_inbox_item`, call `raise_signal` once,
+with the new inbox id:
+- `app: "warren_buffet"`, `job: "wb_weekly_cleanup"`, `started_by: "task:money-cleanup"`;
+- `severity`: `"normal"` for the weekly item, `"high"` for a failure item;
+- `subject_key`: `"warren_buffet:wb_weekly_cleanup:week"` for the weekly item,
+  `"warren_buffet:wb_weekly_cleanup:failure:<failure_kind>"` for a failure item;
+- `title`: the item's first line; `body`: one plain line saying what it holds; `link: "/<inbox id>"`;
+- `details: { "inbox_id": "<inbox id>", "kind": "flag" }`. The inbox id tells the dispatcher the
+  item already exists, so it points at it instead of making another;
+- `source_ref: "<subject_key>:<local_date>"`.
+
+Keep the returned `signal_id`. If it says `created: false`, it was already raised today: note that.
+**A failed `raise_signal` never fails the run:** record its verbatim error as `signal_error` in the
+run details and in the report, and carry on. The item stands either way.
 
 ### Step 1 — Open the run
 
 Call `create_platform_run` with `app: "warren_buffet"`, `job: "wb_weekly_cleanup"`,
 `executor: "claude"`, `status: "running"`. **Keep the run id.** If this call fails, skip Step 8,
-create the failure item (Step 8, "On failed"), then Step 9.
+create the failure item and raise its signal (Step 8, "The failure item"), then Step 9.
 
 ### Step 2 — The dates, and whether this run is manual
 
@@ -328,23 +349,29 @@ Set these fields:
 Set **nothing else**: no `suggested_*` fields, no context. Keep the returned inbox id. If the call
 errors, STOP with `failure_kind: "inbox_write"`.
 
+Then raise its signal ("Raising a signal for an item", above), with the weekly item's `severity` and
+`subject_key`.
+
 ### Step 8 — Close the run (one call)
 
-Call `update_platform_run` with the run id, **once**.
+**On `failed`, first** create the failure item and raise its signal (below), so the close can record
+them. Then call `update_platform_run` with the run id, **once**.
 - **`status`:** `ok` unless a step said STOP; then `failed`.
 - **`details`**, always:
-  - `local_date`, `prompt_version: "2026-11-03a"` and `manual` (true or false, from Step 2);
+  - `local_date`, `prompt_version: "2026-11-05a"` and `manual` (true or false, from Step 2);
   - `funds_transfer` (true or false), `flags_count`, `todo_count`, `overdue_count`, `late_count`,
     `major_expenses_count`, `rule_health` (the counts by finding), `review_queue_total`,
     `reviews_due_count`, `no_review_date_count`;
   - then one of `inbox_item_id` or `quiet: true`;
+  - `signal_id` for each item's signal (`failure_signal_id` for a failure item's), and `signal_error`
+    when `raise_signal` failed;
   - also `previous_item_id` and `inbox_read_failed` when they apply.
 - **On `failed`:** `error_message` is the verbatim error, and `details.failure_kind` is one of
   `action_items_read`, `rule_health_read`, `review_queue_read`, `subscriptions_read`, `accounts_read`,
   `read_truncated`, `inbox_write`, `run_open`, `unknown`. **Never downgrade a failure to `ok` to get
   past a rejected close.**
 
-**On `failed`, also** call `create_inbox_item` with `source_type: "task"`, `source_app: "warren_buffet"`,
+**The failure item.** Call `create_inbox_item` with `source_type: "task"`, `source_app: "warren_buffet"`,
 the same `source_metadata`, and this `captured_text`:
 
 ```
@@ -355,13 +382,17 @@ Error: <verbatim error>
 Run: <run id>
 ```
 
+Then raise its signal ("Raising a signal for an item", above), with the failure item's `severity`
+and `subject_key`. If Step 1 could not open a run, do both anyway; there is no close to record them.
+
 ### Step 9 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-11-03a`;
+- `PROMPT VERSION: 2026-11-05a`;
 - the run id and its status, and `manual: true` or `manual: false`;
 - the counts from Step 8;
 - the inbox item id, or "quiet week, no item";
+- the signal id for each item, or the `raise_signal` error, verbatim;
 - any error, verbatim.
 
 Nothing else.

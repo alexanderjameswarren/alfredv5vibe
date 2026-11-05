@@ -8,8 +8,8 @@ The nightly job runs on the weekly day too; this one adds the week's view and do
 nightly counts.
 
 - **Schedule:** weekly, **Monday 4:35 am America/Los_Angeles**. The plan's `weekly_day` is
-  `monday`. That is after the nightly run (4:20), so tonight's note is in, and before `push_time`
-  (05:00), so everything lands before Alex is up at 5.
+  `monday`. That is after the nightly run (4:20), so tonight's note is in, and before the
+  dispatcher's first run (05:00), so its signals are delivered when Alex is up at 5.
 - **Weekly day:** a claude.ai task's schedule cannot read the plan, so the task fires on a fixed
   day and Step 2 checks it against `weekly_day`. On a mismatch the run does nothing but raise one
   item saying the task's schedule and the plan disagree. **Changing `weekly_day` in the plan means
@@ -19,7 +19,8 @@ nightly counts.
   (`list_triggers`) and **web search**. The **`overwatch` skill** must be available to the task.
 - **Settings it reads** from the active plan: `weekly_day`, `audit_every_weeks`,
   `friction_trigger_count`, `friction_window_days`, `estimate_accuracy_min_shipped`,
-  `estimate_correction_factor`, `pushes_per_day`, `push_time`.
+  `estimate_correction_factor`. `pushes_per_day` and `push_time` are no longer read: what reaches
+  Alex, and how often, is the dispatcher's (the plan's `delivery` section).
 - **Spec:** `docs/technical-spec-overwatch-q4n.md` section 6 ("On the weekly day"), 4.10, 4.11 and
   4.12.
 - **Edit rule:** change this file, then paste it into the task. Never edit the task alone. A change
@@ -30,7 +31,7 @@ nightly counts.
 > The task runs the text that was pasted, not the text in this repo. So the prompt carries a
 > version, and Step 11 echoes it.
 >
-> ### `PROMPT VERSION: 2026-10-31a`
+> ### `PROMPT VERSION: 2026-11-04a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -44,7 +45,7 @@ nightly counts.
    everything below "THE PROMPT" line as its instructions.
 3. **Run it once by hand** and say in the chat that this run is manual (Step 2 then runs it even
    on another day). Check: a `platform_runs` row for `overwatch` / `weekly` closed `ok`; the weekly
-   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-10-31a`.
+   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-11-04a`.
 
 ---
 
@@ -53,7 +54,7 @@ nightly counts.
 ---
 
 You are running Overwatch's weekly review for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-10-31a`. **First, load the `overwatch` skill.** It tells you how to read the
+`PROMPT VERSION: 2026-11-04a`. **First, load the `overwatch` skill.** It tells you how to read the
 week, what makes a friction pattern and its fix, when a parked project has become possible, and how
 to word the note. Follow these steps in order for everything else. **Where the skill and these
 steps disagree, these steps win.** Do not improvise.
@@ -66,8 +67,9 @@ steps disagree, these steps win.** Do not improvise.
    number is the 7-day week.
 2. **YOU READ, GROUP AND PROPOSE; YOU NEVER CHANGE THE PLAN OR AN APP.** The only tools that write
    that you may call are: `create_platform_run`, `update_platform_run`, `create_overwatch_note`,
-   `create_inbox_item`, `create_reminder`, `record_seen_releases`, and `update_friction` **with
-   `pattern_id` only**. **Never** call `create_overwatch_plan`, `update_overwatch_checks`,
+   `create_inbox_item`, `raise_signal` (Step 10.2 only), `record_seen_releases`, and `update_friction` **with
+   `pattern_id` only**. **Never** call `create_reminder`, `send_alfred_push`, `log_claude_notification`,
+   `create_overwatch_plan`, `update_overwatch_checks`,
    `update_friction` with `status` or `resolved_by`, `update_project_plan`,
    `record_project_estimate`, `create_project_link`, `archive_inbox_item`, `update_inbox_item`, any
    app's own write tools, or any tool that creates, changes or runs a scheduled task. **Every change
@@ -113,7 +115,7 @@ create the failure item (Step 10, "On failed"), then Step 11.
    on <weekday>, but the plan's weekly_day is <weekly_day>. Change the claude.ai task's day and the
    overwatch/weekly schedule row's day_of_week to match, or change weekly_day through the plan
    gate.", then go to Step 10.3 and close `ok` with `details.not_weekly_day: true`. Do nothing else:
-   no note, no nudge.
+   no note, no signal.
 
 ### Step 3 — Read the week
 
@@ -269,7 +271,7 @@ SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismat
 5. **One for the drift audit, when Step 8 found anything**, kind `drift_audit`. First line:
    `Overwatch: drift audit — <N> findings`. Title: `Overwatch: drift audit, <N> findings`. One line per finding.
 
-### Step 10 — Write the note, nudge, and close the run
+### Step 10 — Write the note, raise signals, and close the run
 
 1. **The weekly note:** `create_overwatch_note` with `period: "weekly"`, `for_date: <local_date>`,
    and:
@@ -292,19 +294,29 @@ SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismat
      `new_releases`, `friction_patterns`, `estimate_accuracy`, `drift_audit` (the findings, or
      `not_due`), `inbox_items`, `skipped`, `settings_missing`.
    - If it errors, STOP with `failure_kind: "note_write"`.
-2. **Nudges** (`pushes_per_day`, `push_time`): the nightly run may already have used today's
-   nudges. `get_platform_runs` with `app: "overwatch"`, `job: "nightly"`, `limit: 1`: if it ran
-   today, `reminders_sent` in its `details` counts against `pushes_per_day`. Send at most what is
-   left, most important first (plan change, friction fix, newly possible, feature watch, drift
-   audit): one `create_reminder` per item, `inbox_id` its id, `text` its title without
-   "Overwatch: " (for the feature watch and the drift audit, also the top entry or finding:
-   `<N> new releases: <top entry>`, `drift audit, <N> findings: <top finding>`), `due_at`
-   `<local_date>T<push_time>:00<offset>`, or now plus 15 minutes if
-   `push_time` has passed. A failed call is SKIPPED.
+2. **Signals:** for **each** inbox item raised this run, call `raise_signal` once. Never count,
+   cap or skip them, and never check what the nightly run sent: the dispatcher decides what reaches
+   Alex and when.
+   - `app: "overwatch"`, `job: "weekly"`, `started_by: "task:overwatch-weekly"`.
+   - `severity`: `"high"` for a plan change; `"normal"` for a friction fix, newly possible and the
+     drift audit; `"low"` for the feature watch.
+   - `subject_key`: stable from week to week: `overwatch:weekly:<kind>`, plus `:<the pattern, app or
+     group id>` when the item is about one thing. Lower case, no spaces, no date; for example
+     `overwatch:weekly:plan_change`, `overwatch:weekly:friction:<pattern id>`,
+     `overwatch:weekly:releases`.
+   - `title`: the item's title without "Overwatch: ". For the feature watch and the drift audit,
+     use the top entry or finding: `<N> new releases: <top entry>`,
+     `drift audit, <N> findings: <top finding>`.
+   - `body`: one plain line on why it matters. `link`: `/<inbox id>`, the item's id.
+   - `details`: `{"inbox_id": "<inbox id>", "kind": "info"}`. The inbox id tells the dispatcher the
+     item already exists, so it points at it instead of making another.
+   - `source_ref`: `overwatch:weekly:<local_date>:<inbox id>`.
+
+   A failed call is SKIPPED.
 3. **Close the run:** `update_platform_run` with the run id, **once**.
    - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-   - **`details`**, always: `local_date`, `prompt_version: "2026-10-31a"`, `manual`, `plan_id`,
-     `drift_audit` (true or false), `note_id`, `inbox_item_ids`, `reminders_sent`, `new_releases`,
+   - **`details`**, always: `local_date`, `prompt_version: "2026-11-04a"`, `manual`, `plan_id`,
+     `drift_audit` (true or false), `note_id`, `inbox_item_ids`, `signals_raised`, `new_releases`,
      `friction_patterns`, `shipped_count`, `skipped`, `settings_missing`, and `not_weekly_day` when
      it applies.
    - **On `failed`:** `error_message` is the verbatim error, and `details.failure_kind` is one of
@@ -326,9 +338,9 @@ Run: <run id>
 ### Step 11 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-10-31a`;
+- `PROMPT VERSION: 2026-11-04a`;
 - the run id and its status, and `manual: true` or `manual: false`;
-- whether the drift audit ran; the note id, the inbox item ids and the reminders sent;
+- whether the drift audit ran; the note id, the inbox item ids and the signals raised;
 - `skipped` and `settings_missing`, if any;
 - any error, verbatim.
 

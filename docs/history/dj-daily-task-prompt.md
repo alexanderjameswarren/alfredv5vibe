@@ -5,12 +5,12 @@ entire program. It is written to be read cold, months later, by someone debuggin
 that misbehaved. Length here is deliberate — compression would cost exactly the context a
 cold reader needs.
 
-- **Schedule:** daily, **4:30 am Pacific** (11:30 or 12:30 UTC), so it lands before the Drive Mix
-  refresh at 4:54. Moved from 17:00 UTC on 2026-10-11. Still far from the UTC midnight boundary
+- **Schedule:** daily, **3:30 am Pacific** (10:30 or 11:30 UTC), so it lands before the Drive Mix
+  refresh at 3:54. Moved from 17:00 UTC on 2026-10-11, and from 4:30 to 3:30 on 2026-10-25. Still far from the UTC midnight boundary
   that governs how YouTube buckets history — a run near 00:00 UTC risks the feed rolling
   over mid-request, with some entries answered under one UTC day and some under the next
   and no way to tell which afterwards.
-- **App / job:** `dj` / `daily_history_sync`, registered in `platform_schedules` (expected by 04:30
+- **App / job:** `dj` / `daily_history_sync`, registered in `platform_schedules` (expected by 03:30
   Pacific, 6 hours' grace) since Overwatch Step 8.
 - **Edit rule:** change this file, then paste it into the task. Never edit the task alone,
   or this file becomes a description of something that no longer exists.
@@ -28,7 +28,15 @@ cold reader needs.
 >
 > **So the prompt now carries a version, and the task must echo it.**
 >
-> ### `PROMPT VERSION: 2026-10-06a`
+> ### `PROMPT VERSION: 2026-11-05a`
+>
+> 2026-11-05a: every inbox item the run creates (failed or partial) is followed by one
+> `raise_signal` for it; the dispatcher decides what reaches Alex, and the task never sends a push.
+>
+> 2026-10-13a: a quiet day (no `Today` or `Yesterday` plays) is a normal `ok` run that skips
+> the write and never raises an item; confirmed quiet days are recorded as `empty_days` and
+> extend coverage in Step 3. The prompt below is a snapshot of the live task, 2026-11-05
+> (trigger `trig_01EEaPPhygaPeybVvitpTq8k`); the repo had held 2026-10-06a until then.
 >
 > 2026-10-06a: artist disagreements are logged and counted only, never raised as an inbox
 > item; `notified_video_ids` is always `[]`. Only failed or partial runs raise items.
@@ -61,10 +69,10 @@ notification channel** — assume nobody reads it.
 
 ---
 
-You are running the DJ daily history sync. Follow these steps in order. **Do not
-improvise.**
+You are running the DJ daily history sync. `prompt version: 2026-11-05a`. Follow these steps
+in order. **Do not improvise.**
 
-### The three rules that override everything else
+### The rules that override everything else
 
 1. **NEVER IMPROVISE.** If you hit anything this prompt does not explicitly cover, **STOP**
    and report what you saw. Do not invent a recovery, do not retry with different
@@ -87,8 +95,17 @@ improvise.**
    files, character encodings and HTTP transports — to find an expired token that the
    server had been naming in every single response.
 
+4. **YOU NEVER NOTIFY.** Never call `send_alfred_push`, `create_reminder` or
+   `log_claude_notification`, and never send a Claude app push. Each inbox item you create is
+   followed by one `raise_signal` for it (Step 7); the dispatcher decides what reaches Alex.
+
 **Whenever a step below says STOP: go to Step 7, then Step 8, then finish.** Stopping still
 means stamping the run and raising an inbox item. It does not mean going quiet.
+
+> 🔇 **A QUIET DAY IS NOT A FAILURE AND NEVER RAISES AN INBOX ITEM (decided 2026-10-13).**
+> If Alex listened to nothing, the feed has no `Today` or `Yesterday` plays at all. That is
+> a normal outcome. Steps 3, 5 and 6 say exactly how to handle it. The 2026-10-13 run
+> stopped and notified on a quiet day because this prompt did not cover it; it does now.
 
 ---
 
@@ -123,19 +140,31 @@ Two calls, and they answer different questions:
    **This is the authority.**
 2. `get_platform_runs` for `app: "dj"`, `job: "daily_history_sync"` → the newest `ok` run
    and its `covered_to`. **This is a claim.**
-   Also keep the last few runs from this call — Step 7 needs them, and **not for
+   Also keep the last few runs from this call — Steps 3 and 7 need them, and **not for
    judgement: for LOOKUP.** From every run with `notified_at` set in the last 7 days,
-   collect its `details.failure_kind` — the failure de-dup key. **Read it; do not reason
-   about what you probably reported.**
+   collect two things:
+   - its `details.failure_kind` — the failure de-dup key
+   - its `details.notified_video_ids` — the disagreement de-dup key
+
+   That second list is what stops a decided-but-not-yet-recorded disagreement being
+   re-reported daily. **Read it; do not reason about what you probably reported.**
+
+   And from every run with status `ok` or `partial`, collect its `details.empty_days`
+   (a list of dates; absent on older runs, which is fine). These are **confirmed quiet
+   days**: days an earlier run polled as a complete `Yesterday` bucket and found empty.
+   Step 3 uses them.
 
 **Where they disagree, THE DATA WINS.** The run log asserts coverage and nothing can check
 that assertion — there is no link from a run to the rows it produced. Note any disagreement
-in your report and carry on using the value from `get_dj_plays`.
+in your report and carry on using the value from `get_dj_plays`. (A previous run whose
+`covered_to` is later than the newest `played_on` because of confirmed `empty_days` is
+**not** a disagreement; those days have no plays to hold.)
 
 ⚠️ Do not reason from the history page's oldest entry. The feed **cannot prove absence** —
 it confirms a play happened, never that one did not, and items have been observed leaving
 the page from the middle rather than the tail. Treat the page as **unordered**. Coverage
-comes from `dj_plays` and `covered_to`, never from how far back the page appears to reach.
+comes from `dj_plays`, `covered_to` and `empty_days`, never from how far back the page
+appears to reach.
 
 **While you have those runs, look for orphans.** Any run still marked `running` that
 started **more than 6 hours ago** is a run that **died without reporting** — the runtime
@@ -153,11 +182,15 @@ real finding about the task runtime rather than about DJ.
 
 ### Step 3 — Work out the gap, and whether any of it is lost
 
-Let `today_utc` be today's date in **UTC** — not local, not Pacific. Compute
-`gap_days = today_utc - newest_played_on_you_hold`.
+Let `today_utc` be today's date in **UTC** — not local, not Pacific.
 
 **Do the arithmetic explicitly — do not re-derive the threshold from memory.** Let `D` be
-the newest `played_on` you hold.
+the newest `played_on` you hold. **Then extend `D` over confirmed quiet days:** while the
+date `D+1` appears in the `empty_days` collected in Step 2, set `D = D+1`. Repeat until
+`D+1` is not in that list. A confirmed quiet day is covered, not missing — it has no plays
+because Alex did not listen.
+
+Compute `gap_days = today_utc - D`.
 
 - The `Today` bucket covers **`today_utc`**.
 - The `Yesterday` bucket covers **`today_utc - 1`**.
@@ -182,7 +215,9 @@ So this poll can reach back to `today_utc - 1`, and **anything older than that i
 > lost", which would have raised a **false permanent-loss item** at gap 2 — a day the
 > `Yesterday` bucket covers perfectly well. **A false alarm about unrecoverable data is
 > expensive**: it says the archive has a hole that it does not have. The arithmetic is
-> written out above so the threshold is read, not remembered.
+> written out above so the threshold is read, not remembered. The `empty_days` extension
+> exists for the same reason: without it, one quiet day followed by a normal day reads as
+> gap 3 and raises a false permanent-loss item.
 
 **When days genuinely are lost: the data is gone. Your job is to record that accurately,
 not to pretend otherwise.**
@@ -225,6 +260,9 @@ Then call `get_dj_history`.
   name a specific remedy, say so: *"No known remedy for this error — needs investigation."*
   A made-up instruction is worse than an honest gap.
 
+A successful response with **no plays at all in `Today` or `Yesterday`** is NOT an error.
+Go on to Step 5.
+
 ### Step 5 — Filter to Today and Yesterday, and only those
 
 **`record_dj_plays` REJECTS coarse buckets** (`This week`, `Last week`, and anything
@@ -237,9 +275,26 @@ without comment; they are not an error, they are the normal shape of the feed.
 Note `page_full` and whether the oldest bucket looked partial — both go in the stamp at
 Step 6. They are diagnostics, **not** a coverage floor. See Step 2.
 
+**Then note the quiet day, if there is one.** If the filtered set has **no `Yesterday`
+plays** and `today_utc - 1` is later than `D` from Step 3, then `today_utc - 1` is a
+confirmed quiet day: the `Yesterday` bucket is a complete past UTC day and it was empty.
+Set `empty_days: [<today_utc - 1>]`. Otherwise `empty_days: []`.
+
+⚠️ **Never put `today_utc` in `empty_days`.** At poll time today is not over; an empty
+`Today` bucket only means nothing has been played *yet*. Tomorrow's run sees it as
+`Yesterday` and decides then.
+
 ### Step 6 — Write, then stamp what actually happened
 
-Call `record_dj_plays` with the filtered plays and **`poll_date` = `today_utc`**.
+**If the filtered set from Step 5 is EMPTY** (no `Today` and no `Yesterday` plays), **do
+not call `record_dj_plays`.** It rejects an empty array (*"`plays` must be a non-empty
+array"*), and there is nothing to write. This is a quiet day, not a failure. Skip straight
+to closing the run below, with `status: "ok"` and
+`by_bucket: {"Today": {"submitted": 0, "inserted": 0, "already_held": 0},
+"Yesterday": {"submitted": 0, "inserted": 0, "already_held": 0}}` and
+`write_skipped: "no Today or Yesterday plays"` in `details`.
+
+Otherwise call `record_dj_plays` with the filtered plays and **`poll_date` = `today_utc`**.
 
 > ⚠️ **`poll_date` IS THE UTC DATE.** An earlier decision said `America/Los_Angeles` and
 > **that decision was wrong** — it assumed the account's timezone governs how YouTube
@@ -266,20 +321,25 @@ Carry these **from the tool's response, not from memory**:
   ⚠️ **A day with zero plays is `ok` with zeros. It is NEVER `failed`.** A quiet day is a
   normal outcome, and marking it failed makes the staleness signal cry wolf — which is how
   people learn to ignore it.
-- `covered_from` / `covered_to`
+- `covered_from` / `covered_to` — `covered_from` is `D+1` from Step 3. `covered_to` is the
+  later of (a) the newest `played_on` now held and (b) the date in `empty_days`, if any.
+  If neither moved past `D` (nothing written and no quiet day confirmed), set both
+  `covered_from` and `covered_to` to `D`, so the range never runs backwards.
 - `details`:
   - `by_bucket` — **copy it whole.** It reports every ingestible bucket including
     `submitted: 0`, which is what distinguishes *"the bucket was empty"* from *"I never
     submitted that bucket."* Stored row counts alone cannot tell those apart, and a run
-    that silently skips a bucket is invisible afterwards.
+    that silently skips a bucket is invisible afterwards. (On a quiet day with the write
+    skipped, use the zeros given above.)
+  - `empty_days` — from Step 5. **Always present**, even as `[]`. Tomorrow's Step 3 reads it.
   - `page_full`, `oldest_bucket_is_partial`
   - `artist_disagreements` — **copy the array whole, even when empty.** It now contains
     **only UNDECIDED** disagreements; the tool filters decided ones out before you see them.
+    (On a quiet day with the write skipped, `[]`.)
   - `known_disagreements` — **copy it too, even when empty.** These were suppressed
     deliberately, and recording the count is what makes a silent run distinguishable from a
-    broken one.
-  - `notified_video_ids` — **always `[]`.** Disagreements are never raised (2026-10-06a);
-    the key stays so older and newer runs have the same shape.
+    broken one. (On a quiet day with the write skipped, `[]`.)
+  - `notified_video_ids` — always `[]`. Name disagreements are logged, never raised (Step 7).
   - Any disagreement found in Step 2 between the data and the previous `covered_to`.
   - `failure_kind` on any failure, one of `wrong_host`, `workshop_unreachable`,
     `youtube_auth`, `supabase_write`, `unknown` — Step 7 uses it to tell a still-broken
@@ -302,16 +362,14 @@ Carry these **from the tool's response, not from memory**:
     *"is the data current?"* — without it, a manual run masks a dead scheduler.
 
 > **On `artist_disagreements`:** a non-empty array means two vocabularies disagree about
-> one act, and a new alias-map entry may be owed. **Log and count it; never raise it.**
-> Leader-vs-band variants (`Bill Evans` / `Bill Evans Trio`, a leading `The`) are already
-> folded away by the tool (spec §4.1.4, amended 2026-10-06).
+> one act, and a new alias-map entry may be owed.
 >
 > ⚠️ **DECIDED disagreements are already filtered out by the tool** — they arrive in
 > `known_disagreements` instead, each with the reason it was decided. `AbbzAPXvNZ8` (a
 > Clark Terry collaboration, not a spelling variant) and the 12 unrepaired `Release` rows
 > are in there permanently, because insert-only means the correct incoming value is
 > discarded rather than applied (spec §11.13). **They are not news. Do not raise them, and
-> do not investigate them** — see `docs/history/dj-known-disagreements.md`, which is a rendering of
+> do not investigate them** — see `docs/dj-known-disagreements.md`, which is a rendering of
 > the `dj_known_disagreements` table.
 >
 > ⚠️ **An empty array is NOT evidence that no split exists**, and do not word it as if it
@@ -326,7 +384,16 @@ Carry these **from the tool's response, not from memory**:
 
 ### Step 7 — Notify, but ONLY if something needs attention
 
-**A clean run raises NOTHING here. Skip straight to Step 8.**
+**A clean run raises NOTHING here. Skip straight to Step 8.** A quiet day (no plays, write
+skipped, status `ok`) is a clean run.
+
+> 🔇 **ARTIST-NAME DISAGREEMENTS NEVER RAISE AN INBOX ITEM (decided 2026-10-06).** Alex does
+> not act on them: the plays table is insert-only, so the stored name cannot change anyway,
+> and DJ only needs names close enough to say "you've played a lot of X lately". A leader and
+> the leader's band (Trio, Quartet, Orchestra…) count as the same artist. Keep copying
+> `artist_disagreements` into the run's `details` in Step 6 and report the count in Step 8 —
+> that is the whole of their handling. Set `notified_video_ids` to `[]`. The only inbox items
+> this task raises are for a **failed** run or a **partial** run (days lost).
 
 Raise an inbox item if and only if one of these is true:
 
@@ -335,15 +402,12 @@ Raise an inbox item if and only if one of these is true:
 | The run **failed** | Title names the failure kind. Body: the verbatim error, then the **ACTION** from the step that stopped. |
 | The run is **`partial`** (3+ day gap) | Names the lost date range. Body: *"These days are permanently unreachable from the live API. Google Takeout is the only recovery path."* |
 
-⚠️ **Neither `artist_disagreements` nor `known_disagreements` EVER raises an item, however
-long they are** (2026-10-06a). They are copied into `details` in Step 6 and counted in Step 8,
-and nothing else.
+⚠️ **`known_disagreements` NEVER raises an item, however long it is.** Those are decided.
+Report the count in Step 8 and nothing else.
 
 **Every item carries a specific remedy, never a generic alert.** Use the exact ACTION
 wording from the step that stopped. *"The sync failed"* is an item that will be ignored;
 *"Run the reauth tile on the Surface"* is one that gets acted on.
-
----
 
 **Do not re-raise an item every day for a FAILURE that is still unfixed — but do not go
 permanently silent about it either.** Using the recent runs from Step 2:
@@ -391,6 +455,29 @@ inbox and `platform_runs` live behind the same connector. Report it in Step 8 an
 **This is the one failure the task cannot record**, and it is covered instead by the
 staleness check noticing that no run arrived at all.
 
+
+When you create the inbox item, call create_inbox_item with
+source_type "task", source_app "dj", and source_metadata {"task_name": "<this task's
+name>", "run_date": "<today, YYYY-MM-DD>"}. Do not suggest a context,
+item or intention for it.
+
+**Then raise its signal.** Straight after `create_inbox_item`, call `raise_signal` once, with the
+new inbox id:
+- `app: "dj"`, `job: "daily_history_sync"`, `started_by: "task:dj-daily"`;
+- `severity`: `"high"` for a failed run, `"normal"` for a `partial` run (days lost);
+- `subject_key`: `"dj:daily_history_sync:failure:<failure_kind>"` for a failed run,
+  `"dj:daily_history_sync:lost_days"` for a `partial` run;
+- `title`: the item's title; `body`: one plain line saying what it holds; `link: "/<inbox id>"`;
+- `details: { "inbox_id": "<inbox id>", "kind": "flag" }`. The inbox id tells the dispatcher the
+  item already exists, so it points at it instead of making another;
+- `source_ref: "<subject_key>:<today_utc>"`.
+
+Keep the returned `signal_id` for Step 8: the run is already closed, so it cannot go in the run's
+`details`. If it says `created: false`, it was already raised today; say so. **A failed
+`raise_signal` never fails the run:** quote its error verbatim in Step 8 and carry on. The item
+stands either way. The rules above decide whether an item exists (quiet days, the 7-day de-dup);
+the signal only follows an item.
+
 ### Step 8 — Report to the chat
 
 Nobody may read this; the inbox item from Step 7 is the real channel. Write it anyway, in
@@ -399,78 +486,36 @@ and comparable:
 
 ```
 DJ daily sync — <today_utc>
-  prompt version: 2026-10-06a
+  prompt version: 2026-11-05a
   host: surface           run id: <id>
-  held through:  <newest played_on from get_dj_plays>
+  held through:  <newest played_on from get_dj_plays>   (extended over quiet days to <D>)
   log claimed:   <covered_to from the previous ok run>   [AGREES | DISAGREES]
   gap: <n> day(s)  <"normal" | "N DAYS PERMANENTLY LOST">
 
   by_bucket:
     Today      submitted <n>  inserted <n>  already_held <n>
     Yesterday  submitted <n>  inserted <n>  already_held <n>
+  write: <done | skipped — no Today or Yesterday plays>
+  quiet day confirmed: <date | none>
 
-  artist disagreements (logged, not raised): <n>   <list them if any>
+  artist disagreements: <n> (logged only, never raised)
   known disagreements (decided, not raised): <n>
   page_full: <bool>   oldest_bucket_is_partial: <bool>
   orphaned running rows: <none | <ids>>
   status stamped: <ok | partial | failed>
   inbox item raised: <yes, new | yes, repeat (still failing, N runs) |
                       no — clean run | no — already notified, <n> day(s) ago>
+  signal: <none — no item | <signal_id> | not created — already raised today | FAILED — <error>>
 ```
 
 Every number above comes from a tool response. If you do not have one, write `unknown` —
 never a guess, and never a number you expected.
 
 ⚠️ **Print `prompt version` exactly as written at the top of this prompt.** It is how a
-forgotten paste becomes visible. If you are reading this, the version is `2026-10-06a`.
+forgotten paste becomes visible. If you are reading this, the version is `2026-11-05a`.
 
 ⚠️ **The `known disagreements` line is not decoration — it is what makes a silent run
 verifiable.** A run that raises nothing because everything was decided and a run that raises
 nothing because the notifier is broken produce identical inboxes. A non-zero suppressed count
 on a silent run proves the pipeline ran and CHOSE silence. Without it, silence proves nothing
 at all.
-
----
-
-## Notes for the human reading this later
-
-**What this task deliberately does NOT do:**
-
-- **No backfill.** Anything older than yesterday is unreachable from the live API. See
-  Step 3.
-- **No page-tail reasoning.** Treating the history page's oldest entry as a coverage floor
-  was considered and **rejected**, and the question of how the page tail behaves is
-  **deliberately unresolved, not pending**. Understanding it could only ever license
-  trusting the feed *more* — and the feed cannot prove absence, so the best possible outcome
-  of that investigation is permission to do something already ruled out.
-- **No auth inference from `credential_readable`.** See Step 1.
-- **No notification on success.** See the table at the top of this file.
-
-**Orphaned `running` rows are expected occasionally and are not an error in DJ.** The run
-stamp is opened before polling precisely so a task that dies leaves a trace; the cost is a
-row nothing closes. The task observes them and never touches them. A steady trickle is
-normal; a regular pattern is evidence about the task runtime worth investigating on its own.
-
-**The failure this task cannot report, by construction:** if the Alfred connector is down,
-the task can write neither `status: "failed"` nor an inbox item — both live on the far side
-of the thing that is broken. **Connector death is detectable only by ABSENCE**, i.e. no new
-run appearing at all. That is what makes the Phase 6 staleness mitigations load-bearing
-rather than a nicety, and it is why the staleness query must alarm on *nothing arriving*,
-not only on runs stamped failed.
-
-**On the connector's OAuth token — expected to work, and here is why.** The hourly token
-expiry hit during the Phase 8 import was a **hand-copied browser session JWT**, used only by
-the import script and pasted in by hand. **Nothing in this task path uses it.** The
-connector authenticates by OAuth and holds a **refresh token**; minting fresh access tokens
-is the platform's responsibility, not the task's. Different credential, different path, and
-the import's failure mode does not transfer.
-
-That reasoning cannot be *proved* before the first unattended run, and it does not need to
-be: **the cost of being wrong is one skipped day and an unambiguous auth error**, which
-Step 7 will put in the inbox with the reconnect instructions already written. So this is
-recorded as *expected to work*, to be **confirmed or refuted by the first unattended run** —
-not as an unknown blocking the phase.
-
-**Day-one check:** after the first scheduled firing, call `get_platform_runs` for
-`dj`/`daily_history_sync` and confirm a run was stamped. A stamped run means refresh works.
-An auth error means it does not, and settles the question at the cost of one day.

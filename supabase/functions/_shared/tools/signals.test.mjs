@@ -180,12 +180,18 @@ const dec = (n, decision, extra = {}) => ({ signal_id: ID(n), app: "alfred", sev
   decision, reason: `because ${n}`, repeats: 0, merge_target_signal_id: null, inbox_id: null, bundle: false, ...extra });
 
 /** Fake db for delivery: each chain is recorded and answered by table and the methods it used. */
-function deliveryDb({ plan, signals = [], subs = [{ id: "sub1", endpoint: "https://e/secret", p256dh: "p", auth_key: "a" }] }) {
+function deliveryDb({ plan, signals = [], subs = [{ id: "sub1", endpoint: "https://e/secret", p256dh: "p", auth_key: "a" }],
+  visibleInbox = [] }) {
   const calls = [];
   const builder = (table) => {
     const chain = [];
     const answer = () => {
       const ops = chain.map(([k]) => k);
+      // RLS: only the caller's own items come back; someone else's id looks missing.
+      if (table === "inbox" && ops.includes("in")) {
+        const asked = chain.find(([k]) => k === "in")[2];
+        return { data: asked.filter((id) => visibleInbox.includes(id)).map((id) => ({ id })), error: null };
+      }
       if (table === "signals" && ops.includes("update")) return { data: [{ id: "x" }], error: null };
       if (table === "signals") return { data: signals, error: null };
       if (table === "push_subscriptions") return { data: subs, error: null };
@@ -276,6 +282,56 @@ test("deliver: hold, inbox, pop, merge each do their own thing; wait does nothin
   assert.equal(merged.inbox_id, inboxRow.id, "a same-run merge joins the item just made");
   assert.ok(!JSON.stringify(out).includes("secret"));
   assert.equal(out.results.find((r) => r.signal_id === ID(5)), undefined);
+});
+
+test("deliver: a signal without details.inbox_id never looks one up", async () => {
+  const db = deliveryDb({ plan: { at: "t", decisions: [dec(1, "inbox")] }, signals: [sig(1)] });
+  await m.deliverSignalsTool.handler({}, { db });
+  assert.ok(!db.calls.some(([t, k]) => t === "inbox" && k === "in"));
+  assert.equal(inserts(db).length, 1);
+});
+
+test("deliver: inbox decision with the task's own item marks it delivered there, no new item", async () => {
+  const own = "own-inbox-1";
+  const db = deliveryDb({ plan: { at: "t", decisions: [dec(1, "inbox")] },
+    signals: [sig(1, { details: { inbox_id: own } })], visibleInbox: [own] });
+  const out = await m.deliverSignalsTool.handler({}, { db });
+  assert.equal(inserts(db).length, 0);
+  assert.equal(out.results[0].inbox_id, own);
+  const up = signalUpdates(db)[0];
+  assert.equal(up.inbox_id, own);
+  assert.equal(up.outcome, "inbox");
+  assert.match(up.reason, /own inbox item/);
+  assert.equal(logs(db)[0].p_link, `/${own}`);
+  assert.equal(logs(db)[0].p_delivery_detail.own_item, true);
+});
+
+test("deliver: pop with the task's own item links the push to it and adds a repeat, no new item", async () => {
+  sends.length = 0;
+  const own = "own-inbox-2";
+  const db = deliveryDb({ plan: { at: "t", decisions: [dec(1, "pop", { severity: "high" })] },
+    signals: [sig(1, { severity: "high", details: { inbox_id: own } })], visibleInbox: [own] });
+  await m.deliverSignalsTool.handler({}, { db });
+  assert.equal(inserts(db).length, 0);
+  assert.equal(sends[0].url, `/${own}`);
+  assert.ok(db.calls.some(([t, k, c, v]) => t === "inbox" && k === "eq" && c === "id" && v === own));
+  assert.deepEqual(db.calls.find(([t, k]) => t === "inbox" && k === "update")[2].source_metadata.merged_signal_ids, [ID(1)]);
+  assert.match(signalUpdates(db)[0].reason, /points at the task's own inbox item/);
+});
+
+test("deliver: a missing item, or someone else's (RLS hides it), falls back to a new item and says why", async () => {
+  sends.length = 0;
+  const db = deliveryDb({ plan: { at: "t", decisions: [dec(1, "inbox"), dec(2, "pop")] },
+    signals: [sig(1, { details: { inbox_id: "gone-1" } }), sig(2, { details: { inbox_id: "not-mine-2" } })],
+    visibleInbox: [] });
+  await m.deliverSignalsTool.handler({}, { db });
+  assert.equal(inserts(db).length, 2);
+  const [a, b] = signalUpdates(db);
+  assert.match(a.reason, /details\.inbox_id gone-1 was not found or is not yours, so a new item was made/);
+  assert.match(b.reason, /details\.inbox_id not-mine-2 was not found or is not yours/);
+  assert.equal(sends[0].url, `/${inserts(db)[1].id}`);
+  const asked = db.calls.find(([t, k]) => t === "inbox" && k === "in")[3];
+  assert.deepEqual(asked.sort(), ["gone-1", "not-mine-2"]);
 });
 
 test("deliver: a pop for a subject with an open item points at it and adds a repeat", async () => {

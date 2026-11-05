@@ -349,7 +349,46 @@ Scope of this step (write and test; numbering, queuing and deploys follow as 7b)
 - SQL: signals
 Estimated run: 45m
 
-### 8. Overwatch and Arnold onto signals (50m)
+### 8. Overwatch and Arnold onto signals — WRITTEN 2026-11-04 (`s8-n6ya`)
+Step 7 is checkpointed (main b4ed482).
+- **Prompts at 2026-11-04a:**
+  - Overwatch nightly and weekly raise one signal per inbox item they make, with started_by
+    task:overwatch-nightly or task:overwatch-weekly, a stable subject key, severity by
+    importance, link `/<inbox id>`, and `details.inbox_id`. Their own pushes_per_day counting is
+    gone, and create_reminder, send_alfred_push and log_claude_notification are on their
+    never-call lists.
+  - Arnold morning review raises one signal for its review item (normal,
+    `arnold:review:<template>`), not log_claude_notification. It dedupes over 7 days with
+    get_signals, and ends with one log line; it has no Claude push.
+- **Skills:** overwatch and arnold updated (versions 2026-11-04a).
+- **Must ship first (8b):** deliver_signals has to honour `details.inbox_id`. Today an inbox
+  decision makes a new item, and so does a pop unless an open item already shares the subject.
+  So a task that writes its own item and also raises a signal would get a duplicate.
+  Fix, in signals.ts and its test only, then a mcp deploy:
+  - when a signal's `details.inbox_id` names an item, an inbox decision marks it delivered
+    against that item;
+  - a pop points at that item and adds a repeat;
+  - neither makes a new item.
+- **Alex, next:** agree; then 8b ships. After that, Claude updates the three scheduled tasks
+  with the new prompts and turns off Arnold morning review's Claude app push.
+
+### 8b. deliver_signals uses the task's own inbox item — DONE 2026-11-04 (`s8b-c4lu`)
+When a signal's `details.inbox_id` names an item the caller can see (one read through ctx.db,
+where RLS hides other users' items):
+- an inbox decision marks the signal delivered against that item, with no new item, and logs
+  it with `own_item: true`;
+- a pop links to `/<that id>`, records the repeat on the item, and makes no new item.
+
+An id that is missing or not the caller's falls back to a new item, and the signal's reason says
+why. A signal without an inbox_id is unchanged and does no lookup. Tests: signals and mcp,
+62 of 62. mcp was deployed as **v197**, verify_jwt false. check_platform_conformance came back
+CONFORMANT (103 tables). db:deploy was released after the deploy: this step ends with gitcom,
+not Checkpoint.
+**Next:** Claude updates the three scheduled tasks (Overwatch nightly, Overwatch weekly, Arnold
+morning review) with the 2026-11-04a prompts, and turns off Arnold morning review's Claude app
+push.
+
+Original plan for step 8 (50m):
 Overwatch nightly and weekly raise signals instead of reminders; `pushes_per_day` and `push_time`
 retired. Arnold morning review raises a signal only when it raised an item. Alex pastes three
 prompts.
@@ -376,7 +415,45 @@ Files: docs/history/dj-daily-task-prompt.md, docs/history/dj-weekly-review-promp
 docs/history/ken-seed-check-task-prompt.md, docs/sam-daily-review-task-prompt.md (new),
 docs/drive-mix-daily-refresh-task-prompt.md (new), docs/wb-weekly-cleanup-task-prompt.md.
 DB: none.
-Waits on: docs/wb-weekly-cleanup-task-prompt.md (warren_buffet_p4-r6d).
+Waits on: docs/wb-weekly-cleanup-task-prompt.md (warren_buffet_p4-r6d). Claimed in 9b.
+
+#### 9 part 1. Which repo copies match what is live — DONE 2026-11-05 (`s9-q2vd`)
+Read only. Repo versions: Money cleanup 2026-11-03a, DJ daily 2026-10-06a, Ken seed check
+2026-09-25a, DJ weekly has no version line. SAM and Drive Mix had no repo copy.
+
+#### 9 part 2. Snapshot three live prompts — DONE 2026-11-05 (`s9b-m3kx`)
+Copied byte for byte from the inbox items Claude made from the live tasks (md5 checked against
+the database), then archived those items as processed:
+- docs/sam-daily-review-task-prompt.md (new): trigger `trig_01AGKP3tNa7ivX18YTYgx8id`. Its
+  version line says 2026-09-19a, and its report template still prints 2026-09-17b. Left as live.
+- docs/drive-mix-daily-refresh-task-prompt.md (new): trigger `trig_01M9atR63BYAAJx73rWM4Kxj`.
+  No version line.
+- docs/history/dj-daily-task-prompt.md: prompt replaced with live 2026-10-13a (trigger
+  `trig_01EEaPPhygaPeybVvitpTq8k`); header version note updated. Header schedule text still says
+  4:30, and the schedule row says 3:30.
+
+Next: Alex runs gitcom. Then part 3 edits all six prompts onto signals: Money cleanup from repo
+version 2026-11-03a, Ken seed check from repo version 2026-09-25a, and the other four from
+these snapshots (DJ weekly from the repo copy).
+
+Scope of part 3:
+- create: nothing
+- update: docs/wb-weekly-cleanup-task-prompt.md, docs/history/dj-daily-task-prompt.md, docs/history/dj-weekly-review-prompt.md, docs/history/ken-seed-check-task-prompt.md, docs/sam-daily-review-task-prompt.md, docs/drive-mix-daily-refresh-task-prompt.md, docs/progress-notification_routing-d7v.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+#### 9 part 3. Six prompts onto signals — DONE 2026-11-05 (`s9c-w7rd`)
+All six are at 2026-11-05a. Each has a never-notify rule, and each inbox item is followed by one
+`raise_signal` (started_by `task:<slug>`; high for a failure item, normal otherwise; details
+`inbox_id`, kind flag, or info for the DJ weekly report; source_ref `<subject_key>:<date>`).
+Money, Drive Mix and the DJ weekly record `signal_id` in the run details. SAM, DJ daily and Ken
+failure items are made after the close, which accepts only `notified_at`, so their `signal_id` goes
+in the report. The DJ daily header schedule is now 3:30. App ids and started_by values were checked
+against raise_signal and started_by_valid: all accepted.
+
+Next: Alex runs gitcom. Then Claude updates the six scheduled tasks from these files, and turns
+off each one's Claude app push.
 
 ### Phase D — Dispatcher screen
 
@@ -454,4 +531,9 @@ Files: this file. DB: none.
 | 7b | 10m | 1m 36s | stable wb-sync subjects, numbered and queued 205 |
 | 7c | 5m | 8s | queued test 4 |
 | 7d | 10m | 17s | blocked by the plan guard (deploy loop) |
-| 7e | 10m | see report | three deploys, conformance |
+| 7e | 10m | 1m 13s | three deploys, conformance |
+| 8 | 10m | 3m 45s | Overwatch and Arnold prompts and skills onto signals |
+| 8b | 10m | 1m 58s | deliver_signals uses the task's own item; mcp v197 |
+| 9 | 3m | 10s | which repo prompts are stale (read only) |
+| 9b | 8m | 3m 32s | snapshot SAM, Drive Mix and DJ daily live prompts |
+| 9c | 25m | see report | six prompts onto signals, 2026-11-05a |

@@ -1,5 +1,14 @@
 # Weekly DJ review — RUN THIS
 
+`PROMPT VERSION: 2026-11-05a`. The run's details record it (see "The run"). Bump the date-letter
+whenever this file changes, and paste it into the task: the task runs the pasted text, not this
+file. 2026-11-05a, the first version line: the inbox item is followed by one `raise_signal` for it,
+and the dispatcher decides what reaches Alex.
+
+🛑 **YOU NEVER NOTIFY.** Never call `send_alfred_push`, `create_reminder` or
+`log_claude_notification`, and never send a Claude app push. The inbox item is followed by one
+`raise_signal` for it; the dispatcher decides what reaches Alex.
+
 🛑 **YOU ARE RUNNING THIS JOB, NOT REVIEWING IT.** Make the calls in "The run" below and write
 the item. Do not critique this document, summarise it, or report on its structure. If something
 here looks wrong, do the run anyway and put the concern in one line at the end.
@@ -30,6 +39,30 @@ create_inbox_item
 ```
 
 **Nothing else. No `suggested_*` field of any kind, and no `suggest_item` / `suggest_intent`.**
+
+### Then its signal, in full
+
+Keep the new inbox id, then call, once:
+
+```
+raise_signal
+  app:          "dj"
+  job:          "weekly_review"
+  started_by:   "task:dj-weekly-review"
+  severity:     "normal"
+  subject_key:  "dj:weekly_review:report"
+  title:        "Weekly DJ review, <YYYY-MM-DD>"
+  body:         one plain line, e.g. "<n> upcoming concerts, <n> decisions waiting"
+  link:         "/<inbox id>"
+  details:      { "inbox_id": "<inbox id>", "kind": "info" }
+  source_ref:   "dj:weekly_review:report:<YYYY-MM-DD>"
+```
+
+The inbox id tells the dispatcher the item already exists, so it points at it instead of making
+another. Keep the returned `signal_id`. If it says `created: false`, it was already raised today.
+**A failed `raise_signal` never fails the run:** record its verbatim error as `signal_error` in the
+close and carry on. The item stands either way. Run by hand with the inbox write skipped, raise no
+signal either.
 
 🛑 **`source_type: "task"` IS NOT OPTIONAL AND IT IS NOT COSMETIC.** It is what stops this
 item being mistaken for something Alex typed. A task row shows the task glyph, is titled
@@ -66,10 +99,10 @@ failure permanently.
 **First, before anything else:** call `create_platform_run` with app `"dj"`, job `"weekly_review"`,
 executor `"claude"`, status `"running"`. Keep the run id.
 
-**Last, after the inbox item, and also if the run stops early:** call `update_platform_run` with that id:
-- `"ok"` when the inbox item was written, with details `{ "inbox_item_id": "<id>", "concerts": <n> }`;
+**Last, after the inbox item and its signal, and also if the run stops early:** call `update_platform_run` with that id:
+- `"ok"` when the inbox item was written, with details `{ "prompt_version": "2026-11-05a", "inbox_item_id": "<id>", "signal_id": "<id>", "concerts": <n> }` (`signal_error` in place of `signal_id` if `raise_signal` failed);
 - `"partial"` when the report says it is partial, with the same details;
-- `"failed"` otherwise, with a one-line `error_message` and details `{ "failure_kind": "<short slug>" }`.
+- `"failed"` otherwise, with a one-line `error_message` and details `{ "prompt_version": "2026-11-05a", "failure_kind": "<short slug>" }`.
 
 A run with no row means the task never fired; that is what the schedule row is for.
 
@@ -89,7 +122,7 @@ A run with no row means the task never fired; that is what the schedule row is f
 
 ### Budget: 60 calls per 300 seconds, SHARED
 
-**The run costs `10 + 3n`** where n is the number of upcoming concerts (the two run-stamp calls included). Three concerts is 19.
+**The run costs `11 + 3n`** where n is the number of upcoming concerts (the two run-stamp calls and the signal included). Three concerts is 20.
 
 ⚠️ **IF n > 8, DO THE EIGHT NEAREST DATES IN FULL AND GIVE THE REST ONE LINE EACH** — date,
 playlist, `runs`, `last_run_on`, taken from the engagement call you already made, so the fallback
@@ -100,7 +133,7 @@ partial report that says so beats a complete one that guessed.
 
 ---
 
-## What THIS job writes — three things, and nothing else
+## What THIS job writes — four things, and nothing else
 
 ⚠️ **Everything else here is read-only.**
 
@@ -109,6 +142,7 @@ partial report that says so beats a complete one that guessed.
 | the run stamp | first (open) and last (close) | `create_platform_run`, `update_platform_run` |
 | derived tag facts (`derivable_as` non-null) | **immediately, without asking** — they are facts, not proposals | `record_dj_artist_tag` |
 | the inbox item | last, once the report is written | `create_inbox_item`, `source_type: "task"`, no suggestions |
+| its signal | straight after the inbox item | `raise_signal` |
 
 🛑 **THIS JOB DOES NOT ACT ON THE REPORT. IT WRITES IT.** Concert statuses, tagging answers and
 playlist edits all happen later, in the conversation Alex opens from the inbox item, governed by

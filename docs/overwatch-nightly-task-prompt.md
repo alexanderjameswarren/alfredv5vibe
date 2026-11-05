@@ -7,7 +7,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 
 - **Schedule:** daily, **4:20 am America/Los_Angeles**. That is after the DJ sync (3:30) and the
   Drive Mix refresh (3:54), so tonight's stopped-schedule check sees whether they ran, and before
-  `push_time` (05:00), so everything lands before Alex is up at 5.
+  the dispatcher's first run (05:00), so its signals are delivered when Alex is up at 5.
 - **App / job:** `overwatch` / `nightly` (schedule row from migration 177, with the weekly one).
   claude.ai task `trig_013sUsnchXf7L29ti7CunERU`.
 - **Tools:** the **Alfred** connector (mcp v192 or later, for `get_overwatch_nightly_counts`) and the
@@ -21,8 +21,10 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
   rewrites and the mark), so the worst night is about 38. Rule 8's pause stays as a safety net.
 - **Settings it reads** from the active plan, through the counts: `stall_days`, `waiting_on_alex_days`, `fading_days`,
   `overrun_factor`, `active_project_limit`, `inbox_backlog_threshold`, `routing_low_confidence`,
-  `overdue_days`, `urgent_within_days` (to add through the gate), `pushes_per_day`, `push_time`, and
-  `inventory_stale_days` (to add through the gate; **7** until then, rule 1).
+  `overdue_days`, `urgent_within_days` (to add through the gate), and
+  `inventory_stale_days` (to add through the gate; **7** until then, rule 1). `pushes_per_day` and
+  `push_time` are no longer read: what reaches Alex, and how often, is the dispatcher's (the plan's
+  `delivery` section).
 - **Spec:** `docs/technical-spec-overwatch-q4n.md` section 6 (the nightly job and the rule for
   Overwatch's scheduled tasks), 4.6 to 4.12 and Appendix C; `docs/technical-spec-nightly_counts-f8k.md`
   for the counts call.
@@ -35,7 +37,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 > version, and Step 10 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-11-03a`
+> ### `PROMPT VERSION: 2026-11-04a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -49,16 +51,16 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
    "THE PROMPT" line as its instructions.
 4. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
    Check: a `platform_runs` row for `overwatch` / `nightly` closed `ok`; tonight's note in
-   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-11-03a`.
+   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-11-04a`.
 
-## The record, the note and the nudges are SEPARATE
+## The record, the note and the signals are SEPARATE
 
 | | when | where |
 |---|---|---|
 | **Record** | **every run**, failures and duplicates included | `platform_runs` |
 | **Note** | every run that gets past Step 3, quiet nights included; a second manual run that day replaces it | `overwatch_notes`, period `nightly` |
 | **Inbox items** | **only** for a stall, an overrun, fading or overdue intentions, a proposal, a stale inventory, or a finish-summary follow-up | Alfred inbox, `source_app: "overwatch"`; a follow-up goes to the affected app |
-| **Nudges** | at most `pushes_per_day`, only when there are new inbox items | `create_reminder`, each linked to one of them |
+| **Signals** | one for each inbox item raised tonight | `raise_signal`, linking to its item; the dispatcher decides whether it pops |
 | **Failure item** | **only** when the run failed | one inbox item, "Overwatch nightly FAILED" |
 
 ---
@@ -68,7 +70,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 ---
 
 You are running Overwatch's nightly check for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-11-03a`. **First, load the `overwatch` skill.** It tells you how to read each
+`PROMPT VERSION: 2026-11-04a`. **First, load the `overwatch` skill.** It tells you how to read each
 app, what counts as fading, what counts as a deadline mention, what counts as a follow-up from a
 finish summary, and how to word the note. Follow
 these steps in order for everything else. **Where the skill and these steps disagree, these steps
@@ -84,9 +86,10 @@ win.** Do not improvise.
    says `inventory_stale_days (used 7)`.
 2. **YOU READ, COUNT AND REPORT; YOU NEVER CHANGE.** The only tools that write that you may call
    are: `create_platform_run`, `update_platform_run`, `log_activity` (Step 4 only),
-   `create_overwatch_note`, `create_inbox_item`, `create_reminder`, `update_overwatch_watch` (only
+   `create_overwatch_note`, `create_inbox_item`, `raise_signal` (Step 8.1 only), `update_overwatch_watch` (only
    `expiry_noted: true`), `update_overwatch_checks`, `update_app_profile` (Step 8.4 only, and only
-   `current_state`) and `mark_finish_summaries_reviewed` (Step 8.5 only). **Never** call `create_overwatch_plan`,
+   `current_state`) and `mark_finish_summaries_reviewed` (Step 8.5 only). **Never** call `create_reminder`,
+   `send_alfred_push`, `log_claude_notification`, `create_overwatch_plan`,
    `update_project_plan`, `record_project_estimate`, `update_friction`, `create_project_link`,
    `archive_inbox_item`, `update_inbox_item`, any app's own write tools, or any tool that creates,
    changes or runs a scheduled task. A change you think is needed goes into an inbox item as a
@@ -139,7 +142,7 @@ create the failure item (Step 9, "On failed"), then Step 10.
 3. **A run already today:** `counts.prior_runs.today`, **leaving out this run's own id**.
    - **Scheduled run** (`manual` false) and one exists: **stop at once.** Go to Step 9 and close
      `ok` with `details.duplicate_of` set to that run's id. Nothing else: no note, no items, no
-     nudges.
+     signals.
    - **Manual run:** always go ahead, and keep the other run's id as `earlier_run_id`. Step 7 then
      replaces today's note, which is what `create_overwatch_note` does for a second note on the same
      day and period.
@@ -419,22 +422,29 @@ Call `create_overwatch_note` with `period: "nightly"`, `for_date: <local_date>`,
 A second manual run on the same day replaces the note, keeping its id; that is expected. If the call
 errors, STOP with `failure_kind: "note_write"`.
 
-### Step 8 — Nudges, watch items and checks
+### Step 8 — Signals, watch items and checks
 
-1. **Nudges** (`pushes_per_day`, `push_time`). Take the inbox items raised in Step 6, most important
-   first: waiting on Alex, then overrun, stalled, overdue, scan gaps, a stale inventory, proposals,
-   fading, follow-ups. Send **at most
-   `pushes_per_day`**, less any reminders an earlier run today already sent (`earlier_run_id`'s
-   `details.reminders_sent`, from Step 2.3's read): one `create_reminder` per item, `inbox_id` its
-   id, `text` its push text (below), and `due_at`
-   `<local_date>T<push_time>:00<offset>`. If `push_time` has already passed, use now plus 15
-   minutes instead. A night with no new items sends nothing.
-   **The push text names the top item and the count**, by kind:
-   - overdue: `<N> missed: <the most overdue intention> (+<M> undated)`, or with none missed
-     `<M> undated: <the soonest deadline's intention>`; add `+<K> more` inside the brackets when
-     more than one missed;
-   - fading: `<N> fading: <the oldest item>`;
-   - any other item: its title without "Overwatch: ".
+1. **Signals.** For **each** inbox item raised in Step 6, call `raise_signal` once. Raise every one,
+   every night it is raised: never count, cap or skip them, and never check for an earlier
+   notification. The dispatcher decides what reaches Alex and when. A night with no new items
+   raises nothing.
+   - `app: "overwatch"`, `job: "nightly"`, `started_by: "task:overwatch-nightly"`.
+   - `severity`: `"high"` for waiting on Alex and for missed intentions; `"low"` for fading; `"normal"`
+     for everything else (overrun, stalled, scan gaps, a stale inventory, proposals, follow-ups).
+   - `subject_key`: stable from night to night, so repeats tie together: `overwatch:<kind>:<the
+     project, app or group id>`, or `overwatch:<kind>` when there is no one thing, lower case, no
+     spaces, no date. For example `overwatch:stalled:<group id>`, `overwatch:overdue`,
+     `overwatch:fading`, `overwatch:inventory`.
+   - `title`, the text that may pop, by kind:
+     - overdue: `<N> missed: <the most overdue intention> (+<M> undated)`, or with none missed
+       `<M> undated: <the soonest deadline's intention>`; add `+<K> more` inside the brackets when
+       more than one missed;
+     - fading: `<N> fading: <the oldest item>`;
+     - any other item: its title without "Overwatch: ".
+   - `body`: one plain line on why it matters. `link`: `/<inbox id>`, the item's id.
+   - `details`: `{"inbox_id": "<inbox id>", "kind": "flag"}`. The inbox id tells the dispatcher the
+     item already exists, so it points at it instead of making another.
+   - `source_ref`: `overwatch:nightly:<local_date>:<inbox id>`, so a re-run does not raise it twice.
 2. **Watch items that ended:** for each one in the note, `update_overwatch_watch` with its `id`
    and `expiry_noted: true`.
 3. **Checks for the next run:** `update_overwatch_checks` with `counts.plan.checks_later`, plus a
@@ -453,9 +463,9 @@ A failed call here is SKIPPED, never STOP.
 
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-- **`details`**, always: `local_date`, `prompt_version: "2026-11-03a"`, `manual`, `plan_id`,
+- **`details`**, always: `local_date`, `prompt_version: "2026-11-04a"`, `manual`, `plan_id`,
   `counts` (an object with one key per flag, the same keys as Step 7's flags, and that flag's
-  count; never `flag_counts`), `note_id`, `inbox_item_ids`, `reminders_sent`, `apps_pulled`,
+  count; never `flag_counts`), `note_id`, `inbox_item_ids`, `signals_raised`, `apps_pulled`,
   `summaries_reviewed` (the ids marked in Step 8.5), `profiles_rewritten` (app ids),
   `alfred_calls`, `paused`, `skipped` and `settings_missing`; also `earlier_run_id` when Step 2.3
   kept one, or `duplicate_of` when it stopped there.
@@ -478,10 +488,10 @@ Run: <run id>
 ### Step 10 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-11-03a`;
+- `PROMPT VERSION: 2026-11-04a`;
 - the finish summaries reviewed and the follow-ups raised, and whether the inventory is stale;
 - the run id and its status, and `manual: true` or `manual: false`; `duplicate_of` if it stopped;
-- the count of each flag, the note id, the inbox item ids and the reminders sent;
+- the count of each flag, the note id, the inbox item ids and the signals raised;
 - `alfred_calls` and whether it paused;
 - `skipped` and `settings_missing`, if any;
 - any error, verbatim.

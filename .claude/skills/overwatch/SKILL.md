@@ -5,11 +5,15 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
-Skill version: 2026-11-02a
+Skill version: 2026-11-04a
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
-It is allowed to be pushy, within the limits in its own plan.
+It is allowed to be pushy, but it never sends anything itself. Its nightly and weekly runs
+raise a signal for each inbox item they make (`raise_signal`, linking to the item, with its
+importance as the severity). The dispatcher decides what pops, under the `delivery` section of
+Overwatch's own plan. Overwatch never calls `create_reminder` or `send_alfred_push` from those
+runs, and `pushes_per_day` and `push_time` are no longer read.
 
 Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
 
@@ -19,7 +23,7 @@ Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
    profile (`activity_recipe`, `rhythm_days`, `current_state`, written with
    `update_app_profile`). A new app is a new row, never a change here.
 2. **Count with tools; write the judgement.** Stalls, gaps, backlogs and limits are counted
-   from tool results. Claude only words the note and the nudges.
+   from tool results. Claude only words the note and the signals' titles.
 3. **One gate for changing Overwatch.** `update_overwatch_checks` is free. Anything else
    about the plan (instructions or settings) changes only through `create_overwatch_plan`,
    which is tier 3. In a scheduled run, never call it: propose the change as a task inbox

@@ -5,7 +5,7 @@ description: Arnold, Alex's workout and wellbeing coach in Alfred. Use whenever 
 
 # Arnold
 
-Skill version: 2026-10-31b
+Skill version: 2026-11-04a
 
 ## What this is for
 
@@ -135,13 +135,14 @@ Arnold may design workouts: a routine, a stretch sequence, a rehab set.
 
 ## Pasted review prompts
 
-A prompt starting "Arnold:" comes from the morning review: it puts one in an Arnold inbox item
-and sends a Claude push only when `review_instructions` say a plan conversation is due (a goal
-met or missed for a stretch the plan names, or a scheduled check-in).
+A prompt starting "Arnold:" comes from the morning review: it puts one in an Arnold inbox item,
+and raises a signal linking to it, only when `review_instructions` say a plan conversation is due
+(a goal met or missed for a stretch the plan names, or a scheduled check-in). Whether the signal
+pops is the dispatcher's decision.
 
 **Arnold inbox items are actionable only.** Each is titled as a call to action, e.g. "Review
 your Arnold plan: yoga goal hit two weeks running". A goal met on its own never becomes an inbox
-item; at most it earns an encouragement push.
+item; at most it earns an encouragement signal from the hourly watch.
 
 1. Read state as above, then talk about that flag first.
 2. If the conversation changes the plan, follow "Changing the plan".
@@ -153,14 +154,19 @@ item; at most it earns an encouragement push.
 
 Two Claude scheduled tasks act on the plan. Their procedures live in their prompt docs, not here:
 
-- **Claude hourly notifications** (`docs/claude-hourly-notifications-task-prompt.md`): a generic
-  task for every participating app. For Arnold it reads the plan and progress, applies
-  `nudge_instructions` within the plan's limits and the shared notification settings, and sends
-  each nudge separately with `send_alfred_push`.
+- **The dispatcher** (the "Claude hourly notifications" task,
+  `docs/claude-hourly-notifications-task-prompt.md`): its watch stage reads Arnold's plan and
+  progress, applies `nudge_instructions` within the plan's own window, and raises a signal for
+  each nudge (`raise_signal`). Its dispatch stage then decides, under the delivery rules in
+  Overwatch's plan, what pops, and sends it with `deliver_signals`.
 - **Arnold morning review** (`docs/arnold-morning-review-task-prompt.md`): reviews yesterday and
-  the current period against `review_instructions`, and when a plan conversation is due, creates
-  the "Arnold:" inbox item and sends a Claude push, logging both with `log_claude_notification`.
+  the current period against `review_instructions`. When a plan conversation is due, it creates
+  the "Arnold:" inbox item and raises one signal linking to it. It sends no push of its own, and
+  its Claude app push is off.
 
-In conversation you do not send pushes. If Alex says the nudges are too many, too few or badly
-timed, that is a plan change: adjust the limits, checkpoints or `nudge_instructions` in a new
-version.
+In conversation you do not send pushes or raise signals. If Alex says the nudges are too many,
+too few or badly timed, decide which it is:
+- **What Arnold looks for** (checkpoints, `nudge_instructions`) is a plan change, made in a new
+  version.
+- **How often or when anything pops** (caps, quiet hours, bundling) is in the delivery section of
+  Overwatch's plan, and changes through `create_overwatch_plan`.
