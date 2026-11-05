@@ -1,5 +1,5 @@
 // switchboard-runner's logic, free of Deno and the database so `node --test` can run it. index.ts supplies `Deps`.
-// Spec: docs/technical-spec-switchboard2-h8r.md 8.1.
+// Spec: docs/technical-spec-switchboard2-h8r.md 8.1, and 11 for the helper's pickup and result.
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
@@ -31,9 +31,25 @@ export type Action = {
   link_expires_at: string | null;
   project_code: string;
 };
+export type PickedAction = {
+  action_id: string; run_id: string; project_code: string; payload: Record<string, unknown>;
+  fingerprint: string; headline: string; chat_url: string | null;
+};
+export type Picked = {
+  action: { id: string; user_id: string; kind: string; status: string; picked_up_at: string | null };
+  run: { id: string; action_id: string; mode: string; finished_at: string | null } | null;
+};
 export type Deps = {
   queueSecret: string;
+  /** The desktop helper's key, SWITCHBOARD_PICKUP_KEY. Separate from the queue key. */
+  pickupKey: string;
   userId: string;
+  /** switchboard_pickup_git, with the service role. */
+  pickupGit(userId: string): Promise<PickedAction | null>;
+  /** Git actions still consumed that were picked before `before`, with their open real run if any. */
+  stalePicks(userId: string, before: string): Promise<{ action_id: string; run_id: string | null }[]>;
+  findPicked(actionId: string, runId: string): Promise<Picked | null>;
+  finishRun(runId: string, fields: Record<string, unknown>): Promise<void>;
   insertAction(row: Record<string, unknown>): Promise<{ id: string }>;
   authUser(jwt: string): Promise<string | null>;
   findByLinkHash(hash: string, userId: string): Promise<Action | null>;
@@ -443,11 +459,77 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
   return reply({ ok, run_id: runId, summary, conformance, counts, mismatch, ...(test ? { test } : {}) });
 }
 
-export async function handle(req: Request, deps: Deps): Promise<Response> {
+// ---------------------------------------------------------------------------
+// the desktop helper: pickup and result (spec 11)
+// ---------------------------------------------------------------------------
+
+/** A picked action with no result after this long is marked failed at the next pickup, so its project's queue moves. */
+export const PICK_TIMEOUT_MS = 30 * 60 * 1000;
+const MAX_SUMMARY = 300;
+const MAX_OUTPUT = 8000;
+const TIMED_OUT = "timed out: the helper picked this up but never reported a result.";
+
+const pickupAuthorised = (req: Request, deps: Deps) =>
+  secretMatches(req.headers.get("x-switchboard-pickup-key"), deps.pickupKey);
+
+/** Fail every pick older than the timeout, then hand out the next ready git action, or null. */
+async function handlePickup(req: Request, deps: Deps, now: number): Promise<Response> {
+  if (!pickupAuthorised(req, deps)) return json({ ok: false, error: "unauthorized" }, 401);
+  const stale = await deps.stalePicks(deps.userId, new Date(now - PICK_TIMEOUT_MS).toISOString());
+  for (const s of stale) {
+    if (s.run_id) {
+      await deps.finishRun(s.run_id, { summary: TIMED_OUT, result: { ok: false, timed_out: true }, finished_at: new Date(now).toISOString() });
+    }
+    await deps.setStatus(s.action_id, "failed");
+  }
+  const action = await deps.pickupGit(deps.userId);
+  return json({ ok: true, action, timed_out: stale.map((s) => s.action_id) });
+}
+
+/** The helper's report: closes the run and marks the action succeeded or failed. Only for a pick still waiting. */
+async function handleResult(req: Request, deps: Deps, now: number): Promise<Response> {
+  if (!pickupAuthorised(req, deps)) return json({ ok: false, error: "unauthorized" }, 401);
+  const body = await readBody(req);
+  const actionId = body?.action_id;
+  const runId = body?.run_id;
+  if (typeof actionId !== "string" || !actionId || typeof runId !== "string" || !runId) {
+    return json({ ok: false, error: "action_id and run_id are required." }, 400);
+  }
+  if (typeof body?.ok !== "boolean") return json({ ok: false, error: "ok must be true or false." }, 400);
+  const summary = typeof body?.summary === "string" ? body.summary.trim() : "";
+  if (!summary || summary.length > MAX_SUMMARY || /[\r\n]/.test(summary)) {
+    return json({ ok: false, error: `summary must be one line of at most ${MAX_SUMMARY} characters.` }, 400);
+  }
+  const exitCode = body?.exit_code;
+  if (exitCode !== undefined && !Number.isInteger(exitCode)) return json({ ok: false, error: "exit_code must be an integer." }, 400);
+  const output = typeof body?.output === "string" ? body.output.slice(-MAX_OUTPUT) : undefined;
+
+  const picked = await deps.findPicked(actionId, runId);
+  const a = picked?.action;
+  const r = picked?.run;
+  if (!a || a.user_id !== deps.userId || a.kind !== "git" || !r || r.action_id !== a.id) {
+    return json({ ok: false, error: "no such picked action and run." }, 404);
+  }
+  if (a.status !== "consumed" || !a.picked_up_at || r.mode !== "real" || r.finished_at) {
+    return json({ ok: false, error: `this action is ${a.status} and no longer waiting for a result.` }, 409);
+  }
+  await deps.finishRun(r.id, {
+    summary, result: { ok: body.ok, ...(exitCode === undefined ? {} : { exit_code: exitCode }), ...(output === undefined ? {} : { output }) },
+    finished_at: new Date(now).toISOString(),
+  });
+  await deps.setStatus(a.id, body.ok ? "succeeded" : "failed");
+  return json({ ok: true, action_id: a.id, run_id: r.id, status: body.ok ? "succeeded" : "failed" });
+}
+
+const HELPER_ROUTES = new Set(["pickup", "result"]);
+
+export async function handle(req: Request, deps: Deps, now = Date.now()): Promise<Response> {
   const route = new URL(req.url).pathname.replace(/\/+$/, "").split("/").pop() ?? "";
   const browser = RUN_ROUTES.has(route);
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: browser ? CORS : {} });
-  if (route !== "queue" && !browser) return json({ ok: false, error: "not found." }, 404);
+  if (route !== "queue" && !browser && !HELPER_ROUTES.has(route)) return json({ ok: false, error: "not found." }, 404);
   if (req.method !== "POST") return json({ ok: false, error: "method not allowed; use POST." }, 405, browser);
+  if (route === "pickup") return handlePickup(req, deps, now);
+  if (route === "result") return handleResult(req, deps, now);
   return browser ? handleRun(route, req, deps) : handleQueue(req, deps);
 }

@@ -4,7 +4,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import postgres from "npm:postgres@3.4.5";
 import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts";
-import { type Action, type Deps, handle, type RunOutcome, type Statement, type StatementResult } from "./core.ts";
+import {
+  type Action, type Deps, handle, type Picked, type PickedAction, type RunOutcome, type Statement, type StatementResult,
+} from "./core.ts";
 
 // switchboard-runner: the only code that executes queued SQL, and the only code using SUPABASE_DB_URL.
 // Spec: docs/technical-spec-switchboard2-h8r.md 8.1. Routes and refusals are in core.ts.
@@ -17,7 +19,10 @@ import { type Action, type Deps, handle, type RunOutcome, type Statement, type S
 //                  unless it's a test action, whose one run this is.
 //   POST /approve  Alex's JWT. { token, fingerprint } -> { run_id, summary, conformance, counts }. Needs a clean latest dry run.
 //   POST /cancel   Alex's JWT. { token, reason? } -> { run_id, cancelled, reason }. Spends the link; runs nothing.
+//   POST /pickup   x-switchboard-pickup-key. {} -> { action | null, timed_out }. The desktop helper; git actions only (spec 11).
+//   POST /result   x-switchboard-pickup-key. { action_id, run_id, ok, summary, exit_code?, output? } -> { status }.
 //
+// The pickup key is SWITCHBOARD_PICKUP_KEY: never logged, never in an error, separate from the queue key.
 // ⚠️ verify_jwt must be false in config.toml: /queue has no user token, so the run routes check the JWT themselves.
 // After every deploy an unauthenticated POST to /queue must come back 401 with this function's own body.
 // ⚠️ THE SERVICE ROLE BYPASSES RLS, so user_id is set explicitly, from CLIPBOARD_USER_ID.
@@ -89,7 +94,28 @@ function deps(): Deps {
       .order("started_at", { ascending: false }).limit(1).maybeSingle()) as { id: string; result: Record<string, unknown> | null } | null;
   return {
     queueSecret: Deno.env.get("SWITCHBOARD_QUEUE_SECRET") ?? "",
+    pickupKey: Deno.env.get("SWITCHBOARD_PICKUP_KEY") ?? "",
     userId: Deno.env.get("CLIPBOARD_USER_ID") ?? "",
+    pickupGit: async (userId) => must(await db.rpc("switchboard_pickup_git", { p_user: userId })) as PickedAction | null,
+    stalePicks: async (userId, before) => {
+      const actions = must(await db.from("switchboard_actions").select("id").eq("user_id", userId).eq("kind", "git")
+        .eq("status", "consumed").lt("picked_up_at", before)) as { id: string }[];
+      if (!actions.length) return [];
+      const runs = must(await db.from("switchboard_runs").select("id, action_id")
+        .in("action_id", actions.map((a) => a.id)).eq("mode", "real").is("finished_at", null)) as { id: string; action_id: string }[];
+      return actions.map((a) => ({ action_id: a.id, run_id: runs.find((r) => r.action_id === a.id)?.id ?? null }));
+    },
+    findPicked: async (actionId, runId) => {
+      const action = must(await db.from("switchboard_actions").select("id, user_id, kind, status, picked_up_at")
+        .eq("id", actionId).maybeSingle()) as Picked["action"] | null;
+      if (!action) return null;
+      const run = must(await db.from("switchboard_runs").select("id, action_id, mode, finished_at")
+        .eq("id", runId).maybeSingle()) as Picked["run"];
+      return { action, run };
+    },
+    finishRun: async (runId, fields) => {
+      must(await db.from("switchboard_runs").update(fields).eq("id", runId));
+    },
     insertAction: async (row) => must(await db.from("switchboard_actions").insert(row).select("id").single()),
     authUser: async (jwt) => {
       const { data, error } = await db.auth.getUser(jwt);
