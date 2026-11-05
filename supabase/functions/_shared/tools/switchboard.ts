@@ -6,6 +6,7 @@
 //   get_switchboard_run     tier 1  an action (with its full SQL) and a run
 //   issue_switchboard_link  tier 2  issue the approval link for the SQL Claude reviewed
 //   get_sql_read            tier 1  one read-only query, as claude_reader (§8.2)
+//   queue_switchboard_git   tier 2  queue a git action and issue its link (§11)
 //
 // Database access ONLY through ctx.db, except get_sql_read's query itself: see readerSeam.
 // ============================================================================
@@ -81,6 +82,126 @@ export const issueSwitchboardLinkTool = defineTool({
       throw dbError(tool, "issuing the link", error);
     }
     return data;
+  },
+});
+
+// ---------------------------------------------------------------------------
+// queue_switchboard_git (§11): the payload the helper accepts (switchboard helper/lib/core.mjs), and nothing else.
+// The helper still checks the checkout (main or worktree) and refuses what this cannot know.
+// ---------------------------------------------------------------------------
+
+const GIT_KEYS: Record<string, string[]> = {
+  gitcom: ["command", "message", "include_unclaimed"],
+  gitsync: ["command"],
+  gitnewtree: ["command", "install"],
+  gitpush: ["command", "mode", "finish", "paths", "all", "db", "message", "include_unclaimed"],
+};
+const PROJECT_CODE = /^[a-z0-9][a-z0-9_-]{1,40}$/;
+const PATH_WORD = /^[A-Za-z0-9_][A-Za-z0-9_.\/-]*\/?$/;
+
+/** The payload to store, or a refusal reason. args minus project_code and chat_url is the payload. */
+export function gitPayload(args: Record<string, unknown>): { payload: Record<string, unknown> } | { refused: string } {
+  const r = (refused: string) => ({ refused });
+  const { project_code: _c, chat_url: _u, ...p } = args;
+  const command = p.command;
+  if (typeof command !== "string" || !Object.hasOwn(GIT_KEYS, command)) {
+    return r(`\`command\` must be gitcom, gitsync, gitnewtree or gitpush, not ${JSON.stringify(command ?? null)}.`);
+  }
+  const extra = Object.keys(p).filter((k) => !GIT_KEYS[command].includes(k));
+  if (extra.length) return r(`${command} does not take ${extra.join(", ")}.`);
+  for (const k of Object.keys(p)) if (p[k] === undefined || p[k] === null) delete p[k];
+
+  if (p.message !== undefined) {
+    const m = p.message;
+    if (typeof m !== "string" || !m.trim() || m.length > 200 || /[\r\n"]/.test(m) || m.trim().startsWith("-")) {
+      return r("`message` must be one line of at most 200 characters, with no double quote, not starting with -.");
+    }
+    p.message = m.trim();
+  }
+  if (p.include_unclaimed !== undefined && !["all", "none"].includes(p.include_unclaimed as string)) {
+    return r("`include_unclaimed` must be all or none.");
+  }
+  if (command === "gitnewtree" && p.install !== undefined && typeof p.install !== "boolean") {
+    return r("`install` must be true or false.");
+  }
+  if (command === "gitpush") {
+    const mode = p.mode;
+    if (!["push", "checkpoint", "finish"].includes(mode as string)) return r("gitpush needs `mode`: push, checkpoint or finish.");
+    if (mode === "finish") {
+      if (!["phase", "project-done"].includes(p.finish as string)) {
+        return r("a Finish needs `finish`: phase (this worktree only) or project-done (also moves the docs to history).");
+      }
+    } else if (p.finish !== undefined) return r(`\`finish\` is only for a Finish, not ${mode}.`);
+    if (mode === "checkpoint") {
+      const paths = p.paths;
+      if (p.all === true && paths === undefined) { /* every uncommitted path */ }
+      else if (Array.isArray(paths) && paths.length && p.all === undefined) {
+        const bad = paths.filter((x) => typeof x !== "string" || !PATH_WORD.test(x) || x.split("/").includes(".."));
+        if (bad.length) return r(`not a usable path: ${bad.map(String).join(", ")}.`);
+      } else return r("a Checkpoint needs `paths` (a list) or `all: true`, not both.");
+      if (p.db !== undefined && !["release", "keep"].includes(p.db as string)) return r("`db` must be release or keep.");
+    } else if (p.paths !== undefined || p.all !== undefined || p.db !== undefined) {
+      return r(`\`paths\`, \`all\` and \`db\` are only for a Checkpoint, not ${mode}.`);
+    }
+    if (mode === "checkpoint" && p.include_unclaimed !== undefined) return r("`include_unclaimed` is only for main.");
+  }
+  return { payload: p };
+}
+
+/** What the click will do, in the queue's capitals. */
+export function gitHeadline(code: string, p: Record<string, unknown>): string {
+  switch (p.command) {
+    case "gitcom":
+      return `GITCOM ${code}: COMMITS ITS CLAIMED FILES${p.include_unclaimed === "all" ? " AND EVERY UNCLAIMED CHANGE" : ""}`;
+    case "gitsync":
+      return `GITSYNC ${code}: MERGES MAIN INTO THE WORKTREE`;
+    case "gitnewtree":
+      return `GITNEWTREE ${code}: CREATES A WORKTREE FROM ORIGIN/MAIN`;
+    default: {
+      if (p.mode === "push") return `GITPUSH PUSH ${code}: COMMITS AND PUSHES MAIN`;
+      if (p.mode === "checkpoint") {
+        const what = p.all ? "EVERY UNCOMMITTED PATH" : `${(p.paths as string[]).length} PATH${(p.paths as string[]).length === 1 ? "" : "S"}`;
+        return `GITPUSH CHECKPOINT ${code}: MERGES ${what} INTO MAIN, PUSHES${p.db === "keep" ? ", KEEPS THE DB CLAIMS" : ""}`;
+      }
+      return `GITPUSH FINISH ${code}: MERGES INTO MAIN, PUSHES, REMOVES THE WORKTREE` +
+        (p.finish === "project-done" ? ", MOVES THE DOCS TO HISTORY" : "");
+    }
+  }
+}
+
+export const queueSwitchboardGitTool = defineTool({
+  name: "queue_switchboard_git",
+  tier: 2,
+  tables: { reads: ["switchboard_actions", "switchboard_settings"], writes: ["switchboard_actions"] },
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "queue_switchboard_git";
+    const code = typeof args.project_code === "string" ? args.project_code.trim() : "";
+    if (!PROJECT_CODE.test(code)) throw fail(tool, "`project_code` must be a project code such as switchboard2-h8r.");
+    const chatUrl = args.chat_url ?? null;
+    if (chatUrl !== null && (typeof chatUrl !== "string" || !/^https:\/\/claude\.ai\//.test(chatUrl))) {
+      throw fail(tool, "`chat_url` must be a https://claude.ai/ link.");
+    }
+    const checked = gitPayload(args);
+    if ("refused" in checked) throw fail(tool, `refused: ${checked.refused}`);
+    const headline = gitHeadline(code, checked.payload);
+
+    // Authenticated cannot insert into switchboard_actions (189): the queue function does it as the caller.
+    const { data: queued, error: queueError } = await ctx.db.rpc("switchboard_queue_git", {
+      p_project_code: code, p_payload: checked.payload, p_headline: headline, p_chat_url: chatUrl,
+    });
+    if (queueError) {
+      if (REFUSALS.has(queueError.code ?? "") || queueError.code === "23514") throw fail(tool, `refused: ${queueError.message}`);
+      throw dbError(tool, "queueing the git action", queueError);
+    }
+    const actionId = (queued as Record<string, unknown> | null)?.action_id as string | undefined;
+    if (!actionId) throw fail(tool, "the queue returned no action id.");
+
+    const { data, error } = await ctx.db.rpc("switchboard_issue_link", { p_action_id: actionId });
+    if (error) {
+      if (REFUSALS.has(error.code ?? "")) throw fail(tool, `queued as ${actionId}, but no link: ${error.message}`);
+      throw dbError(tool, `issuing the link for ${actionId}`, error);
+    }
+    return { ...(data as Record<string, unknown>), action_id: actionId, payload: checked.payload };
   },
 });
 

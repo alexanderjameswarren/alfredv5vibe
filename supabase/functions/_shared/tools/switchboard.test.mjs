@@ -444,3 +444,94 @@ test("issue: the database's refusal is a refusal, an outage is not", async () =>
   await assert.rejects(issue({ data: null, error: { code: "57014", message: "timeout" } }),
     (e) => !e.message.includes("refused") && e.message.includes("timeout"));
 });
+
+// --- queue_switchboard_git ------------------------------------------------------------------------------------------
+
+const LINK = { action_id: ACTION_ID, url: "https://x/approve#t?kind=git&exp=1", expires_at: "2026-11-05T14:00:00Z", headline: "H" };
+/** rpc answers by name; every call logged. */
+function gitDb({ queue = ok({ action_id: ACTION_ID }), link = ok(LINK) } = {}) {
+  const calls = [];
+  return {
+    calls,
+    from() { throw new Error("queue_switchboard_git must not touch a table directly"); },
+    rpc(name, params) {
+      calls.push([name, params]);
+      return Promise.resolve(name === "switchboard_queue_git" ? queue : link);
+    },
+  };
+}
+const queueGit = (args, db = gitDb()) => m.queueSwitchboardGitTool.handler(args, { db });
+
+test("git: tier 2", () => assert.equal(m.queueSwitchboardGitTool.tier, 2));
+
+test("git: a Finish queues the payload without project_code, issues the link, headline says what it does", async () => {
+  const db = gitDb();
+  const out = await queueGit({ project_code: "switchboard2-h8r", command: "gitpush", mode: "finish", finish: "phase" }, db);
+  assert.deepEqual(db.calls[0], ["switchboard_queue_git", {
+    p_project_code: "switchboard2-h8r", p_payload: { command: "gitpush", mode: "finish", finish: "phase" },
+    p_headline: "GITPUSH FINISH switchboard2-h8r: MERGES INTO MAIN, PUSHES, REMOVES THE WORKTREE", p_chat_url: null,
+  }]);
+  assert.deepEqual(db.calls[1], ["switchboard_issue_link", { p_action_id: ACTION_ID }]);
+  assert.equal(out.url, LINK.url);
+  assert.equal(out.action_id, ACTION_ID);
+});
+
+test("git: headlines", () => {
+  const h = (p) => m.gitHeadline("p-a1", p);
+  assert.equal(h({ command: "gitcom" }), "GITCOM p-a1: COMMITS ITS CLAIMED FILES");
+  assert.equal(h({ command: "gitcom", include_unclaimed: "all" }), "GITCOM p-a1: COMMITS ITS CLAIMED FILES AND EVERY UNCLAIMED CHANGE");
+  assert.equal(h({ command: "gitsync" }), "GITSYNC p-a1: MERGES MAIN INTO THE WORKTREE");
+  assert.equal(h({ command: "gitnewtree" }), "GITNEWTREE p-a1: CREATES A WORKTREE FROM ORIGIN/MAIN");
+  assert.equal(h({ command: "gitpush", mode: "push" }), "GITPUSH PUSH p-a1: COMMITS AND PUSHES MAIN");
+  assert.equal(h({ command: "gitpush", mode: "checkpoint", paths: ["a.sql"] }), "GITPUSH CHECKPOINT p-a1: MERGES 1 PATH INTO MAIN, PUSHES");
+  assert.equal(h({ command: "gitpush", mode: "checkpoint", all: true, db: "keep" }),
+    "GITPUSH CHECKPOINT p-a1: MERGES EVERY UNCOMMITTED PATH INTO MAIN, PUSHES, KEEPS THE DB CLAIMS");
+  assert.match(h({ command: "gitpush", mode: "finish", finish: "project-done" }), /REMOVES THE WORKTREE, MOVES THE DOCS TO HISTORY$/);
+});
+
+test("git: every accepted shape", () => {
+  for (const p of [
+    { command: "gitcom", message: " one line ", include_unclaimed: "none" },
+    { command: "gitsync" },
+    { command: "gitnewtree", install: false },
+    { command: "gitpush", mode: "push", message: "m", include_unclaimed: "all" },
+    { command: "gitpush", mode: "checkpoint", paths: ["supabase/migrations/207_x.sql", "docs/"], db: "release" },
+    { command: "gitpush", mode: "checkpoint", all: true },
+    { command: "gitpush", mode: "finish", finish: "project-done", message: "done" },
+  ]) assert.ok("payload" in m.gitPayload(p), JSON.stringify(p));
+  assert.equal(m.gitPayload({ command: "gitcom", message: " x " }).payload.message, "x");
+});
+
+test("git: refused keys and values, before anything is queued", async () => {
+  for (const [args, want] of [
+    [{ command: "rm" }, /command.*gitcom/],
+    [{ command: "gitsync", message: "m" }, /gitsync does not take message/],
+    [{ command: "gitcom", sql: "x" }, /does not take sql/],
+    [{ command: "gitcom", message: "a\nb" }, /one line/],
+    [{ command: "gitcom", message: "--force" }, /not starting with -/],
+    [{ command: "gitcom", include_unclaimed: "some" }, /all or none/],
+    [{ command: "gitnewtree", install: "yes" }, /true or false/],
+    [{ command: "gitpush" }, /needs `mode`/],
+    [{ command: "gitpush", mode: "finish" }, /phase .* project-done/],
+    [{ command: "gitpush", mode: "push", finish: "phase" }, /only for a Finish/],
+    [{ command: "gitpush", mode: "checkpoint" }, /paths.*or `all: true`/],
+    [{ command: "gitpush", mode: "checkpoint", paths: ["a"], all: true }, /not both/],
+    [{ command: "gitpush", mode: "checkpoint", paths: ["../x"] }, /not a usable path/],
+    [{ command: "gitpush", mode: "checkpoint", all: true, db: "drop" }, /release or keep/],
+    [{ command: "gitpush", mode: "push", db: "keep" }, /only for a Checkpoint/],
+    [{ command: "gitpush", mode: "checkpoint", all: true, include_unclaimed: "all" }, /only for main/],
+  ]) {
+    const db = gitDb();
+    await assert.rejects(queueGit({ project_code: "p-a1", ...args }, db), (e) => /refused/.test(e.message) && want.test(e.message), JSON.stringify(args));
+    assert.equal(db.calls.length, 0);
+  }
+  await assert.rejects(queueGit({ project_code: "Bad Code", command: "gitsync" }), /project_code/);
+  await assert.rejects(queueGit({ project_code: "p-a1", command: "gitsync", chat_url: "https://evil/" }), /chat_url/);
+});
+
+test("git: a queue or link refusal is passed on, and says when the action was queued", async () => {
+  await assert.rejects(queueGit({ project_code: "p-a1", command: "gitsync" }, gitDb({ queue: { data: null, error: { code: "23514", message: "payload check" } } })),
+    /refused: payload check/);
+  await assert.rejects(queueGit({ project_code: "p-a1", command: "gitsync" }, gitDb({ link: { data: null, error: { code: "55000", message: "another link is live" } } })),
+    (e) => e.message.includes(`queued as ${ACTION_ID}`) && e.message.includes("another link is live"));
+});

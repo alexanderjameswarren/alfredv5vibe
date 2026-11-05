@@ -19,6 +19,8 @@ import {
 //                  unless it's a test action, whose one run this is.
 //   POST /approve  Alex's JWT. { token, fingerprint } -> { run_id, summary, conformance, counts }. Needs a clean latest dry run.
 //   POST /cancel   Alex's JWT. { token, reason? } -> { run_id, cancelled, reason }. Spends the link; runs nothing.
+//   A git link (spec 11.3): /preview adds kind and payload; /approve only spends the link, so the action is consumed
+//   for the helper, and runs nothing here; /cancel needs no dry run; /dry-run is refused.
 //   POST /pickup   x-switchboard-pickup-key. {} -> { action | null, timed_out }. The desktop helper; git actions only (spec 11).
 //   POST /result   x-switchboard-pickup-key. { action_id, run_id, ok, summary, exit_code?, output? } -> { status }.
 //
@@ -81,7 +83,7 @@ async function conformance(): Promise<string> {
   }
 }
 
-const ACTION_COLUMNS = "id, user_id, payload, fingerprint, headline, status, link_used_at, link_expires_at, project_code";
+const ACTION_COLUMNS = "id, user_id, kind, payload, fingerprint, headline, status, link_used_at, link_expires_at, project_code";
 
 function deps(): Deps {
   const db = createServiceClient();

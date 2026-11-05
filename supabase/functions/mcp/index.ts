@@ -76,7 +76,9 @@ import {
   updateReminderTool,
 } from "../_shared/tools/reminders.ts";
 import { createArnoldPlanTool, getArnoldPlanTool, getArnoldProgressTool } from "../_shared/tools/arnold.ts";
-import { getSqlReadTool, getSwitchboardRunTool, issueSwitchboardLinkTool } from "../_shared/tools/switchboard.ts";
+import {
+  getSqlReadTool, getSwitchboardRunTool, issueSwitchboardLinkTool, queueSwitchboardGitTool,
+} from "../_shared/tools/switchboard.ts";
 import {
   getClaudeNotificationSettingsTool,
   getClaudeNotificationsTool,
@@ -3121,6 +3123,31 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(issueSwitchboardLinkTool, args, token),
+  );
+
+  server.registerTool(
+    "queue_switchboard_git",
+    {
+      title: "Queue Switchboard Git",
+      description:
+        "Queue one git command (gitcom, gitsync, gitnewtree or gitpush) for a project and issue its single-use approval link in the same call. Nothing runs until Alex clicks Approve; then the desktop helper runs it in that project's worktree. Git has no dry run. " +
+        "Keys by command: gitcom takes message, include_unclaimed (main only); gitsync takes nothing; gitnewtree takes install; gitpush takes mode (push | checkpoint | finish), and for a Finish finish (phase | project-done), for a Checkpoint paths (a list) or all: true, and db (release | keep), plus message. Any other key is refused. " +
+        "One live link per project code, as issue_switchboard_link. Returns { action_id, url, expires_at, headline, payload }. Give the url whole. If it says queued but no link, the action exists: issue its link later with issue_switchboard_link. Tier 2.",
+      inputSchema: {
+        project_code: z.string().describe("The project code, e.g. switchboard2-h8r; main's code for main."),
+        command: z.enum(["gitcom", "gitsync", "gitnewtree", "gitpush"]).describe("The git command."),
+        mode: z.enum(["push", "checkpoint", "finish"]).optional().describe("gitpush only."),
+        finish: z.enum(["phase", "project-done"]).optional().describe("gitpush finish only."),
+        paths: z.array(z.string()).optional().describe("gitpush checkpoint: repo-relative paths."),
+        all: z.boolean().optional().describe("gitpush checkpoint: every uncommitted path, instead of paths."),
+        db: z.enum(["release", "keep"]).optional().describe("gitpush checkpoint: release (default) or keep the db: claims."),
+        message: z.string().optional().describe("Commit message: one line, at most 200 characters, no double quote."),
+        include_unclaimed: z.enum(["all", "none"]).optional().describe("gitcom or gitpush on main: unclaimed changes."),
+        install: z.boolean().optional().describe("gitnewtree: run npm install."),
+        chat_url: z.string().optional().describe("This chat's https://claude.ai/ link, for the result line."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardGitTool, args, token),
   );
 
   server.registerTool(
