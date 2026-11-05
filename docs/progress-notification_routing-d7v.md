@@ -602,7 +602,21 @@ Renumbered: this step is 10f. The add and end override tools and the screen word
 - **Deploy:** origin/main had 4 new commits since the last gitsync (switchboard2-h8r), none in supabase/functions/. mcp deployed at 14:09, carrying signals.ts. check_platform_conformance: CONFORMANT, all 103 non-exempt public tables.
 - **Claims:** db:deploy and the four db:fn claims are released; claims.cmd status shows no db: claims.
 
-#### Step 10h scope (planned; was "10f", then "10g")
+#### 10h. One name for Arnold's hourly task in the log — QUEUED 2026-11-05 (`s10h-m2x6`)
+Main was at c92873a, with 209 and the 10e files checkpointed. 210 was free (origin/main ends at 209).
+- **Counts:** get_claude_notifications reads all 32 rows.
+  - 2 have started_by null with job claude_hourly_notifications.
+  - 13 read `task:claude_hourly_notifications`, written by step 3's backfill as `'task:' || job`.
+  - That is 15 in all.
+- **Other underscore spellings, reported and not changed:** `task:arnold_morning_review` (2 rows: 01eabd28-0654-441f-b85f-edd3b4593c34, 5ca6fc7b-b1d3-447e-9b25-720111aebdaa). The live task prompt writes `task:arnold-morning-review`. Every started_by in signals (23 rows) is already `task:claude-hourly-notifications`.
+- **210_backfill_claude_notifications_started_by.sql:**
+  - It sets started_by to `task:claude-hourly-notifications` for those two groups.
+  - The guard trigger is off for that one update, as in 200, inside one transaction.
+  - Queued `dca24e91-11e4-4137-8185-288d14b6302c`, expect 15.
+- **Test 1 re-run:** `0be66877-e2a2-4d38-ab77-6440d403a156`. Run it after 210.
+- Renumbered: the override tools, the rules card and the skill are now **10i**.
+
+#### Step 10i scope (planned; was "10f", "10g", then "10h")
 - create: nothing
 - update: supabase/functions/_shared/tools/overwatch-plan.ts, supabase/functions/_shared/tools/overwatch-plan.test.mjs, supabase/functions/mcp/index.ts (register the tools), src/overwatch/dispatcherModel.js, src/overwatch/dispatcherModel.test.js, src/overwatch/DispatcherPage.jsx, src/overwatch/DispatcherPage.test.jsx, .claude/skills/overwatch/SKILL.md, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
 - delete: nothing
@@ -690,4 +704,5 @@ Files: this file. DB: none.
 | 10d | 10m | 4m 30s | History paged 50 at a time with a cursor, Show older |
 | 10e | 45m | 14m 28s | overrides, inbox at any hour, items from signals; stopped before queueing (plan guard) |
 | 10f | 10m | 3m 05s | 209 numbered and queued with five tests; mcp deploy waits for 209 live |
-| 10g | 6m | see report | mcp deployed, conformant; started_by repair blocked by the plan guard |
+| 10g | 6m | 1m 29s | mcp deployed, conformant; started_by repair blocked by the plan guard |
+| 10h | 3m | see report | 210 started_by backfill (15 rows) and test 1 queued |
