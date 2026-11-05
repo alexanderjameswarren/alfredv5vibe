@@ -3,8 +3,8 @@
 Live since 2026-10-29: a Google Apps Script in alex.warren@secorus.com posts labelled
 mail to the `email-capture` Edge Function. It replaced the Postmark inbound integration
 (free tier 100/month; ~300 expected), whose code was removed on 2026-11-02 (function v31).
-Earlier design, historical: docs/technical-spec-email-capture.md.
-Progress: docs/progress-gmail-capture.md.
+Earlier design, historical: docs/history/technical-spec-email-capture.md.
+Progress: docs/history/progress-gmail-capture.md.
 
 ## Flow
 
