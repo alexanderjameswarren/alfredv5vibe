@@ -320,6 +320,26 @@ export const deliverSignalsTool = defineTool({
         ...(error ? { warning: `The push result could not be recorded: ${error.message}` } : {}) };
     };
 
+    // A task that wrote its own inbox item names it in details.inbox_id, so delivery points at it instead of
+    // making a second. Read through ctx.db: RLS shows only the caller's rows, so someone else's id is "not found".
+    const ownIds = [...new Set(((rows ?? []) as Row[])
+      .map((r) => (r.details as Row | null)?.inbox_id)
+      .filter((v): v is string => typeof v === "string" && v.trim() !== ""))];
+    const visible = new Set<string>();
+    if (ownIds.length) {
+      const { data: found, error: foundError } = await db.from("inbox").select("id").in("id", ownIds);
+      if (foundError) throw dbError(tool, "reading the tasks' own inbox items", foundError);
+      for (const r of (found ?? []) as Row[]) visible.add(r.id as string);
+    }
+    /** The signal's own item when it is there and the caller's; else null, with why in `note`. */
+    const ownItem = (s: Row): { id: string | null; note: string | null } => {
+      const id = (s.details as Row | null)?.inbox_id;
+      if (typeof id !== "string" || id.trim() === "") return { id: null, note: null };
+      return visible.has(id)
+        ? { id, note: null }
+        : { id: null, note: `details.inbox_id ${id} was not found or is not yours, so a new item was made` };
+    };
+
     const delivered = new Map<string, string>();   // signal id -> inbox id, for same-run merges
     const results: Row[] = [];
     const digest: Row[] = [];
@@ -336,13 +356,17 @@ export const deliverSignalsTool = defineTool({
         if (d.decision === "hold") {
           if (!await decide(d.signal_id, { state: "held", reason: d.reason })) result.skipped = "no longer queued";
         } else if (d.decision === "inbox") {
-          const inboxId = await newInbox(capturedText(words.title, words.body, s.link as string | null), s.app as string, meta);
+          const own = ownItem(s);
+          const inboxId = own.id ??
+            await newInbox(capturedText(words.title, words.body, s.link as string | null), s.app as string, meta);
+          const reason = [d.reason, own.id ? "the task's own inbox item" : own.note].filter(Boolean).join("; ");
           await logNotification(db, tool, {
             app: s.app as string, job: s.job as string, kind: kindFor(s), channel: "inbox_item", title: words.title,
             body: words.body, link: `/${inboxId}`, dedupe_key: `signal:${d.signal_id}`, delivery_status: "sent",
-            delivery_detail: { inbox_id: inboxId }, started_by: s.started_by as string, signal_id: d.signal_id,
+            delivery_detail: { inbox_id: inboxId, ...(own.id ? { own_item: true } : {}) },
+            started_by: s.started_by as string, signal_id: d.signal_id,
           });
-          await decide(d.signal_id, { state: "delivered", outcome: "inbox", reason: d.reason, inbox_id: inboxId });
+          await decide(d.signal_id, { state: "delivered", outcome: "inbox", reason, inbox_id: inboxId });
           delivered.set(d.signal_id, inboxId);
           result.inbox_id = inboxId;
         } else if (d.decision === "merge") {
@@ -353,13 +377,17 @@ export const deliverSignalsTool = defineTool({
           await decide(d.signal_id, { state: "merged", merged_into: target, reason: d.reason, inbox_id: inboxId });
           result.inbox_id = inboxId;
         } else if (d.decision === "pop") {
-          const inboxId = d.inbox_id ??
+          // The task's own item first, then an open item for the subject, else a new one.
+          const own = ownItem(s);
+          const existing = own.id ?? d.inbox_id;
+          const inboxId = existing ??
             await newInbox(capturedText(words.title, words.body, s.link as string | null), s.app as string, meta);
-          if (d.inbox_id) await bumpRepeat(inboxId, d.signal_id);
+          if (existing) await bumpRepeat(inboxId, d.signal_id);
+          const reason = [d.reason, own.id ? "points at the task's own inbox item" : own.note].filter(Boolean).join("; ");
           Object.assign(result, await pop({ app: s.app as string, job: s.job as string, kind: kindFor(s),
             title: words.title, body: words.body, inboxId, dedupe: `signal:${d.signal_id}`,
             startedBy: s.started_by as string, signalId: d.signal_id }));
-          await decide(d.signal_id, { state: "delivered", outcome: "pop", reason: d.reason, inbox_id: inboxId,
+          await decide(d.signal_id, { state: "delivered", outcome: "pop", reason, inbox_id: inboxId,
             notification_id: result.notification_id });
           delivered.set(d.signal_id, inboxId);
           result.inbox_id = inboxId;
