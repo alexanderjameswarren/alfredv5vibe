@@ -3,7 +3,7 @@
 Project code: `switchboard2-h8r`
 Spec: `docs/technical-spec-switchboard2-h8r.md`
 
-Status: Phases 0, 1 and 2 complete (Phase 2 at s47-x4fu). Phase 3 planned (s48, s49). Next: s50, the first of the tile fixes.
+Status: Phases 0 to 3 complete (Phase 3's worktree finished and merged as cb42ff8 on 2026-11-05). Part 3, git by link, continues under the same code in a fresh worktree; the docs came back from `docs/history/` at s80b-s80c. Next: s81.
 
 Rule: one step at a time. The CLI finishes a step, records it here, reports, and stops for Alex.
 
@@ -84,8 +84,12 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 3 | s75b | alfred-v5 cutover plan | — | done (s75b-n6gw), read-only; the skill yielded to cli_rules-v8m | 2026-11-04 |
 | 3 | s76 | Overwatch without the repo's sender | — | done, switchboard 4018732: `repos.json` `overwatch: true` posts through the installed sender, on for alfred-v5; bridge for the fixed id only; the brown top bar back | 2026-11-04 |
 | 3 | s77 | CLAUDE.md names the installed commands | — | built (s77-k8dz) | 2026-11-04 |
-| 3 | s78-s79 | Settings handover, then deleting the shims and dead folders; then Finish | — | todo | |
-| 5 git | s80-s87 | Every git command by link: spec §11, plus sandbox sf checks, `sb client` answers and the panel snapshot | see below | todo | |
+| 3 | s78, s79, s79b | Settings handover, then deleting the shims and dead folders; then Finish | — | done: s79b deleted the shims and dead folders; Finish merged as cb42ff8. Phase 3 complete | 2026-11-05 |
+| 5 git | s80, s80b, s80c | Queue changes: git payload check, `picked_up_at`, needs_click by type, no link for no-click actions, `switchboard_pickup_git` | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:clips`, `db:fn:switchboard_issue_link` | migration 206 succeeded (action 56a7cf70-fc54-4285-922a-017b506fc06c, run 305cba34-1598-4c26-9dec-8a1d68ec8882), CONFORMANT (103 tables); `6_verify_git.sql` passed 17 of 18 (run 529be5c5-7de1-4ab7-b619-7968180ac5cf). The failure, a gitpush with no mode let through by a null check, is fixed by migration 207 (action 0035347d-ff7e-442e-b644-538cbdea09b7) and the test re-queued (action 3b2cfdd4-fc23-4a00-8fe5-8834d820960a); both awaiting approval. clips.source comment names clip.cmd | 2026-11-05 |
+| 5 git | s81 | Runner: helper pickup and result, pickup key | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` | deployed (s81-c9wt): `/pickup` and `/result` behind `x-switchboard-pickup-key` (`SWITCHBOARD_PICKUP_KEY`, constant-time, separate from the queue key). A pick with no result for 30 minutes is failed at the next pickup. No key: 401 on `/pickup`, `/result` and `/queue`. Runner tests 51 pass. Waiting on Alex to set the key | 2026-11-05 |
+| 5 git | s82, s82b | Helper and by-link mode (switchboard repo, as switchboard_repo-k7m) | — | done (s82-x4mb, s82b-n2fy), uncommitted there until Alex's `gitpush main push`. The helper runs allowlisted git actions in a visible window and posts `/result`; it picks up on an approval trigger, not a timer; `helper.mjs --status`. By link, a question becomes exit 3. Finish takes `--phase` or `--project-done`, and only `--project-done` archives the docs | 2026-11-05 |
+| docs | s83, s83b | docs/ tidy: only open projects' docs stay in docs/ | — | done. s83 (s83-d6lt) was a read-only audit of the 24 files. s83b (s83b-h3vq) moved 10 to docs/history/, each confirmed byte-identical before its source was deleted: progress-gmail-capture, progress-email-capture, technical-spec-email-capture, progress-record_links-r7k, progress-sam-rail, lyrics-paste-progress, oauth_consent-progress, restructure-p1-progress, restructure-p2-progress, review-warren_buffet_p2-m4t. technical-spec-gmail-capture's two links now point at history. Kept by Alex's decision: Drive Mix's spec and progress, and the gmail capture spec (code comments name both specs). Also kept: the eight task prompts, which are live automations; skills read four of them, and inventory.mjs would mark one in history as retired | 2026-11-05 |
+| 5 git | s84-s87 | Every git command by link: spec §11, plus sandbox sf checks, `sb client` answers and the panel snapshot | see below | todo | |
 | 4 | s88-s92 | Salesforce reads: spec §10 | see below | todo | |
 | 5 SF | s93-s96 | Salesforce actions by link: spec §11 | see below | todo | |
 | 6-8 | | Spec §12-§14 | | todo | |
@@ -507,11 +511,13 @@ Outside the repo, for Alex: the `~/.claude/settings.json` autoMode line that nam
 
 The helper arrives here rather than with Phase 4. Every git link needs a click for the first two weeks (spec §11.1).
 
-**s80, queue changes** (database step; estimated run: 10m). `git` is already an allowed kind. Adds `needs_click` by action type and a pickup function.
-- create: supabase/migrations/_pending_switchboard2-h8r_git_actions.sql, supabase/tests/switchboard2-h8r/5_verify_git.sql
+**s80, queue changes** (database step; estimated run: 10m). `git` is already an allowed kind. Adds `needs_click` by action type and a pickup function. Done (s80b, s80c): migrations 206 and 207.
+- create: supabase/migrations/_pending_switchboard2-h8r_git_actions.sql, supabase/tests/switchboard2-h8r/6_verify_git.sql
 - SQL: switchboard_actions, switchboard_runs
 
-**s81, runner: git actions and pickup key** (estimated run: 12m).
+**s81, runner: git actions and pickup key** (estimated run: 12m). The runner must mark every picked run, and its action, `succeeded` or `failed`: `switchboard_pickup_git` hands out one git action at a time per project, so a picked action left `consumed` stalls that project's queue. Done (s81-c9wt): `/result` closes it; a pick older than 30 minutes is failed at the next `/pickup`.
+
+  For s82: the helper reads the key from `%LOCALAPPDATA%\Switchboard\config\pickup.key` (one line, outside every repo; protected like the rest of config), posts `/pickup` with header `x-switchboard-pickup-key`, and always posts `/result` with `ok`, a one-line `summary` and the `exit_code`, even when the command fails or is refused. A run longer than 30 minutes would be failed under it, so the helper should refuse anything it can't finish in that time.
 - update: supabase/functions/switchboard-runner/index.ts, supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs
 - deploy: switchboard-runner
 
@@ -519,11 +525,17 @@ The helper arrives here rather than with Phase 4. Every git link needs a click f
 - create: helper/ and tests
 - update: git/
 
-**s83, MCP tool to queue a git action** (estimated run: 8m). Needs `mcp/index.ts`, held by warren_buffet at s48.
-- update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
+**s83, s83b: docs/ tidy** (done; see the table). This took the s83 number, so the MCP tool is now s84 and the approve page s84b.
+
+**s84, MCP tool to queue a git action** (estimated run: 8m). Needs `mcp/index.ts`, held by notification_routing-d7v. It inserts a `kind: git` switchboard_actions row and returns the link for Alex's click. The payload is the one the s82 helper accepts; it refuses any other key:
+  - always: `command` (gitcom, gitsync, gitnewtree, gitpush)
+  - gitcom: `message`, `include_unclaimed` (all or none)
+  - gitnewtree: `install` (true or false)
+  - gitpush: `mode` (push, checkpoint, finish); `finish` (phase or project-done, required for a Finish); `paths` or `all` (checkpoint); `db` (release or keep); `message`; `include_unclaimed` (main only)
+- update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, docs/technical-spec-switchboard2-h8r.md (§11)
 - deploy: mcp
 
-**s84, approve page and `git <id>` post** (estimated run: 10m). "Git ready" and "Git running" already exist from s54.
+**s84b, approve page and `git <id>` post** (estimated run: 10m). "Git ready" and "Git running" already exist from s54.
 - update: src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, extension/, panel/
 
 **s85, skill, CLAUDE.md, live test of all four** (estimated run: 8m).
@@ -582,7 +594,7 @@ Each is claimed at its step, never before, and released by Checkpoint.
 | s52 | `db:fn:switchboard_issue_link`, `db:table:switchboard_actions`, `db:deploy` |
 | s80 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_issue_link` |
 | s81 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` |
-| s83 | `db:table:switchboard_actions`, `db:deploy` |
+| s84 | `db:table:switchboard_actions`, `db:deploy` |
 | s86 | `db:table:switchboard_actions`, `db:deploy` |
 | s87 | the snapshot table (named at s87), `db:deploy` |
 | s88 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:switchboard_settings` |
@@ -899,6 +911,7 @@ s48 planned 35 steps and about 6h09m. Part 1 grew from 2 steps and 18m to 6 step
 - `claude_reader` token deny list: drafted at the migration step.
 - Read rules for the 11 child tables with no `user_id` (2.10): through the parent row's owner. Until then `get_sql_read` can't read them.
 - The faint "Send to CLI" subtitle on the /send fallback page.
+- Switchboard repo, open (s80b): `gitpush` Finish should ask whether the project is done or only a phase finished, and move the docs to `docs/history/` only when the project is done. At cb42ff8 it archived this project's docs at the end of Phase 3.
 
 ## Test checklist
 

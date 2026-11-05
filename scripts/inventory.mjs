@@ -10,7 +10,7 @@
 //                                 instead, queue a `finish_summary` for that commit against its first parent (a
 //                                 merge into main, as gitpush Finish sends it) and run the sender
 //
-// Only --send touches the network, through scripts/overwatch-post.mjs and overwatch-ingest. Git is read only.
+// Only --send touches the network, through the installed Switchboard's overwatch sender and overwatch-ingest. Git is read only.
 // gitpush queues the same payload after every merge into main (scripts/lib/finish-summary.mjs).
 
 import { spawnSync } from "node:child_process";
