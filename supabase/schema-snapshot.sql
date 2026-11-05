@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-05 07:55, through migration 207 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-05 13:27, through migration 208 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -7839,6 +7839,40 @@ ALTER FUNCTION "public"."switchboard_prune_runs"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."switchboard_prune_runs"() IS 'Switchboard: clear the result of every run older than 30 days and keep the row. Returns how many. Run daily by the cron job switchboard-prune-runs; no API role can call it.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text" DEFAULT NULL::"text") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_user uuid := auth.uid();
+  v_id   uuid;
+begin
+  if v_user is null then
+    raise exception 'switchboard_queue_git: no signed-in user.' using errcode = '28000';
+  end if;
+  if p_payload is null or jsonb_typeof(p_payload) <> 'object' then
+    raise exception 'switchboard_queue_git: the payload must be a JSON object.' using errcode = '23514';
+  end if;
+  if p_headline is null or btrim(p_headline) = '' then
+    raise exception 'switchboard_queue_git: a headline is required.' using errcode = '23514';
+  end if;
+
+  -- The guard trigger sets fingerprint, status and needs_click; the table's checks refuse a bad code or payload.
+  insert into public.switchboard_actions (user_id, kind, project_code, payload, headline, chat_url, created_by)
+  values (v_user, 'git', p_project_code, p_payload, btrim(p_headline), p_chat_url, 'claude')
+  returning id into v_id;
+  return jsonb_build_object('action_id', v_id);
+end;
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") IS 'Switchboard: queue a git action for the signed-in caller, as created_by claude, and return {action_id}. Kind git only. The guard trigger sets fingerprint, status and needs_click; the git payload check refuses an unknown command or a gitpush with no mode. The link is issued separately by switchboard_issue_link. Called by the queue_switchboard_git tool (spec 11.3).';
 
 
 
@@ -24363,6 +24397,12 @@ GRANT ALL ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") TO "ser
 
 
 REVOKE ALL ON FUNCTION "public"."switchboard_prune_runs"() FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") TO "service_role";
 
 
 
