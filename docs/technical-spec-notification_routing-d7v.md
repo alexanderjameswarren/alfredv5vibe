@@ -28,6 +28,19 @@ one place (Overwatch's plan). When Alex's workflow changes he changes that plan,
 7. **started_by** on `claude_notifications` and `reminders`. `notify-dispatch` logs every pop it
    sends.
 8. **Signals raised after 19:00 wait until 05:00.** Reminders and step timers are unaffected.
+   Narrowed in step 10e: only notifications wait for the window. Inbox, hold, merge and drop are
+   decided at any hour.
+
+**Decisions of 2026-11-05 (step 10e):**
+
+9. **Overrides.** `delivery.overrides` is an ordered list of exceptions Claude edits for Alex in plain
+   words (section 5.1). The tools to add and end them come in step 10f.
+10. **Only Overwatch writes to the inbox directly.** Every other app only raises signals, and the
+    dispatcher decides inbox, notification, hold or drop. An app that used to write its own item
+    describes it in `details.item`, and delivery writes it (section 4.3). The task prompts switch in
+    step 10g.
+11. **A failure is just a kind of signal.** `details.kind: "failure"` is merged and muted like any
+    other kind. All repeat handling is central, in the dispatcher; none is in the tasks.
 
 ## 3. What exists today (the starting point)
 
@@ -86,13 +99,18 @@ Indexes: `(user_id, state, created_at)`, `(user_id, subject_key, created_at desc
   subject is healthy again (a `resolved` row), which resets its escalation count. wb-sync calls it
   on an ok run. Written in step 7, where wb-sync first needs it (moved from step 3).
 - `dispatch_signals(p_now timestamptz default now())`: compute only. Returns `{at, local_time,
-  local_date, plan_id, in_window, pops, decisions}` with one decision per queued signal:
-  `{signal_id, app, severity, subject_key, decision, reason, repeats, merge_target_signal_id,
-  inbox_id, bundle}`, decision `wait`, `hold`, `inbox`, `pop`, `merge` or `digest`; or
-  `{stopped}` when the active plan has no delivery section. Writes nothing.
+  local_date, plan_id, in_window, overrides, pops, decisions}` with one decision per queued signal:
+  `{signal_id, app, severity, raised_severity, kind, subject_key, decision, reason, repeats,
+  merge_target_signal_id, inbox_id, bundle, overrides}`, decision `wait`, `hold`, `inbox`, `pop`,
+  `merge`, `drop` or `digest`; or `{stopped}` when the active plan has no delivery section. Writes
+  nothing. `severity` is after any override, and `overrides` lists the labels that matched.
 - `overwatch_delivery_problem(p jsonb)`: validator for the delivery section; null when valid
   (or absent), else a plain message. Used by a check constraint on `overwatch_plans`, with the
-  helper `overwatch_delivery_whole`.
+  helpers `overwatch_delivery_whole` and `overwatch_override_problem(o, n)` (one override, with the
+  guardrails).
+- `overwatch_override_applies(o, p_at, app, job, subject_key, severity, kind, started_by)`: whether
+  an override matches a signal and, when `p_at` is given, is in force then. With `p_at` null it
+  checks the match only, which is how past notifications are counted against an override's caps.
 
 ### 4.3 Tools (`_shared/tools/signals.ts`)
 
@@ -108,6 +126,20 @@ Indexes: `(user_id, state, created_at)`, `(user_id, subject_key, created_at desc
 
 Apps never check for an existing inbox item and never pick a channel. They raise a signal every
 time something is worth knowing; the dispatcher merges.
+
+**Items built from signals (step 10e).**
+- `raise_signal` accepts `details.item = {captured_text, source_app, source_metadata,
+  ai_reasoning}`. `captured_text` is required, and unknown keys are refused.
+- `deliver_signals` writes the item from `details.item` when it must make one: for an inbox
+  decision, and for a notification. It writes exactly those fields, with `source_type: "task"` and
+  `source_app` defaulting to the signal's app. Otherwise it builds the item from the title and body.
+  A notification links to its item.
+- A merge into an open item (and a notification pointing at one) updates the item's
+  `source_metadata`: `repeats`, `first_seen` (the item's `created_at` the first time), `last_seen`
+  and `merged_signal_ids`. An old `repeat_count` carries on as `repeats`.
+- The item's `captured_text` keeps one last line, "Seen <n> times since <Nov 5, 8:10 AM>" (Pacific),
+  replaced on each repeat, never stacked.
+- `drop` decisions move the signal to `dropped` with the reason.
 
 ## 5. The delivery section of Overwatch's plan
 
@@ -145,6 +177,72 @@ versioned, so every rule change has a reason and a `supersedes_id`.
 - Every number is a whole number; `overwatch_delivery_problem` names the first thing wrong, and an
   `overwatch_plans` check constraint makes `create_overwatch_plan` refuse an invalid section.
 
+- `pace.max_per_day_all` (optional): the daily cap on notifications from every app; null means
+  none. `max_pops_per_day` still works as an alias and is used when `max_per_day_all` is absent or
+  null.
+
+### 5.1 Overrides (`delivery.overrides`, step 10e)
+
+An optional ordered list. Every override that matches a signal and is in force applies, in list
+order, and a later one wins for each setting it gives.
+
+```json
+{
+  "label": "DJ is too chatty",
+  "reason": "Alex asked on Nov 5",
+  "created_at": "2026-11-05T09:00:00-08:00",
+  "created_by": "chat",
+  "match": { "app": "dj", "job": "dj-daily", "subject_key": "dj:*", "severity": ["normal"],
+             "kind": ["info", "failure"], "started_by": "task:dj-daily" },
+  "when": { "starts_at": "…", "ends_at": "2026-11-12T09:00:00-08:00",
+            "days_of_week": ["mon", "fri"], "time_from": "09:00", "time_to": "17:00" },
+  "effect": { "severity": -1, "decision": "inbox",
+              "pace": { "exempt": true, "max_per_hour": 1, "max_per_day": 4, "min_gap_minutes": 30 },
+              "window": { "ignore": true }, "bundle": "never", "merge": false, "priority": "after" },
+  "confirm_broad": false
+}
+```
+
+- Only `label` is required, and labels are unique in the list.
+- **match:** every field given must match, and a missing field matches everything.
+  - `subject_key` is exact, or a prefix ending in `*`.
+  - `kind` is `details.kind`, else `flag` for high and urgent signals and `info` otherwise. It is one
+    of nudge, flag, info, encouragement or failure.
+  - `severity` is matched against the severity the signal was raised with.
+- **when:**
+  - `starts_at` is inclusive and `ends_at` exclusive. Both are timestamps with a time zone.
+  - `days_of_week` uses `mon` … `sun`, Pacific.
+  - `time_from` and `time_to` are Pacific, given together. A range with time_from after time_to runs
+    past midnight.
+- **effect:**
+  - `severity` sets a value, or moves one step with `1` or `-1`, and the default for the new
+    severity applies.
+  - `decision` is `notify`, `inbox`, `hold` or `drop`. It replaces the severity default and is final:
+    escalation does not apply to it.
+  - `pace.exempt` skips the plan's caps and gap. `max_per_hour`, `max_per_day` and `min_gap_minutes`
+    are the override's own limits, counted over the notifications of the signals it matches,
+    including past ones. They always apply, exempt or not.
+  - `window` is `{ignore: true}` or its own `{start, end}`.
+  - `bundle: never` keeps a signal out of the digest, and `always` lets it in whatever its severity.
+    A signal with its own pace or priority is never bundled.
+  - `merge: false` means the signal is not folded into an open item, a recent notification, or an
+    earlier signal in the same run.
+  - `priority: before | after` paces the signal ahead of, or after, everything else when the caps
+    are reached.
+- **Reason:** the decision's reason names each override that changed it, by label, for example
+  `normal signals default to inbox; override 'DJ is too chatty': high to inbox` or
+  `override 'Ken up': severity normal to high`.
+
+**Guardrails**, enforced by `overwatch_override_problem` through the plan's check constraint:
+- An override with decision `hold` or `drop` must have `when.ends_at` and `created_at`, with
+  ends_at at most 14 days after created_at.
+- An override with decision `hold` or `drop` and no match fields is refused unless `confirm_broad`
+  is true.
+- Unknown keys, bad values, `time_from` without `time_to`, a window with both `ignore` and times,
+  and duplicate labels are refused, each with a plain-words message naming the override, e.g.
+  `Override 1 ('Mute DJ') holds signals, so it must end: give when.ends_at, at most 14 days after
+  created_at.`
+
 **Seed (step 4 migration).** A new plan version per user with notification settings
 (`written_by: "overwatch"`, the only non-Alex author the table allows), copying every existing
 setting and adding `delivery` with the window, hourly and daily caps and watchers copied from
@@ -154,24 +252,33 @@ is a later rule change for Alex to make, not the seed.
 
 ## 6. Dispatcher rules (`dispatch_signals`)
 
-Queued signals in priority order (severity order, then app order, then oldest first), six rules in
-this order:
+Queued signals in priority order (severity order, then app order, then oldest first). The rules
+run in this order (from step 10e, 209_dispatch_overrides.sql):
 
-1. **Quiet hours.** Outside the window → `wait`.
-2. **Default** from `defaults[severity]`. (Before it: a signal whose subject already has an
-   earlier signal in this run being delivered merges into that one.)
+0. **Overrides** (section 5.1): each setting comes from the last matching, in-force override that
+   gives it. With no overrides nothing changes.
+1. **Default** from `defaults[severity]`, after any severity override, then any decision
+   override. (Before it: a signal whose subject already has an earlier signal in this run being
+   delivered merges into that one, unless an override says `merge: false`.)
+2. **The window, for notifications only.** After escalation and merge, a `pop` outside the
+   signal's window (the plan's, its override's own, or none with `ignore`) → `wait`. Inbox, hold,
+   merge and drop are decided at any hour, and `deliver_signals` delivers them then.
 3. **Escalation.** Count the subject's earlier held, delivered and merged signals since its last
    `resolved`, this run's held ones included. Past `hold_repeats`, hold becomes inbox; past
    `inbox_repeats`, inbox becomes pop. Example: a sync failure is held; the second in a row
    becomes an inbox item.
 4. **Merge.** An inbox outcome for a subject with an open (unarchived) inbox item → `merge` into
    it. A pop for such a subject still pops, pointing at that item. A pop for a subject popped
-   within `pop_merge_hours` → `merge`. Merging bumps the item's `source_metadata.repeat_count`.
-5. **Bundling.** `min_signals` or more pops of a `digest_severities` severity in one run, not
-   pointing at an open item, become one `digest`: one inbox item listing them and one pop.
-6. **Pace.** Each pop, and the digest as a whole, is one unit, in priority order. A unit that
-   would break the hourly or daily cap or the minimum gap: urgent → `wait`; a pop pointing at an
-   open item → `merge`; otherwise → `inbox`. A held-back digest becomes one inbox item per signal.
+   within `pop_merge_hours` → `merge`. Merging updates the item's repeats and its "Seen n times"
+   line (section 4.3). A failure (`details.kind: "failure"`) merges like any other signal.
+5. **Bundling.** `min_signals` or more pops of a `digest_severities` severity (or with
+   `bundle: always`) in one run, not pointing at an open item, become one `digest`: one inbox item
+   listing them and one pop.
+6. **Pace.** Each pop, and the digest as a whole, is one unit: `priority: before` first, then the
+   rest, then `after`, each in priority order. A unit that would break the plan's hourly or daily
+   cap or minimum gap (unless exempt), or its override's own caps: urgent → `wait`; a pop pointing
+   at an open item → `merge`; otherwise → `inbox`. A held-back digest becomes one inbox item per
+   signal.
 
 Escalation comes before merge so repeats can still turn into a pop while an item is open; that
 is the one change from the step 1 order.

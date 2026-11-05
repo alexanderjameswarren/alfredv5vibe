@@ -544,6 +544,72 @@ Tests: the Overwatch files pass 118/118. The full suite ran twice, and both runs
 
 Next: step 10e, the High and Urgent limit change (a migration to dispatch_signals plus its test), then step 11.
 
+#### 10e. Delivery overrides, inbox at any hour, items from signals — WRITTEN, NOT QUEUED 2026-11-05 (`s10e-t4mb`)
+This replaced the "High and Urgent limit change": Alex's decisions 9 to 11 in spec section 2.
+- **SQL**, written as supabase/migrations/_pending_notification_routing-d7v_dispatch_overrides.sql:
+  - `overwatch_override_problem` and `overwatch_override_applies` are new.
+  - `overwatch_delivery_problem` and `dispatch_signals` are replaced.
+  - The rules are in spec sections 5.1 and 6.
+  - Its number is 209: origin/main already has 208_switchboard_queue_git, which this worktree has not synced. 208 touches no table or function here, so there is no drift.
+  - **Blocked:** the plan guard refused creating 209_dispatch_overrides.sql, which is not in this step's scope. So nothing is queued. A follow-up prompt must declare create `supabase/migrations/209_dispatch_overrides.sql` and delete the `_pending_` file. Both are claimed.
+- **Test:** supabase/tests/notification_routing-d7v/6_dispatch_overrides_verify.sql. It covers:
+  - no overrides, and the defaults word for word;
+  - inbox, hold and merge outside the window;
+  - an app decision, the reason naming the override, a severity shift and set, the later override winning, drop, and kind failure;
+  - expired, other day, today, outside and inside hours, and overnight hours;
+  - pace: exempt, the override's own hourly cap within the run and from history;
+  - window ignore, its own window, and its close;
+  - a failure merged like any other, merge false, and every guardrail and validator refusal, confirm_broad and the plan constraint.
+  - It is not run yet. Tests 1 to 4 are unchanged and must still pass after the migration.
+- **signals.ts:**
+  - raise_signal checks `details.item`.
+  - deliver_signals:
+    - writes items from `details.item` for inbox and notify decisions;
+    - handles `drop`;
+    - on a merge sets repeats, first_seen and last_seen, and writes one "Seen n times since …" line.
+  - get_dispatch_plan and deliver_signals now declare literal table lists. The mcp tables test was already failing on the constant before this step.
+- **Tests:** signals.test.mjs passes 27/27. All shared and mcp function tests pass, 932/932.
+- **Next:** step 10f numbers, queues and verifies 209, then deploys mcp once it is live. Then step 10g, the add and end override tools and the screen wording. Then step 10h, the task prompt switch and the Overwatch nightly checks. The High and Urgent limit is now an override rule; it needs no migration of its own.
+
+#### 10f. Number and queue 209 — QUEUED 2026-11-05 (`s10f-c9dw`)
+Renumbered: this step is 10f. The add and end override tools and the screen wording are now 10g; the task prompt switch and the Overwatch nightly checks are now 10h.
+- 209 was still free: origin/main ends at 208. supabase/migrations/209_dispatch_overrides.sql was written from the `_pending_` file (only its path line differs), and the `_pending_` file is deleted.
+- Queued, none applied yet:
+  - 209 migration `7c31e010-1e5b-47b6-8086-2c3acb87f993`
+  - 6 overrides test `12ce192d-d8bb-4348-aa8f-58bb87625056`
+  - 1 signals test `1cc89d49-8f6f-413e-84b1-2764ec070b6b`
+  - 2 dispatcher test `c86ba34d-1ef1-4ce1-994a-89d61bcff55d`
+  - 3 started_by test `835fe0a4-80fa-4908-a6b3-07870392f95e`
+  - 4 resolve_signal test `fe42717c-907a-4948-bcb6-1873fd27c78d`
+- The tests need 209 live first.
+- Claimed for this step: db:fn:dispatch_signals, db:fn:overwatch_delivery_problem, db:fn:overwatch_override_problem, db:fn:overwatch_override_applies, db:deploy.
+- **Still in this step:** once Alex says 209 is live and the tests passed, deploy mcp (signals.ts), run check_platform_conformance, then Alex checkpoints 209, signals.ts and its test.
+
+#### 10g. 209 live, mcp deployed — DONE 2026-11-05 (`s10g-r4k8`)
+- **209 is live:** run ff33f4e0, CONFORMANT, 103 tables.
+- **Tests:**
+  - 6: 71/71
+  - 2: 52/52
+  - 3: 17/17
+  - 4: 15/15
+  - 1: 35/36. Only `backfill_left_no_nulls` failed.
+- **The test 1 failure is data, not 209.**
+  - There are 2 claude_notifications rows with started_by null, written by Arnold's hourly task on its old prompt after step 3's backfill: c7ba30d5-363e-40e7-9e76-3a79f73a6ffb and 871c8e24-3d75-40be-9af1-2c9d79091f16, both arnold / claude_hourly_notifications, Nov 4.
+  - get_claude_notifications returns all 30 rows, and these are the only null ones. No other job has any.
+- **Repair not queued.** The plan guard refused creating supabase/migrations/210_backfill_claude_notifications_started_by.sql, because this step declares create: nothing.
+  - The file is claimed. The repair sets started_by to `task:claude-hourly-notifications` where it is null and the job is claude_hourly_notifications, with expect 2.
+  - The older backfilled rows read `task:claude_hourly_notifications` (underscore). The task now writes the hyphen form.
+- **Deploy:** origin/main had 4 new commits since the last gitsync (switchboard2-h8r), none in supabase/functions/. mcp deployed at 14:09, carrying signals.ts. check_platform_conformance: CONFORMANT, all 103 non-exempt public tables.
+- **Claims:** db:deploy and the four db:fn claims are released; claims.cmd status shows no db: claims.
+
+#### Step 10h scope (planned; was "10f", then "10g")
+- create: nothing
+- update: supabase/functions/_shared/tools/overwatch-plan.ts, supabase/functions/_shared/tools/overwatch-plan.test.mjs, supabase/functions/mcp/index.ts (register the tools), src/overwatch/dispatcherModel.js, src/overwatch/dispatcherModel.test.js, src/overwatch/DispatcherPage.jsx, src/overwatch/DispatcherPage.test.jsx, .claude/skills/overwatch/SKILL.md, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
+- delete: nothing
+- deploy: mcp
+- SQL: none
+- DB: db:deploy at the deploy step. mcp/index.ts was yielded to switchboard2-h8r on 2026-11-05 and must be claimed again (gitsync first).
+
 ### 11. Dispatcher actions (75m)
 Hold, drop, deliver now on signals; edit and cancel reminders; reschedule and cancel step timers.
 Confirmations are modals. `push-send` gains the `signal_id` mode. The `update_signal` tool (tier 2:
@@ -622,3 +688,6 @@ Files: this file. DB: none.
 | 10b | 15m | 3m 41s | sections reworked, plain words, 12-hour times, header overlap |
 | 10c | 10m | 4m 34s | whole-card links, one icon per card, Radio icon, reasons without "pop" |
 | 10d | 10m | 4m 30s | History paged 50 at a time with a cursor, Show older |
+| 10e | 45m | 14m 28s | overrides, inbox at any hour, items from signals; stopped before queueing (plan guard) |
+| 10f | 10m | 3m 05s | 209 numbered and queued with five tests; mcp deploy waits for 209 live |
+| 10g | 6m | see report | mcp deployed, conformant; started_by repair blocked by the plan guard |
