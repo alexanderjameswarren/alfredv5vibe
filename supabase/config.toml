@@ -71,7 +71,7 @@ entrypoint = "./functions/notify-dispatch/index.ts"
 
 [functions.clip-capture]
 enabled = true
-# 🛑 JWT verification OFF. Called by the Chrome extension and by scripts/clip.mjs.
+# 🛑 JWT verification OFF. Called by the installed Switchboard's Chrome extension and clip.cmd.
 # Neither holds a Supabase session, and neither can get one: spec decision 5
 # ruled out a pasted login token because those expire in about an hour.
 #
