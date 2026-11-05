@@ -345,9 +345,9 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_SWITCHBOARD_25 = ["get_switchboard_run", "issue_switchboard_link", "get_sql_read"];
   // Switchboard s84d, +1.
   const EXPECTED_ADDED_SWITCHBOARD_84 = ["queue_switchboard_git"];
-  // Notification routing steps 3 and 4, +5; step 7, +1.
+  // Notification routing steps 3 and 4, +5; step 7, +1; step 10j, +2 (delivery overrides).
   const EXPECTED_ADDED_NOTIFICATION_ROUTING = ["raise_signal", "get_signals", "get_dispatch_plan", "deliver_signals",
-    "get_delivery_rules", "resolve_signal"];
+    "get_delivery_rules", "resolve_signal", "add_delivery_override", "end_delivery_override"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
@@ -368,10 +368,10 @@ test("the tool count is 72 after the job-search tools", () => {
   // 2026-11-02, +1 for Warren Buffet Phase 4 Step 8b: Amazon and Whole Foods items. +2 for Step 8f: item tags and splits.
   // +1 for nightly counts. 2026-11-03, +1 for the Warren Buffet money chat: record_wb_subscription_review.
   // +5 for notification routing (signals, dispatcher, delivery rules). 2026-11-04, +1: resolve_signal.
-  // 2026-11-05, +1: queue_switchboard_git.
+  // 2026-11-05, +1: queue_switchboard_git. +2: add_delivery_override, end_delivery_override.
   assert.ok(registered.some((r) => r.name === "record_wb_subscription_review"), "record_wb_subscription_review is not registered");
-  assert.equal(registered.length, 195,
-    `expected 195 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 197,
+    `expected 197 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -769,6 +769,7 @@ test("Overwatch Steps 13 and 14 schemas advertise exactly the args their handler
     get_activity: 1, log_activity: 1, get_project_plans: 1, update_project_plan: 2,
     get_project_links: 1, create_project_link: 2, record_project_estimate: 2, get_project_estimates: 1,
     get_overwatch_plan: 1, create_overwatch_plan: 3, update_overwatch_checks: 2, get_delivery_rules: 1,
+    add_delivery_override: 3, end_delivery_override: 3,
     get_overwatch_watch: 1, create_overwatch_watch: 2, update_overwatch_watch: 2,
     get_overwatch_notes: 1, create_overwatch_note: 2, get_claim_blocks: 1, update_app_profile: 2,
     record_seen_releases: 1, log_friction: 1, get_friction: 1, update_friction: 2,

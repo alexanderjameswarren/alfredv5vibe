@@ -125,9 +125,11 @@ import {
   NOTE_PERIODS,
   RELEASE_SOURCES,
   WATCH_KINDS,
+  addDeliveryOverrideTool,
   createOverwatchNoteTool,
   createOverwatchPlanTool,
   createOverwatchWatchTool,
+  endDeliveryOverrideTool,
   getClaimBlocksTool,
   getDeliveryRulesTool,
   getFrictionTool,
@@ -3626,6 +3628,55 @@ export function createMcpServer(token: string) {
       inputSchema: {},
     },
     async (args: Record<string, unknown>) => runToolForMcp(getDeliveryRulesTool, args, token),
+  );
+
+  const overrideDryRun =
+    "Dry run unless dry_run is false: it checks the override against the plan's rules (a hold or drop must end within " +
+    "14 days of now; one that names nothing in particular needs confirm_broad) and lists the last 7 days' signals " +
+    "whose decision would change, before and after in plain words. That list is an estimate from each signal's " +
+    "recorded decision, not a re-run of the dispatcher: an override's own hourly and daily limits are not replayed. " +
+    "Show Alex the result; save only after he says yes, by calling again with dry_run: false and confirmed: true. " +
+    "Saving writes a new Overwatch plan version that changes only delivery.overrides. Never in a scheduled run. Tier 3.";
+
+  server.registerTool(
+    "add_delivery_override",
+    {
+      title: "Add Delivery Override",
+      description:
+        "Add one exception to the dispatcher's delivery rules, e.g. 'DJ is too chatty': DJ signals become inbox items " +
+        "instead of notifications. override is { label, match, when, effect, confirm_broad } as in the notification " +
+        "routing spec 5.1: match by app, job, subject_key (exact or 'prefix*'), severity, kind (nudge, flag, info, " +
+        "encouragement, failure) or started_by; when by starts_at, ends_at, days_of_week (mon..sun) and time_from to " +
+        "time_to (Pacific); effect by severity (a value, or 1 / -1), decision (notify, inbox, hold, drop), pace " +
+        "(exempt, max_per_hour, max_per_day, min_gap_minutes), window ({ignore: true} or {start, end}), bundle (never, " +
+        "always), merge (false) or priority (before, after). created_at is set for you. A label already in use is " +
+        "refused unless that override has ended. " + overrideDryRun,
+      inputSchema: {
+        override: z.record(z.any()).describe("{ label, match, when, effect, confirm_broad }; label is required."),
+        reason: z.string().describe("One line: why, in Alex's words."),
+        dry_run: z.boolean().optional().describe("Default true: check and show the changes, save nothing."),
+        confirmed: z.boolean().optional().describe("true with dry_run false to save, after Alex approves."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(addDeliveryOverrideTool, args, token),
+  );
+
+  server.registerTool(
+    "end_delivery_override",
+    {
+      title: "End Delivery Override",
+      description:
+        "End one exception in the dispatcher's delivery rules, by its label. It sets the override's end to now and keeps " +
+        "it in the plan, so the Dispatcher screen shows it as ended; one that has not started yet is removed. The dry " +
+        "run lists the last 7 days' signals it changed that go back to the plan's own rules. " + overrideDryRun,
+      inputSchema: {
+        label: z.string().describe("The override's label, as get_delivery_rules shows it."),
+        reason: z.string().describe("One line: why it ends."),
+        dry_run: z.boolean().optional().describe("Default true: check and show the changes, save nothing."),
+        confirmed: z.boolean().optional().describe("true with dry_run false to save, after Alex approves."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(endDeliveryOverrideTool, args, token),
   );
 
   server.registerTool(

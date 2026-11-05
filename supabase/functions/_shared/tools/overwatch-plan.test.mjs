@@ -244,3 +244,140 @@ test("update_friction: wont_fix needs a reason, open clears the stamp, fixed nee
   await bad({ status: "open", resolved_by: "x" }, /not open/);
   await bad({ status: "resolved" }, /status must be one of/);
 });
+
+// ---------------------------------------------------------------------------
+// add_delivery_override, end_delivery_override
+// ---------------------------------------------------------------------------
+
+const DELIVERY = { window: { start: "05:00", end: "20:00" }, defaults: { low: "hold", normal: "inbox", high: "pop", urgent: "pop" } };
+const ago = (h) => new Date(Date.now() - h * 3600000).toISOString();
+const SIGNALS = [
+  { id: "s1", app: "dj", job: "dj-daily", severity: "high", subject_key: "dj:daily:x", title: "New DJ album", state: "delivered",
+    outcome: "pop", reason: "high signals default to pop", details: {}, created_at: ago(5) },
+  { id: "s2", app: "arnold", job: "hourly", severity: "normal", subject_key: "arnold:sleep", title: "Sleep", state: "delivered",
+    outcome: "inbox", reason: "normal signals default to inbox", details: {}, created_at: ago(4) },
+  { id: "s3", app: "warren_buffet", job: "wb-sync", severity: "high", subject_key: "wb-sync:failure", title: "Sync failed",
+    state: "delivered", outcome: "inbox", reason: "high signals default to pop; the hourly cap stops the pop, an inbox item instead",
+    details: { kind: "failure" }, created_at: ago(3) },
+];
+
+/** A plan with a delivery section, signals for the replay, and RPC answers for the check and the save. */
+function overrideDb({ overrides = [], problem = null } = {}) {
+  const plan = { ...PLAN, settings: { ...PLAN.settings, delivery: { ...DELIVERY, overrides } } };
+  return fakeDb((table) => (table === "signals" ? { data: SIGNALS, error: null } : { data: plan, error: null }),
+    (name) => (name === "overwatch_delivery_problem" ? { data: problem, error: null } : { data: { id: "p2" }, error: null }));
+}
+const rpcs = (db, name) => db.calls.filter(([t, n]) => t === "rpc" && n === name);
+const DJ = { label: "DJ is too chatty", match: { app: "dj" }, effect: { decision: "inbox" } };
+
+test("add_delivery_override: tier 3; a dry run by default checks, replays the week, and saves nothing", async () => {
+  assert.equal(m.addDeliveryOverrideTool.tier, 3);
+  assert.deepEqual(m.addDeliveryOverrideTool.tables, { reads: ["overwatch_plans", "signals"], writes: ["overwatch_plans"] });
+  const db = overrideDb();
+  const out = await m.addDeliveryOverrideTool.handler({ override: DJ, reason: "Alex asked" }, { db, confirmed: true });
+  assert.equal(out.saved, false);
+  assert.equal(out.dry_run, true);
+  assert.equal(rpcs(db, "create_overwatch_plan").length, 0);
+  const [, , checked] = rpcs(db, "overwatch_delivery_problem")[0];
+  assert.equal(checked.p.overrides.length, 1);
+  assert.equal(checked.p.overrides[0].label, "DJ is too chatty");
+  assert.ok(Date.parse(checked.p.overrides[0].created_at) <= Date.now());
+  assert.equal(checked.p.overrides[0].created_by, "chat");
+  assert.deepEqual(out.changed.map((c) => [c.signal_id, c.before, c.after]), [["s1", "notification", "inbox item"]]);
+  assert.equal(out.checked, 3);
+  assert.match(out.note, /not a full re-run/);
+  assert.ok(saw(db, "signals", "neq", "state", "resolved"));
+
+  const prop = await m.addDeliveryOverrideTool.propose({ override: DJ, reason: "Alex asked" }, { db: overrideDb() });
+  assert.equal(prop.saved, false);
+  assert.equal(prop.changed.length, 1);
+});
+
+test("add_delivery_override: dry_run false saves one new plan version changing only the overrides", async () => {
+  const db = overrideDb({ overrides: [{ label: "Old", effect: { decision: "inbox" } }] });
+  const out = await m.addDeliveryOverrideTool.handler({ override: DJ, reason: "Alex asked", dry_run: false }, { db });
+  assert.equal(out.saved, true);
+  assert.equal(out.plan_id, "p2");
+  const [, , p] = rpcs(db, "create_overwatch_plan")[0];
+  assert.equal(p.p_instructions, PLAN.instructions);
+  assert.equal(p.p_reason, "Alex asked");
+  assert.equal(p.p_checks, null);
+  assert.equal(p.p_settings.stall_days, 5);
+  assert.deepEqual(p.p_settings.delivery.window, DELIVERY.window);
+  assert.deepEqual(p.p_settings.delivery.overrides.map((o) => o.label), ["Old", "DJ is too chatty"]);
+});
+
+test("add_delivery_override: refusals in plain words, before anything is saved", async () => {
+  const live = overrideDb({ overrides: [{ label: "dj is too chatty", effect: { decision: "inbox" } }] });
+  await assert.rejects(m.addDeliveryOverrideTool.handler({ override: DJ, reason: "x", dry_run: false }, { db: live }),
+    /already in the plan and has not ended/);
+  const ended = overrideDb({ overrides: [{ label: "DJ is too chatty", when: { ends_at: ago(1) }, effect: { decision: "inbox" } }] });
+  await m.addDeliveryOverrideTool.handler({ override: DJ, reason: "again", dry_run: false }, { db: ended });
+  assert.deepEqual(rpcs(ended, "create_overwatch_plan")[0][2].p_settings.delivery.overrides.length, 1, "the ended one is replaced");
+
+  const refused = overrideDb({ problem: "Override 1 ('Mute DJ') holds signals, so it must end: give when.ends_at." });
+  await assert.rejects(m.addDeliveryOverrideTool.handler({ override: { label: "Mute DJ", effect: { decision: "hold" } },
+    reason: "x", dry_run: false }, { db: refused }), /must end: give when\.ends_at/);
+  assert.equal(rpcs(refused, "create_overwatch_plan").length, 0);
+
+  const db = overrideDb();
+  await assert.rejects(m.addDeliveryOverrideTool.handler({ override: { ...DJ, created_at: "x" }, reason: "x" }, { db }),
+    /unknown keys: created_at/);
+  await assert.rejects(m.addDeliveryOverrideTool.handler({ override: DJ }, { db }), /reason is required/);
+  await assert.rejects(m.addDeliveryOverrideTool.handler({ override: { effect: {} }, reason: "x" }, { db }), /label is required/);
+  await assert.rejects(m.addDeliveryOverrideTool.handler({ override: DJ, reason: "x", dry_run: "no" }, { db }), /dry_run must be/);
+  const none = fakeDb(() => ({ data: PLAN, error: null }));
+  await assert.rejects(m.addDeliveryOverrideTool.handler({ override: DJ, reason: "x" }, { db: none }), /no delivery section/);
+});
+
+test("decision estimates: severity, merge false, window and pace exemptions, kind failure", () => {
+  const d = DELIVERY.defaults;
+  assert.equal(m.decisionWith({ label: "x", effect: { severity: -1 } }, SIGNALS[1], d), "hold");
+  assert.equal(m.decisionWith({ label: "x", effect: { pace: { exempt: true } } }, SIGNALS[2], d), "pop");
+  assert.equal(m.decisionWith({ label: "x", effect: { window: { ignore: true } } },
+    { ...SIGNALS[1], reason: "outside the window 05:00-20:00", state: "queued" }, d), "pop");
+  const merged = { ...SIGNALS[1], state: "merged", outcome: null };
+  assert.equal(m.decisionWith({ label: "x", effect: { merge: false } }, merged, d), "inbox");
+  assert.equal(m.decisionWith({ label: "x", effect: { decision: "notify" } }, merged, d), null, "a merge still merges");
+  assert.equal(m.decisionWith({ label: "x", effect: { decision: "drop" } }, merged, d), "drop");
+  assert.ok(m.overrideApplies({ label: "x", match: { kind: ["failure"] } }, SIGNALS[2], null));
+  assert.ok(!m.overrideApplies({ label: "x", match: { kind: ["failure"] } }, SIGNALS[0], null));
+  assert.ok(m.overrideApplies({ label: "x", match: { subject_key: "dj:*", severity: ["high"] } }, SIGNALS[0], null));
+  const at = new Date("2026-11-05T18:00:00Z"); // Thu 10:00 AM Pacific
+  assert.ok(m.overrideApplies({ label: "x", when: { days_of_week: ["thu"], time_from: "09:00", time_to: "11:00" } }, SIGNALS[0], at));
+  assert.ok(!m.overrideApplies({ label: "x", when: { days_of_week: ["fri"] } }, SIGNALS[0], at));
+  assert.ok(!m.overrideApplies({ label: "x", when: { time_from: "22:00", time_to: "09:30" } }, SIGNALS[0], at));
+  assert.ok(!m.overrideApplies({ label: "x", when: { ends_at: "2026-11-05T17:00:00Z" } }, SIGNALS[0], at));
+});
+
+test("end_delivery_override: sets ends_at to now, dry-runs by default, and names what goes back", async () => {
+  assert.equal(m.endDeliveryOverrideTool.tier, 3);
+  const live = { ...DJ, created_at: ago(48) };
+  const signals = [{ ...SIGNALS[0], outcome: "inbox", reason: "high signals default to pop; override 'DJ is too chatty': high to inbox" }];
+  const plan = { ...PLAN, settings: { ...PLAN.settings, delivery: { ...DELIVERY, overrides: [live] } } };
+  const mk = () => fakeDb((t) => (t === "signals" ? { data: signals, error: null } : { data: plan, error: null }),
+    (n) => (n === "overwatch_delivery_problem" ? { data: null, error: null } : { data: { id: "p3" }, error: null }));
+  const db = mk();
+  const dry = await m.endDeliveryOverrideTool.handler({ label: "dj is too chatty", reason: "Better now" }, { db });
+  assert.equal(dry.saved, false);
+  assert.equal(rpcs(db, "create_overwatch_plan").length, 0);
+  assert.deepEqual(dry.changed.map((c) => [c.before, c.after]), [["inbox item", "notification"]]);
+
+  const db2 = mk();
+  const out = await m.endDeliveryOverrideTool.handler({ label: "DJ is too chatty", reason: "Better now", dry_run: false }, { db: db2 });
+  assert.equal(out.saved, true);
+  assert.equal(out.removed, false);
+  const [ended] = rpcs(db2, "create_overwatch_plan")[0][2].p_settings.delivery.overrides;
+  assert.ok(Date.parse(ended.when.ends_at) <= Date.now());
+  assert.equal(ended.effect.decision, "inbox", "kept, marked ended");
+
+  await assert.rejects(m.endDeliveryOverrideTool.handler({ label: "Nope", reason: "x" }, { db: mk() }),
+    /no override called 'Nope'. The plan's overrides: 'DJ is too chatty'/);
+  const future = { ...PLAN, settings: { ...PLAN.settings, delivery: { ...DELIVERY,
+    overrides: [{ ...DJ, when: { starts_at: new Date(Date.now() + 86400000).toISOString() } }] } } };
+  const db3 = fakeDb((t) => (t === "signals" ? { data: [], error: null } : { data: future, error: null }),
+    (n) => (n === "overwatch_delivery_problem" ? { data: null, error: null } : { data: { id: "p4" }, error: null }));
+  const gone = await m.endDeliveryOverrideTool.handler({ label: "DJ is too chatty", reason: "Never mind", dry_run: false }, { db: db3 });
+  assert.equal(gone.removed, true);
+  assert.deepEqual(rpcs(db3, "create_overwatch_plan")[0][2].p_settings.delivery.overrides, []);
+});
