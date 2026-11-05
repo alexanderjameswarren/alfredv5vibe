@@ -415,7 +415,33 @@ Files: docs/history/dj-daily-task-prompt.md, docs/history/dj-weekly-review-promp
 docs/history/ken-seed-check-task-prompt.md, docs/sam-daily-review-task-prompt.md (new),
 docs/drive-mix-daily-refresh-task-prompt.md (new), docs/wb-weekly-cleanup-task-prompt.md.
 DB: none.
-Waits on: docs/wb-weekly-cleanup-task-prompt.md (warren_buffet_p4-r6d).
+Waits on: docs/wb-weekly-cleanup-task-prompt.md (warren_buffet_p4-r6d). Claimed in 9b.
+
+#### 9 part 1. Which repo copies match what is live — DONE 2026-11-05 (`s9-q2vd`)
+Read only. Repo versions: Money cleanup 2026-11-03a, DJ daily 2026-10-06a, Ken seed check
+2026-09-25a, DJ weekly has no version line. SAM and Drive Mix had no repo copy.
+
+#### 9 part 2. Snapshot three live prompts — DONE 2026-11-05 (`s9b-m3kx`)
+Copied byte for byte from the inbox items Claude made from the live tasks (md5 checked against
+the database), then archived those items as processed:
+- docs/sam-daily-review-task-prompt.md (new): trigger `trig_01AGKP3tNa7ivX18YTYgx8id`. Its
+  version line says 2026-09-19a, and its report template still prints 2026-09-17b. Left as live.
+- docs/drive-mix-daily-refresh-task-prompt.md (new): trigger `trig_01M9atR63BYAAJx73rWM4Kxj`.
+  No version line.
+- docs/history/dj-daily-task-prompt.md: prompt replaced with live 2026-10-13a (trigger
+  `trig_01EEaPPhygaPeybVvitpTq8k`); header version note updated. Header schedule text still says
+  4:30, and the schedule row says 3:30.
+
+Next: Alex runs gitcom. Then part 3 edits all six prompts onto signals: Money cleanup from repo
+version 2026-11-03a, Ken seed check from repo version 2026-09-25a, and the other four from
+these snapshots (DJ weekly from the repo copy).
+
+Scope of part 3:
+- create: nothing
+- update: docs/wb-weekly-cleanup-task-prompt.md, docs/history/dj-daily-task-prompt.md, docs/history/dj-weekly-review-prompt.md, docs/history/ken-seed-check-task-prompt.md, docs/sam-daily-review-task-prompt.md, docs/drive-mix-daily-refresh-task-prompt.md, docs/progress-notification_routing-d7v.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
 
 ### Phase D — Dispatcher screen
 
@@ -495,4 +521,6 @@ Files: this file. DB: none.
 | 7d | 10m | 17s | blocked by the plan guard (deploy loop) |
 | 7e | 10m | 1m 13s | three deploys, conformance |
 | 8 | 10m | 3m 45s | Overwatch and Arnold prompts and skills onto signals |
-| 8b | 10m | see report | deliver_signals uses the task's own item; mcp v197 |
+| 8b | 10m | 1m 58s | deliver_signals uses the task's own item; mcp v197 |
+| 9 | 3m | 10s | which repo prompts are stale (read only) |
+| 9b | 8m | see report | snapshot SAM, Drive Mix and DJ daily live prompts |
