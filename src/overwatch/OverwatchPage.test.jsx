@@ -22,6 +22,8 @@ jest.mock("./overwatchApi", () => ({
   getApps: jest.fn(),
   getOpenFriction: jest.fn(),
   getPortfolioPlans: jest.fn(),
+  getDispatcherSummary: jest.fn(),
+  getDispatcher: jest.fn(),
 }));
 
 const NIGHTLY = { id: "n1", period: "nightly", for_date: "2026-10-26",
@@ -60,7 +62,27 @@ beforeEach(() => {
   api.getOpenFriction.mockResolvedValue({ entries: [{ id: "f1", process: "todos", occurred_at: "2026-10-25T10:00:00Z",
     what_happened: "x" }], settings: {} });
   api.getPortfolioPlans.mockResolvedValue({ portfolios: [], plans: [], lanes: [], slices: [], progress: [], groupNames: {} });
+  api.getDispatcherSummary.mockResolvedValue({ queued: 2, unprocessed: 0, held: 1, pops: 3 });
+  api.getDispatcher.mockResolvedValue({ signals: [], notifications: [], reminders: [], steps: [], executionNames: {},
+    delivery: null, appNames: {} });
   Object.assign(navigator, { clipboard: { writeText: jest.fn().mockResolvedValue() } });
+});
+
+test("the Dispatcher row: a one-line summary linking to /overwatch/dispatcher, which opens the screen", async () => {
+  renderAt("/overwatch");
+  const row = await screen.findByRole("link", { name: /Dispatcher\s*2 queued · 0 unprocessed · 1 held · 3 notifications today/ });
+  expect(row).toHaveAttribute("href", "/overwatch/dispatcher");
+  expect(row.querySelector("svg.lucide-radio")).not.toBeNull();
+  expect(row.querySelector("svg.lucide-bell-ring")).toBeNull();
+  fireEvent.click(row);
+  expect(await screen.findByRole("heading", { name: "Dispatcher", level: 2 })).toBeInTheDocument();
+});
+
+test("the Dispatcher row survives a failed summary; the tab still loads", async () => {
+  api.getDispatcherSummary.mockRejectedValue(new Error("Could not load the dispatcher's pops. Please try again."));
+  renderAt("/overwatch");
+  expect(await screen.findByRole("link", { name: /Dispatcher\s*Summary unavailable/ })).toBeInTheDocument();
+  expect(await screen.findByRole("link", { name: /Report as of/ })).toBeInTheDocument();
 });
 
 test("live tab: just the title, the status line, six sections; Action Required and Projects open", async () => {

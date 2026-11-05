@@ -9,9 +9,10 @@
 //   resolve_signal     tier 1  a subject is healthy again: its escalation count starts over
 //   get_signals        tier 1  read signals, newest first
 //   get_dispatch_plan  tier 1  what the dispatcher would do now (dispatch_signals, writes nothing)
-//   deliver_signals    tier 1  do it: hold, inbox items, pops, merges; Claude only words what gets through
+//   deliver_signals    tier 1  do it: hold, drop, inbox items, pops, merges; Claude only words what gets through
 //
-// Apps never pick a channel or check for an existing inbox item. Database
+// Apps never pick a channel or check for an existing inbox item; only Overwatch writes to the inbox directly. An app
+// that used to write its own item describes it in details.item, and delivery writes it. Database
 // access ONLY through ctx.db. push_subscriptions' endpoint and keys are read only
 // to send, and never returned (as in send_alfred_push).
 // ============================================================================
@@ -39,6 +40,43 @@ export function requireSubjectKey(tool: string, v: unknown): string {
   return v.trim();
 }
 
+/** details.item: the inbox item an app used to write itself, which the dispatcher now writes when it delivers. */
+export type Item = { captured_text: string; source_app: string | null; source_metadata: Row; ai_reasoning: string | null };
+const ITEM_KEYS = ["captured_text", "source_app", "source_metadata", "ai_reasoning"];
+
+export function requireItem(tool: string, v: unknown): Item | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "object" || Array.isArray(v)) {
+    throw fail(tool, "`details.item` must be {captured_text, source_app, source_metadata, ai_reasoning}.");
+  }
+  const item = v as Row;
+  const extra = Object.keys(item).filter((k) => !ITEM_KEYS.includes(k));
+  if (extra.length) throw fail(tool, `\`details.item\` has unknown keys: ${extra.join(", ")}. Use ${ITEM_KEYS.join(", ")}.`);
+  const meta = item.source_metadata;
+  if (meta !== undefined && meta !== null && (typeof meta !== "object" || Array.isArray(meta))) {
+    throw fail(tool, "`details.item.source_metadata` must be an object.");
+  }
+  return {
+    captured_text: requireText(tool, "details.item.captured_text", item.captured_text, 20000),
+    source_app: optionalText(tool, "details.item.source_app", item.source_app),
+    source_metadata: (meta as Row | null | undefined) ?? {},
+    ai_reasoning: optionalText(tool, "details.item.ai_reasoning", item.ai_reasoning),
+  };
+}
+
+const SEEN_RE = /\n\nSeen \d+ times since [^\n]+$/;
+
+/** "Nov 5, 8:10 AM" in Pacific. */
+export function pacificShort(iso: string): string {
+  return new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit" }).format(new Date(iso));
+}
+
+/** The item's text with one last line "Seen <n> times since <first>", replacing any earlier one. */
+export function withSeenLine(text: string, n: number, firstSeen: string): string {
+  return `${text.replace(SEEN_RE, "")}\n\nSeen ${n} times since ${pacificShort(firstSeen)}`;
+}
+
 function optionalTimestamp(tool: string, name: string, v: unknown): string | null {
   if (v === undefined || v === null) return null;
   if (typeof v !== "string" || Number.isNaN(Date.parse(v))) {
@@ -61,6 +99,7 @@ export const raiseSignalTool = defineTool({
     if (details !== undefined && details !== null && (typeof details !== "object" || Array.isArray(details))) {
       throw fail(tool, "`details` must be an object.");
     }
+    const item = requireItem(tool, (details as Row | null | undefined)?.item);
     const sourceRef = optionalText(tool, "source_ref", args.source_ref);
     if (sourceRef && sourceRef.length > 300) throw fail(tool, "`source_ref` must be at most 300 characters.");
 
@@ -74,7 +113,7 @@ export const raiseSignalTool = defineTool({
       p_body: optionalText(tool, "body", args.body),
       p_link: requireAlfredPath(tool, args.link),
       p_source_ref: sourceRef,
-      p_details: (details as Row | null | undefined) ?? null,
+      p_details: details ? { ...(details as Row), ...(item ? { item } : {}) } : null,
     });
     if (error) throw dbError(tool, "raise_signal", error);
     const row = (Array.isArray(data) ? data[0] : data) as Row | null;
@@ -157,7 +196,6 @@ export const getSignalsTool = defineTool({
 // ---------------------------------------------------------------------------
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const DISPATCH_READS = ["signals", "overwatch_plans", "inbox", "claude_notifications"];
 
 type Decision = {
   signal_id: string; app: string; severity: string; subject_key: string; decision: string; reason: string;
@@ -177,7 +215,7 @@ async function dispatchPlan(db: Db, tool: string, at: string | null): Promise<Pl
 
 export const getDispatchPlanTool = defineTool({
   name: "get_dispatch_plan",
-  tables: { reads: DISPATCH_READS, writes: [] },
+  tables: { reads: ["signals", "overwatch_plans", "inbox", "claude_notifications"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "get_dispatch_plan";
@@ -227,7 +265,7 @@ function capturedText(title: string, body: string | null, link: string | null): 
 export const deliverSignalsTool = defineTool({
   name: "deliver_signals",
   tables: {
-    reads: [...DISPATCH_READS, "push_subscriptions"],
+    reads: ["signals", "overwatch_plans", "inbox", "claude_notifications", "push_subscriptions"],
     writes: ["signals", "inbox", "claude_notifications"],
   },
   tier: 1,
@@ -289,14 +327,39 @@ export const deliverSignalsTool = defineTool({
       return id;
     };
 
+    /** The item an app described in details.item, exactly those fields, else one from the signal's words. */
+    const itemFor = async (s: Row, words: Words, meta: Row) => {
+      const item = (s.details as Row | null)?.item as Item | undefined;
+      if (!item || typeof item.captured_text !== "string") {
+        return await newInbox(capturedText(words.title, words.body, s.link as string | null), s.app as string, meta);
+      }
+      const id = crypto.randomUUID();
+      const { error } = await db.from("inbox").insert({
+        id, archived: false, triaged_at: null, captured_text: item.captured_text, source_type: "task",
+        source_metadata: item.source_metadata ?? {}, source_app: item.source_app ?? s.app, ai_reasoning: item.ai_reasoning ?? null,
+        ai_status: "not_started", suggest_item: false, suggest_intent: false, suggest_event: false,
+        suggested_tags: [], suggested_status: "active",
+      });
+      if (error) throw dbError(tool, "creating the inbox item from details.item", error);
+      return id;
+    };
+
+    /** A repeat folded into an open item: repeats, first_seen, last_seen, and one "Seen n times since" line. */
     const bumpRepeat = async (inboxId: string, signalId: string) => {
-      const { data, error } = await db.from("inbox").select("source_metadata").eq("id", inboxId).maybeSingle();
+      const { data, error } = await db.from("inbox").select("source_metadata, captured_text, created_at")
+        .eq("id", inboxId).maybeSingle();
       if (error) throw dbError(tool, "reading the inbox item to merge into", error);
-      const meta = ((data as Row | null)?.source_metadata ?? {}) as Row;
+      const row = (data ?? {}) as Row;
+      const { repeat_count, ...meta } = (row.source_metadata ?? {}) as Row;
       const merged = Array.isArray(meta.merged_signal_ids) ? meta.merged_signal_ids : [];
-      const { error: upError } = await db.from("inbox").update({ source_metadata: {
-        ...meta, repeat_count: (Number(meta.repeat_count) || 1) + 1, merged_signal_ids: [...merged, signalId],
-      } }).eq("id", inboxId);
+      const repeats = (Number(meta.repeats) || Number(repeat_count) || 1) + 1;
+      const at = now();
+      const firstSeen = typeof meta.first_seen === "string" ? meta.first_seen
+        : typeof row.created_at === "string" ? row.created_at : at;
+      const patch: Row = { source_metadata: { ...meta, repeats, first_seen: firstSeen, last_seen: at,
+        merged_signal_ids: [...merged, signalId] } };
+      if (typeof row.captured_text === "string") patch.captured_text = withSeenLine(row.captured_text, repeats, firstSeen);
+      const { error: upError } = await db.from("inbox").update(patch).eq("id", inboxId);
       if (upError) throw dbError(tool, "updating the inbox item merged into", upError);
     };
 
@@ -355,10 +418,11 @@ export const deliverSignalsTool = defineTool({
 
         if (d.decision === "hold") {
           if (!await decide(d.signal_id, { state: "held", reason: d.reason })) result.skipped = "no longer queued";
+        } else if (d.decision === "drop") {
+          if (!await decide(d.signal_id, { state: "dropped", reason: d.reason })) result.skipped = "no longer queued";
         } else if (d.decision === "inbox") {
           const own = ownItem(s);
-          const inboxId = own.id ??
-            await newInbox(capturedText(words.title, words.body, s.link as string | null), s.app as string, meta);
+          const inboxId = own.id ?? await itemFor(s, words, meta);
           const reason = [d.reason, own.id ? "the task's own inbox item" : own.note].filter(Boolean).join("; ");
           await logNotification(db, tool, {
             app: s.app as string, job: s.job as string, kind: kindFor(s), channel: "inbox_item", title: words.title,
@@ -380,8 +444,7 @@ export const deliverSignalsTool = defineTool({
           // The task's own item first, then an open item for the subject, else a new one.
           const own = ownItem(s);
           const existing = own.id ?? d.inbox_id;
-          const inboxId = existing ??
-            await newInbox(capturedText(words.title, words.body, s.link as string | null), s.app as string, meta);
+          const inboxId = existing ?? await itemFor(s, words, meta);
           if (existing) await bumpRepeat(inboxId, d.signal_id);
           const reason = [d.reason, own.id ? "points at the task's own inbox item" : own.note].filter(Boolean).join("; ");
           Object.assign(result, await pop({ app: s.app as string, job: s.job as string, kind: kindFor(s),

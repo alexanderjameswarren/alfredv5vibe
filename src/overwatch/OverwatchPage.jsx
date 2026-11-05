@@ -1,8 +1,8 @@
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Lightbulb, MoonStar, TriangleAlert } from "lucide-react";
+import { ChevronRight, Lightbulb, MoonStar, Radio, TriangleAlert } from "lucide-react";
 import ObjectIcon, { GroupTypeIcon } from "../shared/ObjectIcon";
-import { OVERWATCH_BRIEFING_PATH, overwatchRouteFromPath } from "../viewPaths";
+import { OVERWATCH_BRIEFING_PATH, OVERWATCH_DISPATCHER_PATH, overwatchRouteFromPath } from "../viewPaths";
 import OverwatchSection from "./OverwatchSection";
 import OverwatchCopyButton from "./OverwatchCopyButton";
 import BriefingSection, { briefingCopy } from "./BriefingSection";
@@ -14,8 +14,10 @@ import IdeasSection from "./IdeasSection";
 import FrictionSection from "./FrictionSection";
 import {
   getApps, getIdeaRecords, getIdeas, getLatestRuns, getNeedsYou, getNote, getNotes, getOpenFriction, getPortfolioPlans,
-  getProjects, getQuiet, getRunForNote,
+  getProjects, getQuiet, getRunForNote, getDispatcherSummary,
 } from "./overwatchApi";
+import { summaryLine } from "./dispatcherModel";
+import DispatcherPage from "./DispatcherPage";
 import { ideaGroups } from "./ideasModel";
 import { ideaCount } from "./IdeasSection";
 import { quietApps } from "./quietModel";
@@ -83,6 +85,25 @@ function StatusLine({ runs, nightlyNote, appNames }) {
   );
 }
 
+/** The Dispatcher row: a real link to its screen, with its own read so a failure there leaves the tab alone. */
+function DispatcherRow() {
+  const { loading, error, data } = useLoad(() => getDispatcherSummary(), "dispatcher-summary");
+  const line = loading ? "Loading…" : error ? "Summary unavailable" : summaryLine(data);
+  return (
+    <Link
+      to={OVERWATCH_DISPATCHER_PATH}
+      className="flex items-center justify-between gap-2 mb-3 px-4 py-1 min-h-[44px] rounded-lg border border-border bg-card hover:border-primary transition-colors"
+    >
+      <span className="flex items-center gap-2 min-w-0 flex-wrap">
+        <Radio className="w-4 h-4 text-primary shrink-0" aria-hidden="true" />
+        <span className="text-base font-medium text-foreground">Dispatcher</span>
+        <span className="text-sm text-muted-foreground">{line}</span>
+      </span>
+      <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" aria-hidden="true" />
+    </Link>
+  );
+}
+
 function BriefingPage({ noteId }) {
   const { loading, error, data } = useLoad(() => loadBriefings(noteId), noteId || "latest");
   return (
@@ -133,6 +154,7 @@ function TabPage() {
       </h2>
       {error && <p role="alert" className="mb-3 text-sm text-destructive">{error}</p>}
       {data && <StatusLine runs={data.runs} nightlyNote={data.notes.nightly} appNames={appNames} />}
+      <DispatcherRow />
       <div className="space-y-3">
         {SECTIONS.map((s) => (
           <OverwatchSection key={s.id} id={s.id} title={s.title} icon={s.icon}
@@ -151,5 +173,6 @@ export default function OverwatchPage() {
   if (route.screen === "briefing") return <BriefingPage noteId={route.noteId} />;
   if (route.screen === "plan") return <PlanPage portfolioId={route.portfolioId} planId={route.planId} />;
   if (route.screen === "slice") return <SliceStatusPage portfolioId={route.portfolioId} sliceId={route.sliceId} />;
+  if (route.screen === "dispatcher") return <DispatcherPage />;
   return <TabPage />;
 }

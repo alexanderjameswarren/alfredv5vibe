@@ -203,6 +203,126 @@ test("needs you: Overwatch's untriaged, unarchived items, newest first", async (
   expect(has(q, "order", "created_at", { ascending: false })).toBe(true);
 });
 
+test("dispatcher summary: scheduled reminders and step timers, waiting and held signals, notifications on the day", async () => {
+  const counts = { reminders: 1, notification_steps: 2, claude_notifications: 3 };
+  mockRespond = (t, ops) => {
+    if (t !== "signals") return { count: counts[t], error: null };
+    const state = ops.find((o) => o[0] === "eq" && o[1] === "state");
+    return { count: state[2] === "queued" ? 4 : 5, error: null };
+  };
+  expect(await api.getDispatcherSummary("2026-11-05")).toEqual({ queued: 3, unprocessed: 4, held: 5, pops: 3 });
+  const q = (t) => mockLog.find((l) => l.table === t);
+  expect(has(q("claude_notifications"), "eq", "channel", "alfred_push")).toBe(true);
+  expect(has(q("claude_notifications"), "eq", "local_date", "2026-11-05")).toBe(true);
+  expect(has(q("notification_steps"), "not", "due_at", "is", null)).toBe(true);
+  expect(has(q("reminders"), "select", "id", { count: "exact", head: true })).toBe(true);
+  mockRespond = () => ({ count: null, error: { message: "boom" } });
+  await expect(api.getDispatcherSummary("2026-11-05")).rejects.toThrow("Could not load the dispatcher's reminders");
+});
+
+test("dispatcher: signals, log, reminders, step timers, the plan's delivery rules and app names; reads only", async () => {
+  mockRespond = (t) => {
+    if (t === "overwatch_plans") return { data: { settings: { delivery: { window: { start: "05:00", end: "20:00" } } } }, error: null };
+    if (t === "apps") return { data: [{ id: "dj", name: "DJ" }], error: null };
+    if (t === "notification_steps") return { data: [{ id: "s1", execution_id: "e1" }, { id: "s2", execution_id: "e2" },
+      { id: "s3", execution_id: "e3" }], error: null };
+    if (t === "executions") return { data: [{ id: "e1", intent_id: "i1" }, { id: "e2", group_id: "g1" },
+      { id: "e3", item_ids: ["it1"] }], error: null };
+    if (t === "intents") return { data: [{ id: "i1", text: "Morning stretch" }], error: null };
+    if (t === "item_groups") return { data: [{ id: "g1", name: "Dinner menu" }], error: null };
+    if (t === "items") return { data: [{ id: "it1", name: "Micro Workout Rotation" }], error: null };
+    return { data: [{ id: `${t}-1` }], error: null };
+  };
+  const out = await api.getDispatcher();
+  expect(out.signals).toEqual([{ id: "signals-1" }]);
+  expect(out.history.notifications).toEqual([{ id: "claude_notifications-1" }]);
+  expect(out.history.next).toBeNull();
+  expect(out.reminders).toEqual([{ id: "reminders-1" }]);
+  expect(out.steps.map((s) => s.id)).toEqual(["s1", "s2", "s3"]);
+  expect(out.executionNames).toEqual({ e1: "Morning stretch", e2: "Dinner menu", e3: "Micro Workout Rotation" });
+  expect(out.delivery).toEqual({ window: { start: "05:00", end: "20:00" } });
+  expect(out.appNames).toEqual({ dj: "DJ" });
+  const q = (t) => mockLog.find((l) => l.table === t);
+  expect(has(q("signals"), "in", "state", ["queued", "held"])).toBe(true);
+  expect(has(q("claude_notifications"), "order", "created_at", { ascending: false })).toBe(true);
+  expect(has(q("claude_notifications"), "order", "id", { ascending: false })).toBe(true);
+  expect(has(q("claude_notifications"), "limit", 51)).toBe(true);
+  expect(has(q("reminders"), "eq", "state", "scheduled")).toBe(true);
+  expect(has(q("notification_steps"), "eq", "state", "scheduled")).toBe(true);
+  expect(has(q("notification_steps"), "not", "due_at", "is", null)).toBe(true);
+  const writes = ["insert", "update", "upsert", "delete"];
+  expect(mockLog.some((l) => l.ops.some((o) => writes.includes(o[0])) || l.table.startsWith("rpc:"))).toBe(false);
+});
+
+test("dispatcher: no plan means no rules; an error is a plain sentence", async () => {
+  mockRespond = (t) => (t === "overwatch_plans" ? { data: null, error: null } : { data: [], error: null });
+  expect((await api.getDispatcher()).delivery).toBeNull();
+  mockRespond = (t) => (t === "reminders" ? { data: null, error: { message: "boom" } } : { data: [], error: null });
+  await expect(api.getDispatcher()).rejects.toThrow("Could not load the reminders. Please try again.");
+});
+
+// A fake History store: applies the cursor, order and limit the read asks for, as Postgres would.
+const { timeKey } = require("./dispatcherModel");
+function historyStore(tables) {
+  return (t, ops) => {
+    if (t === "signals" && ops.some((o) => o[0] === "in")) return { data: [], error: null };
+    const cut = ops.find((o) => o[0] === "or")?.[1]
+      .match(/^created_at\.lt\."(.+?)",and\(created_at\.eq\."(.+?)",id\.lt\.(.+)\)$/);
+    const after = (r) => !cut || timeKey(r.created_at) < timeKey(cut[1])
+      || (timeKey(r.created_at) === timeKey(cut[2]) && r.id < cut[3]);
+    const rows = tables[t].filter(after).sort((a, b) =>
+      timeKey(b.created_at).localeCompare(timeKey(a.created_at)) || (a.id < b.id ? 1 : -1));
+    return { data: rows.slice(0, ops.find((o) => o[0] === "limit")[1]), error: null };
+  };
+}
+
+test("history pages: 50 at a time, newest first, every card once, ties on the same time included", async () => {
+  // 130 rows across both sources; groups of 6 share one instant, written with different fraction widths.
+  const stamp = (i) => {
+    const base = new Date(Date.UTC(2026, 10, 5, 12) - Math.floor(i / 6) * 1000).toISOString().slice(0, 19);
+    return i % 2 ? `${base}.5+00:00` : `${base}.500000+00:00`;
+  };
+  const ids = Array.from({ length: 130 }, (_, i) => `${(i * 37 % 130).toString(16).padStart(4, "0")}-id`);
+  const claude_notifications = ids.filter((_, i) => i % 3).map((id) => ({ id, channel: "alfred_push",
+    created_at: stamp(ids.indexOf(id)) }));
+  const signals = ids.filter((_, i) => !(i % 3)).map((id) => ({ id, state: "merged", created_at: stamp(ids.indexOf(id)) }));
+  mockRespond = historyStore({ claude_notifications, signals });
+
+  const pages = [];
+  let page = await api.getDispatcherHistory();
+  pages.push(page);
+  while (page.next) { page = await api.getDispatcherHistory(page.next); pages.push(page); }
+  expect(pages.map((p) => p.notifications.length + p.signals.length)).toEqual([50, 50, 30]);
+  expect(pages.map((p) => !!p.next)).toEqual([true, true, false]);
+
+  const shown = pages.flatMap((p) => [...p.notifications, ...p.signals]
+    .sort((a, b) => timeKey(b.created_at).localeCompare(timeKey(a.created_at)) || (a.id < b.id ? 1 : -1)));
+  expect(shown.map((r) => r.id)).toHaveLength(130);
+  expect(new Set(shown.map((r) => r.id)).size).toBe(130);
+  const all = [...claude_notifications, ...signals].sort((a, b) =>
+    timeKey(b.created_at).localeCompare(timeKey(a.created_at)) || (a.id < b.id ? 1 : -1));
+  expect(shown.map((r) => r.id)).toEqual(all.map((r) => r.id));
+
+  const second = mockLog.filter((l) => l.ops.some((o) => o[0] === "or"))[0];
+  const last = [...pages[0].notifications, ...pages[0].signals].sort((a, b) =>
+    timeKey(a.created_at).localeCompare(timeKey(b.created_at)) || (a.id < b.id ? -1 : 1))[0];
+  expect(pages[0].next).toEqual({ at: last.created_at, id: last.id });
+  expect(has(second, "or", `created_at.lt."${last.created_at}",and(created_at.eq."${last.created_at}",id.lt.${last.id})`)).toBe(true);
+});
+
+test("history: a sent row's reason comes from its signal; an error is a plain sentence", async () => {
+  mockRespond = (t, ops) => {
+    if (t === "claude_notifications") return { data: [{ id: "n1", signal_id: "s1", created_at: "2026-11-05T16:00:00Z" }], error: null };
+    if (ops.some((o) => o[0] === "in")) return { data: [{ id: "s1", reason: "high signals default to pop" }], error: null };
+    return { data: [], error: null };
+  };
+  const out = await api.getDispatcherHistory();
+  expect(out).toEqual({ notifications: [{ id: "n1", signal_id: "s1", created_at: "2026-11-05T16:00:00Z" }],
+    signals: [{ id: "s1", reason: "high signals default to pop" }], next: null });
+  mockRespond = (t) => (t === "signals" ? { data: null, error: { message: "boom" } } : { data: [], error: null });
+  await expect(api.getDispatcherHistory()).rejects.toThrow("Could not load the merged signals. Please try again.");
+});
+
 test("first line of a capture", () => {
   expect(api.firstLine("\n  Overwatch: overdue — 2026-10-25 \nMissed")).toBe("Overwatch: overdue — 2026-10-25");
   expect(api.firstLine(null)).toBe("");

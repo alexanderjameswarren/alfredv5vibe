@@ -181,7 +181,7 @@ const dec = (n, decision, extra = {}) => ({ signal_id: ID(n), app: "alfred", sev
 
 /** Fake db for delivery: each chain is recorded and answered by table and the methods it used. */
 function deliveryDb({ plan, signals = [], subs = [{ id: "sub1", endpoint: "https://e/secret", p256dh: "p", auth_key: "a" }],
-  visibleInbox = [] }) {
+  visibleInbox = [], openItem = { source_metadata: { repeat_count: 2 } } }) {
   const calls = [];
   const builder = (table) => {
     const chain = [];
@@ -195,7 +195,7 @@ function deliveryDb({ plan, signals = [], subs = [{ id: "sub1", endpoint: "https
       if (table === "signals" && ops.includes("update")) return { data: [{ id: "x" }], error: null };
       if (table === "signals") return { data: signals, error: null };
       if (table === "push_subscriptions") return { data: subs, error: null };
-      if (table === "inbox" && ops.includes("select")) return { data: { source_metadata: { repeat_count: 2 } }, error: null };
+      if (table === "inbox" && ops.includes("select")) return { data: openItem, error: null };
       return { data: null, error: null };
     };
     const b = new Proxy({}, {
@@ -342,8 +342,93 @@ test("deliver: a pop for a subject with an open item points at it and adds a rep
   assert.equal(inserts(db).length, 0);
   assert.equal(sends[0].url, "/open-1");
   const bump = db.calls.find(([t, k]) => t === "inbox" && k === "update")[2];
-  assert.equal(bump.source_metadata.repeat_count, 3);
+  assert.equal(bump.source_metadata.repeats, 3, "an old repeat_count carries on as repeats");
+  assert.ok(!("repeat_count" in bump.source_metadata));
   assert.deepEqual(bump.source_metadata.merged_signal_ids, [ID(1)]);
+});
+
+const ITEM = { captured_text: "Money: 3 transactions to review", source_app: "warren_buffet",
+  source_metadata: { task_name: "money-cleanup", week: "2026-11-02" }, ai_reasoning: "Weekly cleanup." };
+
+test("raise: details.item is checked, unknown keys and missing text refused", async () => {
+  const db = fakeDb({ rpcs: created });
+  await m.raiseSignalTool.handler({ ...ARGS, details: { kind: "flag", item: ITEM } }, { db });
+  const [, , p] = db.calls.find(([t, n]) => t === "rpc" && n === "raise_signal");
+  assert.deepEqual(p.p_details, { kind: "flag", item: ITEM });
+  const bad = [
+    [{ item: [] }, /`details.item` must be/],
+    [{ item: { ...ITEM, colour: "red" } }, /unknown keys: colour/],
+    [{ item: { ...ITEM, captured_text: " " } }, /captured_text` is required/],
+    [{ item: { ...ITEM, source_metadata: "x" } }, /source_metadata` must be an object/],
+  ];
+  const db2 = fakeDb();
+  for (const [details, re] of bad) await assert.rejects(m.raiseSignalTool.handler({ ...ARGS, details }, { db: db2 }), re);
+  assert.equal(db2.calls.length, 0);
+});
+
+test("deliver: an inbox decision makes the item from details.item, exactly those fields", async () => {
+  const db = deliveryDb({ plan: { at: "t", decisions: [dec(1, "inbox")] }, signals: [sig(1, { details: { item: ITEM } })] });
+  await m.deliverSignalsTool.handler({}, { db });
+  const [row] = inserts(db);
+  assert.equal(row.captured_text, ITEM.captured_text);
+  assert.equal(row.source_app, "warren_buffet");
+  assert.deepEqual(row.source_metadata, ITEM.source_metadata);
+  assert.equal(row.ai_reasoning, "Weekly cleanup.");
+  assert.equal(row.source_type, "task");
+  assert.equal(logs(db)[0].p_link, `/${row.id}`);
+  assert.equal(signalUpdates(db)[0].inbox_id, row.id);
+});
+
+test("deliver: a notification whose signal has details.item makes that item and links to it", async () => {
+  sends.length = 0;
+  const db = deliveryDb({ plan: { at: "t", decisions: [dec(1, "pop", { severity: "high" })] },
+    signals: [sig(1, { severity: "high", details: { item: { captured_text: "Ken: seed check failed" } } })] });
+  await m.deliverSignalsTool.handler({}, { db });
+  const [row] = inserts(db);
+  assert.equal(row.captured_text, "Ken: seed check failed");
+  assert.equal(row.source_app, "alfred", "the signal's app when the item names none");
+  assert.deepEqual(row.source_metadata, {});
+  assert.equal(sends[0].url, `/${row.id}`);
+});
+
+test("deliver: a merge counts repeats and keeps one 'Seen n times' line, replacing the last", async () => {
+  const openItem = { captured_text: "Bank sync failed\n\nSeen 2 times since Nov 3, 6:00 AM",
+    created_at: "2026-11-03T14:00:00Z",
+    source_metadata: { repeats: 2, first_seen: "2026-11-03T14:00:00Z", merged_signal_ids: [ID(7)] } };
+  const plan = { at: "t", decisions: [dec(1, "merge", { inbox_id: "open-1", merge_target_signal_id: ID(8) })] };
+  const db = deliveryDb({ plan, signals: [sig(1)], openItem });
+  await m.deliverSignalsTool.handler({}, { db });
+  const bump = db.calls.find(([t, k]) => t === "inbox" && k === "update")[2];
+  assert.equal(bump.source_metadata.repeats, 3);
+  assert.equal(bump.source_metadata.first_seen, "2026-11-03T14:00:00Z");
+  assert.ok(Date.parse(bump.source_metadata.last_seen) > Date.parse("2026-11-03T14:00:00Z"));
+  assert.deepEqual(bump.source_metadata.merged_signal_ids, [ID(7), ID(1)]);
+  assert.equal(bump.captured_text, "Bank sync failed\n\nSeen 3 times since Nov 3, 6:00 AM");
+  assert.equal((bump.captured_text.match(/Seen \d+ times/g) || []).length, 1);
+});
+
+test("deliver: a first merge starts first_seen from the item and adds the line", async () => {
+  const openItem = { captured_text: "Bank sync failed", created_at: "2026-11-05T16:10:00Z", source_metadata: {} };
+  const db = deliveryDb({ plan: { at: "t", decisions: [dec(1, "merge", { inbox_id: "open-1", merge_target_signal_id: ID(8) })] },
+    signals: [sig(1)], openItem });
+  await m.deliverSignalsTool.handler({}, { db });
+  const bump = db.calls.find(([t, k]) => t === "inbox" && k === "update")[2];
+  assert.equal(bump.source_metadata.repeats, 2);
+  assert.equal(bump.captured_text, "Bank sync failed\n\nSeen 2 times since Nov 5, 8:10 AM");
+});
+
+test("deliver: outside the window, inbox, hold, merge and drop are delivered; only the notification waits", async () => {
+  sends.length = 0;
+  const plan = { at: "t", in_window: false, decisions: [dec(1, "inbox"), dec(2, "hold"), dec(3, "drop"),
+    dec(4, "merge", { merge_target_signal_id: ID(1) }), dec(5, "wait", { severity: "high" })] };
+  const db = deliveryDb({ plan, signals: [1, 2, 3, 4, 5].map((n) => sig(n)) });
+  const out = await m.deliverSignalsTool.handler({}, { db });
+  assert.equal(out.errors, 0);
+  const states = signalUpdates(db).map((u) => u.state);
+  assert.deepEqual(states, ["delivered", "held", "dropped", "merged"]);
+  assert.equal(signalUpdates(db)[2].reason, "because 3");
+  assert.equal(inserts(db).length, 1);
+  assert.equal(sends.length, 0);
 });
 
 test("deliver: a digest is one inbox item and one pop for all its signals", async () => {

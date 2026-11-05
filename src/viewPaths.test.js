@@ -36,6 +36,7 @@ import {
   overwatchBriefingPath,
   overwatchPlanPath,
   overwatchSlicePath,
+  OVERWATCH_DISPATCHER_PATH,
 } from "./viewPaths";
 import { uid } from "./utils/flattenElements";
 
@@ -69,6 +70,13 @@ describe("the map itself", () => {
     expect(isKnownPath("/overwatch/plan")).toBe(false);
     expect(isKnownPath("/overwatch/plan/pf-1/version")).toBe(false);
     expect(isKnownPath("/overwatch/plan/pf-1/slice/s-3/x")).toBe(false);
+  });
+
+  it("serves the Dispatcher screen", () => {
+    expect(OVERWATCH_DISPATCHER_PATH).toBe("/overwatch/dispatcher");
+    expect(overwatchRouteFromPath("/overwatch/dispatcher/")).toEqual({ screen: "dispatcher" });
+    expect(pathToView(OVERWATCH_DISPATCHER_PATH)).toBe("overwatch");
+    expect(isKnownPath("/overwatch/dispatcher/x")).toBe(false);
   });
 
   it("is a bijection — no two views share a path", () => {

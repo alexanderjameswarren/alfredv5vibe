@@ -1,6 +1,7 @@
 import { supabase } from "../supabaseClient";
 import { daysBefore, pacificToday } from "../money/moneyFormat";
 import { rowDay } from "./activityModel";
+import { newestFirst } from "./dispatcherModel";
 
 /**
  * Overwatch tab reads. Spec: docs/technical-spec-overwatch-q4n.md section 9.
@@ -350,6 +351,130 @@ export async function getNeedsYou() {
     .order("created_at", { ascending: false }).limit(50);
   if (error) fail("Could not load what needs you", error);
   return data || [];
+}
+
+// --- The Dispatcher screen (notification_routing-d7v, step 10). Read only. ---
+
+const SIGNAL_COLUMNS = "id, app, job, severity, subject_key, title, link, started_by, state, outcome, reason, "
+  + "decided_at, inbox_id, merged_into, details, created_at";
+const NOTIFICATION_COLUMNS = "id, app, job, kind, channel, title, link, local_date, delivery_status, started_by, signal_id, created_at";
+const SHOWN_SIGNAL_STATES = ["queued", "held"];
+export const HISTORY_PAGE = 50;
+
+/**
+ * One page of History: sent rows and merged signals, newest first, at most HISTORY_PAGE.
+ * `before` is { at, id } of the oldest card already shown. Each source is read past it in the same
+ * order (created_at desc, id desc), one extra row each says whether anything older is left, and
+ * `next` is the cursor for the page after, or null.
+ */
+export async function getDispatcherHistory(before = null) {
+  const page = (q) => {
+    const after = before
+      ? q.or(`created_at.lt."${before.at}",and(created_at.eq."${before.at}",id.lt.${before.id})`)
+      : q;
+    return after.order("created_at", { ascending: false }).order("id", { ascending: false }).limit(HISTORY_PAGE + 1);
+  };
+  const [sent, merged] = await Promise.all([
+    page(supabase.from("claude_notifications").select(NOTIFICATION_COLUMNS)),
+    page(supabase.from("signals").select(SIGNAL_COLUMNS).eq("state", "merged")),
+  ]);
+  if (sent.error) fail("Could not load the sent log", sent.error);
+  if (merged.error) fail("Could not load the merged signals", merged.error);
+  const all = [
+    ...(sent.data || []).map((row) => ({ sent: true, at: row.created_at, id: row.id, row })),
+    ...(merged.data || []).map((row) => ({ sent: false, at: row.created_at, id: row.id, row })),
+  ].sort(newestFirst);
+  const shown = all.slice(0, HISTORY_PAGE);
+  const last = shown[shown.length - 1];
+  const notifications = shown.filter((c) => c.sent).map((c) => c.row);
+  const signalIds = [...new Set(notifications.map((n) => n.signal_id).filter(Boolean))];
+  let reasons = [];
+  if (signalIds.length) {
+    const res = await supabase.from("signals").select("id, reason").in("id", signalIds);
+    if (res.error) fail("Could not load the dispatcher's reasons", res.error);
+    reasons = res.data || [];
+  }
+  return {
+    notifications,
+    signals: [...shown.filter((c) => !c.sent).map((c) => c.row), ...reasons],
+    next: all.length > HISTORY_PAGE ? { at: last.at, id: last.id } : null,
+  };
+}
+
+/**
+ * The Overwatch tab's Dispatcher row: reminders and step timers scheduled to send, signals waiting for
+ * the dispatcher, held signals, and notifications sent on a Pacific day.
+ */
+export async function getDispatcherSummary(today = pacificToday()) {
+  const head = (table) => supabase.from(table).select("id", { count: "exact", head: true });
+  const [reminders, steps, unprocessed, held, sent] = await Promise.all([
+    head("reminders").eq("state", "scheduled"),
+    head("notification_steps").eq("state", "scheduled").not("due_at", "is", null),
+    head("signals").eq("state", "queued"),
+    head("signals").eq("state", "held"),
+    head("claude_notifications").eq("channel", "alfred_push").eq("local_date", today),
+  ]);
+  const reads = [["reminders", reminders], ["step timers", steps], ["waiting signals", unprocessed],
+    ["held signals", held], ["notifications", sent]];
+  for (const [what, res] of reads) if (res.error) fail(`Could not load the dispatcher's ${what}`, res.error);
+  return {
+    queued: (reminders.count || 0) + (steps.count || 0),
+    unprocessed: unprocessed.count || 0,
+    held: held.count || 0,
+    pops: sent.count || 0,
+  };
+}
+
+/** A name for each execution: its intention's text, else its group's or first item's name. */
+async function executionNames(ids) {
+  if (!ids.length) return {};
+  const { data: runs, error } = await supabase.from("executions").select("id, intent_id, group_id, item_ids").in("id", ids);
+  if (error) fail("Could not load the step timers' executions", error);
+  const rows = runs || [];
+  const intentIds = [...new Set(rows.map((r) => r.intent_id).filter(Boolean))];
+  const groupIds = [...new Set(rows.map((r) => r.group_id).filter(Boolean))];
+  const itemIds = [...new Set(rows.map((r) => (Array.isArray(r.item_ids) ? r.item_ids[0] : null)).filter(Boolean))];
+  const none = Promise.resolve({ data: [], error: null });
+  const [intents, groups, items] = await Promise.all([
+    intentIds.length ? supabase.from("intents").select("id, text").in("id", intentIds) : none,
+    groupIds.length ? supabase.from("item_groups").select("id, name").in("id", groupIds) : none,
+    itemIds.length ? supabase.from("items").select("id, name").in("id", itemIds) : none,
+  ]);
+  const name = (res, col) => Object.fromEntries((res.data || []).map((r) => [r.id, r[col]]));
+  const [it, gr, im] = [name(intents, "text"), name(groups, "name"), name(items, "name")];
+  return Object.fromEntries(rows.map((r) => [r.id,
+    it[r.intent_id] || gr[r.group_id] || (Array.isArray(r.item_ids) && im[r.item_ids[0]]) || "Execution"]));
+}
+
+/**
+ * The Dispatcher screen: recent signals, the sent log, scheduled reminders, step timers with a send
+ * time (and their executions' names), the active plan's delivery rules, and the apps for their names.
+ */
+export async function getDispatcher() {
+  const [signals, history, reminders, steps, plan, apps] = await Promise.all([
+    supabase.from("signals").select(SIGNAL_COLUMNS).in("state", SHOWN_SIGNAL_STATES)
+      .order("created_at", { ascending: false }).limit(200),
+    getDispatcherHistory(),
+    supabase.from("reminders").select("id, text, due_at, state, inbox_id, intent_id, started_by").eq("state", "scheduled")
+      .order("due_at", { ascending: true }).limit(100),
+    supabase.from("notification_steps").select("id, execution_id, seq, text, due_at, state")
+      .eq("state", "scheduled").not("due_at", "is", null).order("due_at", { ascending: true }).limit(100),
+    supabase.from("overwatch_plans").select("settings").eq("active", true).maybeSingle(),
+    supabase.from("apps").select("id, name"),
+  ]);
+  const reads = [["signals", signals], ["reminders", reminders], ["step timers", steps],
+    ["delivery rules", plan], ["apps", apps]];
+  for (const [what, res] of reads) if (res.error) fail(`Could not load the ${what}`, res.error);
+  const stepRows = steps.data || [];
+  return {
+    signals: signals.data || [],
+    history,
+    reminders: reminders.data || [],
+    steps: stepRows,
+    executionNames: await executionNames([...new Set(stepRows.map((s) => s.execution_id).filter(Boolean))]),
+    delivery: plan.data?.settings?.delivery || null,
+    appNames: Object.fromEntries((apps.data || []).map((a) => [a.id, a.name])),
+  };
 }
 
 /** The first non-empty line of a capture. */

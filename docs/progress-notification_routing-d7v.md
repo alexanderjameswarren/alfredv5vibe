@@ -471,13 +471,144 @@ to main.
 
 ### Phase D — Dispatcher screen
 
-### 10. Dispatcher screen, read-only (75m)
+### 10. Dispatcher screen, read-only (75m) — WRITTEN 2026-11-05 (`s10-v3qa`)
 `/overwatch/dispatcher`: Queued, Held, Delivered, Merged, History, Reminders, Step timers; a
 Dispatcher row on the Overwatch tab.
 
 Files: src/overwatch/DispatcherPage.jsx +test, src/overwatch/dispatcherModel.js +test,
 src/overwatch/overwatchApi.js +test, src/overwatch/OverwatchPage.jsx +test, src/viewPaths.js +test.
 DB: none.
+
+Done:
+- `OVERWATCH_DISPATCHER_PATH` is `/overwatch/dispatcher`, served by OverwatchPage.
+- The Dispatcher row sits under the status line and has its own read (`getDispatcherSummary`: head counts of queued and held signals, and alfred_push rows for the Pacific day). If it fails, the row says "Summary unavailable" and the rest of the tab still loads.
+- `getDispatcher` reads the following, all through owner RLS, with no writes and no RPC:
+  - signals in queued, held, delivered and merged (newest 200);
+  - claude_notifications (newest 100);
+  - scheduled reminders;
+  - step timers that are scheduled or waiting;
+  - the active plan's settings.delivery;
+  - app names.
+- `dispatcherModel.js` holds the plain-words rules, the inside-the-window check (end exclusive), Pacific times, and the rows. Each row's title links to `/<id>`, and a second link opens the inbox item (the inbox_id column, else details.inbox_id), the notification's own link, the reminder's target, or the step's execution.
+- Dropped and resolved signals are not shown.
+- Queued and Held start open; the other sections start collapsed.
+- The only buttons are the section toggles.
+
+Tests: the affected files pass 188/188; the full suite passes 3224, with 7 skipped; scripts pass 54/54.
+
+#### 10b. Rework after Alex's review — WRITTEN 2026-11-05 (`s10b-k8wf`)
+The sections are now Queued, "Unprocessed – next run <time>", Held and History.
+- **Queued:** scheduled reminders, plus step timers with a due_at, soonest first. A step's title is its execution's name (the intention text, else the group's, else the first item's), and it links to the execution page.
+- **Unprocessed:** signals still queued. The next run is the next top of the hour from 5 AM to 7 PM Pacific, else "tomorrow 5:00 AM".
+- **History:** sent rows from claude_notifications ("Sent <time>", how, who started it) and merged signals ("Not sent: an item already exists in the Inbox", with the inbox link), newest first. A send with a signal_id gets a coloured edge, a bell, and "Dispatcher: <the signal's reason>".
+
+Other changes:
+- Times are 12-hour everywhere, and every label says "notification" or "notify", never "pop".
+- The tab line reads "N queued · N unprocessed · N held · N notifications today".
+- The page heading uses the BellRing icon, as the tab row does.
+- Overlap fix: the rows' `relative z-10` links stacked above the app's sticky header (`z-10`, src/shared/AppChrome.jsx:63 and :180). The page root now has `isolate`. PlanPage and the other Overwatch screens use the same pattern and were not changed.
+
+Tests: the affected files pass 190/190; the full suite passes 3226, with 7 skipped; scripts pass 54/54.
+
+#### 10c. Round 2 after Alex's review — WRITTEN 2026-11-05 (`s10c-r2hy`)
+- The Dispatcher icon is Radio on the tab row and the page heading; BellRing is gone from both.
+- Every card is one link, and all the "Open …" lines are gone. A card opens:
+  - its inbox item, if it has one;
+  - otherwise what a reminder is for, the execution for a step, or the signal (for a sent row with no link, its log row).
+- Each card starts with one icon:
+  - BellRing: sent, or will be sent, as a notification;
+  - Inbox: sent as an inbox item;
+  - Ban: held, or not sent;
+  - Hourglass: unprocessed.
+- The coloured left bar is gone.
+- Held cards read "Held", then "Dispatcher: <reason>".
+- Merged cards read "Not sent", then "Dispatcher: an item already exists in the Inbox".
+- "Dispatcher: <reason>" shows only when there is a reason. A stored "pop" or "pops" displays as "notification" or "notifications" (`reasonWords` in dispatcherModel.js). Stored data is unchanged.
+
+Tests: the affected Overwatch files pass 114/114. The full suite's first run had 1 failure, which I didn't capture; the two reruns passed 3227 with 7 skipped. Scripts pass 54/54.
+
+#### 10d. History paged — WRITTEN 2026-11-05 (`s10d-n5tq`)
+- History shows the newest 50 cards (sent rows and merged signals together). Its heading reads "History (N shown)".
+- "Show older" loads the next 50 and appends them, and is hidden when nothing older is left.
+- `getDispatcherHistory(before)` pages in the read itself:
+  - It reads claude_notifications and merged signals, each by `created_at desc, id desc`, past the cursor `{at, id}` (the oldest card shown), 51 rows each.
+  - It merges them and keeps the 50 newest. The extra row says whether there is more.
+  - It reads the reasons for the page's sent rows by signal id.
+  - The first page comes with getDispatcher. The signals read there is now queued and held only.
+- Merged cards now sort and show on created_at, not decided_at, which can be null.
+- `timeKey` compares to the microsecond whatever fraction width PostgREST returns, so rows with the same time break on id, the same as the database.
+- The API test pages 130 rows with groups of six on one instant through a fake store, and checks that every card appears exactly once and in order.
+- Live now: 27 sent rows and 14 merged signals, 41 cards, so Show older does not appear yet.
+
+Tests: the Overwatch files pass 118/118. The full suite ran twice, and both runs passed 3231 with 7 skipped and no failures. Scripts pass 54/54.
+
+Next: step 10e, the High and Urgent limit change (a migration to dispatch_signals plus its test), then step 11.
+
+#### 10e. Delivery overrides, inbox at any hour, items from signals — WRITTEN, NOT QUEUED 2026-11-05 (`s10e-t4mb`)
+This replaced the "High and Urgent limit change": Alex's decisions 9 to 11 in spec section 2.
+- **SQL**, written as supabase/migrations/_pending_notification_routing-d7v_dispatch_overrides.sql:
+  - `overwatch_override_problem` and `overwatch_override_applies` are new.
+  - `overwatch_delivery_problem` and `dispatch_signals` are replaced.
+  - The rules are in spec sections 5.1 and 6.
+  - Its number is 209: origin/main already has 208_switchboard_queue_git, which this worktree has not synced. 208 touches no table or function here, so there is no drift.
+  - **Blocked:** the plan guard refused creating 209_dispatch_overrides.sql, which is not in this step's scope. So nothing is queued. A follow-up prompt must declare create `supabase/migrations/209_dispatch_overrides.sql` and delete the `_pending_` file. Both are claimed.
+- **Test:** supabase/tests/notification_routing-d7v/6_dispatch_overrides_verify.sql. It covers:
+  - no overrides, and the defaults word for word;
+  - inbox, hold and merge outside the window;
+  - an app decision, the reason naming the override, a severity shift and set, the later override winning, drop, and kind failure;
+  - expired, other day, today, outside and inside hours, and overnight hours;
+  - pace: exempt, the override's own hourly cap within the run and from history;
+  - window ignore, its own window, and its close;
+  - a failure merged like any other, merge false, and every guardrail and validator refusal, confirm_broad and the plan constraint.
+  - It is not run yet. Tests 1 to 4 are unchanged and must still pass after the migration.
+- **signals.ts:**
+  - raise_signal checks `details.item`.
+  - deliver_signals:
+    - writes items from `details.item` for inbox and notify decisions;
+    - handles `drop`;
+    - on a merge sets repeats, first_seen and last_seen, and writes one "Seen n times since …" line.
+  - get_dispatch_plan and deliver_signals now declare literal table lists. The mcp tables test was already failing on the constant before this step.
+- **Tests:** signals.test.mjs passes 27/27. All shared and mcp function tests pass, 932/932.
+- **Next:** step 10f numbers, queues and verifies 209, then deploys mcp once it is live. Then step 10g, the add and end override tools and the screen wording. Then step 10h, the task prompt switch and the Overwatch nightly checks. The High and Urgent limit is now an override rule; it needs no migration of its own.
+
+#### 10f. Number and queue 209 — QUEUED 2026-11-05 (`s10f-c9dw`)
+Renumbered: this step is 10f. The add and end override tools and the screen wording are now 10g; the task prompt switch and the Overwatch nightly checks are now 10h.
+- 209 was still free: origin/main ends at 208. supabase/migrations/209_dispatch_overrides.sql was written from the `_pending_` file (only its path line differs), and the `_pending_` file is deleted.
+- Queued, none applied yet:
+  - 209 migration `7c31e010-1e5b-47b6-8086-2c3acb87f993`
+  - 6 overrides test `12ce192d-d8bb-4348-aa8f-58bb87625056`
+  - 1 signals test `1cc89d49-8f6f-413e-84b1-2764ec070b6b`
+  - 2 dispatcher test `c86ba34d-1ef1-4ce1-994a-89d61bcff55d`
+  - 3 started_by test `835fe0a4-80fa-4908-a6b3-07870392f95e`
+  - 4 resolve_signal test `fe42717c-907a-4948-bcb6-1873fd27c78d`
+- The tests need 209 live first.
+- Claimed for this step: db:fn:dispatch_signals, db:fn:overwatch_delivery_problem, db:fn:overwatch_override_problem, db:fn:overwatch_override_applies, db:deploy.
+- **Still in this step:** once Alex says 209 is live and the tests passed, deploy mcp (signals.ts), run check_platform_conformance, then Alex checkpoints 209, signals.ts and its test.
+
+#### 10g. 209 live, mcp deployed — DONE 2026-11-05 (`s10g-r4k8`)
+- **209 is live:** run ff33f4e0, CONFORMANT, 103 tables.
+- **Tests:**
+  - 6: 71/71
+  - 2: 52/52
+  - 3: 17/17
+  - 4: 15/15
+  - 1: 35/36. Only `backfill_left_no_nulls` failed.
+- **The test 1 failure is data, not 209.**
+  - There are 2 claude_notifications rows with started_by null, written by Arnold's hourly task on its old prompt after step 3's backfill: c7ba30d5-363e-40e7-9e76-3a79f73a6ffb and 871c8e24-3d75-40be-9af1-2c9d79091f16, both arnold / claude_hourly_notifications, Nov 4.
+  - get_claude_notifications returns all 30 rows, and these are the only null ones. No other job has any.
+- **Repair not queued.** The plan guard refused creating supabase/migrations/210_backfill_claude_notifications_started_by.sql, because this step declares create: nothing.
+  - The file is claimed. The repair sets started_by to `task:claude-hourly-notifications` where it is null and the job is claude_hourly_notifications, with expect 2.
+  - The older backfilled rows read `task:claude_hourly_notifications` (underscore). The task now writes the hyphen form.
+- **Deploy:** origin/main had 4 new commits since the last gitsync (switchboard2-h8r), none in supabase/functions/. mcp deployed at 14:09, carrying signals.ts. check_platform_conformance: CONFORMANT, all 103 non-exempt public tables.
+- **Claims:** db:deploy and the four db:fn claims are released; claims.cmd status shows no db: claims.
+
+#### Step 10h scope (planned; was "10f", then "10g")
+- create: nothing
+- update: supabase/functions/_shared/tools/overwatch-plan.ts, supabase/functions/_shared/tools/overwatch-plan.test.mjs, supabase/functions/mcp/index.ts (register the tools), src/overwatch/dispatcherModel.js, src/overwatch/dispatcherModel.test.js, src/overwatch/DispatcherPage.jsx, src/overwatch/DispatcherPage.test.jsx, .claude/skills/overwatch/SKILL.md, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
+- delete: nothing
+- deploy: mcp
+- SQL: none
+- DB: db:deploy at the deploy step. mcp/index.ts was yielded to switchboard2-h8r on 2026-11-05 and must be claimed again (gitsync first).
 
 ### 11. Dispatcher actions (75m)
 Hold, drop, deliver now on signals; edit and cancel reminders; reschedule and cancel step timers.
@@ -552,4 +683,11 @@ Files: this file. DB: none.
 | 9b | 8m | 3m 32s | snapshot SAM, Drive Mix and DJ daily live prompts |
 | 9c | 25m | 4m 37s | six prompts onto signals, 2026-11-05a |
 | 9d | 5m | 5m 46s | six prompts into inbox items for Claude, md5 checked |
-| 9e | 5m | see report | source_app back on Ken and DJ weekly items, 2026-11-05b |
+| 9e | 5m | 2m 44s | source_app back on Ken and DJ weekly items, 2026-11-05b |
+| 10 | 75m | 6m 16s | read-only Dispatcher screen and tab row |
+| 10b | 15m | 3m 41s | sections reworked, plain words, 12-hour times, header overlap |
+| 10c | 10m | 4m 34s | whole-card links, one icon per card, Radio icon, reasons without "pop" |
+| 10d | 10m | 4m 30s | History paged 50 at a time with a cursor, Show older |
+| 10e | 45m | 14m 28s | overrides, inbox at any hour, items from signals; stopped before queueing (plan guard) |
+| 10f | 10m | 3m 05s | 209 numbered and queued with five tests; mcp deploy waits for 209 live |
+| 10g | 6m | see report | mcp deployed, conformant; started_by repair blocked by the plan guard |
