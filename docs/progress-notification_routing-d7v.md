@@ -740,7 +740,47 @@ Alex checked 11g's History: order, 12-hour times and Started by are right. Fixed
 - /<signal id> opens the generic "Record from signals" page, so those cards stay links (no change).
 - Tests: src/overwatch 142/142 (15 suites); the app suite 3283 passed, 7 skipped.
 
-#### Step 12 scope (planned): a skill for task prompts; the weekly drift check; get_sql_read can read decided_by
+#### 12. Task-prompt skill, weekly check, reader grant — WRITTEN 2026-11-06 (`s12-g4n6`), waiting on gitsync
+Main at 718dbcf with all of step 11 live. Alex kept cards with no item linking to the raw record page.
+- **.claude/skills/task-prompts/SKILL.md** (2026-11-06a): the ten rules, a checklist, a skeleton. The overwatch skill
+  (2026-11-06b) points at it and gives Step 8b's judgment.
+- **Overwatch weekly prompt 2026-11-06b, Step 8b** (every week): reads each enabled non-Overwatch task's live text
+  from list_triggers; a forbidden tool in a "never" sentence is fine, in an instruction or the allowed-writes list is
+  a finding; one high signal `overwatch:weekly:direct_writes`, a note line, `direct_writes` in flags and the close.
+  The inventory can't decide (it records names, not use); recording allowed writes there needs scripts/lib/inventory.mjs.
+- **Reader grant:** `_pending_notification_routing-d7v_reader_decided_by.sql` (`grant select (decided_by)` to
+  claude_reader) and test `8_reader_decided_by_verify.sql` (6 checks).
+- **Mistake, reported:** the skill was first written to the main checkout's .claude/skills/task-prompts/SKILL.md
+  by a wrong path, and is still there, untracked (md5 946c950e…, identical to the worktree copy). Left for Alex.
+- **Next (12b):** gitsync, number and queue the grant and test 8, then the checkpoint.
+
+#### 12b. Number and queue the grant; hand over the weekly prompt — QUEUED 2026-11-06 (`s12b-w9c1`)
+- Alex deleted the stray main-checkout skill folder and ran gitsync: worktree at cd0f016, bringing SAM's 216 and
+  Switchboard 2 changes; nothing touches signals, no drift. 217 was free.
+- `_pending_…_reader_decided_by.sql` numbered as **217_signals_reader_decided_by.sql** (pending deleted); test 8 points at it.
+- db:table:signals claimed. Queued: 217 `f907648a-4959-4186-91c7-3796561f5c0b`, then test 8
+  `bb8cdbd0-f70b-4d78-8537-52b2c8302a0f` (--test).
+- Decision: allowed tools are not recorded in the inventory for now; the weekly check reads live text.
+- Overwatch weekly prompt 2026-11-06b handed over: inbox item `2426f7cb-82c1-4ce5-8da5-226021f43a49`, 23,656
+  characters, md5 cc0914a7… checked against the file.
+- **Next:** Alex runs 217 and test 8, updates the weekly task from the item, and checkpoints step 12. Then step 13.
+
+#### Step 13 scope (planned): the cutover review, then closeout
+- Part 1, read only: check every scheduled task runs its 2026-11-06 prompt with its Claude app push off; a week of
+  signals, deliveries and the nightly and weekly checks; anything still calling the four tools directly; claims and
+  db: claims held.
+- Part 2, closeout (scope set from part 1): started_by required (create_reminder refuses task:*;
+  claude_notifications.started_by not null; required on send_alfred_push and log_claude_notification), the spec's
+  final state, and gitpush Finish.
+
+#### Step 12b scope (as planned): number and queue the reader grant and test 8, then the checkpoint
+- create: supabase/migrations/<next>_signals_reader_decided_by.sql
+- update: supabase/tests/notification_routing-d7v/8_reader_decided_by_verify.sql, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
+- delete: supabase/migrations/_pending_notification_routing-d7v_reader_decided_by.sql
+- deploy: nothing
+- SQL: signals
+
+#### Step 12 scope (as planned): a skill for task prompts; the weekly drift check; get_sql_read can read decided_by
 - create: .claude/skills/task-prompts/SKILL.md, supabase/migrations/_pending_notification_routing-d7v_reader_decided_by.sql, supabase/tests/notification_routing-d7v/8_reader_decided_by_verify.sql
 - update: docs/overwatch-weekly-task-prompt.md, .claude/skills/overwatch/SKILL.md, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
 - delete: nothing
@@ -863,4 +903,6 @@ Files: this file. DB: none.
 | 11e | 3m | 56s | 212 and 213 renamed to 214 and 215 |
 | 11f | 20m | 8m 38s | Dispatcher screen buttons, dialog, model, API; app suite green |
 | 11g | 15m | 5m 39s | five screen fixes from Alex's test |
-| 11h | 12m | see report | five more screen fixes; /<signal id> opens the generic record page |
+| 11h | 12m | 3m 50s | five more screen fixes; /<signal id> opens the generic record page |
+| 12 | 20m | 5m 28s | task-prompts skill, weekly Step 8b, reader grant written; waiting on gitsync |
+| 12b | 5m | see report | 217 and test 8 queued; weekly prompt handed over |

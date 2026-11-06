@@ -453,6 +453,33 @@ by each sender and `started_by`. The nightly prompt:
 - **if the dispatcher has no ok run since yesterday 07:00**, raises an inbox item directly (not a
   signal, since the dispatcher is what is broken).
 
+## 11a. Keeping task prompts on the pattern (step 12)
+
+- **`.claude/skills/task-prompts/SKILL.md`** holds the rules every non-Overwatch task prompt follows,
+  drawn from the ten 2026-11-06a prompts, with a checklist and a skeleton. The overwatch skill points
+  at it.
+- **Overwatch weekly Step 8b**, every week (prompt 2026-11-06b), flags a non-Overwatch task whose
+  prompt would write to the inbox or notify directly.
+  - **Data:** each enabled task's live text from `list_triggers` (what actually runs), and the
+    inventory's `task_prompt` parts for the repo file and its version.
+  - **Use or prohibition:** every prompt names the forbidden tools in its "never call" rule, so a name
+    match flags all ten. The run judges each sentence that names `create_inbox_item`,
+    `send_alfred_push`, `create_reminder` or `log_claude_notification`: one that forbids it is the
+    rule working; one that tells the task to call it, or lists it in the allowed-writes rule, is a
+    finding. The skill makes the allowed-writes rule the place that must never list them.
+  - A finding is one `high` signal, `overwatch:weekly:direct_writes`, and a line in the weekly note.
+  - **Not used, and why:** the inventory records which registered tools a file names
+    (`details.tools`), not how, and not the text, so it cannot tell use from prohibition. It also
+    misses docs/history/dj-weekly-review-prompt.md (its name has no "task-prompt") and marks the DJ
+    daily and Ken prompts `history` though they are live. Recording each prompt's allowed writes in
+    the inventory would let a check run without Claude's reading; that is a change to
+    `scripts/lib/inventory.mjs`, outside this project's files.
+- **get_sql_read and decided_by:** claude_reader's grants are per column, set when a table is
+  registered, so `signals.decided_by` (214) needed its own grant (`grant select (decided_by)`),
+  `217_signals_reader_decided_by.sql`, verified by test 8.
+- **Decided 2026-11-06:** allowed tools are not recorded in the inventory for now; the weekly check
+  reads each task's live text.
+
 ## 12. Platform rules (mcp-platform skill)
 
 - Every new table: `platform.register_table()`, which grants authenticated and service_role and

@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-06 10:12, through migration 216 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-06 10:28, through migration 217 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -28899,6 +28899,10 @@ GRANT SELECT("created_at") ON TABLE "public"."signals" TO "claude_reader";
 
 
 GRANT SELECT("updated_at") ON TABLE "public"."signals" TO "claude_reader";
+
+
+
+GRANT SELECT("decided_by") ON TABLE "public"."signals" TO "claude_reader";
 
 
 
