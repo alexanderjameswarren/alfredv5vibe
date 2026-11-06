@@ -452,13 +452,11 @@ async function backHomeAndOpen(rowText) {
   await screen.findByRole("button", { name: /Today's plan · / });
   // The checklist may still be unfolded from the first visit.
   if (!screen.queryByRole("button", { name: new RegExp(esc(rowText)) })) await expandPlan();
-  await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(esc(rowText)) }));
-  });
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(esc(rowText)) }));
 }
 
 async function pressNext(name) {
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name })); });
+  fireEvent.click(screen.getByRole("button", { name }));
 }
 
 test("StrictMode and a slow song fetch: home to another snippet of the same song", async () => {
@@ -617,6 +615,66 @@ test("the pass credits the item in the URL, even when another item has the same 
   expect(passInserts()[0].row.plan_item_id).toBe("item-snip-again");
 });
 
+// --- Two items on one range (s7) ---------------------------------------------
+// A warm-up early and the climb at the end, both on snip-1.
+
+function seedSameRangeTwice() {
+  mockDb.tables.sam_practice_plan_items.push({ ...mockDb.tables.sam_practice_plan_items[0],
+    id: "item-climb", position: 3, target_bpm: 75, target_effective_bpm: 75, target_passes: 2,
+    accuracy_target: 85, instruction: "The climb." });
+}
+// sam_plan_item_progress counts each linked pass for its own item (migration 216;
+// tested in supabase/tests/sam_cleanup-m4t/2_plan_item_positions_test.sql), so
+// the two items on snip-1 can differ.
+
+test("two items on one range: the checklist lists both in position order", async () => {
+  seedSameRangeTwice();
+  renderAt("/sam");
+  await expandPlan();
+  const rows = screen.getAllByRole("button", { name: /m\.1–1 · RH · Opening bar/ });
+  expect(rows).toHaveLength(2);
+  expect(rows[0]).toHaveTextContent("60 BPM");
+  expect(rows[1]).toHaveTextContent("75 BPM");
+  fireEvent.click(rows[1]);
+  await waitFor(() => expect(bpmBox()).toHaveValue(75));
+  expect(probe.location.search).toBe("?item=item-climb");
+});
+
+test("two items on one range: Next goes from the warm-up to the climb, and the plan line names it", async () => {
+  seedSameRangeTwice();
+  mockDb.progressRows = done("item-snip", "item-whole");
+  renderAt(`/sam/songs/${SONG_ID}?item=item-snip`);
+  await waitFor(() => expect(bpmBox()).toHaveValue(60));
+  await pressNext("Next: Throwaway m.1–1 · RH");
+  await waitFor(() => expect(bpmBox()).toHaveValue(75));
+  expect(probe.location.search).toBe("?item=item-climb");
+  expect(await planLine(/Plan · m\.1–1 · RH · 75 BPM · 85%.*The climb\./)).toBeInTheDocument();
+});
+
+test("two items on one range: the snippet tag shows both, each with its own count", async () => {
+  seedSameRangeTwice();
+  mockDb.progressRows = [
+    { plan_item_id: "item-snip", day: "2026-09-16", attempts: 3, qualifying: 3 },
+    { plan_item_id: "item-climb", day: "2026-09-16", attempts: 1, qualifying: 1 },
+  ];
+  renderAt(`/sam/songs/${SONG_ID}?item=item-climb`);
+  await waitFor(() => expect(bpmBox()).toHaveValue(75));
+  expect(await planLine(/Plan · m\.1–1 · RH · 75 BPM · 85% · 1\/2 today/)).toBeInTheDocument();
+  await openSavedList();
+  expect(await screen.findByText("Plan · 60 BPM · 3/4 / Plan · 75 BPM · 1/2")).toBeInTheDocument();
+});
+
+test("two items on one range: the session and pass link to the opened item", async () => {
+  seedSameRangeTwice();
+  renderAt(`/sam/songs/${SONG_ID}?item=item-climb`);
+  await waitFor(() => expect(bpmBox()).toHaveValue(75));
+  await pressPlay();
+  expect(sessionInserts()[0].row).toMatchObject({ snippet_id: "snip-1", plan_item_id: "item-climb" });
+  await act(async () => { completePass(1); });
+  await waitFor(() => expect(passInserts()).toHaveLength(1));
+  expect(passInserts()[0].row.plan_item_id).toBe("item-climb");
+});
+
 // --- Next, from the player (2026-09-19) --------------------------------------
 
 test("Next on the plan line opens the next item at its target tempo, writing nothing to the song", async () => {
@@ -628,10 +686,10 @@ test("Next on the plan line opens the next item at its target tempo, writing not
   // Done, so the way on to the next item is right here at the keyboard.
   const next = await screen.findByRole("button", { name: "Next: Throwaway Whole song" });
   const fetches = mockFetchSongById.mock.calls.length;
-  await act(async () => { fireEvent.click(next); });
+  fireEvent.click(next);
 
   // It went through the same open-plan-item path a checklist tap uses...
-  expect(mockFetchSongById.mock.calls.length).toBe(fetches + 1);
+  await waitFor(() => expect(mockFetchSongById.mock.calls.length).toBe(fetches + 1));
   // ...and applied THAT item's tempo (55), not the one just finished (60).
   await waitFor(() => expect(screen.getByLabelText(/BPM:/)).toHaveValue(55));
   // The snippet is gone: the next item is the whole song.
@@ -671,7 +729,7 @@ async function loadSnippetFromPanel(rowText) {
   await openSavedList();
   // Anchored: the list header also names the current snippet.
   const row = await screen.findByRole("button", { name: new RegExp(`^${esc(rowText)}`) });
-  await act(async () => { fireEvent.click(row); });
+  fireEvent.click(row);
 }
 
 test("an unplanned snippet of a planned song: the line says so, and Next still points into the plan", async () => {
@@ -703,7 +761,7 @@ test("tray: left icon loads and folds the list; closing keeps the range; Whole s
   expect(header).toHaveAttribute("aria-expanded", "false");
   expect(screen.queryByRole("button", { name: "Load m.2-2" })).not.toBeInTheDocument();
   fireEvent.click(header);
-  await act(async () => { fireEvent.click(await screen.findByRole("button", { name: "Load m.2-2" })); });
+  fireEvent.click(await screen.findByRole("button", { name: "Load m.2-2" }));
   expect(await screen.findByText("Not in today's plan")).toBeInTheDocument();
   // Choosing folds it again, and the header names what is loaded.
   expect(screen.queryByRole("button", { name: "Load m.2-2" })).not.toBeInTheDocument();
@@ -715,7 +773,7 @@ test("tray: left icon loads and folds the list; closing keeps the range; Whole s
   expect(screen.getByText("Not in today's plan")).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Whole song" })); });
+  fireEvent.click(screen.getByRole("button", { name: "Whole song" }));
   await screen.findByText("Plan · Whole song · 55 BPM · 80% · Done 2/2 today");
   expect(screen.getByRole("button", { name: "Whole song" })).toBeDisabled();
 });
@@ -727,7 +785,7 @@ test("tray: Enter in End commits the range like leaving the box", async () => {
   const end = screen.getByLabelText(/End:/);
   end.focus();
   fireEvent.change(end, { target: { value: "1" } });
-  await act(async () => { fireEvent.keyDown(end, { key: "Enter" }); });
+  fireEvent.keyDown(end, { key: "Enter" });
   expect(await screen.findByRole("button", { name: "Whole song" })).toBeEnabled();
 });
 
@@ -778,17 +836,13 @@ test("tapping Next from an unplanned range opens that item at its target tempo",
   await screen.findByText("Not in today's plan");
 
   const fetches = mockFetchSongById.mock.calls.length;
-  await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Next: Throwaway m.1–1 · RH" }));
-  });
+  fireEvent.click(screen.getByRole("button", { name: "Next: Throwaway m.1–1 · RH" }));
 
   // Same open-plan-item path a checklist tap uses, and that item's tempo (60).
-  expect(mockFetchSongById.mock.calls.length).toBe(fetches + 1);
+  await waitFor(() => expect(mockFetchSongById.mock.calls.length).toBe(fetches + 1));
   await waitFor(() => expect(screen.getByLabelText(/BPM:/)).toHaveValue(60));
   // He is on the plan again, so the off-plan line goes away.
-  await waitFor(() =>
-    expect(screen.getByText(/Plan · m\.1–1 · RH · 60 BPM · 90% · 0\/4 today/)).toBeInTheDocument()
-  );
+  expect(await screen.findByText(/Plan · m\.1–1 · RH · 60 BPM · 90% · 0\/4 today/)).toBeInTheDocument();
   expect(screen.queryByText("Not in today's plan")).not.toBeInTheDocument();
   // For this sitting only — the song row is untouched.
   expect(mockDb.updates.filter((u) => u.table === "sam_songs")).toEqual([]);

@@ -31,7 +31,7 @@ import useActivePlan from "./lib/useActivePlan";
 import {
   firstIncompleteItem, heardTempo, itemForLoadedRange, itemState, matchPlanItem,
   nextIncompleteItem, passQualifies, planBadgeText, planSongFor, planTempoCheck, snippetTagText,
-  openSearch, parseOpenSearch, loadOpenableSnippet, loadStaleItemSnippet,
+  openSearch, parseOpenSearch, loadOpenableSnippet, loadStaleItemSnippet, planItemsOnRange,
 } from "./lib/activePlan";
 import PlanLine from "./components/PlanLine";
 import useWarmupLadder, { fetchDefaultLadder } from "./lib/useWarmupLadder";
@@ -429,12 +429,17 @@ export default function SamPlayer({ onBack }) {
         planText: planBadge.text,
       }
     : null;
-  // Snippet rows in the panel: a planned snippet of this song gets a tag.
+  // Snippet rows in the panel: a planned snippet of this song gets a tag, one
+  // part per plan item on that range, in plan order (two items can share one).
   const planTagFor = (snippetId) => {
-    const it = matchPlanItem(activePlan.plan, songDbId, snippetId);
-    if (!it || !snippetId) return null;
-    const st = itemState(it, activePlan.progress);
-    return { text: snippetTagText(it, st), state: planTone(st) };
+    if (!snippetId) return null;
+    const items = planItemsOnRange(activePlan.plan, songDbId, snippetId);
+    if (!items.length) return null;
+    const states = items.map((it) => itemState(it, activePlan.progress));
+    const opened = items.findIndex((it) => it.id === openItemId);
+    const tone = opened >= 0 ? planTone(states[opened])
+      : states.every((s) => s.done) ? "done" : states.some((s) => s.amber) ? "amber" : "open";
+    return { text: items.map((it, i) => snippetTagText(it, states[i])).join(" / "), state: tone };
   };
 
   // The app default ladder (§3) is fetched, never copied: sam_default_warmup_ladder()
@@ -482,7 +487,8 @@ export default function SamPlayer({ onBack }) {
   // snippet ladder that is being overridden would otherwise look broken.
   const warmupForSnippetRow = useCallback((row) => {
     if (!row) return { resolved: { ladder: null, source: null }, itemLadder: null };
-    const item = matchPlanItem(activePlan.plan, songDbId, row.id);
+    // The opened item when it is on this row's range, else the first on it.
+    const item = matchPlanItem(activePlan.plan, songDbId, row.id, openItemId);
     return {
       resolved: resolveLadder({
         planItem: item,
@@ -492,7 +498,7 @@ export default function SamPlayer({ onBack }) {
       }),
       itemLadder: item?.warmup_ladder ?? null,
     };
-  }, [activePlan.plan, songDbId, song, defaultLadder]);
+  }, [activePlan.plan, songDbId, song, defaultLadder, openItemId]);
   const warmupDisabledReason = Number.isFinite(warmupTarget.effectiveBpm)
     ? null
     : "Set a tempo, or a goal tempo, before warming up.";

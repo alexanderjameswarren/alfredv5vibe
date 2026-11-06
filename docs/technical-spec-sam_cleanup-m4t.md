@@ -135,27 +135,33 @@ the checklist and Next send him there second.
 
 ### Design
 
-- `sam_practice_plan_songs` stays one row per song, holding the song note.
-- A song can have items anywhere in the checklist: each item takes an optional
-  plan-wide `position`, and items are numbered by it rather than by song order.
-- The input is checked for one item at each position, numbered 1 to n with no
-  gaps.
-- Without positions, the order is today's.
-- The same range may appear more than once: the unique index goes.
-- Whether `songs[]` may also repeat a song (two notes for one song) is settled in
-  s8 against the tool's input. Repeating it would also need the
-  `sam_practice_plan_songs` key relaxed.
+Settled at s8 (migration 216):
+- **Songs once, items may repeat.** A song appears once in `songs[]`, and
+  `sam_practice_plan_songs (plan_id, song_id)` stays unique, holding the song
+  note. Its items may repeat a range: the index
+  `sam_practice_plan_items_one_per_range` and the function's check are gone.
+- **Positions.** Each item takes an optional plan-wide `position`, and the
+  checklist runs in that order, whatever the song order.
+  - Either every item gives one or none does. Some but not all is refused.
+  - Positions are whole numbers from 1, no two alike. Gaps are allowed.
+  - With none, positions run song by song in array order, as before.
+  - `sam-plans.ts` applies the same rule before the proposal, and the proposal
+    lists the checklist order.
 
 **Pass matching.** A pass counts for the plan item that was opened.
-- The app keeps the id of the item it opened (from the checklist or Next). It
+- The app keeps the id of the item it opened, from the URL's `?item=` (s3c). It
   writes that id to `sam_passes.plan_item_id` and `sam_sessions.plan_item_id`.
   Both columns already exist (migration 054), so no new column is needed.
-- `sam_plan_item_progress` and `sam_plan_unplanned_practice` match on
-  `plan_item_id` first. A pass with no `plan_item_id`, or one from another plan,
-  falls back to song plus range, as today. Where the range matches two items, it
-  goes to the first by position.
-- In the app, `itemForLoadedRange` prefers the opened item id, and
-  `planSongFor` keeps its one row per song.
+- In `sam_plan_item_progress`, a pass linked to an item of THIS plan counts for
+  that item only. A pass with no `plan_item_id`, or linked to an item of another
+  plan, falls back to song plus range and counts for every item of this plan on
+  that range. The second case is practice done before a plan saved mid-day; Alex
+  accepted this refinement at s8.
+- `sam_plan_unplanned_practice` uses the same matching. A pass is planned when it
+  is linked to an item of this plan, or when it is on an item's range.
+- In the app, `itemForLoadedRange` and `matchPlanItem` prefer the opened item
+  id. The snippet tags list every item on a range (s7), and `planSongFor` keeps
+  its one row per song.
 
 ### Steps
 

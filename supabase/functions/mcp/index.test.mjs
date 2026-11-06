@@ -905,6 +905,16 @@ test("SAM plan schemas advertise exactly the args their handlers read", () => {
   }
 });
 
+test("create_sam_practice_plan: items may repeat a range and take a plan-wide position (migration 216)", () => {
+  const t = registered.find((r) => r.name === "create_sam_practice_plan");
+  assert.match(t.cfg.description, /Its items may repeat a range/);
+  assert.match(t.cfg.description, /give every item a `position`/);
+  assert.match(t.cfg.description, /giving some but not all is refused/);
+  assert.doesNotMatch(t.cfg.description, /A song may appear once; put all/);
+  const item = t.cfg.inputSchema.songs.element.shape.items.unwrap().element.shape;
+  assert.ok(item.position, "items advertise position");
+});
+
 test("create_sam_snippet registers and advertises exactly the args its handler reads", () => {
   const t = registered.find((r) => r.name === "create_sam_snippet");
   assert.ok(t, "create_sam_snippet not registered");
