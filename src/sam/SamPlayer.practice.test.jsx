@@ -767,3 +767,82 @@ test("Practice attaches one, and drops it again on Stop", async () => {
   await act(async () => { await Promise.resolve(); });
   expect(mockOnHeldKeys).toBeFalsy();
 });
+
+// --- Resume at a chosen measure (sam_cleanup s6) ------------------------------
+
+const twelveBars = () => Array.from({ length: 12 }, (_, i) => ({
+  ...JSON.parse(JSON.stringify(SONG.measures[0])),
+  number: i + 1,
+  // Bars 9-12 repeat printed bars 1-4, as written-out repeats do.
+  ...(i >= 8 ? { sourceMeasure: String(i - 7) } : {}),
+}));
+
+// Pause with the scroll at the start of `meas`, among the loaded measures.
+async function pauseAt(meas, nums) {
+  await act(async () => {
+    mockScrollProps.onBeatEvents(nums.map((n, i) => ({ meas: n, beat: 1, targetTimeMs: i * 1000 })));
+  });
+  mockScrollProps.scrollStateExtRef.current.elapsed = nums.indexOf(meas) * 1000 + 500;
+  fireEvent.click(await screen.findByRole("button", { name: /Pause/ }));
+  await screen.findByRole("button", { name: /Resume/ });
+}
+const box = () => screen.getByLabelText("Resume at measure");
+async function resumeWith(value) {
+  if (value !== undefined) fireEvent.change(box(), { target: { value } });
+  fireEvent.click(screen.getByRole("button", { name: /Resume/ }));
+  await screen.findByRole("button", { name: /Pause/ });
+  return mockScrollProps.firstPassStart;
+}
+const ALL = Array.from({ length: 12 }, (_, i) => i + 1);
+
+test("resume box: prefilled with the paused measure; resuming unchanged starts there", async () => {
+  songOverrides = { measures: twelveBars() };
+  await start(/^Play$/);
+  await pauseAt(6, ALL);
+  expect(box()).toHaveValue(6);
+  expect(await resumeWith()).toBe(5);
+});
+
+test("resume box: an edited measure is where Resume starts, with the printed number shown", async () => {
+  songOverrides = { measures: twelveBars() };
+  await start(/^Play$/);
+  await pauseAt(6, ALL);
+  fireEvent.change(box(), { target: { value: "10" } });
+  expect(screen.getByTestId("resume-printed")).toHaveTextContent("(2)");
+  expect(await resumeWith()).toBe(9);
+});
+
+test("resume box: whole song clamps to its measures; empty or junk falls back to the paused measure", async () => {
+  songOverrides = { measures: twelveBars() };
+  await start(/^Play$/);
+  await pauseAt(6, ALL);
+  expect(await resumeWith("99")).toBe(11);
+  await pauseAt(6, ALL);
+  expect(await resumeWith("0")).toBe(0);
+  await pauseAt(6, ALL);
+  expect(await resumeWith("")).toBe(5);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("resume box: a snippet clamps to its range", async () => {
+  songOverrides = { measures: twelveBars() };
+  await open();
+  fireEvent.click(screen.getByRole("button", { name: "Snippets" }));
+  for (const [label, value] of [[/Start:/, "3"], [/End:/, "8"]]) {
+    const el = screen.getByLabelText(label);
+    el.focus();
+    fireEvent.change(el, { target: { value } });
+    fireEvent.keyDown(el, { key: "Enter" });
+  }
+  expect(await screen.findByRole("button", { name: "Whole song" })).toBeEnabled();
+  // Practice: this mock's snippet insert returns no range, and Practice saves none.
+  fireEvent.click(await screen.findByRole("button", { name: /^Practice$/ }));
+  await screen.findByRole("button", { name: /Pause/ });
+  mockScrollProps.scrollStateExtRef.current = { scrollStartT: 0, originPx: 0, pxPerMs: 1 };
+  const range = [3, 4, 5, 6, 7, 8];
+  await pauseAt(5, range);
+  expect(box()).toHaveValue(5);
+  expect(await resumeWith("11")).toBe(5);
+  await pauseAt(5, range);
+  expect(await resumeWith("1")).toBe(0);
+});

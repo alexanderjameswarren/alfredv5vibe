@@ -8,6 +8,7 @@ import SongLoader from "./components/SongLoader";
 import BackButton from "./components/BackButton";
 import SettingsBar from "./components/SettingsBar";
 import SongRail from "./components/SongRail";
+import { resolveResumeMeasure } from "./components/TransportControls";
 import MoreDrawer, { DrawerSection } from "./components/MoreDrawer";
 import { UI } from "./components/uiStyles";
 import AudioToolbar, { toolButton } from "./components/AudioToolbar";
@@ -185,6 +186,8 @@ export default function SamPlayer({ onBack }) {
   const stuckBeatRef = useRef(null);
   const [stuckBeat, setStuckBeat] = useState(null);
   const [pausedMeasure, setPausedMeasure] = useState(null);
+  // The measure box beside Resume (played numbers), prefilled on pause.
+  const [resumeInput, setResumeInput] = useState("");
   const [loopCount, setLoopCount] = useState(0);
   const [missCount, setMissCount] = useState(0);
   const timingWindowMs = useNumericInput(DEFAULTS.timingWindowMs);
@@ -1721,6 +1724,7 @@ export default function SamPlayer({ onBack }) {
     clearStuckBeat();
     const meas = getCurrentMeasure();
     setPausedMeasure(meas);
+    setResumeInput(meas != null ? String(meas) : "");
     endSession();
     // §6.6, and this is the deliberate part: pause ends the session, so it ends
     // the ladder — a streak that survived a pause would not be a streak. What is
@@ -1732,10 +1736,29 @@ export default function SamPlayer({ onBack }) {
     setPlaybackState("paused");
   }
 
+  // The played measures Resume may start from: the snippet's range, or the
+  // whole song's (appended rest bars excluded).
+  const resumeRange = useMemo(() => {
+    if (!song?.measures?.length) return null;
+    if (snippet) return { min: snippet.startMeasure, max: snippet.endMeasure };
+    const nums = song.measures.map((m) => m.number);
+    return { min: Math.min(...nums), max: Math.max(...nums) };
+  }, [song, snippet]);
+  const printedMeasureFor = useCallback((n) => {
+    const m = song?.measures?.find((x) => x.number === n);
+    return m?.sourceMeasure != null && String(m.sourceMeasure) !== String(n) ? m.sourceMeasure : null;
+  }, [song]);
+
   function handleResume() {
     ensureAudioContext();
     resetCounters();
     clearStuckBeat();
+    // Only the start measure changes: the seek and ScrollEngine's start index
+    // both read it, and this render batches it with "playing".
+    const startMeasure = resumeRange
+      ? resolveResumeMeasure(resumeInput, pausedMeasure, resumeRange)
+      : pausedMeasure;
+    if (startMeasure !== pausedMeasure) setPausedMeasure(startMeasure);
     if (!practiceModeRef.current) beginSession();
     // §6.6: "Resuming starts a new session at rung 1." The streak is gone with
     // the session it belonged to; the ramp itself picks up from the bottom.
@@ -1744,7 +1767,7 @@ export default function SamPlayer({ onBack }) {
 
     if (audioElement && !practiceModeRef.current) {
       // Seek to the beginning of the paused measure so audio aligns with scroll
-      const seekMs = pausedMeasure ? getSeekForMeasure(pausedMeasure) : audioElement.currentTime * 1000;
+      const seekMs = startMeasure ? getSeekForMeasure(startMeasure) : audioElement.currentTime * 1000;
       prepareAudioSeek(seekMs);
     }
 
@@ -2130,6 +2153,10 @@ export default function SamPlayer({ onBack }) {
                 onPractice={() => { setSnippetsOpen(false); setMoreOpen(false); handlePractice(); }}
                 onPause={handlePause}
                 onResume={handleResume} onRestart={handleRestart} onStop={handleFullStop}
+                resumeAt={resumeRange ? {
+                  value: resumeInput, onChange: setResumeInput,
+                  min: resumeRange.min, max: resumeRange.max, printedFor: printedMeasureFor,
+                } : null}
                 onWarmUp={() => { setSnippetsOpen(false); setMoreOpen(false); handleWarmUp(); }}
                 warmUpVisible={warmupAvailable}
                 warmUpPrimary={!!planItem?.goal_is_warmup}

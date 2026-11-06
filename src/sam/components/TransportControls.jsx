@@ -20,6 +20,51 @@ import { UI } from "./uiStyles";
 // completed ladder leaves him still looping, so that is the only place the label
 // can ever be true. Paused has none deliberately — pause ends the session and
 // therefore the ladder (§6.6), so there is nothing to restart.
+/**
+ * The measure Resume starts from (sam_cleanup s6). `input` is a PLAYED measure
+ * number, the numbering snippets use; it is clamped to [min, max]. Empty or not
+ * a number falls back to `paused`.
+ */
+export function resolveResumeMeasure(input, paused, { min, max }) {
+  const n = Number.parseInt(String(input ?? "").trim(), 10);
+  if (!Number.isFinite(n)) return paused;
+  return Math.min(max, Math.max(min, n));
+}
+
+/**
+ * The measure box beside Resume: the played number, with the printed number in
+ * parentheses when it differs, as the score labels it ("28 (12)").
+ */
+// Styled like the rail's BPM box (TempoControls): label above, full width,
+// UI.input, whole value selected on focus. Enter (the keypad's Go) resumes.
+export function ResumeMeasureField({ value, onChange, min, max, printedFor, onSubmit, vertical = false }) {
+  const n = Number.parseInt(value, 10);
+  const printed = Number.isFinite(n) && n >= min && n <= max ? printedFor?.(n) : null;
+  return (
+    <label className={`flex flex-col gap-1 text-sm text-foreground ${vertical ? "w-full" : "shrink-0"}`}>
+      Resume at:
+      <input
+        type="number"
+        inputMode="numeric"
+        enterKeyHint="go"
+        aria-label="Resume at measure"
+        min={min}
+        max={max}
+        value={value}
+        onFocus={(e) => e.target.select()}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); onSubmit?.(); }
+        }}
+        className={`w-full ${UI.input}`}
+      />
+      {printed != null && (
+        <span className="text-muted-foreground text-center" data-testid="resume-printed">({printed})</span>
+      )}
+    </label>
+  );
+}
+
 export default function TransportControls({
   onBack,
   playbackState,
@@ -37,6 +82,8 @@ export default function TransportControls({
   // The song rail: full-width buttons stacked top to bottom, Play tallest, and
   // Warm up always under Practice (still filled when it is the item's goal).
   vertical = false,
+  // Paused only: { value, onChange, min, max, printedFor } for the measure box.
+  resumeAt = null,
 }) {
   const isStopped = playbackState === "stopped";
   const isPlaying = playbackState === "playing";
@@ -95,6 +142,8 @@ export default function TransportControls({
           {isStopped && !songDbId ? "Saving..." : isPaused ? "Resume" : "Play"}
         </button>
       )}
+
+      {isPaused && resumeAt && <ResumeMeasureField {...resumeAt} onSubmit={onResume} vertical={vertical} />}
 
       {/* Between Play and Practice unless it led the row (§7.1). */}
       {!vertical && !warmUpPrimary && warmUpButton}
