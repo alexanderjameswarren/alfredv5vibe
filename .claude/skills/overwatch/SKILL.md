@@ -5,7 +5,7 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
-Skill version: 2026-11-06a
+Skill version: 2026-11-06b
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
@@ -294,9 +294,21 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
     practice passes", "Money: 14 transactions reviewed".
   - A quiet night under Action Required is one bullet: "Nothing needs you tonight."
 
+## Writing or changing a scheduled-task prompt
+
+Load the `task-prompts` skill: its rules (signals only, stable subject keys, failures as signals, a run
+every time, a PROMPT VERSION), a checklist and a skeleton. Overwatch's own prompts follow it too, except
+the nightly's dispatcher checks, the one place a task writes to the inbox directly.
+
 ## The weekly run (scheduled task `overwatch/weekly`)
 
 The procedure is `docs/overwatch-weekly-task-prompt.md`. The judgment it asks for:
+
+- **Task prompts writing directly** (Step 8b, every week). Read each enabled non-Overwatch task's live
+  text from `list_triggers`. A forbidden tool (`create_inbox_item`, `send_alfred_push`, `create_reminder`,
+  `log_claude_notification`) named in a "never" sentence is the rule working; named in an instruction to
+  call it, or in the allowed-writes list, is a finding. Unsure counts as a finding, quoted. The inventory
+  only says which tools a file names, so it narrows the list but cannot decide.
 
 - **The week.** Say what moved, by project and app: shipped first, then progress, then
   what was used. Group many small rows into one line ("12 SAM practice passes"). A

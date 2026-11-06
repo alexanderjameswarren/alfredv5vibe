@@ -31,7 +31,10 @@ nightly counts.
 > The task runs the text that was pasted, not the text in this repo. So the prompt carries a
 > version, and Step 11 echoes it.
 >
-> ### `PROMPT VERSION: 2026-11-06a`
+> ### `PROMPT VERSION: 2026-11-06b`
+>
+> 2026-11-06b: Step 8b, every week: any non-Overwatch task prompt that writes to the inbox or notifies
+> directly, judged from each enabled task's live text (`list_triggers`), raised as one signal.
 >
 > 2026-11-06a: signals only. Every item is one `raise_signal` whose `details.item` holds it; the
 > dispatcher writes it and folds a repeat into the open item. No `create_inbox_item`, and the open
@@ -49,7 +52,7 @@ nightly counts.
    everything below "THE PROMPT" line as its instructions.
 3. **Run it once by hand** and say in the chat that this run is manual (Step 2 then runs it even
    on another day). Check: a `platform_runs` row for `overwatch` / `weekly` closed `ok`; the weekly
-   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-11-06a`.
+   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-11-06b`.
 
 ---
 
@@ -58,7 +61,7 @@ nightly counts.
 ---
 
 You are running Overwatch's weekly review for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-11-06a`. **First, load the `overwatch` skill.** It tells you how to read the
+`PROMPT VERSION: 2026-11-06b`. **First, load the `overwatch` skill.** It tells you how to read the
 week, what makes a friction pattern and its fix, when a parked project has become possible, and how
 to word the note. Follow these steps in order for everything else. **Where the skill and these
 steps disagree, these steps win.** Do not improvise.
@@ -238,6 +241,34 @@ skip this step (rule 1).
    - Also note the inventory's `seen_at` (the last rebuild): the checks are only as fresh as it is.
 4. Set `drift_audit: true`. If a read errors, SKIP that check (`count:drift_audit`).
 
+### Step 8b — Task prompts that write or notify directly (every week)
+
+Every task except Overwatch's only raises signals (the `task-prompts` skill). This finds one that doesn't.
+It runs every week, drift-audit week or not.
+
+1. **The prompts.** `list_triggers` (Claude_Code_Remote; not the Alfred budget): every enabled, recurring
+   task and its prompt text, which is what actually runs. Leave out Overwatch's own tasks (Overwatch
+   nightly and weekly) and this one. Then `get_platform_inventory` with `kind: "task_prompt"`,
+   `limit: 50` (one call; reuse Step 8.3's read on an audit week): each repo prompt's `name`,
+   `app_id` and `details.version`, and `details.tools` (every registered tool the file names).
+2. **Which to read closely.** Only a task whose text names one of `create_inbox_item`,
+   `send_alfred_push`, `create_reminder` or `log_claude_notification`. Every prompt names them in its
+   "never call" rule, so naming one is not a finding.
+3. **Use or prohibition.** For each sentence or list line that names one of those tools, decide which:
+   - **A prohibition** (not a finding): the sentence forbids it: "Never call …", "No `create_inbox_item`",
+     "do not …", "not …", or a "never call" list.
+   - **A use** (a finding): the sentence tells the task to call it ("Call `create_inbox_item` with …",
+     "then `send_alfred_push`"), or lists it among the writes the task may make ("THE ONLY WRITES ALLOWED
+     are …", "The only writes are …", "You may write …").
+   - The allowed-writes rule wins: a tool in that list is a use even if a "never" sentence also names it.
+     Unsure: count it as a use, and quote the sentence.
+4. **Keep, per finding:** the task's name, the tool, the sentence (verbatim, up to 200 characters), and
+   the repo file whose `name` matches (by the task's name or the app and job its text opens), with both
+   versions: the live text's `PROMPT VERSION` and the file's `details.version`. A task with no repo file
+   is kept as `no file`.
+5. If `list_triggers` is not available or errors, SKIP this step (`count:direct_writes`). The inventory
+   alone cannot decide it: it records which tools a prompt names, not how.
+
 ### Step 9 — Raise items
 
 Every item is one `raise_signal`, never `create_inbox_item`:
@@ -293,6 +324,14 @@ item (Step 2.4) uses kind `schedule_mismatch`.
    ```
 5. **One for the drift audit, when Step 8 found anything**, kind `drift_audit`. First line:
    `Overwatch: drift audit — <N> findings`. Title: `Overwatch: drift audit, <N> findings`. One line per finding.
+6. **One for direct writes, when Step 8b found anything**, kind `direct_writes`, `severity: "high"`,
+   `subject_key: "overwatch:weekly:direct_writes"` (stable, so a repeat folds into the open item). First line:
+   `Overwatch: task prompts writing directly — <N> tasks`. Title: `Overwatch: <N> task prompts write directly`.
+   One line per finding: `<task>: <tool> — "<the sentence>" (live <version>, repo <version or no file>)`. Then:
+   ```
+   FOR CLAUDE.AI, NOT THE CLI
+   Overwatch found task prompts that write to the inbox or notify directly: <task: tool, one each>. Load the task-prompts skill, compare each with its file in docs/, and propose the change that moves it to raise_signal with details.item.
+   ```
 
 ### Step 10 — Write the note and close the run
 
@@ -305,23 +344,26 @@ item (Step 2.4) uses kind `schedule_mismatch`.
      their id), never a bare URL. Exactly this shape:
      ```
      ## Action Required
-     - <what this week needs from Alex, most important first: plan change, friction fixes, newly possible, new releases that matter, drift audit findings; "Nothing needs you this week." when none>
+     - <what this week needs from Alex, most important first: task prompts writing directly, plan change, friction fixes, newly possible, new releases that matter, drift audit findings; "Nothing needs you this week." when none>
      ## The Week
      - <what shipped, then what progressed, by project and app; the week's nightly flags that stayed open>
      - Ideas: <count>, oldest untouched <name as a link>; newly possible <names as links>
      - Estimates: <accuracy, or why it waits>
      - Drift audit: <findings, or when it is next due>
+     - Task prompts: <"every task only raises signals (<N> checked)", or the tasks that write directly>
      ```
      Items "still open" say so.
    - **`flags`**: `shipped`, `progressed`, `ideas` (count, oldest), `newly_possible`,
      `new_releases`, `friction_patterns`, `estimate_accuracy`, `drift_audit` (the findings, or
-     `not_due`), `signals` (the signal ids from Step 9), `skipped`, `settings_missing`.
+     `not_due`), `direct_writes` (Step 8b's findings, an empty list when none, left out when skipped),
+     `signals` (the signal ids from Step 9), `skipped`, `settings_missing`.
    - If it errors, STOP with `failure_kind: "note_write"`.
 2. **Signals** were raised in Step 9; nothing more here.
 3. **Close the run:** `update_platform_run` with the run id, **once**.
    - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-   - **`details`**, always: `local_date`, `prompt_version: "2026-11-06a"`, `manual`, `plan_id`,
-     `drift_audit` (true or false), `note_id`, `signal_ids`, `signals_raised`, `new_releases`,
+   - **`details`**, always: `local_date`, `prompt_version: "2026-11-06b"`, `manual`, `plan_id`,
+     `drift_audit` (true or false), `direct_writes` (the count, or `"skipped"`), `prompts_checked`, `note_id`,
+     `signal_ids`, `signals_raised`, `new_releases`,
      `friction_patterns`, `shipped_count`, `skipped`, `settings_missing`, and `not_weekly_day` when
      it applies.
    - **On `failed`:** `error_message` is the verbatim error, and `details.failure_kind` is one of
@@ -349,9 +391,10 @@ Run: <run id>
 ### Step 11 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-11-06a`;
+- `PROMPT VERSION: 2026-11-06b`;
 - the run id and its status, and `manual: true` or `manual: false`;
-- whether the drift audit ran; the note id and the signals raised;
+- whether the drift audit ran; how many task prompts Step 8b checked and any that write directly;
+- the note id and the signals raised;
 - `skipped` and `settings_missing`, if any;
 - any error, verbatim.
 
