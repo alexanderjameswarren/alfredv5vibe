@@ -1,7 +1,8 @@
 import { isRecordId, recordPath, executionPath } from "../viewPaths";
 import { appDisplayName } from "./appNames";
 
-// The Dispatcher screen's pure logic (notification_routing-d7v, spec section 10). Read only.
+// The Dispatcher screen's pure logic (notification_routing-d7v, spec section 10), and where a card goes after
+// Alex acts on it (step 11f).
 
 const TZ = "America/Los_Angeles";
 
@@ -185,18 +186,62 @@ export function reasonWords(reason) {
 
 // Each card's icon says what happened or will happen: notify, inbox, notsent or pending.
 
-/** A signal still waiting for the dispatcher, or one it held. The card opens its inbox item, else the signal. */
+/**
+ * Who raised a signal, in plain words: alex -> "you", chat -> "Claude", task:arnold-morning-review ->
+ * "Arnold morning review". "Started by <that>".
+ */
+export function startedByWords(v, appNames = {}) {
+  if (v === "alex") return "you";
+  if (v === "chat") return "Claude";
+  if (typeof v === "string" && v.startsWith("task:")) {
+    const words = v.slice(5).split(/[-_]+/).filter(Boolean);
+    if (!words.length) return v;
+    // The app part reads as the app's own name: dj-weekly-review -> "DJ weekly review",
+    // money-cleanup -> "Money cleanup" (warren_buffet is named Money). Longest match first.
+    const byName = {};
+    for (const [id, name] of Object.entries(appNames || {})) {
+      if (!name) continue;
+      byName[id.toLowerCase()] = name;
+      byName[String(name).toLowerCase().replace(/\s+/g, "_")] = name;
+    }
+    for (let n = words.length; n > 0; n -= 1) {
+      const name = byName[words.slice(0, n).join("_").toLowerCase()];
+      if (name) return [name, ...words.slice(n)].join(" ");
+    }
+    const text = words.join(" ");
+    return text[0].toUpperCase() + text.slice(1);
+  }
+  return v || "not recorded";
+}
+const startedBy = (v, appNames) => `Started by ${startedByWords(v, appNames)}`;
+
+// A card always links /<id>. Old rows stored the long forms; those are shortened when the card is built.
+const LONG_LINK_RE = /^\/(?:inbox\/detail|schedule\/execution)\/([^/?#]+)$/;
+
+/** A stored link as the card's /<id> path: the long inbox and execution forms are shortened; null if unusable. */
+export function cardLink(link) {
+  if (typeof link !== "string" || !link.startsWith("/") || link.startsWith("//")) return null;
+  const m = LONG_LINK_RE.exec(link);
+  return m ? recordPath(decodeURIComponent(m[1])) : link;
+}
+
+/**
+ * A signal still waiting for the dispatcher, or one held. One Alex held reads "Held by you · <time>"; one the
+ * dispatcher held gives its reason. The card opens its inbox item, else the signal.
+ */
 export function signalRow(s, appNames = {}) {
   const held = s.state === "held";
+  const hand = held && byHand(s.decided_by);
   return {
     id: s.id,
     kind: held ? "notsent" : "pending",
     title: s.title,
     path: inboxPathOf(inboxIdOf(s)) || recordPath(s.id),
-    status: held ? "Held" : "",
+    status: hand ? `Held by you · ${pacificTime(s.decided_at)}` : held ? "Held" : "",
     meta: [appDisplayName(s.app, appNames), SEVERITY_WORDS[s.severity] || s.severity,
-      held && s.decided_at ? `Held ${pacificTime(s.decided_at)}` : `Raised ${pacificTime(s.created_at)}`],
-    dispatcher: held ? reasonWords(s.reason) : "",
+      hand ? "" : held && s.decided_at ? `Held ${pacificTime(s.decided_at)}` : `Raised ${pacificTime(s.created_at)}`,
+      startedBy(s.started_by, appNames)],
+    dispatcher: held && !hand ? reasonWords(s.reason) : "",
     note: "",
   };
 }
@@ -223,7 +268,9 @@ export function stepRow(st, executionNames = {}) {
     kind: "notify",
     sortAt: st.due_at,
     title: executionNames[st.execution_id] || "Execution",
-    path: st.execution_id ? executionPath(st.execution_id) : recordPath(st.id),
+    // /<execution id> opens the execution; an id of another shape keeps the long form.
+    path: !st.execution_id ? recordPath(st.id)
+      : isRecordId(st.execution_id) ? recordPath(st.execution_id) : executionPath(st.execution_id),
     status: "",
     meta: ["Step timer", `Sends ${pacificTime(st.due_at)}`],
     dispatcher: "",
@@ -240,40 +287,112 @@ export function queuedRows(reminders, steps, executionNames = {}) {
   return rows.sort((a, b) => String(a.sortAt).localeCompare(String(b.sortAt)));
 }
 
+/** Whether Alex decided it himself: on the screen (alex) or by asking Claude (chat). */
+export function byHand(decidedBy) {
+  return decidedBy === "alex" || decidedBy === "chat";
+}
+const byYou = (decidedBy) => (byHand(decidedBy) ? " · by you" : "");
+
 /** A sent row from claude_notifications; a dispatcher send carries the signal's reason. The card opens its link. */
 export function sentRow(n, signalsById = {}, appNames = {}) {
   const how = CHANNEL_WORDS[n.channel] || n.channel;
   const problem = FAILED_WORDS[n.delivery_status];
   const signal = n.signal_id ? signalsById[n.signal_id] : null;
-  const link = typeof n.link === "string" && n.link.startsWith("/") && !n.link.startsWith("//") ? n.link : null;
+  const link = cardLink(n.link);
+  const hand = byHand(signal?.decided_by);
+  // A step timer ("Alfred") or reminder ("Alfred reminder") is logged with its text in the body; the card is
+  // titled with that text.
+  const title = (n.job === "step_timer" || n.job === "reminder") && n.body ? n.body : n.title;
   return {
     id: n.id,
     kind: n.channel === "inbox_item" ? "inbox" : "notify",
     sortAt: n.created_at,
-    title: n.title,
+    title,
     path: link || recordPath(n.id),
-    status: `Sent ${pacificTime(n.created_at)}`,
-    meta: [appDisplayName(n.app, appNames), problem ? `${how}, ${problem}` : how, `Started by ${n.started_by || "not recorded"}`],
-    dispatcher: reasonWords(signal?.reason),
+    status: `Sent ${pacificTime(n.created_at)}${byYou(signal?.decided_by)}`,
+    // Who raised the signal, not who sent it; a send with no signal says who sent it.
+    meta: [appDisplayName(n.app, appNames), problem ? `${how}, ${problem}` : how,
+      startedBy(signal ? signal.started_by ?? n.started_by : n.started_by, appNames)],
+    dispatcher: hand ? "" : reasonWords(signal?.reason),
     note: "",
   };
 }
 
-/** A merged signal: not sent, because the inbox already held an item for it. The card opens that item. */
+/**
+ * A merged signal: not sent, because the inbox already held an item for it; or sent now by Alex and added to
+ * that item. The card opens the item.
+ */
 export function mergedRow(s, appNames = {}) {
-  // created_at, not decided_at: History pages on it, and decided_at can be null.
-  const at = s.created_at;
+  // When it happened: decided_at, which History pages on (every merged and dropped signal has one).
+  const at = s.decided_at || s.created_at;
+  const hand = byHand(s.decided_by);
+  return {
+    id: s.id,
+    kind: hand ? "inbox" : "notsent",
+    sortAt: at,
+    title: s.title,
+    path: inboxPathOf(inboxIdOf(s)) || recordPath(s.id),
+    // The time is on the status line, as on a Sent card; the meta line carries no date.
+    status: hand ? `Added to the open inbox item ${pacificTime(at)}${byYou(s.decided_by)}` : `Not sent ${pacificTime(at)}`,
+    meta: [appDisplayName(s.app, appNames), startedBy(s.started_by, appNames)],
+    dispatcher: hand ? "" : "an item already exists in the Inbox",
+    note: "",
+  };
+}
+
+/** A dropped signal: never sent. The card opens the signal. */
+export function droppedRow(s, appNames = {}) {
+  const at = s.decided_at || s.created_at;
+  const hand = byHand(s.decided_by);
   return {
     id: s.id,
     kind: "notsent",
     sortAt: at,
     title: s.title,
-    path: inboxPathOf(inboxIdOf(s)) || recordPath(s.id),
-    status: "Not sent",
-    meta: [appDisplayName(s.app, appNames), pacificTime(at)],
-    dispatcher: "an item already exists in the Inbox",
+    path: recordPath(s.id),
+    status: `Dropped ${pacificTime(at)}${byYou(s.decided_by)}`,
+    meta: [appDisplayName(s.app, appNames), SEVERITY_WORDS[s.severity] || s.severity, startedBy(s.started_by, appNames)],
+    dispatcher: hand ? "" : reasonWords(s.reason),
     note: "",
   };
+}
+
+/**
+ * The card for a signal Alex has just acted on, before any reload: { signal, result, at } from the action.
+ * Held goes back into Held (see applyAction); dropped and sent ones are History rows.
+ */
+export function actedRow({ signal, result, at }, appNames = {}) {
+  const s = { ...signal, decided_at: at, decided_by: "alex", inbox_id: result.inbox_id || signal.inbox_id };
+  if (result.state === "dropped") return { ...droppedRow(s, appNames), sortAt: at };
+  if (result.state === "merged") return { ...mergedRow(s, appNames), sortAt: at };
+  const notification = result.as === "notification";
+  return {
+    id: signal.id,
+    kind: notification ? "notify" : "inbox",
+    sortAt: at,
+    title: signal.title,
+    path: inboxPathOf(s.inbox_id) || recordPath(signal.id),
+    status: `Sent ${pacificTime(at)} · by you`,
+    meta: [appDisplayName(signal.app, appNames), notification ? "Notification" : "Inbox item",
+      startedBy(signal.started_by, appNames)],
+    dispatcher: "",
+    note: "",
+  };
+}
+
+/**
+ * The screen's data after Alex acted on one signal: a held one moves to Held; a dropped or sent one leaves
+ * Unprocessed and Held and is added at the top of History.
+ */
+export function applyAction(data, signalId, result, at = new Date().toISOString()) {
+  const signal = (data.signals || []).find((s) => s.id === signalId);
+  if (!signal) return data;
+  if (result.state === "held") {
+    return { ...data, signals: data.signals.map((s) => (s.id === signalId
+      ? { ...s, state: "held", decided_at: at, decided_by: "alex", reason: "held by Alex" } : s)) };
+  }
+  return { ...data, signals: data.signals.filter((s) => s.id !== signalId),
+    acted: [{ signal, result, at }, ...(data.acted || [])] };
 }
 
 /**
@@ -302,6 +421,7 @@ export function historyRows(notifications, signals, appNames = {}) {
   const rows = [
     ...(notifications || []).map((n) => sentRow(n, byId, appNames)),
     ...(signals || []).filter((s) => s.state === "merged").map((s) => mergedRow(s, appNames)),
+    ...(signals || []).filter((s) => s.state === "dropped").map((s) => droppedRow(s, appNames)),
   ];
   return rows.sort(newestFirst);
 }
@@ -328,7 +448,9 @@ export function dispatcherView(data, { now = new Date(), appNames = {} } = {}) {
     queued: queuedRows(data.reminders, data.steps, data.executionNames || {}),
     unprocessed: signals.filter((s) => s.state === "queued").map((s) => signalRow(s, appNames)),
     held: signals.filter((s) => s.state === "held").map((s) => signalRow(s, appNames)),
-    history: historyRows(data.history?.notifications, data.history?.signals, appNames),
+    // Cards Alex acted on in this visit go first; a reload brings them back from the log in their place.
+    history: appendHistory((data.acted || []).map((a) => actedRow(a, appNames)),
+      historyRows(data.history?.notifications, data.history?.signals, appNames)),
     historyNext: data.history?.next || null,
   };
 }

@@ -384,6 +384,38 @@ Plan and Briefing, opened from a Dispatcher row on the Overwatch tab. Files:
   log, newest first, with `started_by`); Reminders and Step timers (scheduled ones).
 - **Actions (step 11):** signals: hold, drop, deliver now; reminders: edit text or time, cancel
   (`remindersApi.js`); step timers: reschedule, cancel (`notificationStepsApi.js`).
+- **The buttons (step 11f).** Each Unprocessed and Held card has a "⋯" button at its right, above the
+  card's stretched link, so tapping it never opens the card. It opens `SignalActionDialog`: the
+  signal's title, then "Hold" (Unprocessed only), "Drop", "Send now as a notification", "Send now as
+  an inbox item", and Cancel. It calls `actOnSignal()` in `overwatchApi.js` (push-send's signal
+  route). On success the card moves without a reload (`applyAction` in `dispatcherModel.js`): held
+  to Held; dropped and sent to the top of History. On an error the server's message stays in the
+  dialog, in plain words ("delivered" reads "sent"), and the card stays put. History now also shows
+  dropped signals, and a card decided by hand (`decided_by` alex or chat) adds "· by you" to its
+  line, e.g. "Sent Fri, Nov 6, 8:20 AM · by you" or "Dropped …", and leaves out the dispatcher's
+  reason. A send folded into an open item reads "Added to the open inbox item … · by you".
+- **Step 11g fixes.**
+  - A card Alex held reads "Held by you · <time>", one line, with no dispatcher reason; one the
+    dispatcher held keeps "Dispatcher: <reason>".
+  - "Started by" is the signal's own `started_by` on every card with a signal (sent, merged, dropped,
+    held, unprocessed), not who sent it, in plain words: alex "you", chat "Claude", `task:<slug>` the
+    slug in words ("Arnold morning review"). A send with no signal gives its sender.
+  - A step-timer send (logged as "Alfred") is titled with its step text.
+  - History is newest first by when the thing happened: a send's `created_at`, a signal's
+    `decided_at` (every merged and dropped signal has one). Each source pages on its own column with
+    the same `{ at, id }` cursor, ties by id.
+  - An action that no longer applies reads "Already dropped | sent | held. Nothing changed." in the
+    dialog; any other error as the server words it.
+- **Step 11h fixes.**
+  - A reminder send ("Alfred reminder") is titled with the reminder's text, like a step timer.
+  - "Not sent <time>" is on the status line, like "Sent <time>", and the meta line has no date.
+  - A task name's app part is the app's display name from `appNames`: task:dj-weekly-review reads
+    "DJ weekly review", task:money-cleanup "Money cleanup".
+  - Every card links `/<id>`: a stored `/inbox/detail/<id>` or `/schedule/execution/<id>` link is
+    shortened (`cardLink`), and a Queued step timer links `/<execution id>`.
+  - `/<signal id>` opens the generic record page ("Record from signals", its columns), since
+    `resolve_record` searches every registered table and `recordRoutes.js` has no signals screen. So
+    dropped, held and unprocessed cards with no inbox item keep linking there.
 - **Hold, drop, deliver now** (decision 6, built in step 11): all three through `push-send` with
   `{ signal_id, action, as? }`, which runs `updateSignal()` with the caller's token, sends any
   notification to the caller's devices, and records `decided_by: alex` (and `started_by: alex` on the

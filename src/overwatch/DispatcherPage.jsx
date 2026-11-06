@@ -1,14 +1,16 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, Ban, BellRing, Hourglass, Inbox, Radio } from "lucide-react";
+import { ArrowLeft, Ban, BellRing, Ellipsis, Hourglass, Inbox, Radio } from "lucide-react";
 import { OVERWATCH_PATH } from "../viewPaths";
 import OverwatchSection from "./OverwatchSection";
+import SignalActionDialog from "./SignalActionDialog";
 import useLoad from "./useLoad";
 import { getDispatcher, getDispatcherHistory } from "./overwatchApi";
-import { SECTIONS, appendHistory, dispatcherView, historyRows } from "./dispatcherModel";
+import { SECTIONS, appendHistory, applyAction, dispatcherView, historyRows } from "./dispatcherModel";
 
-// The Dispatcher screen (notification_routing-d7v, spec section 10): /overwatch/dispatcher. Read only;
-// the actions come in step 11. Every card's title is a real link to its record, stretched over the card.
+// The Dispatcher screen (notification_routing-d7v, spec section 10): /overwatch/dispatcher. Every card's title
+// is a real link to its record, stretched over the card. Unprocessed and Held cards also have a "⋯" button,
+// above the link, that opens SignalActionDialog (step 11f).
 
 const OPEN_BY_DEFAULT = new Set(["queued", "unprocessed", "held"]);
 
@@ -28,13 +30,16 @@ function Meta({ parts }) {
 
 const KIND_ICONS = { notify: BellRing, inbox: Inbox, notsent: Ban, pending: Hourglass };
 
-/** One card, all of it the link: an icon for what happened, the title, the main line, the details. */
-function Row({ row }) {
+/**
+ * One card, all of it the link: an icon for what happened, the title, the main line, the details. With
+ * onActions, a "⋯" button sits above the link (z-10) at the right, so tapping it never opens the card.
+ */
+function Row({ row, onActions }) {
   const Icon = KIND_ICONS[row.kind] || Hourglass;
   return (
     <article className="relative flex items-start gap-3 px-4 py-3 bg-card border border-border rounded-lg hover:border-primary transition-colors">
       <Icon className="w-5 h-5 shrink-0 mt-0.5 text-primary" aria-hidden="true" />
-      <div className="min-w-0 flex flex-col gap-1">
+      <div className="min-w-0 flex-1 flex flex-col gap-1">
         <h3 className="m-0 text-base font-medium leading-snug">
           <Link to={row.path} className="text-foreground after:absolute after:inset-0 after:rounded-lg">{row.title}</Link>
         </h3>
@@ -43,14 +48,22 @@ function Row({ row }) {
         {row.note && <p className="m-0 text-sm text-muted-foreground">{row.note}</p>}
         <Meta parts={row.meta} />
       </div>
+      {onActions && (
+        <button type="button" aria-label={`Actions for ${row.title}`} onClick={() => onActions(row.id)}
+          className="relative z-10 shrink-0 -mr-2 -my-1 inline-flex items-center justify-center w-11 h-11 rounded-lg text-muted-foreground hover:text-primary hover:bg-muted">
+          <Ellipsis className="w-5 h-5" aria-hidden="true" />
+        </button>
+      )}
     </article>
   );
 }
 
-function List({ rows, empty }) {
+function List({ rows, empty, onActions }) {
   if (!rows.length) return <p className="m-0 text-sm text-muted-foreground">{empty}</p>;
-  return <div className="space-y-2">{rows.map((r) => <Row key={r.id} row={r} />)}</div>;
+  return <div className="space-y-2">{rows.map((r) => <Row key={r.id} row={r} onActions={onActions} />)}</div>;
 }
+
+const ACTION_SECTIONS = new Set(["unprocessed", "held"]);
 
 const STATUS_WORDS = { "in force": "In force", "not yet": "Not started yet", ended: "Ended" };
 
@@ -114,16 +127,25 @@ function History({ first, next, appNames }) {
 }
 
 export default function DispatcherPage() {
-  const { loading, error, data } = useLoad(getDispatcher, "dispatcher");
+  const { loading, error, data: loaded } = useLoad(getDispatcher, "dispatcher");
+  // The loaded data, then each action applied to it, so a card moves without a reload.
+  const [data, setData] = useState(null);
+  const [acting, setActing] = useState(null);
+  useEffect(() => { if (loaded) setData(loaded); }, [loaded]);
   const back = (
     <Link to={OVERWATCH_PATH} className="inline-flex items-center gap-2 mb-3 min-h-[44px] text-primary hover:text-primary-hover">
       <ArrowLeft className="w-4 h-4" aria-hidden="true" />
       Overwatch
     </Link>
   );
-  if (loading) return <div>{back}<p className="m-0 text-sm text-muted-foreground">Loading…</p></div>;
   if (error) return <div>{back}<p role="alert" className="m-0 text-sm text-destructive">{error}</p></div>;
+  if (loading || !data) return <div>{back}<p className="m-0 text-sm text-muted-foreground">Loading…</p></div>;
   const view = dispatcherView(data, { appNames: data.appNames });
+  const actingSignal = acting ? (data.signals || []).find((s) => s.id === acting) : null;
+  const done = (result) => {
+    setData((d) => applyAction(d, acting, result));
+    setActing(null);
+  };
   const title = (s) => (s.id === "unprocessed" ? `Unprocessed – next run ${view.nextRun}` : s.title);
   return (
     // `isolate` keeps the cards' stretched links inside this page, under the app's sticky header.
@@ -137,10 +159,13 @@ export default function DispatcherPage() {
       {SECTIONS.filter((s) => s.id !== "history").map((s) => (
         <OverwatchSection key={s.id} id={`dispatcher-${s.id}`} title={title(s)} count={view[s.id].length}
           defaultOpen={OPEN_BY_DEFAULT.has(s.id)}>
-          <List rows={view[s.id]} empty={s.empty} />
+          <List rows={view[s.id]} empty={s.empty} onActions={ACTION_SECTIONS.has(s.id) ? setActing : undefined} />
         </OverwatchSection>
       ))}
       <History first={view.history} next={view.historyNext} appNames={data.appNames} />
+      {actingSignal && (
+        <SignalActionDialog signal={actingSignal} onDone={done} onCancel={() => setActing(null)} />
+      )}
     </div>
   );
 }

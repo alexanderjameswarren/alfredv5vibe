@@ -265,13 +265,15 @@ test("dispatcher: no plan means no rules; an error is a plain sentence", async (
 const { timeKey } = require("./dispatcherModel");
 function historyStore(tables) {
   return (t, ops) => {
-    if (t === "signals" && ops.some((o) => o[0] === "in")) return { data: [], error: null };
+    if (t === "signals" && ops.some((o) => o[0] === "in" && o[1] === "id")) return { data: [], error: null };
+    const col = ops.find((o) => o[0] === "order")[1];
     const cut = ops.find((o) => o[0] === "or")?.[1]
-      .match(/^created_at\.lt\."(.+?)",and\(created_at\.eq\."(.+?)",id\.lt\.(.+)\)$/);
-    const after = (r) => !cut || timeKey(r.created_at) < timeKey(cut[1])
-      || (timeKey(r.created_at) === timeKey(cut[2]) && r.id < cut[3]);
+      .match(/^(\w+)\.lt\."(.+?)",and\(\1\.eq\."(.+?)",id\.lt\.(.+)\)$/);
+    if (cut) expect(cut[1]).toBe(col);
+    const after = (r) => !cut || timeKey(r[col]) < timeKey(cut[2])
+      || (timeKey(r[col]) === timeKey(cut[3]) && r.id < cut[4]);
     const rows = tables[t].filter(after).sort((a, b) =>
-      timeKey(b.created_at).localeCompare(timeKey(a.created_at)) || (a.id < b.id ? 1 : -1));
+      timeKey(b[col]).localeCompare(timeKey(a[col])) || (a.id < b.id ? 1 : -1));
     return { data: rows.slice(0, ops.find((o) => o[0] === "limit")[1]), error: null };
   };
 }
@@ -285,8 +287,12 @@ test("history pages: 50 at a time, newest first, every card once, ties on the sa
   const ids = Array.from({ length: 130 }, (_, i) => `${(i * 37 % 130).toString(16).padStart(4, "0")}-id`);
   const claude_notifications = ids.filter((_, i) => i % 3).map((id) => ({ id, channel: "alfred_push",
     created_at: stamp(ids.indexOf(id)) }));
-  const signals = ids.filter((_, i) => !(i % 3)).map((id) => ({ id, state: "merged", created_at: stamp(ids.indexOf(id)) }));
+  // A signal's place is when it was decided; its created_at runs the other way, so it must not be used.
+  const signals = ids.filter((_, i) => !(i % 3)).map((id) => ({ id, state: "merged", decided_at: stamp(ids.indexOf(id)),
+    created_at: stamp(129 - ids.indexOf(id)) }));
   mockRespond = historyStore({ claude_notifications, signals });
+  const happened = (r) => r.decided_at ?? r.created_at;
+  const newest = (a, b) => timeKey(happened(b)).localeCompare(timeKey(happened(a))) || (a.id < b.id ? 1 : -1);
 
   const pages = [];
   let page = await api.getDispatcherHistory();
@@ -295,32 +301,55 @@ test("history pages: 50 at a time, newest first, every card once, ties on the sa
   expect(pages.map((p) => p.notifications.length + p.signals.length)).toEqual([50, 50, 30]);
   expect(pages.map((p) => !!p.next)).toEqual([true, true, false]);
 
-  const shown = pages.flatMap((p) => [...p.notifications, ...p.signals]
-    .sort((a, b) => timeKey(b.created_at).localeCompare(timeKey(a.created_at)) || (a.id < b.id ? 1 : -1)));
+  const shown = pages.flatMap((p) => [...p.notifications, ...p.signals].sort(newest));
   expect(shown.map((r) => r.id)).toHaveLength(130);
   expect(new Set(shown.map((r) => r.id)).size).toBe(130);
-  const all = [...claude_notifications, ...signals].sort((a, b) =>
-    timeKey(b.created_at).localeCompare(timeKey(a.created_at)) || (a.id < b.id ? 1 : -1));
+  const all = [...claude_notifications, ...signals].sort(newest);
   expect(shown.map((r) => r.id)).toEqual(all.map((r) => r.id));
 
-  const second = mockLog.filter((l) => l.ops.some((o) => o[0] === "or"))[0];
-  const last = [...pages[0].notifications, ...pages[0].signals].sort((a, b) =>
-    timeKey(a.created_at).localeCompare(timeKey(b.created_at)) || (a.id < b.id ? -1 : 1))[0];
-  expect(pages[0].next).toEqual({ at: last.created_at, id: last.id });
-  expect(has(second, "or", `created_at.lt."${last.created_at}",and(created_at.eq."${last.created_at}",id.lt.${last.id})`)).toBe(true);
+  const [sentCut, signalCut] = mockLog.filter((l) => l.ops.some((o) => o[0] === "or"));
+  const last = [...pages[0].notifications, ...pages[0].signals].sort(newest).pop();
+  expect(pages[0].next).toEqual({ at: happened(last), id: last.id });
+  const at = happened(last);
+  expect(has(sentCut, "or", `created_at.lt."${at}",and(created_at.eq."${at}",id.lt.${last.id})`)).toBe(true);
+  expect(has(signalCut, "or", `decided_at.lt."${at}",and(decided_at.eq."${at}",id.lt.${last.id})`)).toBe(true);
 });
 
 test("history: a sent row's reason comes from its signal; an error is a plain sentence", async () => {
   mockRespond = (t, ops) => {
     if (t === "claude_notifications") return { data: [{ id: "n1", signal_id: "s1", created_at: "2026-11-05T16:00:00Z" }], error: null };
-    if (ops.some((o) => o[0] === "in")) return { data: [{ id: "s1", reason: "high signals default to pop" }], error: null };
+    if (ops.some((o) => o[0] === "in" && o[1] === "id")) return { data: [{ id: "s1", reason: "high signals default to pop" }], error: null };
     return { data: [], error: null };
   };
   const out = await api.getDispatcherHistory();
   expect(out).toEqual({ notifications: [{ id: "n1", signal_id: "s1", created_at: "2026-11-05T16:00:00Z" }],
     signals: [{ id: "s1", reason: "high signals default to pop" }], next: null });
+  const signalReads = mockLog.filter((l) => l.table === "signals");
+  expect(has(signalReads[0], "in", "state", ["merged", "dropped"])).toBe(true);
+  expect(signalReads[1].ops[0][1]).toContain("decided_by");
   mockRespond = (t) => (t === "signals" ? { data: null, error: { message: "boom" } } : { data: [], error: null });
-  await expect(api.getDispatcherHistory()).rejects.toThrow("Could not load the merged signals. Please try again.");
+  await expect(api.getDispatcherHistory()).rejects.toThrow("Could not load the merged and dropped signals. Please try again.");
+});
+
+// The fake client has no functions.invoke; each test supplies one.
+const { supabase: mockClient } = require("../supabaseClient");
+
+test("actOnSignal: sends signal_id, action and as to push-send's signal route", async () => {
+  mockClient.functions = { invoke: jest.fn().mockResolvedValue({ data: { state: "held" }, error: null }) };
+  expect(await api.actOnSignal("s1", "hold")).toEqual({ state: "held" });
+  expect(mockClient.functions.invoke).toHaveBeenCalledWith("push-send", { body: { signal_id: "s1", action: "hold" } });
+  await api.actOnSignal("s1", "deliver", "notification");
+  expect(mockClient.functions.invoke).toHaveBeenLastCalledWith("push-send",
+    { body: { signal_id: "s1", action: "deliver", as: "notification" } });
+});
+
+test("actOnSignal: the server's message comes back in plain words", async () => {
+  const refused = { context: { json: async () => ({ error: "push-send: the signal is delivered, so it cannot be dropped. Only a queued or held signal can." }) } };
+  mockClient.functions = { invoke: jest.fn().mockResolvedValue({ data: null, error: refused }) };
+  await expect(api.actOnSignal("s1", "drop")).rejects.toThrow(
+    "The signal is sent, so it cannot be dropped. Only a queued or held signal can.");
+  mockClient.functions = { invoke: jest.fn().mockResolvedValue({ data: null, error: { message: "non-2xx" } }) };
+  await expect(api.actOnSignal("s1", "drop")).rejects.toThrow("That didn't work. Please try again.");
 });
 
 test("first line of a capture", () => {
