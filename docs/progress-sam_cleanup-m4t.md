@@ -34,8 +34,29 @@ Not claimed yet, each claimed by the step that needs it:
   opens the whole song; either corrects the URL in place. Passes and sessions
   credit the URL's item first.
   - *Check:* reload, Back, Forward and a copied link each restore the item.
-- [ ] **s4. Part 3.** Remove the legacy beats[] branches from `ScoreRenderer.jsx`
+- [x] **s4. Part 3.** Remove the legacy beats[] branches from `ScoreRenderer.jsx`
   and `scoreRender.js`. Check `normalizeMeasure`'s callers before touching it.
+  **Stopped at s4 (2026-11-06):** 8 stored songs still have beats[] (archived
+  "Someone Like You" copies). Alex chose to delete them first.
+  - [x] s4b: test script `supabase/tests/sam_cleanup-m4t/1_beats_songs_counts_test.sql`
+    queued (action f7acd900-b47b-46b1-aba8-716bcdc2dbf1).
+  - [ ] s4b2: the delete, as migration 212; `--expect 134,12,8`. **Stopped:**
+    the plan guard refused the `_pending_` file because the draft used a temp
+    table (`s4b2_songs`) not named under SQL. Nothing written or queued. The
+    `db:` claims are held for the retry.
+  - [x] s4b2b: `supabase/migrations/212_sam_cleanup_delete_beats_songs.sql`
+    (no temp table, each delete guarded), queued with `--expect 134,12,8`, action
+    d3f4d216-81d5-497a-b90a-66954c71fbbb. **Queued, not applied.** `db:` claims
+    held until the delete is confirmed; s4c releases them.
+  - [x] s4c: the code removal. Migration 212 applied (run 27ac1bfc); a read-only
+    check then found 0 beats[] measures in 87 songs. The `db:` claims were released.
+    - The beats[] branches are gone from `ScoreRenderer.jsx` and `scoreRender.js`;
+      the voice block is now unconditional.
+    - `normalizeMeasure` always derives beats[] from rh/lh.
+    - The two ScoreRenderer tests were already voice format, so they are unchanged.
+    - **Next Checkpoint carries:** `supabase/migrations/212_sam_cleanup_delete_beats_songs.sql`,
+      `supabase/tests/sam_cleanup-m4t/1_beats_songs_counts_test.sql`, and this
+      step's three code files.
   - *Check:* the score renders as before, and the score tests pass.
 - [ ] **s5. Part 4.** Claim `docs/history/progress-sam-rail.md` first. Run both
   suites. Tick Step 6, or list the gaps.
@@ -71,13 +92,31 @@ Not claimed yet, each claimed by the step that needs it:
 | s8 | 60m |
 | **Total** | **3h00m** (3h10m with s2) |
 
-## Next step's scope (s4)
+## Next step's scope (s4b2: the delete)
+After `gitsync` (to number the migration) and the s4b test result.
+- create: supabase/migrations/_pending_sam_cleanup-m4t_delete_beats_songs.sql, supabase/migrations/<next>_sam_cleanup_delete_beats_songs.sql
+- update: docs/progress-sam_cleanup-m4t.md
+- delete: supabase/migrations/_pending_sam_cleanup-m4t_delete_beats_songs.sql
+- deploy: nothing
+- SQL: sam_songs, sam_sessions, sam_session_events, sam_goals, sam_passes, sam_snippets, sam_song_measures, sam_song_scores, sam_song_lyrics, sam_song_fingerings, sam_practice_plan_songs
+Estimated run: 10m
+
+## Next step's scope (s4c)
 - create: nothing
 - update: src/sam/components/ScoreRenderer.jsx, src/sam/lib/scoreRender.js, src/sam/lib/measureUtils.js, src/sam/components/ScoreRenderer.padding.test.jsx, src/sam/components/ScoreRenderer.labels.vexflow.test.jsx, docs/progress-sam_cleanup-m4t.md
 - delete: nothing
 - deploy: nothing
 - SQL: none
 Estimated run: 20m
+
+## Next step's scope (s5)
+Claims `docs/history/progress-sam-rail.md` first (held by switchboard2-h8r at s2).
+- create: nothing
+- update: docs/history/progress-sam-rail.md, docs/progress-sam_cleanup-m4t.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+Estimated run: 10m
 
 ## Timing log
 
@@ -90,6 +129,11 @@ Estimated run: 20m
 | s3 | 15:38:08 | 15:42:44 | 4m36s |
 | s3b | 16:01:42 | 16:07:59 | 6m17s |
 | s3c | 06:36:32 | 06:43:54 | 7m22s |
+| s4 (stopped) | 06:53:22 | 06:54:25 | 1m03s |
+| s4b | 07:06:43 | 07:08:59 | 2m16s |
+| s4b2 (stopped) | 07:18:23 | 07:19:10 | 0m47s |
+| s4b2b | 07:30:52 | 07:31:40 | 0m48s |
+| s4c | 07:43:04 | 07:45:46 | 2m42s |
 
 ## Log
 
@@ -137,3 +181,19 @@ Estimated run: 20m
   - Tests: 6 in `SamPlayer.plan.test.jsx`, 2 in `activePlan.test.js`. SAM suites
     63 passed, 1 skipped, 939 tests; full app suite 221 suites, 3259 tests;
     scripts 54.
+- 2026-11-06 s4 stopped before any deletion. A read-only check (get_sql_read)
+  of `sam_songs.measures` found beats[] measures in 8 of 95 songs:
+  - all titled "Someone Like You", all archived, 8 measures each, created
+    2026-02-14/15, last updated 2026-09-16;
+  - they have 0 passes and 12 sessions between them;
+  - ids: 6d2b5206-8f04-4ec4-abf4-8122383b927a, 179dd081-1575-42c2-89a9-7b05d927aa93,
+    10856805-6e74-412e-9398-ac6a2f471156, ee14dee1-c783-4277-ab9b-e19ff5e5fdf9,
+    1a39dad3-30a8-4da7-bcc7-5446614cb7ea, 032f4a21-2a5e-496b-ae1d-6c128c88ce79,
+    311de635-9df6-4bde-af39-c07290b031fa, e6013004-9d75-458f-9d27-3b42776538d6.
+  - `sam_song_measures` has no beats column; the claude_reader role cannot read it.
+- 2026-11-06 s4b: claimed the 11 `db:table:` items. A read-only check found none
+  of the stop conditions: 8 archived matches, 12 sessions, 0 passes, no goals,
+  no plan rows, no children inside or outside the 8, all `original`. The reader
+  cannot see `sam_session_events`, so the test returns that count. The test is
+  queued; the delete is not yet written, since `supabase/migrations/` was not in
+  this step's scope.

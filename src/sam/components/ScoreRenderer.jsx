@@ -337,8 +337,9 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
       const trebleMarks = [];
       const bassMarks = [];
 
-      if (measure.rh || measure.lh) {
-        // === Voice format: independent RH/LH voices ===
+      {
+        // === Voice format: independent RH/LH voices (the only stored format;
+        // songSchema refuses beats[], and migration 212 removed the last ones) ===
         const durationQ = measureDurationQ(measure.timeSignature);
         const rhEvents = padVoice(measure.rh || [], durationQ);
         const lhEvents = padVoice(measure.lh || [], durationQ);
@@ -479,68 +480,6 @@ export default function ScoreRenderer({ measures, onBeatEvents, onGeometry, fing
           ...buildTuplets(VF, rhEvents, trebleNotes),
           ...buildTuplets(VF, lhEvents, bassNotes),
         ];
-      } else {
-        // === Legacy beats format ===
-        measure.beats.forEach((beat) => {
-          const rhNotes = (beat.rh || []).filter((n) => n.midi >= 60);
-          const lhNotes = (beat.lh || []).filter((n) => n.midi < 60);
-          const rhBassNotes = (beat.rh || []).filter((n) => n.midi < 60);
-          const lhTrebleNotes = (beat.lh || []).filter((n) => n.midi >= 60);
-
-          const trebleGroup = [...rhNotes, ...lhTrebleNotes];
-          const bassGroup = [...lhNotes, ...rhBassNotes];
-
-          const allMidi = [
-            ...trebleGroup.map((n) => n.midi),
-            ...bassGroup.map((n) => n.midi),
-          ].sort((a, b) => a - b);
-
-          const { base: beatBase, dots: beatDots } = parseDuration(beat.duration || "q");
-
-          let trebleNote;
-          if (trebleGroup.length > 0) {
-            const { keys, heads } = toVexKeys(trebleGroup);
-            trebleNote = new VF.StaveNote({ clef: "treble", keys, duration: beatBase });
-            for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([trebleNote]);
-            heads.forEach((n, ki) => {
-              const acc = noteAccidental(n);
-              if (acc) trebleNote.addModifier(new VF.Accidental(acc), ki);
-            });
-          } else {
-            trebleNote = new VF.StaveNote({ clef: "treble", keys: ["b/4"], duration: beatBase + "r" });
-            for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([trebleNote]);
-          }
-          trebleNotes.push(trebleNote);
-
-          let bassNote;
-          if (bassGroup.length > 0) {
-            const { keys, heads } = toVexKeys(bassGroup);
-            bassNote = new VF.StaveNote({ clef: "bass", keys, duration: beatBase });
-            for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([bassNote]);
-            heads.forEach((n, ki) => {
-              const acc = noteAccidental(n);
-              if (acc) bassNote.addModifier(new VF.Accidental(acc), ki);
-            });
-          } else {
-            bassNote = new VF.StaveNote({ clef: "bass", keys: ["d/3"], duration: beatBase + "r" });
-            for (let i = 0; i < beatDots; i++) VF.Dot.buildAndAttach([bassNote]);
-          }
-          bassNotes.push(bassNote);
-
-          beatMeta.push({
-            meas: measure.number,
-            beat: beat.beat,
-            allMidi,
-            trebleNote,
-            bassNote,
-            trebleSvgEl: null,
-            bassSvgEl: null,
-          });
-        });
-
-        measBeatCount = measure.beats.length;
-        trebleTicks = measure.beats.map((b) => b.beat - 1);
-        bassTicks = trebleTicks;
       }
 
       // 1. Set staves before formatting so VexFlow can compute note head
