@@ -160,11 +160,9 @@ function voiceToBeats(measure) {
 }
 
 /**
- * Normalize a measure to always have beats[].
- * - If measure already has beats[] → return as-is (legacy format)
- * - If measure has lh[]/rh[] → convert to beats format
+ * Add the engine's beats[] to a voice-format measure, derived from lh[]/rh[].
+ * Stored measures are voice format only, so any beats[] on the input is replaced.
  */
 export function normalizeMeasure(measure) {
-  if (measure.beats) return measure;
   return { ...measure, beats: voiceToBeats(measure) };
 }
