@@ -3103,11 +3103,13 @@ export function createMcpServer(token: string) {
     {
       title: "Get Switchboard Run",
       description:
-        "One action in the Switchboard approval queue and one of its runs. Pass exactly one id. With action_id: the action and its latest run (null if it has never run); use this to review queued SQL before issuing a link. With run_id (the id in a chat message \"sql <run id>\"): that run and its action. " +
-        "Returns { action, run }. action: id, kind, project_code, status (queued | link_issued | consumed | succeeded | failed | cancelled), headline, fingerprint, payload (for kind sql, the whole SQL in payload.sql, never cut), chat_url, needs_click, link_expires_at, link_used_at, created_by, created_at, updated_at. run: id, action_id, mode (dry_run | real), summary, result (null once pruned after 30 days), result_pruned_at, started_at, finished_at. Tier 1.",
+        "One action in the Switchboard approval queue and one of its runs. Pass exactly one of action_id, run_id or project_code. With action_id (the id in a chat line \"git <action id> done\"): the action and its latest run (null if it has never run); use this to review queued SQL before issuing a link. With run_id (the id in a chat message \"sql <run id>\"): that run and its action. With project_code (\"check the git run for switchboard2-h8r\"): that project's latest action, of any kind, and its latest run. " +
+        "Returns { action, run }. action: id, kind, project_code, status (queued | link_issued | consumed | succeeded | failed | cancelled), headline, fingerprint, payload (for kind sql, the whole SQL in payload.sql, never cut), chat_url, needs_click, link_expires_at, link_used_at, created_by, created_at, updated_at. run: id, action_id, mode (dry_run | real), summary, result (null once pruned after 30 days), result_pruned_at, started_at, finished_at. " +
+        "For kind git: status succeeded means the command ran and exited 0, so it COMPLETED, even if it changed nothing (a gitsync with nothing to merge); failed means a non-zero exit or a helper refusal. The run summary ends with the command's own \"Result:\" line; report that. Tier 1.",
       inputSchema: {
         action_id: z.string().optional().describe("UUID of the action."),
         run_id: z.string().optional().describe("UUID of the run."),
+        project_code: z.string().optional().describe("A project code, e.g. switchboard2-h8r: its latest action."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(getSwitchboardRunTool, args, token),
@@ -3135,7 +3137,7 @@ export function createMcpServer(token: string) {
       description:
         "Queue one git command (gitcom, gitsync, gitnewtree or gitpush) for a project and issue its single-use approval link in the same call. Nothing runs until Alex clicks Approve; then the desktop helper runs it in that project's worktree. Git has no dry run. " +
         "Keys by command: gitcom takes message, include_unclaimed (main only); gitsync takes nothing; gitnewtree takes install; gitpush takes mode (push | checkpoint | finish), and for a Finish finish (phase | project-done), for a Checkpoint paths (a list) or all: true, and db (release | keep), plus message. Any other key is refused. " +
-        "One live link per project code, as issue_switchboard_link. Returns { action_id, url, expires_at, headline, payload }. Give the url whole. If it says queued but no link, the action exists: issue its link later with issue_switchboard_link. Tier 2.",
+        "One live link per project code, as issue_switchboard_link. Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole. Nothing is posted at approval: once he approves, the result line (git <action id> done or failed) arrives in this chat by itself when the command finishes. Tell him that, and that he can also say \"check the git run\" (get_switchboard_run). If it says queued but no link, the action exists: issue its link later with issue_switchboard_link. Tier 2.",
       inputSchema: {
         project_code: z.string().describe("The project code, e.g. switchboard2-h8r; main's code for main."),
         command: z.enum(["gitcom", "gitsync", "gitnewtree", "gitpush"]).describe("The git command."),
@@ -3147,7 +3149,7 @@ export function createMcpServer(token: string) {
         message: z.string().optional().describe("Commit message: one line, at most 200 characters, no double quote."),
         include_unclaimed: z.enum(["all", "none"]).optional().describe("gitcom or gitpush on main: unclaimed changes."),
         install: z.boolean().optional().describe("gitnewtree: run npm install."),
-        chat_url: z.string().optional().describe("This chat's https://claude.ai/ link, for the result line."),
+        chat_url: z.string().optional().describe("Optional; don't guess it, the extension remembers the chat. Only a https://claude.ai/chat/<uuid> address is used."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardGitTool, args, token),

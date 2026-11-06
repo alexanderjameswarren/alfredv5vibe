@@ -33,7 +33,8 @@ export const getSwitchboardRunTool = defineTool({
   tables: { reads: ["switchboard_actions", "switchboard_runs"], writes: [] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "get_switchboard_run";
-    if ((args.action_id == null) === (args.run_id == null)) throw fail(tool, "pass exactly one of `action_id` or `run_id`.");
+    const given = [args.action_id, args.run_id, args.project_code].filter((v) => v != null).length;
+    if (given !== 1) throw fail(tool, "pass exactly one of `action_id`, `run_id` or `project_code`.");
 
     const readAction = async (id: string) => {
       const { data, error } = await ctx.db.from("switchboard_actions").select(ACTION_COLUMNS).eq("id", id).maybeSingle();
@@ -41,6 +42,23 @@ export const getSwitchboardRunTool = defineTool({
       if (!data) throw fail(tool, `no such action: ${id}.`);
       return data as unknown as Record<string, unknown>;
     };
+    const latestRun = async (id: string) => {
+      const { data: run, error } = await ctx.db.from("switchboard_runs").select(RUN_COLUMNS).eq("action_id", id)
+        .order("started_at", { ascending: false }).limit(1).maybeSingle();
+      if (error) throw dbError(tool, "reading the latest run", error);
+      return run ?? null;
+    };
+
+    if (args.project_code != null) {
+      const code = typeof args.project_code === "string" ? args.project_code.trim() : "";
+      if (!PROJECT_CODE.test(code)) throw fail(tool, "`project_code` must be a project code such as switchboard2-h8r.");
+      const { data, error } = await ctx.db.from("switchboard_actions").select(ACTION_COLUMNS).eq("project_code", code)
+        .order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (error) throw dbError(tool, "reading the latest action", error);
+      if (!data) throw fail(tool, `no action for ${code}.`);
+      const action = data as unknown as Record<string, unknown>;
+      return { action, run: await latestRun(action.id as string) };
+    }
 
     if (args.run_id != null) {
       const id = requireUuid(tool, "run_id", args.run_id);
@@ -52,10 +70,7 @@ export const getSwitchboardRunTool = defineTool({
 
     const id = requireUuid(tool, "action_id", args.action_id);
     const action = await readAction(id);
-    const { data: run, error } = await ctx.db.from("switchboard_runs").select(RUN_COLUMNS).eq("action_id", id)
-      .order("started_at", { ascending: false }).limit(1).maybeSingle();
-    if (error) throw dbError(tool, "reading the latest run", error);
-    return { action, run: run ?? null };
+    return { action, run: await latestRun(id) };
   },
 });
 
@@ -97,6 +112,7 @@ const GIT_KEYS: Record<string, string[]> = {
   gitpush: ["command", "mode", "finish", "paths", "all", "db", "message", "include_unclaimed"],
 };
 const PROJECT_CODE = /^[a-z0-9][a-z0-9_-]{1,40}$/;
+const CHAT_URL = /^https:\/\/claude\.ai\/chat\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PATH_WORD = /^[A-Za-z0-9_][A-Za-z0-9_.\/-]*\/?$/;
 
 /** The payload to store, or a refusal reason. args minus project_code and chat_url is the payload. */
@@ -177,10 +193,8 @@ export const queueSwitchboardGitTool = defineTool({
     const tool = "queue_switchboard_git";
     const code = typeof args.project_code === "string" ? args.project_code.trim() : "";
     if (!PROJECT_CODE.test(code)) throw fail(tool, "`project_code` must be a project code such as switchboard2-h8r.");
-    const chatUrl = args.chat_url ?? null;
-    if (chatUrl !== null && (typeof chatUrl !== "string" || !/^https:\/\/claude\.ai\//.test(chatUrl))) {
-      throw fail(tool, "`chat_url` must be a https://claude.ai/ link.");
-    }
+    // Optional: the extension remembers the chat. Only a claude.ai chat address is kept; anything else is dropped.
+    const chatUrl = typeof args.chat_url === "string" && CHAT_URL.test(args.chat_url.trim()) ? args.chat_url.trim() : null;
     const checked = gitPayload(args);
     if ("refused" in checked) throw fail(tool, `refused: ${checked.refused}`);
     const headline = gitHeadline(code, checked.payload);
@@ -201,7 +215,11 @@ export const queueSwitchboardGitTool = defineTool({
       if (REFUSALS.has(error.code ?? "")) throw fail(tool, `queued as ${actionId}, but no link: ${error.message}`);
       throw dbError(tool, `issuing the link for ${actionId}`, error);
     }
-    return { ...(data as Record<string, unknown>), action_id: actionId, payload: checked.payload };
+    return {
+      ...(data as Record<string, unknown>), action_id: actionId, payload: checked.payload,
+      next: "Give Alex the url. Once he approves, the result line (git <action id> done or failed) arrives in this chat " +
+        "by itself when the command finishes; he can also say \"check the git run\" (get_switchboard_run).",
+    };
   },
 });
 

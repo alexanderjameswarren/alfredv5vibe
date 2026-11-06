@@ -95,6 +95,9 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 5 git | s84e | Runner: git links on /preview, /approve, /cancel | `db:deploy` | built, not deployed (s84e-b5rn). A git link's /preview returns `kind` and `payload`. /approve checks the link as before, then spends it with the fingerprint: the action is consumed for the helper, no dry run is asked for, and nothing runs; it replies `{ok, action_id, sent: true}`. /cancel needs no dry run. /dry-run is refused. SQL is unchanged. 6 new tests, 57 pass. Deployed in s84k: a bad JWT, no queue secret, no pickup key and a wrong one all get 401, and an unknown route gets 404, each with the runner's own body | 2026-11-05 |
 | 5 git | s84d | Register `queue_switchboard_git`, deploy mcp | `db:deploy` | done in s84k (s84k-j4qe): registered in mcp/index.ts with a zod schema for each payload key; index.test.mjs expects it (195 tools, 41 pass). mcp deployed; an unauthenticated call gets 401. 208 and its test both ran (succeeded). **Not yet checked live:** the bad-payload refusal, because this session's Alfred connector loaded its tool list before the deploy | 2026-11-05 |
 | 5 git | s84k | s84d plus the s84e deploy | `db:deploy` | done (s84k-j4qe): switchboard-runner and mcp deployed while holding db:deploy. Yielded docs/history/progress-sam-rail.md to sam_cleanup-m4t (unchanged from main) | 2026-11-05 |
+| 5 git | s84s | get_switchboard_run reads git runs; queue_switchboard_git's reply; cli-workflow 2026-11-06a | `db:deploy` | partly done (s84s-v7nd). In switchboard.ts, get_switchboard_run takes `project_code` as a third way in (exactly one of three): that code's latest action of any kind and its latest run. A bad code is refused; one with no actions gives "no action for <code>.". queue_switchboard_git keeps `chat_url` only when it's https://claude.ai/chat/<uuid> and drops anything else, and replies with `next`: the result arrives in this chat, or say "check the git run". 5 new tests, 49 pass. The skill is at 2026-11-06a: tests before the checkpoint; Expected lines describe the screen; git result lines; how to write scope paths. **Blocked:** mcp/index.ts and index.test.mjs are held by notification_routing-d7v (block recorded), so the descriptions and the mcp deploy wait for s84t | 2026-11-06 |
+| 5 git | s84t | The mcp half of s84s | — | stopped (s84t-q4jx): main had moved, with notification routing's mcp/index.ts changes, and the CLI doesn't run gitsync. Alex ran gitsync by link (action 440ff091) | 2026-11-06 |
+| 5 git | s84t2 | The mcp half of s84s | `db:deploy` | done (s84t2-r6mh), after confirming main is merged. mcp/index.ts: get_switchboard_run advertises `project_code` and says what succeeded and failed mean for git; queue_switchboard_git says the result line arrives by itself, also mentions "check the git run", and says chat_url is optional, chat addresses only. 1 new test, 91 pass. mcp deployed. Live: project_code switchboard2-h8r returned the gitsync action 440ff091 (succeeded, summary ending "Merged main into worktree-switchboard2-h8r"); "Bad Code" was refused | 2026-11-06 |
 | 5 git | s84f | Git result lines in the chat (switchboard repo) | — | todo. The extension posts `sql <id>` for every approval (`runLine` ignores kind; POST_LINE allows only `sql <uuid>`), so a git approval posts the wrong line. Nothing posts the outcome after the helper's /result: the panel tile shows Git done or Git failed, and that's all | |
 | 5 git | s85-s87 | Skill and live test, sandbox sf checks, `sb client` answers and the panel snapshot | see below | todo | |
 | 4 | s88-s92 | Salesforce reads: spec §10 | see below | todo | |
@@ -558,6 +561,22 @@ The helper arrives here rather than with Phase 4. Every git link needs a click f
 - deploy: mcp
 - db items: `db:deploy`
 - check: a call with a bad payload is refused
+
+  Done in s84k.
+
+**s84t, the mcp half of s84s** (estimated run: 8m). Waits for notification_routing-d7v to release mcp/index.ts and index.test.mjs. switchboard.ts already has the code (s84s).
+- update: supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
+- deploy: mcp
+- db items: `db:deploy`
+- get_switchboard_run:
+  - add `project_code: z.string().optional()`;
+  - "Pass exactly one of action_id, run_id or project_code"; project_code gives that code's latest action, of any kind, and its latest run;
+  - append: "For kind git, status succeeded means the command ran and exited 0: completed, even if it changed nothing. Failed means a non-zero exit or a helper refusal. The run summary ends with the command's own Result: line."
+- queue_switchboard_git:
+  - replace the description's return sentence with: "Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole. Once he approves, the result line (git <action id> done or failed) arrives in this chat by itself when the command finishes, and nothing is posted at approval; he can also say \"check the git run\".";
+  - chat_url: "Optional; don't guess it, the extension remembers the chat. Only a https://claude.ai/chat/<uuid> address is used."
+- test: index.test.mjs checks that get_switchboard_run's schema has project_code and that queue_switchboard_git's description doesn't say "send git".
+- check, live, in a new thread: get_switchboard_run with project_code switchboard2-h8r returns its latest action; with "Bad Code" it is refused.
 
 **s84b, approve page and `git <id>` post** (estimated run: 10m). "Git ready" and "Git running" already exist from s54.
 - update: src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, extension/, panel/

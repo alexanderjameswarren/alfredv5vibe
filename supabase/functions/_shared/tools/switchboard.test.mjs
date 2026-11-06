@@ -409,6 +409,27 @@ test("get: exactly one id, well formed, and found", async () => {
   await assert.rejects(run({ action_id: "nope" }, { db }), /action_id.*UUID/);
   await assert.rejects(run({ action_id: ACTION_ID }, { db }), /no such action/);
   await assert.rejects(run({ run_id: RUN_ID }, { db }), /no such run/);
+  await assert.rejects(run({ action_id: ACTION_ID, project_code: "p-a1" }, { db }), /exactly one of/);
+});
+
+test("get: by project_code, its latest action of any kind and that action's latest run", async () => {
+  const db = fakeDb({ tables: { switchboard_actions: ok(ACTION), switchboard_runs: ok(RUN) } });
+  const out = await m.getSwitchboardRunTool.handler({ project_code: "switchboard2-h8r" }, { db });
+  assert.equal(out.action.id, ACTION_ID);
+  assert.deepEqual(out.run, RUN);
+  const a = db.calls.filter((c) => c[0] === "switchboard_actions");
+  assert.ok(a.some((c) => c[1] === "eq" && c[2] === "project_code" && c[3] === "switchboard2-h8r"));
+  assert.ok(!a.some((c) => c[1] === "eq" && c[2] === "kind"));
+  assert.ok(a.some((c) => c[1] === "order" && c[2] === "created_at" && c[3].ascending === false));
+  assert.ok(db.calls.some((c) => c[0] === "switchboard_runs" && c[1] === "eq" && c[2] === "action_id" && c[3] === ACTION_ID));
+});
+
+test("get: a bad project_code is refused before any read; an unused one has no action", async () => {
+  const run = m.getSwitchboardRunTool.handler;
+  const db = fakeDb({ tables: { switchboard_actions: ok(null) } });
+  await assert.rejects(run({ project_code: "Bad Code" }, { db }), /project_code/);
+  assert.equal(db.calls.length, 0);
+  await assert.rejects(run({ project_code: "p-none" }, { db }), /no action for p-none\./);
 });
 
 test("issue: a matching fingerprint calls switchboard_issue_link and returns its result", async () => {
@@ -526,7 +547,22 @@ test("git: refused keys and values, before anything is queued", async () => {
     assert.equal(db.calls.length, 0);
   }
   await assert.rejects(queueGit({ project_code: "Bad Code", command: "gitsync" }), /project_code/);
-  await assert.rejects(queueGit({ project_code: "p-a1", command: "gitsync", chat_url: "https://evil/" }), /chat_url/);
+});
+
+test("git: only a claude.ai chat address is kept as chat_url", async () => {
+  const chat = `https://claude.ai/chat/${ACTION_ID}`;
+  for (const [given, kept] of [[chat, chat], ["https://evil/", null], ["https://claude.ai/project/x", null], [undefined, null]]) {
+    const db = gitDb();
+    await queueGit({ project_code: "p-a1", command: "gitsync", chat_url: given }, db);
+    assert.equal(db.calls[0][1].p_chat_url, kept, String(given));
+  }
+});
+
+test("git: the reply says the result arrives in this chat", async () => {
+  const out = await queueGit({ project_code: "p-a1", command: "gitsync" });
+  assert.match(out.next, /arrives in this chat/);
+  assert.match(out.next, /check the git run/);
+  assert.doesNotMatch(out.next, /send git/);
 });
 
 test("git: a queue or link refusal is passed on, and says when the action was queued", async () => {
