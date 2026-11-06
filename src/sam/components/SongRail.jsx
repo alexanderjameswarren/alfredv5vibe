@@ -17,7 +17,7 @@ const SHAPE = "w-full flex items-center justify-center gap-1.5 px-1 py-2 min-h-[
 export default function SongRail({
   playbackState, songDbId,
   onPlay, onPractice, onPause, onResume, onRestart, onStop,
-  onWarmUp, warmUpVisible, warmUpPrimary, warmUpDisabledReason,
+  onWarmUp, warmUpVisible, warmUpPrimary, warmUpDisabledReason, resumeAt = null,
   song, bpm, timingWindowMs, chordMs, measureWidth, playbackSpeed,
   onSongUpdate, onHideBpmEdit,
   planItem = null, planWarmup = undefined, onSetPlanTempo = null,
@@ -44,6 +44,7 @@ export default function SongRail({
         warmUpVisible={warmUpVisible}
         warmUpPrimary={warmUpPrimary}
         warmUpDisabledReason={warmUpDisabledReason}
+        resumeAt={resumeAt}
       />
 
       <Divider />

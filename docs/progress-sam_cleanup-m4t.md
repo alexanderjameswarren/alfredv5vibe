@@ -58,16 +58,41 @@ Not claimed yet, each claimed by the step that needs it:
       `supabase/tests/sam_cleanup-m4t/1_beats_songs_counts_test.sql`, and this
       step's three code files.
   - *Check:* the score renders as before, and the score tests pass.
-- [ ] **s5. Part 4.** Claim `docs/history/progress-sam-rail.md` first. Run both
+- [x] **s5. Part 4.** Claim `docs/history/progress-sam-rail.md` first. Run both
   suites. Tick Step 6, or list the gaps.
   - *Check:* both suites green.
-- [ ] **s6. Part 5.** A measure field beside Resume, prefilled with the paused
+  - Done 2026-11-06: claimed the rail file (now free). SongRail.test 8 and
+    MoreDrawer.test 5 pass; no stale selectors; Step 6 ticked.
+- [x] **s6. Part 5.** A measure field beside Resume, prefilled with the paused
   measure, limited to the loaded range. Resume starts there.
   - *Check:* pause at m.12, enter 8, Resume, and it starts at m.8 with audio in
     sync.
+  - Done 2026-11-06:
+    - `ResumeMeasureField` and `resolveResumeMeasure` live in
+      TransportControls.jsx. The field takes played numbers and shows the
+      printed one as "(n)".
+    - SamPlayer keeps `resumeInput` (prefilled on pause). `handleResume` sets
+      `pausedMeasure` to the clamped value, and the seek and ScrollEngine's
+      start index follow it. SongRail passes `resumeAt` through.
+    - FocusedPlaybackBar shows only while playing and has no Resume, so it is
+      untouched. SamPlayer.audio.test is untouched; practice.test covers resume.
+    - Tests: 4 in practice.test, 5 in the new TransportControls.test.
+  - s6b (Alex's test passed; style fix):
+    - The box now follows the BPM box: a label above ("Resume at:"), full
+      width, `UI.input` (44px), `type="number"` and `inputMode="numeric"`.
+    - It selects the whole value on focus. Enter, or the keypad's Go, resumes.
+    - There is no shared number-input component, so it copies TempoControls'
+      markup. SongRail needed no change.
+    - Tests: +2 in TransportControls.test.
 - [ ] **s7. Part 6a, app side.** Mostly done at s3c: the opened item's id is
   kept (from the URL), written as `plan_item_id`, and preferred over song plus
-  range. Left: check the checklist and Next with two items on one range.
+  range. What remains:
+  - SamPlayer's snippet-row plan tags (about lines 434 and 485) still call
+    `matchPlanItem` by range alone. With two items on one range they would tag
+    only the first; they should list or prefer the opened item.
+  - Tests for two items on one range: the checklist rows, Next, the plan line
+    and the snippet tag.
+  - The counts stay range-matched until s8 changes `sam_plan_item_progress`.
   - *Check:* plan 32's items still link and count as before.
 - [ ] **s8. Part 6b, database and tool, just in time.**
   - Database: `gitsync`, a drift check, claim the `db:` items and the mcp files,
@@ -109,14 +134,13 @@ Estimated run: 10m
 - SQL: none
 Estimated run: 20m
 
-## Next step's scope (s5)
-Claims `docs/history/progress-sam-rail.md` first (held by switchboard2-h8r at s2).
+## Next step's scope (s7)
 - create: nothing
-- update: docs/history/progress-sam-rail.md, docs/progress-sam_cleanup-m4t.md
+- update: src/sam/SamPlayer.jsx, src/sam/lib/activePlan.js, src/sam/lib/activePlan.test.js, src/sam/SamPlayer.plan.test.jsx, docs/progress-sam_cleanup-m4t.md
 - delete: nothing
 - deploy: nothing
 - SQL: none
-Estimated run: 10m
+Estimated run: 20m
 
 ## Timing log
 
@@ -134,6 +158,9 @@ Estimated run: 10m
 | s4b2 (stopped) | 07:18:23 | 07:19:10 | 0m47s |
 | s4b2b | 07:30:52 | 07:31:40 | 0m48s |
 | s4c | 07:43:04 | 07:45:46 | 2m42s |
+| s5 | 07:55:02 | 07:56:27 | 1m25s |
+| s6 | 08:02:07 | 08:07:38 | 5m31s |
+| s6b | 08:13:22 | 08:14:31 | 1m09s |
 
 ## Log
 

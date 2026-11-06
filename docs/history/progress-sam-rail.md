@@ -64,8 +64,10 @@ scrolls); fit-to-height applies to the stopped, tray-closed score only.
   The drawer is an overlay, so it leaves the fit as it is.
   *Check:* at 1024 x 640 with the tray closed both staves show and the page does
   not scroll; scoring unchanged.
-- [ ] **6. Tests.** Selector updates, MoreDrawer tests, both suites.
+- [x] **6. Tests.** Selector updates, MoreDrawer tests, both suites.
   *Check:* both suites green.
+  Done 2026-11-06 (sam_cleanup-m4t s5): SongRail.test 8 and MoreDrawer.test 5 pass;
+  no test still selects FullSongButton, "Full Song", NumericSettings' default or "Change song".
 
 ## Log
 
