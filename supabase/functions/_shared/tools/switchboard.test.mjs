@@ -549,6 +549,22 @@ test("git: refused keys and values, before anything is queued", async () => {
   await assert.rejects(queueGit({ project_code: "Bad Code", command: "gitsync" }), /project_code/);
 });
 
+test("git: dot-folders are usable paths; traversal, absolute, drive, backslash and empty segments are not", () => {
+  for (const p of [".claude/skills/cli-workflow/SKILL.md", ".clip/x.md", "docs/", "a/.hidden/b.js", "supabase/migrations/208_x.sql"]) {
+    assert.ok(m.usablePath(p), p);
+  }
+  for (const p of ["..", "../x", "a/../b", "a/..", "./a", "a/./b", "/etc/passwd", "C:/x", "C:\\x", "a\\..\\b", "a\\b",
+    "a//b", "/", "", "-rf", "a b", 5]) {
+    assert.ok(!m.usablePath(p), String(p));
+  }
+});
+
+test("git: a checkpoint of a .claude path is queued", async () => {
+  const db = gitDb();
+  await queueGit({ project_code: "p-a1", command: "gitpush", mode: "checkpoint", paths: [".claude/skills/cli-workflow/SKILL.md"] }, db);
+  assert.deepEqual(db.calls[0][1].p_payload.paths, [".claude/skills/cli-workflow/SKILL.md"]);
+});
+
 test("git: only a claude.ai chat address is kept as chat_url", async () => {
   const chat = `https://claude.ai/chat/${ACTION_ID}`;
   for (const [given, kept] of [[chat, chat], ["https://evil/", null], ["https://claude.ai/project/x", null], [undefined, null]]) {

@@ -113,7 +113,14 @@ const GIT_KEYS: Record<string, string[]> = {
 };
 const PROJECT_CODE = /^[a-z0-9][a-z0-9_-]{1,40}$/;
 const CHAT_URL = /^https:\/\/claude\.ai\/chat\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const PATH_WORD = /^[A-Za-z0-9_][A-Za-z0-9_.\/-]*\/?$/;
+const SEGMENT = /^[A-Za-z0-9_.-]+$/;
+
+/** A repo-relative path: segments may start with a dot (.claude), never . or .., no leading -, empty segment or \ or :. */
+export function usablePath(x: unknown): boolean {
+  if (typeof x !== "string" || !x || x.startsWith("-")) return false;
+  const segs = (x.endsWith("/") ? x.slice(0, -1) : x).split("/");
+  return segs.every((s) => SEGMENT.test(s) && s !== "." && s !== "..");
+}
 
 /** The payload to store, or a refusal reason. args minus project_code and chat_url is the payload. */
 export function gitPayload(args: Record<string, unknown>): { payload: Record<string, unknown> } | { refused: string } {
@@ -152,7 +159,7 @@ export function gitPayload(args: Record<string, unknown>): { payload: Record<str
       const paths = p.paths;
       if (p.all === true && paths === undefined) { /* every uncommitted path */ }
       else if (Array.isArray(paths) && paths.length && p.all === undefined) {
-        const bad = paths.filter((x) => typeof x !== "string" || !PATH_WORD.test(x) || x.split("/").includes(".."));
+        const bad = paths.filter((x) => !usablePath(x));
         if (bad.length) return r(`not a usable path: ${bad.map(String).join(", ")}.`);
       } else return r("a Checkpoint needs `paths` (a list) or `all: true`, not both.");
       if (p.db !== undefined && !["release", "keep"].includes(p.db as string)) return r("`db` must be release or keep.");
