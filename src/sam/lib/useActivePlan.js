@@ -11,11 +11,16 @@ import { loadActivePlan, loadTodayProgress, planLinkFor, todayKey } from "./acti
 // same. `refreshProgress` reloads only today's progress — cheap enough to run
 // after every recorded pass.
 //
-// `getLink(songId, snippetId)` is what the writers call. It reads a ref, so it
+// `getLink(songId, snippetId, itemId)` is what the writers call; `itemId` is
+// the plan item that was opened, preferred over a song-and-range match. It reads a ref, so it
 // is stable and safe from ScrollEngine's rAF loop, and it answers
 // { plan_id: null, plan_item_id: null } until a plan has loaded. Linking must
 // never block or fail a pass.
-export default function useActivePlan() {
+//
+// `openKey` names what is loaded (song and snippet). Opening a song from /sam is
+// an in-app route change, so no load or focus event fires: a change of key
+// reloads instead.
+export default function useActivePlan(openKey = null) {
   const [plan, setPlan] = useState(null);
   const [progress, setProgress] = useState(() => new Map());
   const [loaded, setLoaded] = useState(false);
@@ -83,10 +88,23 @@ export default function useActivePlan() {
     };
   }, [refresh]);
 
+  // Skips the first run: the mount effect above has already loaded.
+  const keySeenRef = useRef(false);
+  useEffect(() => {
+    if (!keySeenRef.current) { keySeenRef.current = true; return; }
+    refresh();
+  }, [openKey, refresh]);
+
   const getLink = useCallback(
-    (songId, snippetId) => planLinkFor(planRef.current, songId, snippetId),
+    (songId, snippetId, itemId = null) => planLinkFor(planRef.current, songId, snippetId, itemId),
     []
   );
 
-  return { plan, progress, loaded, refresh, refreshProgress, getLink };
+  // The plan once any load in flight has landed: a cold load of ?item= needs it.
+  const whenLoaded = useCallback(async () => {
+    if (loadingRef.current) await loadingRef.current;
+    return planRef.current;
+  }, []);
+
+  return { plan, progress, loaded, refresh, refreshProgress, getLink, whenLoaded };
 }

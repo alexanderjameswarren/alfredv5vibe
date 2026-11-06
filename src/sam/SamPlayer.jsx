@@ -30,6 +30,7 @@ import useActivePlan from "./lib/useActivePlan";
 import {
   firstIncompleteItem, heardTempo, itemForLoadedRange, itemState, matchPlanItem,
   nextIncompleteItem, passQualifies, planBadgeText, planSongFor, planTempoCheck, snippetTagText,
+  openSearch, parseOpenSearch, loadOpenableSnippet, loadStaleItemSnippet,
 } from "./lib/activePlan";
 import PlanLine from "./components/PlanLine";
 import useWarmupLadder, { fetchDefaultLadder } from "./lib/useWarmupLadder";
@@ -124,8 +125,10 @@ function ToolGroup({ title, children }) {
 export default function SamPlayer({ onBack }) {
   const location = useLocation();
   const navigate = useNavigate();
-  // Which song the URL says is open. null on /sam and /sam/stats.
+  // Which song the URL says is open. null on /sam and /sam/stats. Plus which
+  // plan item or snippet of it (?item= / ?snippet=); none is the whole song.
   const songIdFromUrl = samSongIdFromPath(location.pathname);
+  const { itemId: itemIdFromUrl, snippetId: snippetIdFromUrl } = parseOpenSearch(location.search);
 
   const [song, setSong] = useState(null);
   const [songDbId, setSongDbId] = useState(null);
@@ -190,6 +193,10 @@ export default function SamPlayer({ onBack }) {
   const measureWidth = useNumericInput(DEFAULTS.measureWidth);
   const [lastResult, setLastResult] = useState(null);
   const [snippet, setSnippet] = useState(null); // { startMeasure, endMeasure, restMeasures, dbId }
+  // The plan item that was opened (?item= in the URL), or null. Passes credit it.
+  const [openItemId, setOpenItemId] = useState(null);
+  const openItemIdRef = useRef(null);
+  openItemIdRef.current = openItemId;
   // Whole-song repeat. Session-only by design: never persisted, no column, no
   // localStorage — it resets whenever a song is loaded. Mutually exclusive with
   // a snippet's own loop (see `songRepeatActive`), because both would otherwise
@@ -317,8 +324,12 @@ export default function SamPlayer({ onBack }) {
   // The active practice plan (§7.2/§7.3). One copy for the whole of SAM: the
   // home page's checklist reads it, and every pass and session row is linked
   // through `getPlanLink`.
-  const activePlan = useActivePlan();
-  const { getLink: getPlanLink, refreshProgress: refreshPlanProgress } = activePlan;
+  const activePlan = useActivePlan(songDbId ? `${songDbId}|${snippet?.dbId ?? ""}|${openItemId ?? ""}` : null);
+  const { getLink: getActiveLink, refresh: refreshActivePlan, whenLoaded: planWhenLoaded } = activePlan;
+  const getPlanLink = useCallback(
+    (songId, snippetId) => getActiveLink(songId, snippetId, openItemIdRef.current),
+    [getActiveLink]
+  );
 
   // What the plan says about what is loaded (§7.4). All counts come from
   // `activePlan.progress` — the database function — never from passes.
@@ -336,7 +347,7 @@ export default function SamPlayer({ onBack }) {
     stop: stopWarmup,
   } = warmup;
 
-  const planItem = itemForLoadedRange(activePlan.plan, songDbId, snippet);
+  const planItem = itemForLoadedRange(activePlan.plan, songDbId, snippet, openItemId);
   const planItemState = planItem ? itemState(planItem, activePlan.progress) : null;
   // The running rung's percent, or null with no ladder: the plan tempo warnings
   // stay quiet below 100%.
@@ -508,8 +519,9 @@ export default function SamPlayer({ onBack }) {
     practiceModeRef,
     onPassRecorded: (info) => {
       countPass(info);
-      // Today's plan progress, from the database — never counted here.
-      refreshPlanProgress();
+      // Plan and today's progress, from the database — never counted here. The
+      // plan too: one saved mid-practice is picked up at the next pass.
+      refreshActivePlan();
     },
   });
 
@@ -1336,6 +1348,7 @@ export default function SamPlayer({ onBack }) {
     setSong(loadedSong);
     setSongDbId(null);
     setSnippet(null);
+    setOpenItemId(null);
     // Repeat is session-only state, so a reload drops it back to the default.
     setSongRepeat(false);
     setSongRestMeasures(0);
@@ -1807,6 +1820,8 @@ export default function SamPlayer({ onBack }) {
   function handleSnippetChange(next) {
     disarmPass();
     endWarmupRun();
+    // A range picked by hand is no longer "the item that was opened".
+    setOpenItemId(null);
     setSnippet(next);
   }
 
@@ -1820,25 +1835,14 @@ export default function SamPlayer({ onBack }) {
   // its snippet when that is still loadable, and the item's target tempo in
   // the tempo box for this sitting. Nothing is saved to the song — the tempo
   // box only saves through its own Save button.
-  async function openPlanItem(item) {
+  //
+  // A navigation, pushed so Back returns: the URL effect below does the load.
+  function openPlanItem(item) {
     // Reached from the player too, via the plan line's Next button: end any
     // sitting in flight first so its events are flushed, exactly as closing
     // the song would. From the home page there is nothing to end.
     if (playbackState === "playing") endSession();
-    let loaded;
-    try {
-      loaded = await fetchSongById(item.song_id, supabase);
-    } catch (e) {
-      console.error("[Sam] Failed to open plan item:", e);
-      setImportError("That song could not be loaded.");
-      return;
-    }
-    handleSongLoaded(loaded.song);
-    setSongDbId(loaded.row.id);
-    const sn = item.snippet;
-    if (sn && !item.snippet_unavailable) setSnippet(snippetFromRow(sn));
-    if (Number.isFinite(item.target_bpm)) bpm.set(item.target_bpm);
-    if (Number.isFinite(item.target_playback_speed)) playbackSpeed.set(item.target_playback_speed);
+    navigate(samSongPath(item.song_id) + openSearch({ itemId: item.id }));
   }
 
   // "Set tempo" in the rail: the item's tempo, for this sitting only.
@@ -1881,11 +1885,16 @@ export default function SamPlayer({ onBack }) {
   // /sam/songs/x is the same effect seeing an id with nothing loaded, so it
   // fetches. Both fall out of one rule.
   //
-  // The dependency list is deliberately just [songIdFromUrl]. Adding `song`
+  // The query (?item= / ?snippet=) is part of the address too (s3c): a change
+  // of item or snippet on the same song re-runs this and reloads, so reload,
+  // Back, Forward and a pasted link all restore the snippet, tempo and item.
+  //
+  // The dependency list is deliberately the URL alone. Adding `song`
   // or `songDbId` would re-run this while an import is mid-flight — an
   // imported song is open for a moment *before* its insert returns an id, so
   // the URL is legitimately /sam with a song loaded, and a re-run would read
   // that as "no id in the URL" and close the song the user just imported.
+  const urlResolvingRef = useRef(false);
   useEffect(() => {
     let cancelled = false;
 
@@ -1893,13 +1902,28 @@ export default function SamPlayer({ onBack }) {
       if (songDbId) closeOpenSong();
       return;
     }
-    if (songIdFromUrl === songDbId) return;
+    // Already showing it: the URL was just written from state (below).
+    if (songIdFromUrl === songDbId && (itemIdFromUrl
+      ? itemIdFromUrl === openItemId
+      : !openItemId && (snippetIdFromUrl || null) === (snippet?.dbId ?? null))) return;
 
-    fetchSongById(songIdFromUrl, supabase)
-      .then(({ song: loaded, row }) => {
+    urlResolvingRef.current = true;
+    resolveOpenFromUrl(songIdFromUrl, itemIdFromUrl, snippetIdFromUrl)
+      .then(({ loaded, row, snippetRow, item }) => {
         if (cancelled) return;
         handleSongLoaded(loaded);
         setSongDbId(row.id);
+        if (snippetRow) setSnippet(snippetFromRow(snippetRow));
+        if (item) {
+          setOpenItemId(item.id);
+          if (Number.isFinite(item.target_bpm)) bpm.set(item.target_bpm);
+          if (Number.isFinite(item.target_playback_speed)) playbackSpeed.set(item.target_playback_speed);
+        }
+        // A fallback (old item, unknown snippet) corrects the address in place.
+        const search = openSearch({ itemId: item?.id ?? null, snippetId: snippetRow?.id ?? null });
+        if (search !== openSearch({ itemId: itemIdFromUrl, snippetId: snippetIdFromUrl })) {
+          navigate(samSongPath(row.id) + search, { replace: true });
+        }
       })
       .catch((e) => {
         console.error("[Sam] Failed to load song from the URL:", e);
@@ -1907,21 +1931,51 @@ export default function SamPlayer({ onBack }) {
         // A bad or deleted id must not strand the user on a blank player.
         setImportError("That song could not be loaded.");
         navigate(SAM_PATH, { replace: true });
-      });
+      })
+      .finally(() => { if (!cancelled) urlResolvingRef.current = false; });
 
-    return () => { cancelled = true; };
+    return () => { cancelled = true; urlResolvingRef.current = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [songIdFromUrl]);
+  }, [songIdFromUrl, itemIdFromUrl, snippetIdFromUrl]);
+
+  // What the URL names: the song, plus the item (from the active plan, else its
+  // snippet if that still loads) or the snippet. Anything unknown falls back to
+  // the whole song without an error; only the song itself failing throws.
+  async function resolveOpenFromUrl(songId, itemId, snippetId) {
+    const songLoad = fetchSongById(songId, supabase);
+    let item = null;
+    let snippetRow = null;
+    try {
+      if (itemId) {
+        const plan = await planWhenLoaded();
+        item = (plan?.items || []).find((i) => i.id === itemId && i.song_id === songId) || null;
+        if (item) snippetRow = item.snippet && !item.snippet_unavailable ? item.snippet : null;
+        else snippetRow = await loadStaleItemSnippet(supabase, songId, itemId);
+      } else if (snippetId) {
+        snippetRow = await loadOpenableSnippet(supabase, songId, snippetId);
+      }
+    } catch (e) {
+      console.error("[Sam] Could not resolve the item or snippet in the URL:", e);
+      item = null;
+      snippetRow = null;
+    }
+    const { song: loaded, row } = await songLoad;
+    return { loaded, row, snippetRow, item };
+  }
 
   // Direction 2: state -> URL. A song opened from the library or finished
-  // importing gets its address, pushed so Back closes it. Keyed on songDbId
-  // only, for the same reason as above.
+  // importing gets its address, pushed so Back closes it. A snippet picked in
+  // the player, or a URL fallback, rewrites the query in place.
   useEffect(() => {
-    if (!songDbId) return;
-    if (samSongIdFromPath(location.pathname) === songDbId) return;
-    navigate(samSongPath(songDbId));
+    if (!songDbId || urlResolvingRef.current) return;
+    const search = openSearch({ itemId: openItemId, snippetId: snippet?.dbId ?? null });
+    if (samSongIdFromPath(location.pathname) !== songDbId) {
+      navigate(samSongPath(songDbId) + search);
+    } else if ((location.search || "") !== search) {
+      navigate(samSongPath(songDbId) + search, { replace: true });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [songDbId]);
+  }, [songDbId, openItemId, snippet?.dbId]);
 
   const handleSelectFingering = useCallback((coord) => setFingeringSelection(coord), []);
   const toggleFingeringMode = useCallback(() => {

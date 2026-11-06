@@ -3,8 +3,28 @@ import {
   itemState, planSummary, itemTargetText, itemRangeText, todayKey,
   heardTempo, itemForLoadedRange, planSongFor, planLineText, planBadgeText, snippetTagText,
   planItemsInOrder, firstIncompleteItem, nextIncompleteItem, planIsComplete, itemShortRange,
-  nextItemLabel, passQualifies, planTempoCheck, planTempoText,
+  nextItemLabel, passQualifies, planTempoCheck, planTempoText, openSearch, parseOpenSearch,
 } from "./activePlan";
+
+describe("the opened item and the URL (s3c)", () => {
+  const twice = { id: "p", items: [
+    { id: "a", song_id: "s", snippet_id: "n" }, { id: "b", song_id: "s", snippet_id: "n" },
+  ] };
+  test("the opened item wins on its own range, and only there", () => {
+    expect(matchPlanItem(twice, "s", "n").id).toBe("a");
+    expect(matchPlanItem(twice, "s", "n", "b").id).toBe("b");
+    expect(planLinkFor(twice, "s", "n", "b").plan_item_id).toBe("b");
+    expect(matchPlanItem(twice, "s", null, "b")).toBeNull();
+    expect(matchPlanItem(twice, "s", "n", "gone").id).toBe("a");
+  });
+  test("openSearch and parseOpenSearch", () => {
+    expect(openSearch({ itemId: "i", snippetId: "n" })).toBe("?item=i");
+    expect(openSearch({ snippetId: "n" })).toBe("?snippet=n");
+    expect(openSearch()).toBe("");
+    expect(parseOpenSearch("?item=i")).toEqual({ itemId: "i", snippetId: null });
+    expect(parseOpenSearch("")).toEqual({ itemId: null, snippetId: null });
+  });
+});
 
 const PLAN = {
   id: "plan-1",
@@ -358,6 +378,10 @@ describe("working order, first incomplete, and what comes next", () => {
       .toBe("m.5–12 · RH");
     // A snippet that can no longer be read still names its song.
     expect(nextItemLabel({ song_title: "Prelude", snippet_id: "gone", snippet: null })).toBe("Next: Prelude");
+  });
+
+  test("a Free Play Next item is marked optional", () => {
+    expect(nextItemLabel({ ...item.m1, is_free_play: true })).toBe("Next (optional): Pastorale Whole song");
   });
 });
 

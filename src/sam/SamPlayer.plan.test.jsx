@@ -3,12 +3,12 @@
 //     sam_plan_item_progress for today;
 //   - tapping an item opens its song and snippet at the item's target tempo;
 //   - the session and the pass rows written afterwards carry the plan link;
-//   - a recorded pass refetches today's progress (and only progress).
+//   - a recorded pass refetches the plan and today's progress.
 
 import React from "react";
 import { render, screen, fireEvent, act, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 
 jest.mock("./components/ScoreRenderer", () => () => null);
 
@@ -241,7 +241,7 @@ test("tapping a snippet item opens its song and snippet at the target tempo; the
   });
   expect(sessionInserts()[0].row.settings).toMatchObject({ bpm: 60, handMode: "rh" });
 
-  // One completed loop: a pass, linked the same way, then a progress-only refetch.
+  // One completed loop: a pass, linked the same way, then plan and progress refetched.
   const plansBefore = mockDb.froms.filter((t) => t === "sam_practice_plans").length;
   const progressBefore = mockDb.rpcs.filter((r) => r.fn === "sam_plan_item_progress").length;
   await act(async () => { completePass(1); });
@@ -251,7 +251,17 @@ test("tapping a snippet item opens its song and snippet at the target tempo; the
   });
   await waitFor(() =>
     expect(mockDb.rpcs.filter((r) => r.fn === "sam_plan_item_progress").length).toBe(progressBefore + 1));
-  expect(mockDb.froms.filter((t) => t === "sam_practice_plans").length).toBe(plansBefore);
+  expect(mockDb.froms.filter((t) => t === "sam_practice_plans").length).toBe(plansBefore + 1);
+});
+
+test("opening an item from home reloads the plan, so a plan saved meanwhile is the one in use", async () => {
+  renderHome();
+  await expandPlan();
+  const before = mockDb.froms.filter((t) => t === "sam_practice_plans").length;
+  fireEvent.click(screen.getByRole("button", { name: /Whole song/ }));
+  await screen.findByLabelText(/BPM:/);
+  await waitFor(() =>
+    expect(mockDb.froms.filter((t) => t === "sam_practice_plans").length).toBeGreaterThan(before));
 });
 
 test("a whole-song item opens without a snippet and links to the whole-song item", async () => {
@@ -423,6 +433,188 @@ test("a finished snippet's tag reads Plan ✓", async () => {
   await screen.findByLabelText(/BPM:/);
   await openSavedList();
   expect(await screen.findByText("Plan ✓")).toHaveAttribute("data-state", "done");
+});
+
+// --- Another item on the SAME song (s3b) -------------------------------------
+
+function seedSecondSnippet() {
+  mockDb.tables.sam_snippets.push({ id: "snip-2", song_id: SONG_ID, title: "Second bar", start_measure: 2,
+    end_measure: 2, rest_measures: 0, settings: { handMode: "both" }, archived: false });
+  mockDb.tables.sam_practice_plan_items.push({ id: "item-snip2", plan_id: "plan-1", song_id: SONG_ID,
+    snippet_id: "snip-2", position: 3, is_free_play: false, target_bpm: 50, target_playback_speed: 100,
+    target_effective_bpm: 50, target_passes: 2, accuracy_target: 85, instruction: null });
+}
+const done = (...ids) => ids.map((id) => ({ plan_item_id: id, day: "2026-09-16", attempts: 9, qualifying: 9 }));
+const planLine = (re) => screen.findByText(re, { selector: "*" });
+
+async function backHomeAndOpen(rowText) {
+  fireEvent.click(screen.getByRole("button", { name: "Back to song library" }));
+  await screen.findByRole("button", { name: /Today's plan · / });
+  // The checklist may still be unfolded from the first visit.
+  if (!screen.queryByRole("button", { name: new RegExp(esc(rowText)) })) await expandPlan();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(esc(rowText)) }));
+  });
+}
+
+async function pressNext(name) {
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name })); });
+}
+
+test("StrictMode and a slow song fetch: home to another snippet of the same song", async () => {
+  seedSecondSnippet();
+  mockDb.progressRows = done("item-snip", "item-whole");
+  mockFetchSongById.mockReset().mockImplementation(
+    () => new Promise((r) => setTimeout(() => r({ song: JSON.parse(JSON.stringify(SONG)), row: { id: SONG_ID } }), 50)));
+  render(
+    <React.StrictMode>
+      <MemoryRouter initialEntries={["/sam"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <SamPlayer onBack={() => {}} />
+      </MemoryRouter>
+    </React.StrictMode>
+  );
+  await expandPlan();
+  fireEvent.click(screen.getByRole("button", { name: /m\.1–1 · RH · Opening bar/ }));
+  await screen.findByLabelText(/BPM:/);
+  await waitFor(() => expect(screen.getByLabelText(/BPM:/)).toHaveValue(60));
+  await backHomeAndOpen("m.2–2 · Second bar");
+  await new Promise((r) => setTimeout(r, 200));
+  await waitFor(() => expect(screen.getByLabelText(/BPM:/)).toHaveValue(50));
+  await new Promise((r) => setTimeout(r, 200));
+  expect(screen.getByLabelText(/BPM:/)).toHaveValue(50);
+  expect(mockFetchSongById.mock.calls.length).toBe(2);
+});
+
+test("Next while paused opens the other snippet of the same song", async () => {
+  seedSecondSnippet();
+  mockDb.progressRows = done("item-snip", "item-whole");
+  await openItem("m.1–1 · RH · Opening bar");
+  await pressPlay();
+  fireEvent.click(await screen.findByRole("button", { name: /^Pause$/ }));
+  await pressNext("Next: Throwaway m.2–2");
+  await waitFor(() => expect(screen.getByLabelText(/BPM:/)).toHaveValue(50));
+  expect(await planLine(/Plan · m\.2–2/)).toBeInTheDocument();
+});
+
+describe.each([
+  ["Next", async (_row, name) => pressNext(name)],
+  ["the home checklist", async (row) => backHomeAndOpen(row)],
+])("opening another item of the open song, via %s", (_via, open) => {
+  test("snippet to snippet", async () => {
+    seedSecondSnippet();
+    mockDb.progressRows = done("item-snip", "item-whole");
+    await openItem("m.1–1 · RH · Opening bar");
+    await open("m.2–2 · Second bar", "Next: Throwaway m.2–2");
+    await waitFor(() => expect(screen.getByLabelText(/BPM:/)).toHaveValue(50));
+    expect(await planLine(/Plan · m\.2–2/)).toBeInTheDocument();
+    expect(screen.queryByText(/Not in today's plan/)).not.toBeInTheDocument();
+  });
+
+  test("snippet to whole song", async () => {
+    mockDb.progressRows = done("item-snip");
+    await openItem("m.1–1 · RH · Opening bar");
+    await open("Whole song", "Next: Throwaway Whole song");
+    await waitFor(() => expect(screen.getByLabelText(/BPM:/)).toHaveValue(55));
+    expect(await planLine(/Plan · Whole song/)).toBeInTheDocument();
+  });
+
+  test("whole song to snippet", async () => {
+    seedSecondSnippet();
+    mockDb.progressRows = done("item-snip", "item-whole");
+    await openItem("Whole song");
+    await open("m.2–2 · Second bar", "Next: Throwaway m.2–2");
+    await waitFor(() => expect(screen.getByLabelText(/BPM:/)).toHaveValue(50));
+    expect(await planLine(/Plan · m\.2–2/)).toBeInTheDocument();
+  });
+});
+
+// --- The URL says what is open (s3c) -----------------------------------------
+
+let probe = {};
+function RouterProbe() {
+  probe = { navigate: useNavigate(), location: useLocation() };
+  return null;
+}
+function renderAt(path) {
+  return render(
+    <MemoryRouter initialEntries={[path]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <SamPlayer onBack={() => {}} />
+      <RouterProbe />
+    </MemoryRouter>
+  );
+}
+const bpmBox = () => screen.getByLabelText(/BPM:/);
+const go = (to) => act(async () => { probe.navigate(to); });
+
+test("reload with ?item restores the snippet, tempo, plan line and pass link", async () => {
+  renderAt(`/sam/songs/${SONG_ID}?item=item-snip`);
+  await waitFor(() => expect(bpmBox()).toHaveValue(60));
+  expect(await planLine(/Plan · m\.1–1 · RH/)).toBeInTheDocument();
+  await pressPlay();
+  expect(sessionInserts()[0].row).toMatchObject({ snippet_id: "snip-1", plan_item_id: "item-snip" });
+});
+
+test("opening an item puts it in the URL; Back and Forward move between two items of the same song", async () => {
+  seedSecondSnippet();
+  mockDb.progressRows = done("item-snip", "item-whole");
+  renderAt("/sam");
+  await expandPlan();
+  fireEvent.click(screen.getByRole("button", { name: /m\.1–1 · RH · Opening bar/ }));
+  await waitFor(() => expect(bpmBox()).toHaveValue(60));
+  expect(probe.location.search).toBe("?item=item-snip");
+  await pressNext("Next: Throwaway m.2–2");
+  await waitFor(() => expect(bpmBox()).toHaveValue(50));
+  expect(probe.location.search).toBe("?item=item-snip2");
+
+  await go(-1);
+  await waitFor(() => expect(bpmBox()).toHaveValue(60));
+  expect(await planLine(/Plan · m\.1–1 · RH/)).toBeInTheDocument();
+  await go(1);
+  await waitFor(() => expect(bpmBox()).toHaveValue(50));
+  expect(await planLine(/Plan · m\.2–2/)).toBeInTheDocument();
+});
+
+test("?snippet opens that snippet; dropping it opens the whole song", async () => {
+  renderAt(`/sam/songs/${SONG_ID}?snippet=snip-1`);
+  expect(await planLine(/Plan · m\.1–1 · RH/)).toBeInTheDocument();
+  expect(bpmBox()).toHaveValue(65);
+  await go(`/sam/songs/${SONG_ID}`);
+  expect(await planLine(/Plan · Whole song/)).toBeInTheDocument();
+  expect(probe.location.search).toBe("");
+});
+
+test("an item from an old plan opens its snippet, with no error and no item tempo", async () => {
+  mockDb.tables.sam_practice_plan_items.push({ id: "old-item", plan_id: "plan-0", song_id: SONG_ID,
+    snippet_id: "snip-1", position: 1, target_bpm: 40, target_playback_speed: 100 });
+  renderAt(`/sam/songs/${SONG_ID}?item=old-item`);
+  expect(await planLine(/Plan · m\.1–1 · RH/)).toBeInTheDocument();
+  expect(bpmBox()).toHaveValue(65);
+  await waitFor(() => expect(probe.location.search).toBe("?snippet=snip-1"));
+  expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
+});
+
+test("an old item whose snippet is gone, or an unknown snippet, opens the whole song", async () => {
+  mockDb.tables.sam_practice_plan_items.push({ id: "old-item", plan_id: "plan-0", song_id: SONG_ID,
+    snippet_id: "snip-gone", position: 1 });
+  renderAt(`/sam/songs/${SONG_ID}?item=old-item`);
+  expect(await planLine(/Plan · Whole song/)).toBeInTheDocument();
+  await waitFor(() => expect(probe.location.search).toBe(""));
+  await go(`/sam/songs/${SONG_ID}?snippet=nope`);
+  await waitFor(() => expect(probe.location.search).toBe(""));
+  expect(await planLine(/Plan · Whole song/)).toBeInTheDocument();
+  expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
+});
+
+test("the pass credits the item in the URL, even when another item has the same range", async () => {
+  mockDb.tables.sam_practice_plan_items.push({ ...mockDb.tables.sam_practice_plan_items[0],
+    id: "item-snip-again", position: 3, target_bpm: 70, target_effective_bpm: 70 });
+  renderAt(`/sam/songs/${SONG_ID}?item=item-snip-again`);
+  await waitFor(() => expect(bpmBox()).toHaveValue(70));
+  await pressPlay();
+  expect(sessionInserts()[0].row.plan_item_id).toBe("item-snip-again");
+  await act(async () => { completePass(1); });
+  await waitFor(() => expect(passInserts()).toHaveLength(1));
+  expect(passInserts()[0].row.plan_item_id).toBe("item-snip-again");
 });
 
 // --- Next, from the player (2026-09-19) --------------------------------------
