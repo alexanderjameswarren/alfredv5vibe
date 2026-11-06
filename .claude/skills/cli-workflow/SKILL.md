@@ -5,7 +5,7 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
-Skill version: 2026-11-05a
+Skill version: 2026-11-06a
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -87,6 +87,10 @@ in a table. It sits on top of the copy-box rule; it does not replace it.
   steps, the reload gets skipped.
 - **Then an "Expected:" line**, only when there is something specific to see.
   **Every terminal step has one**, so a command that fails silently shows.
+  It describes what Alex will see on screen, in order ("the tile turns green and
+  says Git done, then the chat shows a line ending in done"), never an internal
+  code alone ("status succeeded"). **Any condition the test depends on is stated
+  up front**, before the actions: "this needs a worktree with nothing to merge".
 - **Then a "Feedback:" line**, only when he must send something back. Use
   "screenshot" when the result is visual and "pass or fail" when it is a
   behavior. For SQL, name where the answer appears: "paste the result cell in
@@ -342,6 +346,9 @@ Estimated run: 12m
   as shown; a folder entry ends in `/` and covers everything under it.
 - **List everything the step will touch**, including test files and any spec doc
   it updates. The project's progress file is implied.
+- **Paths are written out, one form or the other**: comma-separated on the key's
+  line (`- update: src/a.js, src/a.test.js`), or one per line under the key as
+  `  - path`. Never "src/a.js and its test": the guard matches paths, not words.
 - **A step that writes a `_pending_` migration declares under SQL every table the
   file creates, alters or grants on**, even though nothing runs yet. The plan guard
   counts the tables any written SQL file touches; "SQL: none" got a drafting step
@@ -932,6 +939,14 @@ deliberate final error. The rules are in alfred-v5's `CLAUDE.md`.
 - `sql <run id>`: read the run with `get_switchboard_run` and report it.
 - `sql <id> cancelled: <reason>`: read that dry run and act on the reason. The reason
   is optional.
+- `git <action id> done`, `git <action id> failed` or `git <action id> cancelled`: one
+  line per git command, posted at the end, when the command finishes (nothing is
+  posted at approval). Read it with `get_switchboard_run(action_id)`, or with
+  `project_code` for that project's latest action. For a git action, status
+  succeeded means the command ran and exited 0: completed, even if it changed
+  nothing (a gitsync with nothing to merge). Failed means a non-zero exit or a
+  helper refusal. The run summary ends with the command's own "Result:" line;
+  report that. "Check the git run" from Alex means the same read.
 
 **The SQL editor is the fallback, for two things only:** what the runner refused, and
 anything holding a secret such as a password, which never goes in the queue.
@@ -1098,6 +1113,10 @@ decision he must make is then its own numbered step, with each answer in its own
 copy box**, never folded into another step's Feedback line. **When a question or
 decision touches notifications**, name the job that sends them, the app they
 arrive in, and where tapping one goes.
+
+**When the step has tests, this reply gives the tests and no checkpoint**, neither
+the command nor a link. The checkpoint comes in the reply after his test feedback,
+once the tests have passed.
 
 **3. Your to-dos.** Everything the user must do by hand — run SQL, edit a file,
 set a variable, deploy, install. Steps in the step format, one action per step
@@ -1740,6 +1759,8 @@ Only proceed to the next step after I confirm verification is successful.
 - End the report with "Scope vs changes" (clip.cmd --scope), then
   "Next step's scope" with the next step's block, then the timing table
 - Never commit, push, merge, or run any git command that changes state
+- When this step has tests: give Alex the tests and no checkpoint command. The
+  checkpoint comes after he reports the test results
 - If you need clarification, stop and ask
 - Queue migrations, data changes and test scripts with scripts/sql-queue.mjs; don't
   hand them to me for the SQL editor unless the runner refuses them or they hold a

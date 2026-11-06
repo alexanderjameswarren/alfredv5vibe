@@ -175,6 +175,16 @@ test("every tool that reads the shared status enum registers", () => {
   }
 });
 
+test("switchboard git: project_code is advertised, the reply says the result arrives by itself", () => {
+  const get = registered.find((r) => r.name === "get_switchboard_run");
+  assert.deepEqual(Object.keys(get.cfg.inputSchema).sort(), ["action_id", "project_code", "run_id"]);
+  assert.match(get.cfg.description, /succeeded means the command ran and exited 0/);
+  const q = registered.find((r) => r.name === "queue_switchboard_git");
+  assert.match(q.cfg.description, /arrives in this chat by itself/);
+  assert.match(q.cfg.description, /check the git run/);
+  assert.doesNotMatch(q.cfg.description, /send git/);
+});
+
 test("update_platform_run accepts the outcome fields", () => {
   // Their absence from the input schema stripped them silently, before the
   // handler that validates them ever saw them.
