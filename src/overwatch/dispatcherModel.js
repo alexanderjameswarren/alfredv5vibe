@@ -79,13 +79,100 @@ export function deliveryWords(delivery) {
   const p = delivery.pace || {};
   const pace = [
     p.max_pops_per_hour ? `At most ${p.max_pops_per_hour} notifications an hour` : "No hourly limit",
-    p.max_pops_per_day ? `${p.max_pops_per_day} a day` : "no daily limit",
+    (p.max_per_day_all ?? p.max_pops_per_day) ? `${p.max_per_day_all ?? p.max_pops_per_day} a day` : "no daily limit",
     p.min_gap_minutes ? `at least ${p.min_gap_minutes} minutes apart` : "no minimum gap",
   ].join(", ") + ".";
   const d = delivery.defaults || {};
   const defaults = ["low", "normal", "high", "urgent"]
     .filter((s) => d[s]).map((s) => `${SEVERITY_WORDS[s]}: ${DEFAULT_WORDS[d[s]] || d[s]}`).join(" · ");
   return { window, pace, defaults: defaults ? `By default ${defaults}.` : "No default decisions set." };
+}
+
+const KIND_WORDS = { nudge: "nudges", flag: "flags", info: "updates", encouragement: "encouragements", failure: "failures" };
+const DAY_WORDS = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+const DECISION_EFFECTS = {
+  notify: "always a notification", inbox: "inbox instead of a notification", hold: "held", drop: "dropped",
+};
+
+/** "Nov 12, 3:00 PM" in Pacific. */
+function pacificShort(iso) {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return String(iso);
+  return new Intl.DateTimeFormat("en-US", { timeZone: TZ, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    .format(at);
+}
+
+const andList = (xs) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+
+/** Who an override is for: "High and Urgent Arnold", "DJ failures", or "Everything". */
+function overrideWho(match, appNames) {
+  const m = match || {};
+  const parts = [];
+  if (Array.isArray(m.severity)) parts.push(andList(m.severity.map((s) => SEVERITY_WORDS[s] || s)));
+  if (m.app) parts.push(appDisplayName(m.app, appNames));
+  if (m.job) parts.push(`(${m.job})`);
+  if (m.subject_key) parts.push(m.subject_key.endsWith("*") ? `${m.subject_key.slice(0, -1)}…` : m.subject_key);
+  if (Array.isArray(m.kind)) parts.push(andList(m.kind.map((k) => KIND_WORDS[k] || k)));
+  if (m.started_by) parts.push(`started by ${m.started_by}`);
+  return parts.length ? parts.join(" ") : "Everything";
+}
+
+/** What an override does, as a list of short phrases. */
+function overrideEffects(effect) {
+  const e = effect || {};
+  const out = [];
+  if (e.decision) out.push(DECISION_EFFECTS[e.decision] || e.decision);
+  if (typeof e.severity === "string") out.push(`treated as ${SEVERITY_WORDS[e.severity] || e.severity}`);
+  if (e.severity === 1) out.push("one step more important");
+  if (e.severity === -1) out.push("one step less important");
+  const p = e.pace || {};
+  if (p.exempt) out.push("no hourly or daily limit");
+  if (p.max_per_hour != null) out.push(`at most ${p.max_per_hour} an hour`);
+  if (p.max_per_day != null) out.push(`at most ${p.max_per_day} a day`);
+  if (p.min_gap_minutes != null) out.push(`at least ${p.min_gap_minutes} minutes apart`);
+  if (e.window?.ignore) out.push("any hour");
+  else if (e.window?.start) out.push(`from ${twelveHour(e.window.start)} to ${twelveHour(e.window.end)}`);
+  if (e.bundle === "never") out.push("never bundled");
+  if (e.bundle === "always") out.push("always bundled");
+  if (e.merge === false) out.push("never added to an open item");
+  if (e.priority === "before") out.push("first when the limit is reached");
+  if (e.priority === "after") out.push("last when the limit is reached");
+  return out;
+}
+
+/** When an override holds: "Mon and Fri", "9:00 AM to 5:00 PM", "from …", "until …". */
+function overrideWhen(when) {
+  const w = when || {};
+  const out = [];
+  if (Array.isArray(w.days_of_week)) out.push(andList(w.days_of_week.map((x) => DAY_WORDS[x] || x)));
+  if (w.time_from && w.time_to) out.push(`${twelveHour(w.time_from)} to ${twelveHour(w.time_to)}`);
+  if (w.starts_at) out.push(`from ${pacificShort(w.starts_at)}`);
+  if (w.ends_at) out.push(`until ${pacificShort(w.ends_at)}`);
+  return out;
+}
+
+/**
+ * Each override in plain words, for the rules card: { label, text, status } where status is "in force",
+ * "not yet" or "ended". E.g. "Arnold notifications: any hour, until Nov 12, 3:00 PM".
+ */
+export function overrideLines(overrides, appNames = {}, now = new Date()) {
+  if (!Array.isArray(overrides)) return [];
+  return overrides.map((o) => {
+    const effects = overrideEffects(o.effect);
+    // An override about how notifications go (not which outcome) reads as "<who> notifications".
+    const aboutNotifications = !o.effect?.decision && o.effect?.severity === undefined;
+    const who = overrideWho(o.match, appNames);
+    const subject = aboutNotifications ? `${who} notifications` : who;
+    const ends = o.when?.ends_at && Date.parse(o.when.ends_at) <= now.getTime();
+    const starts = o.when?.starts_at && Date.parse(o.when.starts_at) > now.getTime();
+    const when = ends ? [] : overrideWhen(o.when);
+    const text = `${subject}: ${[...effects, ...when].join(", ")}`;
+    return {
+      label: o.label,
+      text: ends ? `${text}. Ended ${pacificShort(o.when.ends_at)}` : text,
+      status: ends ? "ended" : starts ? "not yet" : "in force",
+    };
+  });
 }
 
 const inboxPathOf = (id) => (isRecordId(id) ? recordPath(id) : null);
@@ -235,6 +322,7 @@ export function dispatcherView(data, { now = new Date(), appNames = {} } = {}) {
   const signals = data.signals || [];
   return {
     rules: deliveryWords(data.delivery),
+    overrides: overrideLines(data.delivery?.overrides, appNames, now),
     inside: insideWindow(data.delivery, now),
     nextRun: nextRunLabel(now),
     queued: queuedRows(data.reminders, data.steps, data.executionNames || {}),
