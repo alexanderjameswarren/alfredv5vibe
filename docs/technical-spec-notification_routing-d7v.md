@@ -77,6 +77,7 @@ one place (Overwatch's plan). When Alex's workflow changes he changes that plan,
 | `reason` | text | the rule that decided, in plain words |
 | `decided_at` | timestamptz | |
 | `decided_run_id` | uuid | the dispatcher's `platform_runs` row |
+| `decided_by` | text | step 11: who decided it by hand, `alex` (the screen) or `chat` (update_signal); null is the dispatcher. Checked by `started_by_valid` |
 | `inbox_id` | text | fk `inbox(id)` on delete set null: the item it became or merged into |
 | `notification_id` | uuid | the `claude_notifications` row for a pop |
 | `merged_into` | uuid | fk `signals(id)` |
@@ -122,7 +123,7 @@ Indexes: `(user_id, state, created_at)`, `(user_id, subject_key, created_at desc
 | `get_delivery_rules` | 1 | the active Overwatch plan's `delivery` section (in `overwatch-plan.ts`) |
 | `get_dispatch_plan` | 1 | `dispatch_signals()`: each queued signal's decision and reason, and pops sent and left this hour and today; optional `at` to preview another time |
 | `deliver_signals` | 1 | recompute the plan and apply it: hold, create inbox items, send pops (shared `web-push-send.ts`), merge, one digest; logs every inbox item and pop in `claude_notifications` with `signal_id` and `started_by`; takes only `wording` and `digest` text and an optional `run_id` |
-| `update_signal` | 2 | hold, drop, or deliver now (chat and the screen). Step 11, with the screen's actions |
+| `update_signal` | 2 | Alex's hold, drop or deliver now on one signal: `signal_id`, `action` (hold, drop, deliver), `as` (inbox or notification, deliver only). One tool with an action field, since all three share the lookup, the state check and the stamp. Step 11 (below) |
 | `add_delivery_override` | 3 | add one override (§5.1) as a new plan version, changing only `delivery.overrides`. Takes `override` (label, match, when, effect, confirm_broad) and a one-line `reason`; sets `created_at` now and `created_by: "chat"`; refuses a label already in use unless that override has ended (it is then replaced). In `overwatch-plan.ts` (step 10i) |
 | `end_delivery_override` | 3 | end one by `label`, with a `reason`: sets `when.ends_at` to now and keeps the entry, so the screen shows it as ended and old reasons still name a real override. One that has not started yet is removed instead |
 
@@ -134,6 +135,36 @@ Both dry-run unless called with `dry_run: false` (and, being tier 3, `confirmed:
 - The list is estimated from each signal's recorded decision, not a full re-run of
   `dispatch_signals`: it covers a decision, a severity change, `merge: false`, and the window or
   pace no longer holding back a notification. An override's own caps are not replayed.
+
+**Alex's actions (step 11).** No function is needed: owner RLS lets Alex update his own signals, and
+`signals_guard_update` lets the state columns change and keeps delivered, merged, dropped and resolved
+final. So `updateSignal()` in `signals.ts` makes plain updates, each conditioned on the state it starts
+from, and stamps `decided_at`, `decided_by` and a null `decided_run_id`. The one SQL change is the
+`decided_by` column.
+- **hold:** queued → held, reason "held by Alex".
+- **drop:** queued or held → dropped, reason "dropped by Alex".
+- **deliver:** queued or held, delivered at once; `dispatch_signals` is not consulted, so the window and
+  the caps do not apply. Merging does: the subject's open item (the newest delivered signal whose item is
+  unarchived, as `dispatch_signals` finds it) gets the repeat. For an inbox item the signal becomes
+  `merged` into that signal; a notification links to that item. With no open item an inbox delivery
+  writes the item (from `details.item` when given) and logs it; a notification writes or points at the
+  item, sends, and logs with `started_by` = who did it. The default `as` is a notification for High and
+  Urgent, an inbox item otherwise.
+- The MCP tool records `decided_by: "chat"`. `push-send` with `{ signal_id, action, as? }` runs the same
+  function with the caller's token and records `"alex"`; that is the screen's route (step 11b).
+
+**Item titles (step 11b).** The card shows `source_metadata.task_name` as the title, so an item the
+dispatcher writes is never titled with its job name. For a notification (pop or digest, and deliver
+now as a notification): "Notification: " plus the notification's worded title, else the signal's
+title. For an inbox item: `details.item.source_metadata.task_name` when the task gave one, else the
+worded title, else the signal's title. Other keys, `run_date` among them, are kept.
+`215_retitle_dispatcher_inbox_items.sql` (run as 213) retitled the 8 earlier items titled "dispatcher".
+The `decided_by` column is `214_signals_decided_by.sql` (run as 212).
+
+**A pop always comes with an inbox item.** `deliver_signals` and deliver now point a notification at
+the task's own item, or the subject's open item, or a new one made for it (`itemFor`), and the push
+links to `/<that id>`. A missed notification is still there as an inbox item, with the
+`claude_notifications` row in the Dispatcher's History.
 
 Apps never check for an existing inbox item and never pick a channel. They raise a signal every
 time something is worth knowing; the dispatcher merges.
@@ -353,9 +384,10 @@ Plan and Briefing, opened from a Dispatcher row on the Overwatch tab. Files:
   log, newest first, with `started_by`); Reminders and Step timers (scheduled ones).
 - **Actions (step 11):** signals: hold, drop, deliver now; reminders: edit text or time, cancel
   (`remindersApi.js`); step timers: reschedule, cancel (`notificationStepsApi.js`).
-- **Deliver now** (decision 6): inbox outcome by `update_signal`-equivalent RPC; a pop by
-  `push-send` with `{ signal_id }`, which sends to the caller's devices and logs with
-  `started_by: alex`.
+- **Hold, drop, deliver now** (decision 6, built in step 11): all three through `push-send` with
+  `{ signal_id, action, as? }`, which runs `updateSignal()` with the caller's token, sends any
+  notification to the caller's devices, and records `decided_by: alex` (and `started_by: alex` on the
+  log). No separate RPC (section 4.3).
 - **UI patterns:** existing Overwatch section and list styles; every confirmation is a modal like
   `src/groups/ArchiveGroupDialog.jsx`. Phone width first, nothing scrolls sideways.
 

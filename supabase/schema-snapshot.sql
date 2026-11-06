@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-06 07:53, through migration 212 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-06 08:18, through migration 215 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -16804,6 +16804,8 @@ CREATE TABLE IF NOT EXISTS "public"."signals" (
     "details" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "decided_by" "text",
+    CONSTRAINT "signals_decided_by_valid" CHECK ((("decided_by" IS NULL) OR "public"."started_by_valid"("decided_by"))),
     CONSTRAINT "signals_details_object" CHECK (("jsonb_typeof"("details") = 'object'::"text")),
     CONSTRAINT "signals_job_present" CHECK ((("length"("btrim"("job")) >= 1) AND ("length"("btrim"("job")) <= 100))),
     CONSTRAINT "signals_link_path" CHECK ((("link" IS NULL) OR (("link" ~ '^/'::"text") AND ("link" !~ '^//'::"text") AND ("link" !~ '\s'::"text")))),
@@ -16915,6 +16917,10 @@ COMMENT ON COLUMN "public"."signals"."created_at" IS 'When it was raised.';
 
 
 COMMENT ON COLUMN "public"."signals"."updated_at" IS 'Last state change. Stamped by the guard trigger.';
+
+
+
+COMMENT ON COLUMN "public"."signals"."decided_by" IS 'Who decided this signal by hand: alex (the Dispatcher screen), chat (Claude for Alex, update_signal). Null means the dispatcher decided it. Set with decided_at.';
 
 
 

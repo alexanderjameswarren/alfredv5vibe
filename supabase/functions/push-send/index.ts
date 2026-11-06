@@ -12,6 +12,8 @@ import { PUSH_SEND_OPTIONS } from "../_shared/push-options.ts";
 // look mismatched by two different renderings. See the module for why this
 // comparison is permanent rather than a debugging aid.
 import { vapidFingerprint } from "../../../src/utils/vapidFingerprint.js";
+// Signal mode: the Dispatcher screen's hold, drop and deliver now, the same code as the update_signal tool.
+import { updateSignal } from "../_shared/tools/signals.ts";
 
 // push-send — deliver a Web Push notification to every device the caller has
 // subscribed.
@@ -122,14 +124,40 @@ Deno.serve(async (req) => {
   // Body is optional: an empty POST is the common case from curl.
   let title = DEFAULT_TITLE;
   let body = DEFAULT_BODY;
+  let parsed: Record<string, unknown> | null = null;
   try {
-    const parsed = await req.json();
+    parsed = await req.json();
     if (parsed && typeof parsed === "object") {
       if (typeof parsed.title === "string" && parsed.title) title = parsed.title;
       if (typeof parsed.body === "string" && parsed.body) body = parsed.body;
     }
   } catch {
     // No body, or not JSON. The defaults are the whole point of the defaults.
+  }
+
+  // Signal mode: { signal_id, action: hold | drop | deliver, as?: inbox | notification }. Alex's own action from
+  // the Dispatcher screen, recorded as decided_by "alex", with his token so RLS confines it to his signals.
+  if (parsed && typeof parsed === "object" && "signal_id" in parsed) {
+    const client = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } },
+    );
+    const action = parsed.action;
+    if (action !== "hold" && action !== "drop" && action !== "deliver") {
+      return json({ error: 'push-send: signal mode needs action "hold", "drop" or "deliver".' }, 400);
+    }
+    const as = parsed.as ?? null;
+    if (as !== null && as !== "inbox" && as !== "notification") {
+      return json({ error: 'push-send: as must be "inbox" or "notification".' }, 400);
+    }
+    try {
+      return json(await updateSignal(client, "push-send", {
+        signalId: String(parsed.signal_id), action, as: as as string | null, by: "alex",
+      }));
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
   }
 
   let signingKeyFingerprint = "(unknown)";

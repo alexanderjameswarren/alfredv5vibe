@@ -10,6 +10,7 @@
 //   get_signals        tier 1  read signals, newest first
 //   get_dispatch_plan  tier 1  what the dispatcher would do now (dispatch_signals, writes nothing)
 //   deliver_signals    tier 1  do it: hold, drop, inbox items, pops, merges; Claude only words what gets through
+//   update_signal      tier 2  Alex's own hold, drop or deliver now on one signal (also push-send's signal mode)
 //
 // Apps never pick a channel or check for an existing inbox item; only Overwatch writes to the inbox directly. An app
 // that used to write its own item describes it in details.item, and delivery writes it. Database
@@ -262,6 +263,103 @@ function capturedText(title: string, body: string | null, link: string | null): 
   return [title, body, link ? `Link: ${link}` : null].filter(Boolean).join("\n\n");
 }
 
+/** An item made for a notification is titled after it. */
+export function notificationTaskName(title: string): string {
+  return `Notification: ${title}`;
+}
+
+/** What delivering needs: new items, items from details.item, folding a repeat into an open item, and pops. */
+export function deliveryKit(db: Db, tool: string) {
+  let subs: PushSubscriptionRow[] | null = null;
+  const devices = async () => {
+    if (subs) return subs;
+    const { data, error } = await db.from("push_subscriptions").select("id, endpoint, p256dh, auth_key");
+    if (error) throw dbError(tool, "push_subscriptions read", error);
+    subs = (data ?? []) as PushSubscriptionRow[];
+    return subs;
+  };
+  const now = () => new Date().toISOString();
+
+  /** The card shows task_name as the item's title, so it is never the job name. */
+  const newInbox = async (text: string, app: string, meta: Row, taskName: string) => {
+    const id = crypto.randomUUID();
+    const { error } = await db.from("inbox").insert({
+      id, archived: false, triaged_at: null, captured_text: text, source_type: "task",
+      source_metadata: { app, ...meta, task_name: taskName }, source_app: app,
+      ai_status: "not_started", suggest_item: false, suggest_intent: false, suggest_event: false,
+      suggested_tags: [], suggested_status: "active",
+    });
+    if (error) throw dbError(tool, "creating the inbox item", error);
+    return id;
+  };
+
+  /**
+   * The item an app described in details.item, exactly those fields, else one from the signal's words. Its title
+   * (task_name): for a notification "Notification: <the notification's title>", so the item matches what popped;
+   * for an inbox item the task's own task_name when it gave one, else the title.
+   */
+  const itemFor = async (s: Row, words: Words, meta: Row, as: "inbox" | "notification") => {
+    const item = (s.details as Row | null)?.item as Item | undefined;
+    const given = (item?.source_metadata as Row | undefined)?.task_name;
+    const taskName = as === "notification" ? notificationTaskName(words.title)
+      : typeof given === "string" && given.trim() ? given : words.title;
+    if (!item || typeof item.captured_text !== "string") {
+      return await newInbox(capturedText(words.title, words.body, s.link as string | null), s.app as string, meta, taskName);
+    }
+    const id = crypto.randomUUID();
+    const { error } = await db.from("inbox").insert({
+      id, archived: false, triaged_at: null, captured_text: item.captured_text, source_type: "task",
+      source_metadata: { ...(item.source_metadata ?? {}), task_name: taskName }, source_app: item.source_app ?? s.app,
+      ai_reasoning: item.ai_reasoning ?? null,
+      ai_status: "not_started", suggest_item: false, suggest_intent: false, suggest_event: false,
+      suggested_tags: [], suggested_status: "active",
+    });
+    if (error) throw dbError(tool, "creating the inbox item from details.item", error);
+    return id;
+  };
+
+  /** A repeat folded into an open item: repeats, first_seen, last_seen, and one "Seen n times since" line. */
+  const bumpRepeat = async (inboxId: string, signalId: string) => {
+    const { data, error } = await db.from("inbox").select("source_metadata, captured_text, created_at")
+      .eq("id", inboxId).maybeSingle();
+    if (error) throw dbError(tool, "reading the inbox item to merge into", error);
+    const row = (data ?? {}) as Row;
+    const { repeat_count, ...meta } = (row.source_metadata ?? {}) as Row;
+    const merged = Array.isArray(meta.merged_signal_ids) ? meta.merged_signal_ids : [];
+    const repeats = (Number(meta.repeats) || Number(repeat_count) || 1) + 1;
+    const at = now();
+    const firstSeen = typeof meta.first_seen === "string" ? meta.first_seen
+      : typeof row.created_at === "string" ? row.created_at : at;
+    const patch: Row = { source_metadata: { ...meta, repeats, first_seen: firstSeen, last_seen: at,
+      merged_signal_ids: [...merged, signalId] } };
+    if (typeof row.captured_text === "string") patch.captured_text = withSeenLine(row.captured_text, repeats, firstSeen);
+    const { error: upError } = await db.from("inbox").update(patch).eq("id", inboxId);
+    if (upError) throw dbError(tool, "updating the inbox item merged into", upError);
+  };
+
+  const pop = async (p: { app: string; job: string; kind: string; title: string; body: string | null;
+    inboxId: string; dedupe: string; startedBy: string | null; signalId: string | null; bundleId?: string }) => {
+    const link = `/${p.inboxId}`;
+    const logged = await logNotification(db, tool, {
+      app: p.app, job: p.job, kind: p.kind, channel: "alfred_push", title: p.title, body: p.body, link,
+      dedupe_key: p.dedupe, started_by: p.startedBy, signal_id: p.signalId,
+      delivery_detail: p.bundleId ? { bundle_id: p.bundleId } : null,
+    });
+    if (!logged.created) return { notification_id: logged.id, delivery_status: "duplicate" };
+    const results = await sendToAll(await devices(), JSON.stringify({
+      title: p.title, body: p.body ?? "", tag: `signal-${p.dedupe}`, url: link,
+    }));
+    const outcome = deliveryOutcome(results);
+    const { error } = await db.from("claude_notifications")
+      .update({ delivery_status: outcome.status, delivery_detail: { ...outcome.detail, ...(p.bundleId ? { bundle_id: p.bundleId } : {}) } })
+      .eq("id", logged.id);
+    return { notification_id: logged.id, delivery_status: outcome.status, sent_to: outcome.detail.sent_to,
+      ...(error ? { warning: `The push result could not be recorded: ${error.message}` } : {}) };
+  };
+
+  return { now, newInbox, itemFor, bumpRepeat, pop };
+}
+
 export const deliverSignalsTool = defineTool({
   name: "deliver_signals",
   tables: {
@@ -297,15 +395,7 @@ export const deliverSignalsTool = defineTool({
     if (rowsError) throw dbError(tool, "reading signals", rowsError);
     const signals = new Map(((rows ?? []) as Row[]).map((r) => [r.id as string, r]));
 
-    let subs: PushSubscriptionRow[] | null = null;
-    const devices = async () => {
-      if (subs) return subs;
-      const { data, error } = await db.from("push_subscriptions").select("id, endpoint, p256dh, auth_key");
-      if (error) throw dbError(tool, "push_subscriptions read", error);
-      subs = (data ?? []) as PushSubscriptionRow[];
-      return subs;
-    };
-    const now = () => new Date().toISOString();
+    const { now, newInbox, itemFor, bumpRepeat, pop } = deliveryKit(db, tool);
 
     /** Move one signal on from queued; false when something else moved it first. */
     const decide = async (id: string, patch: Row) => {
@@ -313,74 +403,6 @@ export const deliverSignalsTool = defineTool({
         .update({ decided_at: now(), decided_run_id: runId, ...patch }).eq("id", id).eq("state", "queued").select("id");
       if (error) throw dbError(tool, `updating signal ${id}`, error);
       return ((data ?? []) as Row[]).length > 0;
-    };
-
-    const newInbox = async (text: string, app: string, meta: Row) => {
-      const id = crypto.randomUUID();
-      const { error } = await db.from("inbox").insert({
-        id, archived: false, triaged_at: null, captured_text: text, source_type: "task",
-        source_metadata: { task_name: "dispatcher", app, ...meta }, source_app: app,
-        ai_status: "not_started", suggest_item: false, suggest_intent: false, suggest_event: false,
-        suggested_tags: [], suggested_status: "active",
-      });
-      if (error) throw dbError(tool, "creating the inbox item", error);
-      return id;
-    };
-
-    /** The item an app described in details.item, exactly those fields, else one from the signal's words. */
-    const itemFor = async (s: Row, words: Words, meta: Row) => {
-      const item = (s.details as Row | null)?.item as Item | undefined;
-      if (!item || typeof item.captured_text !== "string") {
-        return await newInbox(capturedText(words.title, words.body, s.link as string | null), s.app as string, meta);
-      }
-      const id = crypto.randomUUID();
-      const { error } = await db.from("inbox").insert({
-        id, archived: false, triaged_at: null, captured_text: item.captured_text, source_type: "task",
-        source_metadata: item.source_metadata ?? {}, source_app: item.source_app ?? s.app, ai_reasoning: item.ai_reasoning ?? null,
-        ai_status: "not_started", suggest_item: false, suggest_intent: false, suggest_event: false,
-        suggested_tags: [], suggested_status: "active",
-      });
-      if (error) throw dbError(tool, "creating the inbox item from details.item", error);
-      return id;
-    };
-
-    /** A repeat folded into an open item: repeats, first_seen, last_seen, and one "Seen n times since" line. */
-    const bumpRepeat = async (inboxId: string, signalId: string) => {
-      const { data, error } = await db.from("inbox").select("source_metadata, captured_text, created_at")
-        .eq("id", inboxId).maybeSingle();
-      if (error) throw dbError(tool, "reading the inbox item to merge into", error);
-      const row = (data ?? {}) as Row;
-      const { repeat_count, ...meta } = (row.source_metadata ?? {}) as Row;
-      const merged = Array.isArray(meta.merged_signal_ids) ? meta.merged_signal_ids : [];
-      const repeats = (Number(meta.repeats) || Number(repeat_count) || 1) + 1;
-      const at = now();
-      const firstSeen = typeof meta.first_seen === "string" ? meta.first_seen
-        : typeof row.created_at === "string" ? row.created_at : at;
-      const patch: Row = { source_metadata: { ...meta, repeats, first_seen: firstSeen, last_seen: at,
-        merged_signal_ids: [...merged, signalId] } };
-      if (typeof row.captured_text === "string") patch.captured_text = withSeenLine(row.captured_text, repeats, firstSeen);
-      const { error: upError } = await db.from("inbox").update(patch).eq("id", inboxId);
-      if (upError) throw dbError(tool, "updating the inbox item merged into", upError);
-    };
-
-    const pop = async (p: { app: string; job: string; kind: string; title: string; body: string | null;
-      inboxId: string; dedupe: string; startedBy: string | null; signalId: string | null; bundleId?: string }) => {
-      const link = `/${p.inboxId}`;
-      const logged = await logNotification(db, tool, {
-        app: p.app, job: p.job, kind: p.kind, channel: "alfred_push", title: p.title, body: p.body, link,
-        dedupe_key: p.dedupe, started_by: p.startedBy, signal_id: p.signalId,
-        delivery_detail: p.bundleId ? { bundle_id: p.bundleId } : null,
-      });
-      if (!logged.created) return { notification_id: logged.id, delivery_status: "duplicate" };
-      const results = await sendToAll(await devices(), JSON.stringify({
-        title: p.title, body: p.body ?? "", tag: `signal-${p.dedupe}`, url: link,
-      }));
-      const outcome = deliveryOutcome(results);
-      const { error } = await db.from("claude_notifications")
-        .update({ delivery_status: outcome.status, delivery_detail: { ...outcome.detail, ...(p.bundleId ? { bundle_id: p.bundleId } : {}) } })
-        .eq("id", logged.id);
-      return { notification_id: logged.id, delivery_status: outcome.status, sent_to: outcome.detail.sent_to,
-        ...(error ? { warning: `The push result could not be recorded: ${error.message}` } : {}) };
     };
 
     // A task that wrote its own inbox item names it in details.inbox_id, so delivery points at it instead of
@@ -422,7 +444,7 @@ export const deliverSignalsTool = defineTool({
           if (!await decide(d.signal_id, { state: "dropped", reason: d.reason })) result.skipped = "no longer queued";
         } else if (d.decision === "inbox") {
           const own = ownItem(s);
-          const inboxId = own.id ?? await itemFor(s, words, meta);
+          const inboxId = own.id ?? await itemFor(s, words, meta, "inbox");
           const reason = [d.reason, own.id ? "the task's own inbox item" : own.note].filter(Boolean).join("; ");
           await logNotification(db, tool, {
             app: s.app as string, job: s.job as string, kind: kindFor(s), channel: "inbox_item", title: words.title,
@@ -444,7 +466,7 @@ export const deliverSignalsTool = defineTool({
           // The task's own item first, then an open item for the subject, else a new one.
           const own = ownItem(s);
           const existing = own.id ?? d.inbox_id;
-          const inboxId = existing ?? await itemFor(s, words, meta);
+          const inboxId = existing ?? await itemFor(s, words, meta, "notification");
           if (existing) await bumpRepeat(inboxId, d.signal_id);
           const reason = [d.reason, own.id ? "points at the task's own inbox item" : own.note].filter(Boolean).join("; ");
           Object.assign(result, await pop({ app: s.app as string, job: s.job as string, kind: kindFor(s),
@@ -473,7 +495,8 @@ export const deliverSignalsTool = defineTool({
         `- ${(w as Words).title}${(s as Row).link ? ` (${(s as Row).link})` : ""}`).join("\n");
       try {
         const inboxId = await newInbox(capturedText(words.title, [words.body, list].filter(Boolean).join("\n\n"), null),
-          first.app as string, { bundle_id: bundleId, signal_ids: digest.map(({ d }) => (d as Decision).signal_id) });
+          first.app as string, { bundle_id: bundleId, signal_ids: digest.map(({ d }) => (d as Decision).signal_id) },
+          notificationTaskName(words.title));
         digestResult = { bundle_id: bundleId, inbox_id: inboxId, ...(await pop({ app: first.app as string,
           job: "dispatcher_digest", kind: "info", title: words.title, body: words.body ?? list, inboxId,
           dedupe: `digest:${bundleId}`, startedBy: first.started_by as string, signalId: null, bundleId })) };
@@ -491,5 +514,118 @@ export const deliverSignalsTool = defineTool({
     for (const d of plan.decisions) counts[d.decision] = (counts[d.decision] ?? 0) + 1;
     return { at: plan.at, counts, results, ...(digestResult ? { digest: digestResult } : {}),
       errors: results.filter((r) => r.error).length };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// update_signal — tier 2: Alex's hold, drop or deliver now. Also push-send's signal mode (the Dispatcher screen).
+// ---------------------------------------------------------------------------
+// Owner RLS lets Alex update his own signals and the guard lets the state columns change, so this is plain updates,
+// each conditioned on the state it starts from. Deliver now skips the window and the hourly limit but still folds
+// into an open item for the subject, as the dispatcher does.
+
+export const SIGNAL_ACTIONS = ["hold", "drop", "deliver"];
+export const DELIVER_AS = ["inbox", "notification"];
+const FROM: Record<string, string[]> = { hold: ["queued"], drop: ["queued", "held"], deliver: ["queued", "held"] };
+
+export async function updateSignal(db: Db, tool: string,
+  input: { signalId: string; action: string; as?: string | null; by: string }) {
+  const { signalId, action, by } = input;
+  if (!UUID_RE.test(signalId)) throw fail(tool, "`signal_id` must be a signal's id.");
+  const { data: found, error: readError } = await db.from("signals")
+    .select("id, app, job, severity, subject_key, title, body, link, started_by, details, state, reason")
+    .eq("id", signalId).maybeSingle();
+  if (readError) throw dbError(tool, "reading the signal", readError);
+  const s = found as Row | null;
+  if (!s) throw fail(tool, `no signal ${signalId}, or it is not yours.`);
+  if (input.as && action !== "deliver") throw fail(tool, "`as` is only for action \"deliver\".");
+  if (!FROM[action].includes(s.state as string)) {
+    const done = { hold: "held", drop: "dropped", deliver: "delivered" }[action];
+    throw fail(tool, `the signal is ${s.state}, so it cannot be ${done}. Only a ${FROM[action].join(" or ")} signal can.`);
+  }
+  const kit = deliveryKit(db, tool);
+  const stamp = { decided_at: kit.now(), decided_by: by, decided_run_id: null };
+  const move = async (patch: Row) => {
+    const { data, error } = await db.from("signals").update({ ...stamp, ...patch }).eq("id", signalId)
+      .in("state", FROM[action]).select("id");
+    if (error) throw dbError(tool, `updating signal ${signalId}`, error);
+    if (!((data ?? []) as Row[]).length) throw fail(tool, "the signal changed while this ran; read it again.");
+  };
+  const out = { signal_id: signalId, action, from: s.state, decided_by: by };
+
+  if (action === "hold") {
+    await move({ state: "held", reason: "held by Alex" });
+    return { ...out, state: "held" };
+  }
+  if (action === "drop") {
+    await move({ state: "dropped", reason: "dropped by Alex" });
+    return { ...out, state: "dropped" };
+  }
+
+  const as = input.as ?? (s.severity === "high" || s.severity === "urgent" ? "notification" : "inbox");
+  if (as === "notification") {
+    try {
+      loadVapid();
+    } catch (e) {
+      throw fail(tool, `push is not configured: ${(e as Error).message}. Nothing was delivered.`);
+    }
+  }
+  // An open item for the subject, as dispatch_signals finds it: the newest delivered signal whose item is unarchived.
+  const { data: prior, error: priorError } = await db.from("signals").select("id, inbox_id")
+    .eq("subject_key", s.subject_key).eq("state", "delivered").not("inbox_id", "is", null)
+    .order("decided_at", { ascending: false }).limit(5);
+  if (priorError) throw dbError(tool, "reading the subject's delivered signals", priorError);
+  let open: Row | null = null;
+  const priorRows = (prior ?? []) as Row[];
+  if (priorRows.length) {
+    const { data: items, error: itemsError } = await db.from("inbox").select("id")
+      .in("id", priorRows.map((r) => r.inbox_id)).eq("archived", false);
+    if (itemsError) throw dbError(tool, "reading the subject's inbox items", itemsError);
+    const live = new Set(((items ?? []) as Row[]).map((r) => r.id));
+    open = priorRows.find((r) => live.has(r.inbox_id)) ?? null;
+  }
+  const words = { title: s.title as string, body: (s.body as string | null) ?? null };
+  const meta = { signal_id: signalId, subject_key: s.subject_key, job: s.job, started_by: s.started_by };
+  const why = `delivered now by Alex${open ? "; folded into the open inbox item" : ""}`;
+
+  if (as === "inbox") {
+    if (open) {
+      await kit.bumpRepeat(open.inbox_id as string, signalId);
+      await move({ state: "merged", merged_into: open.id, inbox_id: open.inbox_id, reason: why });
+      return { ...out, state: "merged", as, inbox_id: open.inbox_id, merged_into: open.id };
+    }
+    const inboxId = await kit.itemFor(s, words, meta, "inbox");
+    await logNotification(db, tool, {
+      app: s.app as string, job: s.job as string, kind: kindFor(s), channel: "inbox_item", title: words.title,
+      body: words.body, link: `/${inboxId}`, dedupe_key: `signal:${signalId}`, delivery_status: "sent",
+      delivery_detail: { inbox_id: inboxId, delivered_now: true }, started_by: by, signal_id: signalId,
+    });
+    await move({ state: "delivered", outcome: "inbox", inbox_id: inboxId, reason: why });
+    return { ...out, state: "delivered", as, inbox_id: inboxId };
+  }
+
+  const inboxId = (open?.inbox_id as string | undefined) ?? await kit.itemFor(s, words, meta, "notification");
+  if (open) await kit.bumpRepeat(inboxId, signalId);
+  const sent = await kit.pop({ app: s.app as string, job: s.job as string, kind: kindFor(s), title: words.title,
+    body: words.body, inboxId, dedupe: `signal:${signalId}`, startedBy: by, signalId });
+  await move({ state: "delivered", outcome: "pop", inbox_id: inboxId, notification_id: sent.notification_id, reason: why });
+  return { ...out, state: "delivered", as, inbox_id: inboxId, ...sent };
+}
+
+export const updateSignalTool = defineTool({
+  name: "update_signal",
+  tables: {
+    reads: ["signals", "inbox", "claude_notifications", "push_subscriptions"],
+    writes: ["signals", "inbox", "claude_notifications"],
+  },
+  tier: 2,
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "update_signal";
+    return await updateSignal(ctx.db, tool, {
+      signalId: requireText(tool, "signal_id", args.signal_id, 100),
+      action: requireEnum(tool, "action", args.action, SIGNAL_ACTIONS),
+      as: args.as === undefined || args.as === null ? null : requireEnum(tool, "as", args.as, DELIVER_AS),
+      by: "chat",
+    });
   },
 });

@@ -94,6 +94,7 @@ import {
   getSignalsTool,
   raiseSignalTool,
   resolveSignalTool,
+  updateSignalTool,
 } from "../_shared/tools/signals.ts";
 import { getAppsTool, checkSourceApp } from "../_shared/tools/apps.ts";
 import { checkSuggestedGroupId, suggestedGroupError, withSuggestedGroups } from "../_shared/tools/inbox-groups.ts";
@@ -3363,6 +3364,26 @@ export function createMcpServer(token: string) {
     async (args: Record<string, unknown>) => runToolForMcp(deliverSignalsTool, args, token),
   );
 
+  server.registerTool(
+    "update_signal",
+    {
+      title: "Update Signal",
+      description:
+        "Alex's own action on one signal, when he says so in chat: hold it, drop it, or send it now. " +
+        "hold: a queued signal becomes held (reason \"held by Alex\"). drop: a queued or held signal is dropped (\"dropped by Alex\"). " +
+        "deliver: a queued or held signal is delivered at once, as an inbox item or a notification (`as`; default a notification for High and Urgent, an inbox item otherwise). " +
+        "Deliver skips the window and the hourly and daily limits, but not merging: when the subject has an open inbox item it folds into it (a repeat and its \"Seen n times\" line), and a notification links to that item. " +
+        "Every action records decided_by \"chat\" and decided_at on the signal. Delivered, merged and dropped are final and are refused. " +
+        "Returns { signal_id, action, from, state, decided_by, as?, inbox_id?, notification_id?, delivery_status? }. Tier 2.",
+      inputSchema: {
+        signal_id: z.string().describe("The signal's id, from get_signals."),
+        action: z.enum(["hold", "drop", "deliver"]).describe("What Alex asked for."),
+        as: z.enum(["inbox", "notification"]).optional().describe("For deliver only: an inbox item or a notification."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateSignalTool, args, token),
+  );
+
   // --- Overwatch, Phase 3 (docs/technical-spec-overwatch-q4n.md §7) ---
   const owEnum = (values: readonly string[]) => z.enum(values as [string, ...string[]]);
 
@@ -3556,7 +3577,11 @@ export function createMcpServer(token: string) {
         "overruns, over_limit, estimated_finish, scope_changes, empty_projects), inbox backlogs and routing, stopped " +
         "schedules, orphan runs, claim blocks, watch items, inventory freshness, finish summaries and portfolio reviews. " +
         "fading_candidates and deadline_candidates are candidates for Claude to judge. A count whose setting is missing " +
-        "is left out and named in settings_missing. Tier 1.",
+        "is left out and named in settings_missing. Also dispatcher_checks, the nightly's checks on the dispatcher: " +
+        "importance (failures and High or Urgent signals held in the last day), silence (hours since the last delivery " +
+        "against settings.nightly_checks.silence_hours, default 36, and overrides in force that hold or drop broadly) " +
+        "and failures (failed or partial runs in the last day with no signal raised for them); {error} there when its " +
+        "reads failed, which never fails the counts. Tier 1.",
       inputSchema: {
         as_of: z.string().optional().describe("Pin the clock, an ISO timestamp with offset. It does not rewind the data. Default now."),
       },
