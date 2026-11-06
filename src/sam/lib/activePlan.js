@@ -134,21 +134,25 @@ export async function loadTodayProgress(supabase, planId, today = todayKey()) {
 /**
  * The plan item a pass or session on (songId, snippetId) belongs to: same song,
  * and the same snippet (a null snippet is the whole song). Null when none.
+ * `itemId`, the item that was opened, wins when it is in the plan on that range.
  */
-export function matchPlanItem(plan, songId, snippetId) {
+export function matchPlanItem(plan, songId, snippetId, itemId = null) {
   if (!plan || !songId) return null;
   const snip = snippetId || null;
-  return (plan.items || []).find((i) => i.song_id === songId && (i.snippet_id || null) === snip) || null;
+  const onRange = (i) => i.song_id === songId && (i.snippet_id || null) === snip;
+  const opened = itemId ? (plan.items || []).find((i) => i.id === itemId) : null;
+  if (opened && onRange(opened)) return opened;
+  return (plan.items || []).find(onRange) || null;
 }
 
 /**
  * The two link columns written on sam_passes and sam_sessions. Both null when
  * there is no active plan, or it has not loaded yet. Never throws.
  */
-export function planLinkFor(plan, songId, snippetId) {
+export function planLinkFor(plan, songId, snippetId, itemId = null) {
   try {
     if (!plan?.id) return { plan_id: null, plan_item_id: null };
-    return { plan_id: plan.id, plan_item_id: matchPlanItem(plan, songId, snippetId)?.id ?? null };
+    return { plan_id: plan.id, plan_item_id: matchPlanItem(plan, songId, snippetId, itemId)?.id ?? null };
   } catch {
     return { plan_id: null, plan_item_id: null };
   }
@@ -299,9 +303,14 @@ export function itemShortRange(item) {
   return `m.${sn.start_measure}–${sn.end_measure}${hand}`;
 }
 
+/** "Next:" or, for a Free Play item, "Next (optional):". */
+export function nextItemLead(item) {
+  return item?.is_free_play ? "Next (optional):" : "Next:";
+}
+
 /** "Next: Autumn Leaves m.1–16" — the Next button's label and accessible name. */
 export function nextItemLabel(item) {
-  return `Next: ${[item?.song_title || "Untitled", itemShortRange(item)].filter(Boolean).join(" ")}`;
+  return `${nextItemLead(item)} ${[item?.song_title || "Untitled", itemShortRange(item)].filter(Boolean).join(" ")}`;
 }
 
 /** "Today's plan · 3 of 6 done" plus " · Free play 1 of 2" when there is free play. */
@@ -402,9 +411,52 @@ export function planTempoText(check) {
  * The item for what is loaded in the player. A range typed but never saved has
  * no snippet id and matches nothing — it is not the whole song.
  */
-export function itemForLoadedRange(plan, songId, snippet) {
+export function itemForLoadedRange(plan, songId, snippet, itemId = null) {
   if (snippet && !snippet.dbId) return null;
-  return matchPlanItem(plan, songId, snippet?.dbId ?? null);
+  return matchPlanItem(plan, songId, snippet?.dbId ?? null, itemId);
+}
+
+// --- What is open, in the URL (sam_cleanup s3c) ------------------------------
+//
+// /sam/songs/<id>?item=<planItemId>, ?snippet=<snippetId>, or bare for the whole
+// song. The player derives what is open from this, so reload, Back and Forward
+// restore it.
+
+/** The query string for what is open: "?item=…", "?snippet=…" or "". */
+export function openSearch({ itemId = null, snippetId = null } = {}) {
+  if (itemId) return `?item=${encodeURIComponent(itemId)}`;
+  if (snippetId) return `?snippet=${encodeURIComponent(snippetId)}`;
+  return "";
+}
+
+/** { itemId, snippetId } from a location's search string. */
+export function parseOpenSearch(search) {
+  const p = new URLSearchParams(search || "");
+  return { itemId: p.get("item") || null, snippetId: p.get("snippet") || null };
+}
+
+/** A snippet of `songId` that can still be loaded, as a sam_snippets row, or null. */
+export async function loadOpenableSnippet(supabase, songId, snippetId) {
+  if (!snippetId) return null;
+  const { data, error } = await supabase
+    .from("sam_snippets").select(SNIPPET_COLS).eq("id", snippetId).maybeSingle();
+  if (error || !data || data.archived || data.song_id !== songId) return null;
+  return data;
+}
+
+/**
+ * A plan item outside the active plan (an old link): its snippet row when it is
+ * still loadable, else null for the whole song. Never throws.
+ */
+export async function loadStaleItemSnippet(supabase, songId, itemId) {
+  try {
+    const { data, error } = await supabase
+      .from("sam_practice_plan_items").select("id, song_id, snippet_id").eq("id", itemId).maybeSingle();
+    if (error || !data || data.song_id !== songId) return null;
+    return await loadOpenableSnippet(supabase, songId, data.snippet_id);
+  } catch {
+    return null;
+  }
 }
 
 /** The plan's row for a song (its song_note), or null. */

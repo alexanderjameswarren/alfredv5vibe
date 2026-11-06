@@ -143,10 +143,11 @@ describe("Next on the plan line", () => {
     expect(screen.getByRole("img", { name: "Done" })).toBeInTheDocument();
   });
 
-  test("Free Play is offered like any other item", () => {
+  test("Free Play is offered, marked optional on screen and in its name", () => {
     const free = { id: "f2", song_title: "Someone Like You", snippet_id: null, is_free_play: true };
     render(<PlanLine item={ITEM} state={stateOf(ITEM, 6, 6)} heardTempo={60} nextItem={free} onOpenNext={() => {}} />);
-    expect(screen.getByRole("button", { name: "Next: Someone Like You Whole song" })).toBeInTheDocument();
+    const btn = screen.getByRole("button", { name: "Next (optional): Someone Like You Whole song" });
+    expect(within(btn).getByText("Next (optional):")).toBeInTheDocument();
   });
 
   test("the song title gives way first; the range and the arrow always survive", () => {

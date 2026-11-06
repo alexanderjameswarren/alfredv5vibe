@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { SAM_PATH, SAM_STATS_PATH, isSamStatsPath } from "../../viewPaths";
+import { SAM_PATH, SAM_STATS_PATH, isSamStatsPath, samSongPath } from "../../viewPaths";
 import { supabase } from "../../supabaseClient";
 import { parseMusicXML } from "../lib/songParser";
 import { fanOutMeasures, recompileMeasures } from "../lib/measureCompiler";
 import { importMusicxmlFingerings } from "../lib/fingeringsApi";
 import { importLyrics } from "../lib/lyricsApi";
-import { fetchSongById, fetchSongForEdit } from "../lib/songLoad";
+import { fetchSongForEdit } from "../lib/songLoad";
 import { fetchParentGoalTempo, goalTempoInsertFields } from "../lib/goalTempo";
 import { validateSongDocument } from "../lib/songSchema";
 import { scanMeasuresForDuplicatePitches } from "../lib/noteDuplicates";
@@ -318,21 +318,12 @@ export default function SongLoader({
     if (onImportError) onImportError(msg);
   };
 
-  async function handleLoadFromLibrary(row) {
+  // Library rows, Continue cards and the family sheet open the whole song by
+  // its address, pushed so Back returns here. SamPlayer's URL effect loads it
+  // (and reports a failed load).
+  function handleLoadFromLibrary(row) {
     setError(null);
-
-    // fetchSongById carries the staleness check with it — see lib/songLoad.js.
-    let loaded;
-    try {
-      loaded = await fetchSongById(row.id, supabase);
-    } catch (e) {
-      console.error("[Sam] Failed to load song:", e);
-      setError("Failed to load song");
-      return;
-    }
-
-    onSongLoaded(loaded.song);
-    if (onSongSaved) onSongSaved(loaded.row.id);
+    navigate(samSongPath(row.id));
   }
 
   async function handleArchive(row) {

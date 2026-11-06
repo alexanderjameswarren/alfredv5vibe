@@ -1,6 +1,6 @@
 import React from "react";
 import { ArrowRight } from "lucide-react";
-import { itemShortRange, nextItemLabel } from "../lib/activePlan";
+import { itemShortRange, nextItemLabel, nextItemLead } from "../lib/activePlan";
 
 // "Next: Autumn Leaves m.1–16" — the one control that moves him from a
 // finished plan item to the next one (2026-09-19). It lives on the PLAYER's
@@ -41,7 +41,7 @@ export default function PlanNextButton({ item, onOpen, className = "" }) {
         className="inline-flex max-w-full items-center gap-1.5 px-2.5 min-h-[33px] border border-border
           rounded text-sm text-muted-foreground group-hover:text-dark transition-colors"
       >
-        <span className="shrink-0">Next:</span>
+        <span className="shrink-0">{nextItemLead(item)}</span>
         <span className="min-w-0 truncate">{item.song_title || "Untitled"}</span>
         {range && <span className="shrink-0">{range}</span>}
         <ArrowRight className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
