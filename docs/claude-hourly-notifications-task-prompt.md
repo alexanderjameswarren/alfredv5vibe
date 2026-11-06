@@ -1,4 +1,4 @@
-`PROMPT VERSION: 2026-11-04a` — the dispatcher (Claude hourly notifications)
+`PROMPT VERSION: 2026-11-06a` — the dispatcher (Claude hourly notifications)
 
 # The dispatcher. The Claude scheduled task prompt.
 
@@ -12,8 +12,9 @@ elsewhere:
 
 To change who gets watched or how pops are paced, change Overwatch's plan, not this file.
 
-- **Schedule:** hourly, **05:00 to 19:00 America/Los_Angeles**, on the hour. Every run watches;
-  only runs inside the delivery window deliver.
+- **Schedule:** hourly, **05:00 to 19:00 America/Los_Angeles**, on the hour. Every run watches and
+  delivers what `get_dispatch_plan` decides. Only notifications wait for the delivery window;
+  inbox, hold, merge and drop are decided at any hour.
 - **App / job:** `alfred` / `claude_hourly_notifications`, executor `claude`. The schedule row
   checks the day's first run (`expected_by: "05:00"`, `grace_hours: 2`). Its notes are updated
   in chat with `create_platform_schedule`, to say it is the dispatcher and give this version.
@@ -30,7 +31,7 @@ To change who gets watched or how pops are paced, change Overwatch's plan, not t
 > The task runs the text that was pasted, not the text in this repo. So the prompt carries a
 > version, and the run record and the final line echo it.
 >
-> ### `PROMPT VERSION: 2026-11-04a`
+> ### `PROMPT VERSION: 2026-11-06a`
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -42,7 +43,7 @@ To change who gets watched or how pops are paced, change Overwatch's plan, not t
 2. **Turn off the task's Claude app push** (its completion notification). Every pop now comes
    from Alfred through `deliver_signals`.
 3. **Run it once by hand.** Check: a `platform_runs` row for `alfred` /
-   `claude_hourly_notifications` closed `ok`, with `prompt_version: "2026-11-04a"` in its details.
+   `claude_hourly_notifications` closed `ok`, with `prompt_version: "2026-11-06a"` in its details.
 
 ---
 
@@ -51,7 +52,7 @@ To change who gets watched or how pops are paced, change Overwatch's plan, not t
 ---
 
 You are running the dispatcher for Alex, the "Claude hourly notifications" task.
-`PROMPT VERSION: 2026-11-04a`. Two stages, in order:
+`PROMPT VERSION: 2026-11-06a`. Two stages, in order:
 - **A, watch:** look at each watched app and raise a signal for anything worth knowing.
 - **B, dispatch:** let Alfred decide what reaches Alex, and word what gets through.
 
@@ -134,10 +135,11 @@ error>"}`) and go on to the next.
 Call `get_dispatch_plan` with no arguments.
 
 - `stopped` is set: close the run `ok` with `details.stopped` set to it, and stop.
-- `in_window` is false: deliver nothing. Go to Step 6 with the decisions counted. Every queued
-  signal waits for the next run inside the window.
-- No decision is `pop`, `digest` or `inbox`: do not call `deliver_signals` unless some decision
-  is `hold` or `merge`. Then call it with no wording, so those signals move on. Go to Step 6.
+- Deliver whatever it decides, inside the window or not. `in_window` is only for the report: a
+  notification outside the window is already decided `wait`, and everything else is decided now.
+- Every decision is `wait`, or there are none: do not call `deliver_signals`. Go to Step 6.
+- No decision is `pop`, `digest` or `inbox`, but some are `hold`, `merge` or `drop`: call
+  `deliver_signals` with `run_id` and no wording, so those signals move on. Go to Step 6.
 
 ### Step 5 — Stage B, word and deliver
 
@@ -147,7 +149,7 @@ Call `get_dispatch_plan` with no arguments.
    - `title`: short and plain, at most about 60 characters;
    - `body`: one or two plain sentences; when the signal has a link, end with that `/<id>`.
 
-   Write nothing for `hold`, `merge` or `wait`, and never mention them.
+   Write nothing for `hold`, `merge`, `drop` or `wait`, and never mention them.
 3. When any decision is `digest`, write one `digest` wording: a title such as "3 things from
    Alfred", and a body of one plain line naming what they are about.
 4. Call `deliver_signals` once with:
@@ -159,7 +161,7 @@ Call `get_dispatch_plan` with no arguments.
    It recomputes the plan itself, so a signal raised in the last minute may be decided too. That
    is fine: one without wording uses its own title and body.
 5. Count from its response, by decision: `hold`, `inbox`, `pop` (a digest counts as one pop),
-   `merge`, `wait`, and `errors`. Any result with an `error` makes the run `partial`; quote each
+   `merge`, `drop`, `wait`, and `errors`. Any result with an `error` makes the run `partial`; quote each
    error verbatim in `details.errors`.
 
 ### Step 6 — Close the run
@@ -172,14 +174,14 @@ Call `update_platform_run` with the run id, **once**:
     `details.failure_kind`.
 - `finished_at` now, `covered_from` and `covered_to` as `local_date`.
 - `details`:
-  - `prompt_version: "2026-11-04a"`, `local_time`, and `stopped` when a step stopped early;
+  - `prompt_version: "2026-11-06a"`, `local_time`, and `stopped` when a step stopped early;
   - `in_window`, `watched` (app ids), `skipped`;
-  - the counts: `raised`, `duplicate`, `held`, `inbox`, `pop`, `merged`, `waiting`;
+  - the counts: `raised`, `duplicate`, `held`, `inbox`, `pop`, `merged`, `dropped`, `waiting`;
   - `errors`.
 
 Then report **one line**, and nothing else:
 
-`dispatcher 2026-11-04a: raised <n>, held <n>, inbox <n>, pop <n>, merged <n>`
+`dispatcher 2026-11-06a: raised <n>, held <n>, inbox <n>, pop <n>, merged <n>`
 
-Add `, waiting <n> (outside window)` when stage B did not deliver. Add `, skipped <app>` or
-`, errors <n>` when there were any.
+Add `, dropped <n>` and `, waiting <n> (notifications outside window)` when there were any. Add
+`, skipped <app>` or `, errors <n>` when there were any.

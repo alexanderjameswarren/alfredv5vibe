@@ -5,15 +5,17 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
-Skill version: 2026-11-05a
+Skill version: 2026-11-06a
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
 It is allowed to be pushy, but it never sends anything itself. Its nightly and weekly runs
-raise a signal for each inbox item they make (`raise_signal`, linking to the item, with its
-importance as the severity). The dispatcher decides what pops, under the `delivery` section of
-Overwatch's own plan. Overwatch never calls `create_reminder` or `send_alfred_push` from those
-runs, and `pushes_per_day` and `push_time` are no longer read.
+raise one signal per item (`raise_signal`, with the item in `details.item` and its importance
+as the severity); the dispatcher writes the item, folds repeats into the open one, and decides
+what reaches Alex under the `delivery` section of Overwatch's own plan. The one exception is the
+nightly's dispatcher checks, written straight to the inbox because the dispatcher may be what is
+broken. Every other app's task only raises signals too. Overwatch never calls `create_reminder`
+or `send_alfred_push` from those runs, and `pushes_per_day` and `push_time` are no longer read.
 
 Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
 
@@ -152,8 +154,8 @@ now. Never add or end one in a scheduled run.
    and `confirm_broad` if needed) and a one-line `reason`. It saves nothing: it checks the override
    and lists the last 7 days' signals whose decision would change, before and after. Show him that
    list as it comes ("New DJ album, Nov 5, 8:10 AM: notification → inbox item"), or say that nothing
-   would have changed. It is an estimate from recorded decisions; say so if he asks why a cap did
-   not show.
+   would have changed. It is an estimate from recorded decisions, and an override's own hourly or
+   daily limits are not replayed; say so if he asks why a limit did not show.
 3. **Save only after he says yes.** Call it again with the same arguments, `dry_run: false`, and
    `confirmed: true`. That writes a new plan version that changes only the overrides.
 4. **Ending one:** `end_delivery_override` with its `label` and a `reason`, dry run first, then
@@ -229,6 +231,25 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
     installed text, so a skill changed in the repo is stale until the update is accepted through
     `propose_skills` in chat.
   When unsure, raise it; a follow-up is cheap to archive and an unnoticed break is not.
+- **The dispatcher checks** (count 13, in `counts.dispatcher_checks`). Each is a direct inbox
+  item, and each ends with a paste-ready prompt when a plan change would help.
+  - **Importance:** a failure or a High or Urgent signal that was held. Usually an override
+    (named in its reason) or a default that is too strict. Propose narrowing or ending that
+    override, or an override that lets that subject through; never propose loosening for every
+    app. A wb-sync failure held once is by design (it raises Low, and escalation lifts the
+    second), so it never shows here.
+  - **Silence:** nothing delivered for longer than `settings.nightly_checks.silence_hours` (36
+    hours when the plan does not set it), or an override in force that holds or drops with no
+    app, job, subject or sender in its match. Look at `signals_last_day` first: nothing raised
+    at all means the apps are quiet or the dispatcher is not running (its own runs are in the
+    stopped-schedules count); signals held or waiting means the rules are holding them. A broad
+    override is worth a line even when it was meant: say when it ends.
+  - **Failures:** a failed run with no failure signal near it, or a partial one with no signal
+    at all. It means that task's prompt does not raise its failure (or raised it under another
+    app or job), so the dispatcher never heard. The fix is in the task's prompt file, not the
+    rules.
+  - Proposing a threshold change: `settings.nightly_checks.silence_hours` is in the plan's
+    settings, outside `delivery`, and changes through `create_overwatch_plan` like any setting.
 - **When to rewrite `current_state`** (count 11g). Only when the work changes what the app
   **does** for Alex: a new screen or section, new tools he would use in chat, a new kind of
   record. Not for fixes, refactors, tests, docs or plumbing. Keep the rewrite to the existing

@@ -312,7 +312,7 @@ export function overrideApplies(o: Override, s: Signal, at: Date | null): boolea
 /**
  * An estimate of what the override would have decided for a signal the plan already decided: its decision, or the
  * severity default after a severity change, merge false undoing a merge, and the window or pace no longer holding
- * back a notification. Per-override caps are not replayed. Returns the decision name, or null for no change.
+ * back a notification. Per-override limits are not replayed. Returns the decision name, or null for no change.
  */
 export function decisionWith(o: Override, s: Signal, defaults: Record<string, string>): string | null {
   const e = (o.effect ?? {}) as Record<string, unknown>;
@@ -358,7 +358,7 @@ async function replay(T: string, ctx: { db: any }, change: (s: Signal) => string
     checked: rows.length,
     changed,
     note: `Estimated from each signal's recorded decision over the last ${REPLAY_DAYS} days, not a full re-run: ` +
-      "an override's own hourly or daily caps are not replayed." +
+      "an override's own hourly or daily limits are not replayed." +
       ((data ?? []).length > REPLAY_LIMIT ? ` Only the newest ${REPLAY_LIMIT} signals were checked.` : ""),
   };
 }

@@ -37,9 +37,14 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 > version, and Step 10 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-11-04a`
+> ### `PROMPT VERSION: 2026-11-06a`
 >
 > Bump the date-letter whenever this file changes below the line.
+>
+> 2026-11-06a: every ordinary item is one `raise_signal` whose `details.item` holds it, and the
+> dispatcher writes it and folds repeats; the open-item check for them is gone. Three dispatcher
+> checks (count 13: importance, silence, failures) are the only items written straight to the
+> inbox, because the dispatcher may be what is broken. A failed run raises a `failure` signal.
 
 ## Setting it up (once)
 
@@ -51,7 +56,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
    "THE PROMPT" line as its instructions.
 4. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
    Check: a `platform_runs` row for `overwatch` / `nightly` closed `ok`; tonight's note in
-   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-11-04a`.
+   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-11-06a`.
 
 ## The record, the note and the signals are SEPARATE
 
@@ -59,9 +64,9 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 |---|---|---|
 | **Record** | **every run**, failures and duplicates included | `platform_runs` |
 | **Note** | every run that gets past Step 3, quiet nights included; a second manual run that day replaces it | `overwatch_notes`, period `nightly` |
-| **Inbox items** | **only** for a stall, an overrun, fading or overdue intentions, a proposal, a stale inventory, or a finish-summary follow-up | Alfred inbox, `source_app: "overwatch"`; a follow-up goes to the affected app |
-| **Signals** | one for each inbox item raised tonight | `raise_signal`, linking to its item; the dispatcher decides whether it pops |
-| **Failure item** | **only** when the run failed | one inbox item, "Overwatch nightly FAILED" |
+| **Signals** | **only** for a stall, an overrun, fading or overdue intentions, a proposal, a stale inventory, or a finish-summary follow-up | `raise_signal`, with the inbox item in `details.item` (`source_app: "overwatch"`; a follow-up goes to the affected app); the dispatcher writes it, folds repeats and decides whether it pops |
+| **Dispatcher items** | **only** for the dispatcher checks (count 13) | Alfred inbox directly (`create_inbox_item`), `source_app: "overwatch"`: the only items Overwatch writes itself |
+| **Failure signal** | **only** when the run failed | one `failure` signal, "Overwatch nightly FAILED" |
 
 ---
 
@@ -70,7 +75,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 ---
 
 You are running Overwatch's nightly check for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-11-04a`. **First, load the `overwatch` skill.** It tells you how to read each
+`PROMPT VERSION: 2026-11-06a`. **First, load the `overwatch` skill.** It tells you how to read each
 app, what counts as fading, what counts as a deadline mention, what counts as a follow-up from a
 finish summary, and how to word the note. Follow
 these steps in order for everything else. **Where the skill and these steps disagree, these steps
@@ -86,7 +91,8 @@ win.** Do not improvise.
    says `inventory_stale_days (used 7)`.
 2. **YOU READ, COUNT AND REPORT; YOU NEVER CHANGE.** The only tools that write that you may call
    are: `create_platform_run`, `update_platform_run`, `log_activity` (Step 4 only),
-   `create_overwatch_note`, `create_inbox_item`, `raise_signal` (Step 8.1 only), `update_overwatch_watch` (only
+   `create_overwatch_note`, `raise_signal` (Step 6 and Step 9 only), `create_inbox_item` (Step 6.8, the
+   dispatcher checks, only), `update_overwatch_watch` (only
    `expiry_noted: true`), `update_overwatch_checks`, `update_app_profile` (Step 8.4 only, and only
    `current_state`) and `mark_finish_summaries_reviewed` (Step 8.5 only). **Never** call `create_reminder`,
    `send_alfred_push`, `log_claude_notification`, `create_overwatch_plan`,
@@ -99,9 +105,10 @@ win.** Do not improvise.
    report. If you do not have it, write `unknown`. You write the note's wording, never its numbers.
 4. **NEVER IMPROVISE.** If you hit anything this prompt and the skill do not cover, **STOP** and
    report what you saw.
-5. **EVERY INBOX ITEM IS OVERWATCH'S, EXCEPT A FOLLOW-UP.** Every `create_inbox_item` call sets
-   `source_type: "task"` and `source_app: "overwatch"`, except a finish-summary follow-up (Step 6.7),
-   which sets the affected app's id so it lands in that app's queue.
+5. **EVERY ITEM IS OVERWATCH'S, EXCEPT A FOLLOW-UP.** Every item, in a signal's `details.item` or
+   written directly in Step 6.8, has `source_app: "overwatch"`, except a finish-summary follow-up
+   (Step 6.7), which has the affected app's id so it lands in that app's queue. A direct item also
+   sets `source_type: "task"`; the dispatcher sets it on the items it writes.
 6. **WHEN A CALL FAILS, QUOTE THE ERROR VERBATIM.**
 7. **EVERY RECORD ID YOU SHOW IS A LINK**, written `https://alfredv5vibe.vercel.app/<id>`, after
    the name it belongs to, in parentheses.
@@ -128,7 +135,7 @@ not `skipped`.
 Call `create_platform_run` with `app: "overwatch"`, `job: "nightly"`, `executor: "claude"`,
 `status: "running"`, and no `started_at` (the server records it, and refuses one on a running
 run). **Keep the run id.** If this call fails, skip Step 9,
-create the failure item (Step 9, "On failed"), then Step 10.
+raise the failure signal (Step 9, "On failed"), then Step 10.
 
 ### Step 2 — The date, manual, and a run already today
 
@@ -209,12 +216,13 @@ Only counts 1, 4b, 6, 7, 9 and 11 need anything from you.
      "unknown".
    - e. **Scope changes:** `counts.scope_changes`, since the last note.
    - f. **Empty Project groups:** `counts.empty_projects`. Every Project should hold at least one item
-     or intention; the note says so, and no inbox item is raised for it.
+     or intention; the note says so, and no signal is raised for it.
 3. **Inbox:**
    - a. **Backlog:** `counts.backlogs`.
    - b. **Unrouted:** `counts.unrouted`.
    - c. **Low-confidence routing:** `counts.low_confidence_routing`.
-   - d. **Overwatch's own open items**, for Step 6: `counts.overwatch_open_first_lines`.
+   - d. **Overwatch's own open items**, for Step 6.8 and the note's "still open":
+     `counts.overwatch_open_first_lines`.
    - f. **Open follow-ups**, for Step 6.7: `counts.followup_open_first_lines`.
    - e. **Urgent:** `counts.inbox_urgent`. The note's inbox line is "<`counts.inbox_total`> items.
      Nothing urgent." when its three lists are empty; otherwise it lists only these.
@@ -280,11 +288,27 @@ Only counts 1, 4b, 6, 7, 9 and 11 need anything from you.
       (`count:impact_review`) and keep no ids, so they stay unreviewed for tomorrow.
 12. **Portfolio plans due a review:** `counts.portfolio_review_due`. No inbox item: this is one line in
     the note (Step 7).
+13. **The dispatcher:** `counts.dispatcher_checks`. If it holds `error`, SKIP this count
+    (`count:dispatcher_checks`, with that error). Otherwise keep:
+    - a. **Importance:** `importance`, one row per subject held in the last day that was a failure
+      (`kind: "failure"`) or High or Urgent: `subject_key`, `app`, `job`, `severity`, `kind`,
+      `held` (how many), `last_title`, `last_reason`, `signal_ids`.
+    - b. **Silence:** `silence.silent` is true when nothing has been delivered for more than
+      `silence.threshold_hours` (`hours_since`, from `last_delivered_at`; `threshold_from` says
+      whether the plan set it, `settings.nightly_checks.silence_hours`, or the default of 36).
+      Also `silence.broad_overrides`: overrides in force that hold or drop with no app, job,
+      subject or sender in their match. `signals_last_day` counts the last day's signals by state.
+    - c. **Failures:** `failures`, failed or partial runs in the last day with no signal raised for
+      them: `run_id`, `app`, `job`, `status`, `started_at`, `failure_kind`, `error_message`.
+    - `signals_truncated: true` means more than 1000 signals in 36 hours; say so in the note.
 
-### Step 6 — Raise inbox items
+### Step 6 — Raise items
 
-Use the open Overwatch items from count 3d. **Never raise an item when an open one starts with the
-same text up to its " — "**: say "still open" for it in the note instead.
+Items 1 to 7 are signals: **raise each one every night it holds**, with no open-item check. The
+dispatcher folds a repeat into the open item with a "Seen n times since..." line, and decides what
+reaches Alex and when. When an open Overwatch item (count 3d) starts with the same text up to its
+" — ", the note says "still open" for it as well. Item 8 is the one kind written straight to the
+inbox.
 
 `<link: id>` means `https://alfredv5vibe.vercel.app/<id>`.
 
@@ -293,6 +317,30 @@ same text up to its " — "**: say "still open" for it in the note instead.
 `source_metadata: { "task_name": "<its title>", "run_date": "<local_date>", "kind": "<its kind>" }`,
 plus any other keys it lists. The run stays on record in `ai_reasoning`. Counts of zero are left out
 of a title and a first line.
+
+**Raising items 1 to 7.** For each, call `raise_signal` once:
+- `app: "overwatch"`, `job: "nightly"`, `started_by: "task:overwatch-nightly"`.
+- `severity`: `"high"` for waiting on Alex and for missed intentions; `"low"` for fading; `"normal"`
+  for everything else (overrun, stalled, scan gaps, a stale inventory, proposals, follow-ups).
+- `subject_key`: stable from night to night, so repeats fold together: `overwatch:<kind>:<the
+  project, app or group id>`, or `overwatch:<kind>` when there is no one thing, lower case, no
+  spaces, no date. For example `overwatch:stalled:<group id>`, `overwatch:overdue`,
+  `overwatch:fading`, `overwatch:inventory`.
+- `title`, the text that may pop, by kind:
+  - overdue: `<N> missed: <the most overdue intention> (+<M> undated)`, or with none missed
+    `<M> undated: <the soonest deadline's intention>`; add `+<K> more` inside the brackets when
+    more than one missed;
+  - fading: `<N> fading: <the oldest item>`;
+  - any other item: its title without "Overwatch: ".
+- `body`: one plain line on why it matters. No `link`.
+- `details`: `{"kind": "flag", "item": {"captured_text": "<the first line, then the rest>",
+  "source_app": "<overwatch, or the follow-up's app>", "source_metadata": {<as above>},
+  "ai_reasoning": "Created by the overwatch/nightly scheduled task, run <run id>."}}`. Nothing else
+  in the item: no `suggested_*` fields.
+- `source_ref`: `<subject_key>:<local_date>`, so a re-run does not raise it twice.
+
+Keep each returned signal id. If one call errors, SKIP it (`skipped` gets `inbox:<first line>`) and
+go on.
 
 1. **One per stalled or overrun project** (counts 2a, 2c). First line:
    `Overwatch: status request for <project_code> — <stalled N days | overrun: N of M steps | past target <date>>`.
@@ -356,9 +404,8 @@ of a title and a first line.
    Overwatch says the platform inventory has not been rebuilt since <date>. Help me check the sender log (alfred-overwatch-outbox.jsonl.log in the repo's .git folder) and, if needed, run npm run inventory -- --send.
    ```
    Kind `inventory_stale`.
-7. **One per follow-up** (count 11f), **`source_app` the follow-up's app** (rule 5). Dedupe against
-   count 3f, not 3d: never raise one when an open item starts with the same text up to its " — ".
-   First line and title, by kind:
+7. **One per follow-up** (count 11f), **`source_app` the follow-up's app** (rule 5). First line and
+   title, by kind:
    - `table_users`: `Overwatch: follow-up: <part> after <table> changed — <merge_commit, 7 characters>`.
      Title: `Overwatch: check <part> after <table> changed`.
    - `tool_in_no_skill`: `Overwatch: follow-up: <tool> is in no skill — <merge_commit, 7 characters>`.
@@ -369,11 +416,51 @@ of a title and a first line.
    (<merge_commit>)." and, for `table_users`, its `uses` of the table; for `skill_to_paste`, the line
    `Skill version: <the skill's details.version from 11a, or unknown>`, the repo's version, which a
    chat compares with the installed copy.
-   Kind `follow_up`, plus `"follow_up": "<kind>"` and `"summary_id": "<id>"`.
+   Kind `follow_up`, plus `"follow_up": "<kind>"` and `"summary_id": "<id>"`. Its `subject_key` is
+   `overwatch:follow_up:<summary id>:<the follow-up's kind>`.
+8. **The dispatcher checks** (count 13), **written straight to the inbox** with `create_inbox_item`,
+   because the dispatcher may be what is broken. **Never raise one when an open Overwatch item
+   (count 3d) starts with the same text up to its " — "**: say "still open" in the note instead.
+   One item per check that found something, with `source_type: "task"`, `source_app: "overwatch"`,
+   `source_metadata` as above with kind `dispatcher`, plus `"check": "<importance, silence or
+   failures>"`, the same `ai_reasoning`, and nothing else. Each names what to do and, where a plan
+   change would help, ends with a paste-ready prompt.
+   - **Importance** (13a). First line: `Overwatch: dispatcher held <N> that may matter — <the
+     first subject_key>`. Title: `Overwatch: dispatcher held <N> important`. Then one line per
+     row: `<last_title> (<app>, <severity><, failure>): held <held> times. Reason: "<last_reason>".`
+     When the reason names an override, end with:
+     ```
+     FOR CLAUDE.AI, NOT THE CLI
+     Overwatch says the dispatcher held <subject_key> (<severity>, <kind>) <held> times yesterday, because of the "<label>" exception. Load the overwatch skill, show me that exception and propose whether to narrow or end it.
+     ```
+     Otherwise end with:
+     ```
+     FOR CLAUDE.AI, NOT THE CLI
+     Overwatch says the dispatcher held <subject_key> (<severity>, <kind>) <held> times yesterday: "<last_reason>". Load the overwatch skill, show me the delivery rules that held it, and propose an exception or a rule change so it reaches me.
+     ```
+   - **Silence** (13b), when `silent` is true or `broad_overrides` is not empty. First line:
+     `Overwatch: dispatcher silent — <hours_since> hours`, or with nothing silent
+     `Overwatch: dispatcher exception holds or drops broadly — <label>`. Title: `Overwatch:
+     nothing delivered for <hours_since> hours` or `Overwatch: broad exception <label>`. Then
+     "Nothing has been delivered since <last_delivered_at, friendly, or never>. The threshold is
+     <threshold_hours> hours (<from the plan | the default>). Signals in the last day: <the counts
+     by state>." and one line per broad override: `"<label>": <hold or drop> <its match in plain
+     words, or "everything">, until <ends_at, friendly, or no end>.` End with:
+     ```
+     FOR CLAUDE.AI, NOT THE CLI
+     Overwatch says nothing has been delivered for <hours_since> hours<, and the "<label>" exception <holds or drops> <what> until <date>>. Load the overwatch skill, check the dispatcher's last runs and the delivery rules, and propose a fix: end or narrow the exception, or change the rules.
+     ```
+   - **Failures** (13c). First line: `Overwatch: <N> failed runs raised no signal — <app>/<job>`
+     (the first). Title: `Overwatch: <N> silent failures`. Then one line per row:
+     `<app>/<job> <status> at <started_at, friendly> (<link: run_id>): <failure_kind or
+     error_message, verbatim>.` End with:
+     ```
+     FOR CLAUDE.AI, NOT THE CLI
+     Overwatch says these runs failed without raising a failure signal: <app>/<job> on <date>, .... Load the overwatch skill, read each task's prompt file in docs/ and tell me which one does not raise a failure signal, and how to fix it.
+     ```
 
-Every item also sets `ai_reasoning: "Created by the overwatch/nightly scheduled task, run <run id>."`
-and nothing else: no `suggested_*` fields. Keep each returned inbox id. If one call errors, SKIP
-it (`skipped` gets `inbox:<first line>`) and go on.
+   Keep each returned inbox id. If one call errors, SKIP it (`skipped` gets `inbox:<first line>`)
+   and go on.
 
 ### Step 7 — Write tonight's note
 
@@ -390,7 +477,9 @@ Call `create_overwatch_note` with `period: "nightly"`, `for_date: <local_date>`,
   - **Every record is a markdown link** `[Name](https://alfredv5vibe.vercel.app/<id>)`, never a
     bare URL: overdue and deadline intentions, inbox items, projects (to the group link,
     `https://alfredv5vibe.vercel.app/groups/detail/<group_id>`).
-  - **Order under Action Required:** time-sensitive first (overdue intentions; deadlines, the urgent
+  - **Order under Action Required:** time-sensitive first (the dispatcher checks, count 13, one
+    bullet each: "The dispatcher held <N> that may matter", "Nothing delivered for <N> hours",
+    "<N> failed runs raised no signal"; overdue intentions; deadlines, the urgent
     ones first; failed or missing tasks, stopped schedules and orphan runs, each suggested as **a bug
     to log**: "Log a bug: <schedule> has had no ok run since <date>."; for notify-dispatch, "Log a
     bug: notify-dispatch has left a reminder unsent since <date>."), then anything waiting on Alex,
@@ -416,35 +505,17 @@ Call `create_overwatch_note` with `period: "nightly"`, `for_date: <local_date>`,
   `fading`, `overdue_intentions`, `deadline_no_date`, `watch_ended`, `checks_due`,
   `inventory_stale` (`{ "seen_at": … | "never", "days": … }`, or an empty list when fresh),
   `impact_review` (the follow-ups from count 11f, each with its summary id),
-  `portfolio_review_due` (count 12: `{ "portfolio_id": …, "name": …, "review_by": … }` each), plus
-  `inbox_items` (the ids from Step 6), `skipped` and `settings_missing`.
+  `portfolio_review_due` (count 12: `{ "portfolio_id": …, "name": …, "review_by": … }` each),
+  `dispatcher_checks` (count 13: `{ "importance": <rows>, "silence": <the silence object>,
+  "failures": <rows> }`), plus `signals` (the signal ids from Step 6.1 to 6.7), `inbox_items` (the
+  ids written in Step 6.8), `skipped` and `settings_missing`.
 
 A second manual run on the same day replaces the note, keeping its id; that is expected. If the call
 errors, STOP with `failure_kind: "note_write"`.
 
 ### Step 8 — Signals, watch items and checks
 
-1. **Signals.** For **each** inbox item raised in Step 6, call `raise_signal` once. Raise every one,
-   every night it is raised: never count, cap or skip them, and never check for an earlier
-   notification. The dispatcher decides what reaches Alex and when. A night with no new items
-   raises nothing.
-   - `app: "overwatch"`, `job: "nightly"`, `started_by: "task:overwatch-nightly"`.
-   - `severity`: `"high"` for waiting on Alex and for missed intentions; `"low"` for fading; `"normal"`
-     for everything else (overrun, stalled, scan gaps, a stale inventory, proposals, follow-ups).
-   - `subject_key`: stable from night to night, so repeats tie together: `overwatch:<kind>:<the
-     project, app or group id>`, or `overwatch:<kind>` when there is no one thing, lower case, no
-     spaces, no date. For example `overwatch:stalled:<group id>`, `overwatch:overdue`,
-     `overwatch:fading`, `overwatch:inventory`.
-   - `title`, the text that may pop, by kind:
-     - overdue: `<N> missed: <the most overdue intention> (+<M> undated)`, or with none missed
-       `<M> undated: <the soonest deadline's intention>`; add `+<K> more` inside the brackets when
-       more than one missed;
-     - fading: `<N> fading: <the oldest item>`;
-     - any other item: its title without "Overwatch: ".
-   - `body`: one plain line on why it matters. `link`: `/<inbox id>`, the item's id.
-   - `details`: `{"inbox_id": "<inbox id>", "kind": "flag"}`. The inbox id tells the dispatcher the
-     item already exists, so it points at it instead of making another.
-   - `source_ref`: `overwatch:nightly:<local_date>:<inbox id>`, so a re-run does not raise it twice.
+1. **Signals** were raised in Step 6; nothing more here.
 2. **Watch items that ended:** for each one in the note, `update_overwatch_watch` with its `id`
    and `expiry_noted: true`.
 3. **Checks for the next run:** `update_overwatch_checks` with `counts.plan.checks_later`, plus a
@@ -463,9 +534,10 @@ A failed call here is SKIPPED, never STOP.
 
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-- **`details`**, always: `local_date`, `prompt_version: "2026-11-04a"`, `manual`, `plan_id`,
+- **`details`**, always: `local_date`, `prompt_version: "2026-11-06a"`, `manual`, `plan_id`,
   `counts` (an object with one key per flag, the same keys as Step 7's flags, and that flag's
-  count; never `flag_counts`), `note_id`, `inbox_item_ids`, `signals_raised`, `apps_pulled`,
+  count; never `flag_counts`), `note_id`, `inbox_item_ids` (Step 6.8's), `signal_ids` and
+  `signals_raised` (Step 6.1 to 6.7's), `apps_pulled`,
   `summaries_reviewed` (the ids marked in Step 8.5), `profiles_rewritten` (app ids),
   `alfred_calls`, `paused`, `skipped` and `settings_missing`; also `earlier_run_id` when Step 2.3
   kept one, or `duplicate_of` when it stopped there.
@@ -473,9 +545,15 @@ Call `update_platform_run` with the run id, **once**.
   `plan_read`, `state_read`, `note_write`, `run_open`, `unknown`. **Never downgrade a failure to
   `ok` to get past a rejected close.**
 
-**On `failed`, also** call `create_inbox_item` with `source_type: "task"`, `source_app: "overwatch"`,
-`source_metadata: { "task_name": "Overwatch nightly FAILED: <failure_kind>", "run_date": "<local_date>", "kind": "failure" }`,
-and this `captured_text`:
+**On `failed`, first** call `raise_signal` once, and put its id in `details.failure_signal_id`
+(a failed call goes in `details.signal_error`, verbatim; it does not change the close):
+`app: "overwatch"`, `job: "nightly"`, `started_by: "task:overwatch-nightly"`, `severity: "high"`,
+`subject_key: "overwatch:nightly:failure:<failure_kind>"` (no date, so repeats fold into one item),
+`title: "Overwatch nightly FAILED: <failure_kind>"`, `body`: the error in one line,
+`source_ref: "overwatch:nightly:failure:<failure_kind>:<local_date>"`, and `details`:
+`{"kind": "failure", "item": {"captured_text": "<the text below>", "source_app": "overwatch",
+"source_metadata": {"task_name": "Overwatch nightly FAILED: <failure_kind>", "run_date": "<local_date>", "kind": "failure"}}}`,
+with this text:
 
 ```
 Overwatch nightly FAILED — <failure_kind>, <local_date>
@@ -488,10 +566,11 @@ Run: <run id>
 ### Step 10 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-11-04a`;
+- `PROMPT VERSION: 2026-11-06a`;
 - the finish summaries reviewed and the follow-ups raised, and whether the inventory is stale;
+- the dispatcher checks: important held, silent (hours and threshold), failures with no signal;
 - the run id and its status, and `manual: true` or `manual: false`; `duplicate_of` if it stopped;
-- the count of each flag, the note id, the inbox item ids and the signals raised;
+- the count of each flag, the note id, the signals raised and the dispatcher inbox item ids;
 - `alfred_calls` and whether it paused;
 - `skipped` and `settings_missing`, if any;
 - any error, verbatim.

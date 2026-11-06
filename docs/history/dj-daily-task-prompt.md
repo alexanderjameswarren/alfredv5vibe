@@ -28,7 +28,12 @@ cold reader needs.
 >
 > **So the prompt now carries a version, and the task must echo it.**
 >
-> ### `PROMPT VERSION: 2026-11-05a`
+> ### `PROMPT VERSION: 2026-11-06a`
+>
+> 2026-11-06a: signals only. A failed or partial run is one `raise_signal` whose `details.item`
+> holds the inbox item, and the dispatcher writes it; no `create_inbox_item`. The 7-day failure
+> de-dup, `notified_at` and "STILL FAILING" are gone: a failure is `details.kind: "failure"` with a
+> subject key that stays the same from run to run, and the dispatcher folds repeats into one item.
 >
 > 2026-11-05a: every inbox item the run creates (failed or partial) is followed by one
 > `raise_signal` for it; the dispatcher decides what reaches Alex, and the task never sends a push.
@@ -52,10 +57,10 @@ cold reader needs.
 | | when | where |
 |---|---|---|
 | **Record** | **every run**, success or failure | `platform_runs` — the durable log the staleness check reads |
-| **Notification** | **only** failure or `partial` — never artist disagreements (logged in the run, not raised) | one Alfred **inbox item** |
+| **Notification** | **only** failure or `partial` — never artist disagreements (logged in the run, not raised) | one **signal** carrying the inbox item; the dispatcher writes it |
 
-A repeat of an unfixed condition is re-raised **once a week**, worded as ongoing — see
-Step 7. **A clean run raises nothing.** A signal that fires on the normal case teaches its reader
+Every failed run raises its signal; the dispatcher folds a repeat of an unfixed condition into
+the open item, with a "Seen n times since..." line. **A clean run raises nothing.** A signal that fires on the normal case teaches its reader
 to skip it — the same principle that stopped `artist_disagreements` firing on every
 collaboration (spec §11.7), applied to a human inbox rather than to a tool. A daily "the
 sync worked" would train exactly the reflex that makes the one broken day invisible.
@@ -69,7 +74,7 @@ notification channel** — assume nobody reads it.
 
 ---
 
-You are running the DJ daily history sync. `prompt version: 2026-11-05a`. Follow these steps
+You are running the DJ daily history sync. `prompt version: 2026-11-06a`. Follow these steps
 in order. **Do not improvise.**
 
 ### The rules that override everything else
@@ -95,12 +100,16 @@ in order. **Do not improvise.**
    files, character encodings and HTTP transports — to find an expired token that the
    server had been naming in every single response.
 
-4. **YOU NEVER NOTIFY.** Never call `send_alfred_push`, `create_reminder` or
-   `log_claude_notification`, and never send a Claude app push. Each inbox item you create is
-   followed by one `raise_signal` for it (Step 7); the dispatcher decides what reaches Alex.
+4. **YOU ONLY RAISE SIGNALS.** Never call `create_inbox_item`, `send_alfred_push`,
+   `create_reminder` or `log_claude_notification`, and never send a Claude app push. An item is
+   one `raise_signal` that carries it in `details.item` (Step 7); the dispatcher writes it and
+   decides what reaches Alex.
+5. **NO REPEAT HANDLING.** Never read earlier runs, items or signals to decide whether to raise,
+   and never word anything as "still failing". The dispatcher folds repeats of the same
+   `subject_key` into one item.
 
 **Whenever a step below says STOP: go to Step 7, then Step 8, then finish.** Stopping still
-means stamping the run and raising an inbox item. It does not mean going quiet.
+means stamping the run and raising a failure signal. It does not mean going quiet.
 
 > 🔇 **A QUIET DAY IS NOT A FAILURE AND NEVER RAISES AN INBOX ITEM (decided 2026-10-13).**
 > If Alex listened to nothing, the feed has no `Today` or `Yesterday` plays at all. That is
@@ -140,16 +149,9 @@ Two calls, and they answer different questions:
    **This is the authority.**
 2. `get_platform_runs` for `app: "dj"`, `job: "daily_history_sync"` → the newest `ok` run
    and its `covered_to`. **This is a claim.**
-   Also keep the last few runs from this call — Steps 3 and 7 need them, and **not for
-   judgement: for LOOKUP.** From every run with `notified_at` set in the last 7 days,
-   collect two things:
-   - its `details.failure_kind` — the failure de-dup key
-   - its `details.notified_video_ids` — the disagreement de-dup key
-
-   That second list is what stops a decided-but-not-yet-recorded disagreement being
-   re-reported daily. **Read it; do not reason about what you probably reported.**
-
-   And from every run with status `ok` or `partial`, collect its `details.empty_days`
+   Also keep the last few runs from this call — Step 3 needs them, and **not for
+   judgement: for LOOKUP.** From every run with status `ok` or `partial`, collect its
+   `details.empty_days`
    (a list of dates; absent on older runs, which is fine). These are **confirmed quiet
    days**: days an earlier run polled as a complete `Yesterday` bucket and found empty.
    Step 3 uses them.
@@ -409,84 +411,42 @@ Report the count in Step 8 and nothing else.
 wording from the step that stopped. *"The sync failed"* is an item that will be ignored;
 *"Run the reauth tile on the Surface"* is one that gets acted on.
 
-**Do not re-raise an item every day for a FAILURE that is still unfixed — but do not go
-permanently silent about it either.** Using the recent runs from Step 2:
+**Raise it every time the condition holds.** Never check earlier runs first, and never word it
+as ongoing: the dispatcher folds a repeat into the open item and adds "Seen n times since...".
 
-Suppress the item **only if all three hold**:
+⚠️ **If Step 4 could not create the run row at all**, raise the item anyway and say so in it:
+*"No run row exists for this failure."*
 
-1. The most recent run with the **same `failure_kind`** has `notified_at` set, **and**
-2. there has been **no `ok` run since** it, **and**
-3. that `notified_at` is **less than 7 days old**.
-
-Otherwise raise the item, then call `update_platform_run` to set `notified_at` on **this**
-run.
-
-**Condition 3 is a deliberate floor, not a detail.** Without it, one item is raised and then
-the condition is silent forever — so a notification missed while travelling or during a busy
-week means never hearing about it again, while the run log quietly fills with failures
-nobody sees. **Once a week for something genuinely broken is a reminder, not noise.**
-
-**Word a repeat so it reads as ongoing, not new.** When you are re-raising because of the
-7-day rule, the title and body must say so:
-
-> *"DJ sync STILL FAILING since `<date of the first failure in this streak>` — `<N>`
-> consecutive runs."*
-
-where `N` is the number of runs with this `failure_kind` since the last `ok` run. A standing
-outage and a fresh one must be distinguishable at a glance in the inbox, or the second gets
-read as the first.
-
-An `ok` run in between resets all of this: a thing that broke, was fixed, and broke again is
-new information and deserves a **new** item, worded as new.
-
-⚠️ **IF STEP 4 COULD NOT CREATE THE RUN ROW AT ALL, THERE IS NOTHING TO SET
-`notified_at` ON — so de-dup does not apply and you must raise the item unconditionally.**
-Raise it, and **say so in the item**:
-
-> *"No run row exists for this failure, so the once-per-week de-duplication does not apply.
-> Every run will raise this item until the cause is fixed."*
-
-Otherwise a persistent `create_platform_run` failure mints one identical item per day with
-nothing to explain why the usual suppression is not working — and the reader concludes the
-de-dup is broken rather than that the failure is upstream of it.
-
-⚠️ **If the failure was `supabase_write`, you may not be able to do any of this** — the
-inbox and `platform_runs` live behind the same connector. Report it in Step 8 and stop.
+⚠️ **If the failure was `supabase_write`, you may not be able to do any of this** — signals and
+`platform_runs` live behind the same connector. Report it in Step 8 and stop.
 **This is the one failure the task cannot record**, and it is covered instead by the
 staleness check noticing that no run arrived at all.
 
-
-When you create the inbox item, call create_inbox_item with
-source_type "task", source_app "dj", and source_metadata {"task_name": "<this task's
-name>", "run_date": "<today, YYYY-MM-DD>"}. Do not suggest a context,
-item or intention for it.
-
-**Then raise its signal.** Straight after `create_inbox_item`, call `raise_signal` once, with the
-new inbox id:
+**Raise the item.** Call `raise_signal` once:
 - `app: "dj"`, `job: "daily_history_sync"`, `started_by: "task:dj-daily"`;
-- `severity`: `"high"` for a failed run, `"normal"` for a `partial` run (days lost);
+- `severity` and kind: `"high"` and `"failure"` for a failed run, `"normal"` and `"flag"` for a
+  `partial` run (days lost);
 - `subject_key`: `"dj:daily_history_sync:failure:<failure_kind>"` for a failed run,
-  `"dj:daily_history_sync:lost_days"` for a `partial` run;
-- `title`: the item's title; `body`: one plain line saying what it holds; `link: "/<inbox id>"`;
-- `details: { "inbox_id": "<inbox id>", "kind": "flag" }`. The inbox id tells the dispatcher the
-  item already exists, so it points at it instead of making another;
+  `"dj:daily_history_sync:lost_days"` for a `partial` run. Never a date in it;
+- `title`: the item's title; `body`: one plain line saying what it holds; no `link`;
+- `details: { "kind": "<failure or flag>", "item": { "captured_text": "<the title, a blank line, then the body above>", "source_app": "dj", "source_metadata": { "task_name": "<this task's name>", "run_date": "<today, YYYY-MM-DD>" } } }`.
+  The dispatcher writes the inbox item from `details.item`. Do not suggest a context, item or
+  intention for it;
 - `source_ref: "<subject_key>:<today_utc>"`.
 
 Keep the returned `signal_id` for Step 8: the run is already closed, so it cannot go in the run's
 `details`. If it says `created: false`, it was already raised today; say so. **A failed
-`raise_signal` never fails the run:** quote its error verbatim in Step 8 and carry on. The item
-stands either way. The rules above decide whether an item exists (quiet days, the 7-day de-dup);
-the signal only follows an item.
+`raise_signal` never fails the run:** quote its error verbatim in Step 8 and carry on.
 
 ### Step 8 — Report to the chat
 
-Nobody may read this; the inbox item from Step 7 is the real channel. Write it anyway, in
+Nobody may read this; the signal from Step 7 is the real channel. Write it anyway, in
 exactly this shape, so that when someone does go looking, six months of runs are skimmable
 and comparable:
 
 ```
 DJ daily sync — <today_utc>
-  prompt version: 2026-11-05a
+  prompt version: 2026-11-06a
   host: surface           run id: <id>
   held through:  <newest played_on from get_dj_plays>   (extended over quiet days to <D>)
   log claimed:   <covered_to from the previous ok run>   [AGREES | DISAGREES]
@@ -503,8 +463,7 @@ DJ daily sync — <today_utc>
   page_full: <bool>   oldest_bucket_is_partial: <bool>
   orphaned running rows: <none | <ids>>
   status stamped: <ok | partial | failed>
-  inbox item raised: <yes, new | yes, repeat (still failing, N runs) |
-                      no — clean run | no — already notified, <n> day(s) ago>
+  signal raised: <yes, failure | yes, lost days | no — clean run>
   signal: <none — no item | <signal_id> | not created — already raised today | FAILED — <error>>
 ```
 
@@ -512,7 +471,7 @@ Every number above comes from a tool response. If you do not have one, write `un
 never a guess, and never a number you expected.
 
 ⚠️ **Print `prompt version` exactly as written at the top of this prompt.** It is how a
-forgotten paste becomes visible. If you are reading this, the version is `2026-11-05a`.
+forgotten paste becomes visible. If you are reading this, the version is `2026-11-06a`.
 
 ⚠️ **The `known disagreements` line is not decoration — it is what makes a silent run
 verifiable.** A run that raises nothing because everything was decided and a run that raises

@@ -286,6 +286,7 @@ test("add_delivery_override: tier 3; a dry run by default checks, replays the we
   assert.deepEqual(out.changed.map((c) => [c.signal_id, c.before, c.after]), [["s1", "notification", "inbox item"]]);
   assert.equal(out.checked, 3);
   assert.match(out.note, /not a full re-run/);
+  assert.match(out.note, /hourly or daily limits are not replayed/);
   assert.ok(saw(db, "signals", "neq", "state", "resolved"));
 
   const prop = await m.addDeliveryOverrideTool.propose({ override: DJ, reason: "Alex asked" }, { db: overrideDb() });

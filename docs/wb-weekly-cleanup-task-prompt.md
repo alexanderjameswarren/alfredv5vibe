@@ -20,9 +20,14 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
 > version, and Step 9 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-11-05a`
+> ### `PROMPT VERSION: 2026-11-06a`
 >
 > Bump the date-letter whenever this file changes below the line.
+>
+> 2026-11-06a: signals only. The weekly item and the failure item are each one `raise_signal`
+> whose `details.item` holds the item, and the dispatcher writes it; no `create_inbox_item`, and
+> no check for last week's open item. A failure is `details.kind: "failure"` with a subject key
+> that stays the same from run to run, so repeats fold into one item.
 >
 > 2026-11-05a: every inbox item the run creates is followed by one `raise_signal` for it; the
 > dispatcher decides what reaches Alex. The task never sends a push, and its Claude app push is off.
@@ -50,16 +55,16 @@ for this job: the prompt below is the whole program. It reads, it proposes, and 
 3. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
    Step 2 reads that, and Step 8 records `manual: true`. Check three things:
    - a `platform_runs` row for `warren_buffet` / `wb_weekly_cleanup` closed `ok`;
-   - one inbox item, or none on a quiet week;
-   - a final report that shows `PROMPT VERSION: 2026-11-05a`.
+   - one signal (and, once the dispatcher has run, one inbox item), or none on a quiet week;
+   - a final report that shows `PROMPT VERSION: 2026-11-06a`.
 
 ## The record and the notification are SEPARATE
 
 | | when | where |
 |---|---|---|
 | **Record** | **every run**: quiet weeks and failures included | `platform_runs` |
-| **Cleanup item** | **only** when there is something to decide | ONE Alfred inbox item, "Money cleanup — week of <date>" |
-| **Failure item** | **only** when the run failed | one Alfred inbox item, "Money cleanup FAILED" |
+| **Cleanup item** | **only** when there is something to decide | ONE signal carrying the inbox item "Money cleanup — week of <date>"; the dispatcher writes it |
+| **Failure item** | **only** when the run failed | one signal (`kind: "failure"`) carrying "Money cleanup FAILED"; repeats fold into one item |
 
 A quiet week raises nothing. A signal that fires on the normal case teaches its reader to skip it.
 
@@ -70,12 +75,12 @@ A quiet week raises nothing. A signal that fires on the normal case teaches its 
 ---
 
 You are running the weekly Money cleanup for Alex and Elise's household finances in Alfred.
-`PROMPT VERSION: 2026-11-05a`. Follow these steps in order. **Do not improvise.**
+`PROMPT VERSION: 2026-11-06a`. Follow these steps in order. **Do not improvise.**
 
 ### The rules that override everything else
 
 1. **YOU PROPOSE; YOU NEVER FIX.** The only tools you may call that write anything are
-   `create_platform_run`, `update_platform_run`, `create_inbox_item` and `raise_signal`. **Never** call a tool that
+   `create_platform_run`, `update_platform_run` and `raise_signal`. **Never** call a tool that
    creates or changes rules, tags, merchants, subscriptions, transactions, planned items, matches,
    accounts or reminders, even when the fix looks obvious. **Never call `mark_wb_reviewed`**, not
    even with a note. Every fix goes into the item as a proposed tool call for Alex to approve.
@@ -91,36 +96,39 @@ You are running the weekly Money cleanup for Alex and Elise's household finances
    sign, money in with no sign (cash flow figures above zero get a `+`). For example `-$9,748.00`,
    `$176.62`, `+$1,200.00`. The tools give money out as negative numbers; keep that sign.
 6. **EVERY RECORD ID YOU SHOW IS A LINK**, written `https://alfredv5vibe.vercel.app/<id>`: transactions,
-   rules, merchants, subscriptions, planned items, accounts, inbox items, intentions, and last week's
-   item. Put the link after the name it belongs to, in parentheses. **Tool calls keep their bare ids**,
+   rules, merchants, subscriptions, planned items, accounts, inbox items and intentions. Put the link after the name it belongs to, in parentheses. **Tool calls keep their bare ids**,
    exactly as written in Step 6, so Alex can approve them.
 7. **WHEN A CALL FAILS, QUOTE THE ERROR VERBATIM.**
-8. **YOU NEVER NOTIFY.** Never call `send_alfred_push`, `create_reminder` or
-   `log_claude_notification`, and never send a Claude app push. Each inbox item you create is
-   followed by one `raise_signal` for it; the dispatcher decides what reaches Alex.
+8. **YOU ONLY RAISE SIGNALS.** Never call `create_inbox_item`, `send_alfred_push`,
+   `create_reminder` or `log_claude_notification`, and never send a Claude app push. Each item is
+   one `raise_signal` that carries it in `details.item`; the dispatcher writes it and decides what
+   reaches Alex.
+9. **NO REPEAT HANDLING.** Never read the inbox or earlier signals to decide whether to raise.
+   The dispatcher folds repeats of the same `subject_key` into one item.
 
 **Whenever a step says STOP: go to Step 8 and close the run as `failed`, then Step 9.**
 
-**Raising a signal for an item.** Straight after each `create_inbox_item`, call `raise_signal` once,
-with the new inbox id:
+**Raising an item.** Call `raise_signal` once:
 - `app: "warren_buffet"`, `job: "wb_weekly_cleanup"`, `started_by: "task:money-cleanup"`;
-- `severity`: `"normal"` for the weekly item, `"high"` for a failure item;
-- `subject_key`: `"warren_buffet:wb_weekly_cleanup:week"` for the weekly item,
-  `"warren_buffet:wb_weekly_cleanup:failure:<failure_kind>"` for a failure item;
-- `title`: the item's first line; `body`: one plain line saying what it holds; `link: "/<inbox id>"`;
-- `details: { "inbox_id": "<inbox id>", "kind": "flag" }`. The inbox id tells the dispatcher the
-  item already exists, so it points at it instead of making another;
-- `source_ref: "<subject_key>:<local_date>"`.
+- `severity` and kind: `"normal"` and `"flag"` for the weekly item, `"high"` and `"failure"` for a
+  failure item;
+- `subject_key`: `"warren_buffet:wb_weekly_cleanup:week:<local_date>"` for the weekly item (each
+  week's item is new, so its key carries the date and never folds into last week's),
+  `"warren_buffet:wb_weekly_cleanup:failure:<failure_kind>"` for a failure item (no date, so a
+  repeat folds into the open one);
+- `title`: the item's first line; `body`: one plain line saying what it holds; no `link`;
+- `details: { "kind": "<flag or failure>", "item": { "captured_text": "<the item's text>", "source_app": "warren_buffet", "source_metadata": { "task_name": "Money cleanup", "run_date": "<local_date>" }, "ai_reasoning": "Created by the wb_weekly_cleanup scheduled task, run <run id>." } }`.
+  The dispatcher writes the inbox item from `details.item`, with `source_type: "task"`;
+- `source_ref: "<subject_key>:<local_date>"` for a failure item, `"<subject_key>"` for the weekly
+  item.
 
 Keep the returned `signal_id`. If it says `created: false`, it was already raised today: note that.
-**A failed `raise_signal` never fails the run:** record its verbatim error as `signal_error` in the
-run details and in the report, and carry on. The item stands either way.
 
 ### Step 1 — Open the run
 
 Call `create_platform_run` with `app: "warren_buffet"`, `job: "wb_weekly_cleanup"`,
 `executor: "claude"`, `status: "running"`. **Keep the run id.** If this call fails, skip Step 8,
-create the failure item and raise its signal (Step 8, "The failure item"), then Step 9.
+raise the failure item (Step 8, "The failure item"), then Step 9.
 
 ### Step 2 — The dates, and whether this run is manual
 
@@ -196,14 +204,11 @@ It is a **quiet week** when **all** of these hold:
 - every active subscription has a review date (`no_review_date_count` is 0).
 
 Major expenses and cash flow are for reading, not deciding, so they never make a week un-quiet.
-On a quiet week, go to Step 8 and close `ok` with `quiet: true`. **Create no item.**
+On a quiet week, go to Step 8 and close `ok` with `quiet: true`. **Raise no item.**
 
-### Step 5 — Is last week's item still open?
+### Step 5 — (removed in 2026-11-06a)
 
-Call `get_inbox` with `limit: 50`. Look for an item whose `captured_text` **begins with exactly**
-`Money cleanup — week of`.
-- If you find one, keep its id as `previous_item_id`. **Do not change, archive or merge it.**
-- If `get_inbox` errors, carry on without it and set `inbox_read_failed: true` in the run details.
+There is no check for last week's item. Go on to Step 6.
 
 ### Step 6 — Write the lines
 
@@ -296,9 +301,9 @@ It hides the finding until its count grows past today's. **Never call it yoursel
   - Propose: `get_wb_transactions({"merchant_id": "<merchant_id>", "limit": 5})`.
   - Then: `create_wb_rule_from_transaction({"transaction_id": "<one of them>", "set_kind": "spend", "add_tag_ids": ["<Category tag>"]})`.
 
-### Step 7 — Create ONE inbox item
+### Step 7 — Raise ONE item
 
-Call `create_inbox_item`, with `captured_text` of exactly this shape. **Leave out any section with
+Raise the weekly item ("Raising an item", above), with item text of exactly this shape. **Leave out any section with
 nothing in it**, but the count line covers every section. Keep each section's heading and order: the
 Overview's order first, then the cleanup sections.
 
@@ -306,7 +311,6 @@ Overview's order first, then the cleanup sections.
 Money cleanup — week of <local_date>
 
 <one line: funds transfer yes/no, how many flags, to-do rows, major expenses, rule findings, queue items, reviews due and subscriptions with no review date>
-<if previous_item_id: "Last week's item is still open: <link: previous_item_id>.">
 
 FUNDS TRANSFER REQUIRED
 <Step 6 funds transfer lines>
@@ -340,39 +344,29 @@ REVIEWS DUE (<count>)
 Nothing here was changed. Approve a line by asking Claude to run its call.
 ```
 
-Set these fields:
-- `source_type: "task"`
-- `source_app: "warren_buffet"`
-- `source_metadata: { "task_name": "Money cleanup", "run_date": "<local_date>" }`
-- `ai_reasoning: "Created by the wb_weekly_cleanup scheduled task, run <run id>."`
-
-Set **nothing else**: no `suggested_*` fields, no context. Keep the returned inbox id. If the call
-errors, STOP with `failure_kind: "inbox_write"`.
-
-Then raise its signal ("Raising a signal for an item", above), with the weekly item's `severity` and
-`subject_key`.
+`details.item` holds only `captured_text`, `source_app`, `source_metadata` and `ai_reasoning`:
+no `suggested_*` fields, no context. If `raise_signal` errors, the item was not filed: STOP with
+`failure_kind: "signal_write"`.
 
 ### Step 8 — Close the run (one call)
 
-**On `failed`, first** create the failure item and raise its signal (below), so the close can record
-them. Then call `update_platform_run` with the run id, **once**.
+**On `failed`, first** raise the failure item (below), so the close can record its signal. Then
+call `update_platform_run` with the run id, **once**.
 - **`status`:** `ok` unless a step said STOP; then `failed`.
 - **`details`**, always:
-  - `local_date`, `prompt_version: "2026-11-05a"` and `manual` (true or false, from Step 2);
+  - `local_date`, `prompt_version: "2026-11-06a"` and `manual` (true or false, from Step 2);
   - `funds_transfer` (true or false), `flags_count`, `todo_count`, `overdue_count`, `late_count`,
     `major_expenses_count`, `rule_health` (the counts by finding), `review_queue_total`,
     `reviews_due_count`, `no_review_date_count`;
-  - then one of `inbox_item_id` or `quiet: true`;
-  - `signal_id` for each item's signal (`failure_signal_id` for a failure item's), and `signal_error`
-    when `raise_signal` failed;
-  - also `previous_item_id` and `inbox_read_failed` when they apply.
+  - then one of `signal_id` (the weekly item's) or `quiet: true`;
+  - `failure_signal_id` for a failure item's signal, and `signal_error` when that `raise_signal`
+    failed.
 - **On `failed`:** `error_message` is the verbatim error, and `details.failure_kind` is one of
   `action_items_read`, `rule_health_read`, `review_queue_read`, `subscriptions_read`, `accounts_read`,
-  `read_truncated`, `inbox_write`, `run_open`, `unknown`. **Never downgrade a failure to `ok` to get
+  `read_truncated`, `signal_write`, `run_open`, `unknown`. **Never downgrade a failure to `ok` to get
   past a rejected close.**
 
-**The failure item.** Call `create_inbox_item` with `source_type: "task"`, `source_app: "warren_buffet"`,
-the same `source_metadata`, and this `captured_text`:
+**The failure item.** Raise it ("Raising an item", above, as a failure item), with this item text:
 
 ```
 Money cleanup FAILED — <failure_kind>, <local_date>
@@ -382,17 +376,17 @@ Error: <verbatim error>
 Run: <run id>
 ```
 
-Then raise its signal ("Raising a signal for an item", above), with the failure item's `severity`
-and `subject_key`. If Step 1 could not open a run, do both anyway; there is no close to record them.
+If Step 1 could not open a run, raise it anyway; there is no close to record it. A failed
+`raise_signal` here never changes the close: record its verbatim error as `signal_error`.
 
 ### Step 9 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-11-05a`;
+- `PROMPT VERSION: 2026-11-06a`;
 - the run id and its status, and `manual: true` or `manual: false`;
 - the counts from Step 8;
-- the inbox item id, or "quiet week, no item";
-- the signal id for each item, or the `raise_signal` error, verbatim;
+- the weekly item's signal id, or "quiet week, no item";
+- the failure item's signal id, or the `raise_signal` error, verbatim;
 - any error, verbatim.
 
 Nothing else.
