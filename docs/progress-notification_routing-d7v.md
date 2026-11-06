@@ -652,9 +652,75 @@ Every task prompt raises signals only, using details.item, with no repeat logic 
 - **Not done (out of scope):** mcp/index.ts's description of get_overwatch_nightly_counts does not yet mention `dispatcher_checks`.
 - **Next:** Alex checkpoints; Claude updates the ten scheduled tasks from the files.
 
+#### 10l. Hand Claude the ten prompts — DONE 2026-11-06 (`s10l-c9v4`)
+Main at 8e589e8 with all of 10k. Each file's text below its THE PROMPT line (the whole file for the
+DJ weekly review, which has no marker), as it stands in origin/main, is in an Overwatch task inbox
+item (`source_metadata.kind: "prompt_handover"`, `prompt_version` 2026-11-06a), md5 and length
+checked against the database: dispatcher e9cbe18c, Overwatch nightly b2b44af0, Overwatch weekly
+8a800735, Arnold morning review a4d24b03, Money cleanup 20356b2b, DJ daily 9e210bca, DJ weekly
+review 51851b4b, Ken seed check 53f705d8, SAM daily review 06c398d6, Drive Mix efb60809. Left
+unarchived. Next: Alex updates the ten tasks from them and archives each item once its task is
+updated.
+
+#### 11. Alex's actions, server side — WRITTEN 2026-11-06 (`s11-t8m2`), waiting on gitsync
+- **No function needed:** owner RLS lets Alex update his own signals, and the guard lets the state columns
+  change and keeps delivered, merged and dropped final. The one SQL change is a new `signals.decided_by` column
+  (checked by `started_by_valid`), in `_pending_notification_routing-d7v_update_signal.sql`, with test
+  `7_update_signal_verify.sql` (8 checks).
+- **One tool, `update_signal`** (tier 2, `action` hold, drop or deliver, `as` inbox or notification), and
+  `updateSignal()` in signals.ts shared with push-send's new signal mode `{signal_id, action, as?}`. The
+  delivery helpers moved out of deliver_signals into `deliveryKit()` so deliver now uses the same item, merge
+  and notification code. The tool records `decided_by: "chat"`, push-send `"alex"`.
+- mcp/index.ts registers `update_signal` (tool count 198) and get_overwatch_nightly_counts' description now names
+  `dispatcher_checks`. Skill section "Hold it, drop it, send it now". Spec §4.1, §4.3, §10.
+- Tests: signals 34/34; shared and mcp function tests 958/958. push-send type-checks; mcp's type check has 113
+  errors, none in the changed code (they were there already: zod typings, ken.ts, records.ts and others).
+- **Next:** gitsync, drift check, number the migration and queue it and its test; deploy mcp and push-send once it
+  is live.
+
+#### 11b. Item titles; number and queue — QUEUED 2026-11-06 (`s11b-k5r7`)
+- gitsync to 8e589e8 brought in SAM files only: no drift. 212 and 213 were free.
+- **Titles:** an item the dispatcher writes is never titled "dispatcher". Notification (pop, digest, deliver now):
+  "Notification: <worded title, else the signal's>". Inbox: the task's `details.item.source_metadata.task_name`,
+  else the worded title, else the signal's. run_date and other keys kept. signals 36/36.
+- `_pending_..._update_signal.sql` numbered as **212_signals_decided_by.sql** (pending file deleted; now 214, see 11e); test 7 points at it.
+- **213_retitle_dispatcher_inbox_items.sql** (now 215, see 11e): the 8 inbox items titled "dispatcher" (6 archived), every one with a
+  delivered signal (1 notification, 7 inbox). Titles from the item's first line, which is the worded title.
+- db:table:signals and db:table:inbox claimed. Queued, to run in this order: 212 `83d80f6f-c4e9-48d6-9075-5482e16081d2`,
+  test 7 `6c56d572-196f-49bc-8e0d-77b8d91d9d7f`, 213 `19ef7354-c559-4e7c-8ec9-43dd31dd5ace` (expect 8).
+- **Next:** once Alex reports them run: db:deploy, deploy mcp and push-send, conformance, release the db: claims.
+
+#### 11c. Deploy — DONE 2026-11-06 (`s11c-n4w6`). STEPS 11 AND 11B DONE.
+- Alex ran all three: 212 live (run 30c77dc4, CONFORMANT); test 7 ok, 9 of 9 checks (run 9cf94f23; the 11b
+  report said 8, wrongly); 213 updated 8 rows, matching --expect (run c0d37821, CONFORMANT). No inbox item is
+  titled "dispatcher" now.
+- mcp deployed 08:01 (`--no-verify-jwt`), push-send 08:01 (JWT verification on). check_platform_conformance:
+  CONFORMANT, all 103 non-exempt public tables. db:deploy, db:table:signals and db:table:inbox released.
+- Found: `get_sql_read`'s claude_reader cannot read `signals.decided_by` (its grants are per column; the rest of
+  signals reads fine). A later migration can grant it.
+- Renumbered: the screen's buttons are now **11d**.
+
+#### 11d/11e. Renumber 212 and 213 as 214 and 215 — DONE 2026-11-06 (`s11d-v2h9` blocked, `s11e-q6b3`)
+- Alex's checkpoint stopped on "migration number 212 is used twice": sam_cleanup-m4t checkpointed its
+  212_sam_cleanup_delete_beats_songs.sql into main after this thread's 07:49 sync. gitsync then brought the worktree
+  to 606740d; no drift (SAM's migration touches only SAM tables).
+- Ours ran on 2026-11-06 as **212_signals_decided_by.sql (run 30c77dc4)** and **213_retitle_dispatcher_inbox_items.sql
+  (run c0d37821)**. Renamed, in the order they ran, to **214_signals_decided_by.sql** and
+  **215_retitle_dispatcher_inbox_items.sql**; identical apart from the path line. Nothing was queued or run again.
+  Test 7, the spec and this file point at the new numbers.
+- s11d was refused by the plan guard (SQL: none, and the files name signals and inbox); s11e declared them.
+- Renumbered: the screen's buttons are now **11f**.
+
+#### Step 11f scope (planned; was "11d"): the Dispatcher screen's hold, drop and deliver-now buttons
+- create: src/overwatch/SignalActionDialog.jsx, src/overwatch/SignalActionDialog.test.jsx
+- update: src/overwatch/DispatcherPage.jsx, src/overwatch/DispatcherPage.test.jsx, src/overwatch/dispatcherModel.js, src/overwatch/dispatcherModel.test.js, src/overwatch/overwatchApi.js, src/overwatch/overwatchApi.test.js, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
 #### Step 11 scope (planned): the Dispatcher's actions, server side first
 - create: supabase/migrations/_pending_notification_routing-d7v_update_signal.sql, supabase/tests/notification_routing-d7v/7_update_signal_verify.sql
-- update: supabase/functions/_shared/tools/signals.ts, supabase/functions/_shared/tools/signals.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, supabase/functions/push-send/index.ts, .claude/skills/overwatch/SKILL.md, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
+- update: supabase/functions/_shared/tools/signals.ts, supabase/functions/_shared/tools/signals.test.mjs, supabase/functions/mcp/index.ts (also: mention dispatcher_checks in get_overwatch_nightly_counts' description), supabase/functions/mcp/index.test.mjs, supabase/functions/push-send/index.ts, .claude/skills/overwatch/SKILL.md, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
 - delete: nothing
 - deploy: mcp, push-send
 - SQL: signals (an update_signal function for hold, drop and deliver now, if RLS does not let the owner change state directly)
@@ -753,3 +819,9 @@ Files: this file. DB: none.
 | 10i | 25m | 6m 36s | 211 queued; override tools, Exceptions card, skill built; registration and deploy blocked by switchboard2-h8r |
 | 10j | 5m | see report | override tools registered, tool count 197, mcp deployed, conformant |
 | 10k | 30m | 18m | ten prompts at 2026-11-06a, nightly dispatcher checks, mcp deployed, conformant |
+| 10l | 3m | see report | ten prompt handover items, md5 checked |
+| 11 | 25m | 7m 36s | decided_by migration and test written, update_signal, push-send signal mode; waiting on gitsync |
+| 11b | 15m | 3m 18s | item titles, 212 numbered, 213 written, three queued |
+| 11c | 3m | 1m 44s | mcp and push-send deployed, conformant, db claims released |
+| 11d | 3m | 1m 3s | renumber refused by the plan guard (SQL: none) |
+| 11e | 3m | see report | 212 and 213 renamed to 214 and 215 |

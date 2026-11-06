@@ -387,8 +387,30 @@ test("deliver: a notification whose signal has details.item makes that item and 
   const [row] = inserts(db);
   assert.equal(row.captured_text, "Ken: seed check failed");
   assert.equal(row.source_app, "alfred", "the signal's app when the item names none");
-  assert.deepEqual(row.source_metadata, {});
+  assert.deepEqual(row.source_metadata, { task_name: "Notification: Title 1" });
   assert.equal(sends[0].url, `/${row.id}`);
+});
+
+test("deliver: an item's title is never the job name", async () => {
+  sends.length = 0;
+  const plan = { at: "t", decisions: [dec(1, "inbox"), dec(2, "inbox"), dec(3, "pop", { severity: "high" }),
+    dec(4, "pop", { severity: "high" })] };
+  const noName = { captured_text: "Drive Mix problem", source_metadata: { run_date: "2026-11-06" } };
+  const db = deliveryDb({ plan, signals: [sig(1, { details: { item: ITEM } }), sig(2, { details: { item: noName } }),
+    sig(3, { severity: "high", details: { item: ITEM } }), sig(4, { severity: "high" })] });
+  await m.deliverSignalsTool.handler({ wording: { [ID(2)]: { title: "Worded 2" }, [ID(4)]: { title: "Worded 4" } } }, { db });
+  const names = inserts(db).map((r) => r.source_metadata.task_name);
+  assert.deepEqual(names, ["money-cleanup", "Worded 2", "Notification: Title 3", "Notification: Worded 4"]);
+  assert.equal(inserts(db)[1].source_metadata.run_date, "2026-11-06", "run_date is kept");
+  assert.ok(!names.includes("dispatcher"));
+});
+
+test("deliver: a digest's item is titled after its notification", async () => {
+  sends.length = 0;
+  const plan = { at: "t", decisions: [dec(1, "digest"), dec(2, "digest"), dec(3, "digest")] };
+  const db = deliveryDb({ plan, signals: [sig(1), sig(2), sig(3)] });
+  await m.deliverSignalsTool.handler({ digest: { title: "3 things from Alfred" } }, { db });
+  assert.equal(inserts(db)[0].source_metadata.task_name, "Notification: 3 things from Alfred");
 });
 
 test("deliver: a merge counts repeats and keeps one 'Seen n times' line, replacing the last", async () => {
@@ -471,6 +493,120 @@ test("deliver: bad wording or run_id is refused", async () => {
   await assert.rejects(m.deliverSignalsTool.handler({ wording: { [ID(1)]: { title: "" } } }, { db }), /title/);
   await assert.rejects(m.deliverSignalsTool.handler({ run_id: "r1" }, { db }), /run_id/);
   await assert.rejects(m.deliverSignalsTool.handler({ digest: "x" }, { db }), /`digest` must be/);
+});
+
+// ---------------------------------------------------------------------------
+// update_signal
+// ---------------------------------------------------------------------------
+
+/** Fake db for update_signal: the signal by id, the subject's delivered signals, open items, and updates. */
+function actionDb({ signal, prior = [], openIds = [], moved = true }) {
+  const calls = [];
+  const builder = (table) => {
+    const chain = [];
+    const answer = () => {
+      const ops = chain.map(([k]) => k);
+      if (table === "signals" && ops.includes("update")) return { data: moved ? [{ id: signal.id }] : [], error: null };
+      if (table === "signals" && ops.includes("not")) return { data: prior, error: null };
+      if (table === "signals") return { data: signal, error: null };
+      if (table === "inbox" && ops.includes("in")) return { data: openIds.map((id) => ({ id })), error: null };
+      if (table === "inbox" && ops.includes("select")) return { data: { source_metadata: {}, captured_text: "Open", created_at: "2026-11-05T16:10:00Z" }, error: null };
+      if (table === "push_subscriptions") return { data: [{ id: "sub1", endpoint: "https://e/x", p256dh: "p", auth_key: "a" }], error: null };
+      return { data: null, error: null };
+    };
+    const b = new Proxy({}, {
+      get: (_t, k) => {
+        if (k === "then") return (res) => res(answer());
+        if (k === "maybeSingle") return () => Promise.resolve(answer());
+        return (...a) => { chain.push([k, ...a]); calls.push([table, k, ...a]); return b; };
+      },
+    });
+    return b;
+  };
+  let n = 0;
+  return {
+    calls,
+    from: builder,
+    rpc: (name, params) => {
+      calls.push(["rpc", name, params]);
+      if (name === "log_claude_notification") return Promise.resolve({ data: { created: true, id: `n${++n}` }, error: null });
+      return Promise.resolve({ data: null, error: null });
+    },
+  };
+}
+const U = m.updateSignalTool;
+
+test("update_signal: tier 2, declares its tables", () => {
+  assert.equal(U.tier, 2);
+  assert.deepEqual(U.tables.writes, ["signals", "inbox", "claude_notifications"]);
+});
+
+test("update_signal: hold moves only a queued signal, with who and when", async () => {
+  const db = actionDb({ signal: sig(1) });
+  const out = await U.handler({ signal_id: ID(1), action: "hold" }, { db });
+  assert.equal(out.state, "held");
+  const up = signalUpdates(db)[0];
+  assert.equal(up.reason, "held by Alex");
+  assert.equal(up.decided_by, "chat");
+  assert.ok(up.decided_at);
+  assert.ok(db.calls.some(([t, k, c, v]) => t === "signals" && k === "in" && c === "state" && v.join() === "queued"));
+  await assert.rejects(U.handler({ signal_id: ID(1), action: "hold" }, { db: actionDb({ signal: sig(1, { state: "held" }) }) }),
+    /is held, so it cannot be held/);
+});
+
+test("update_signal: drop takes queued or held; final ones are refused", async () => {
+  const db = actionDb({ signal: sig(1, { state: "held" }) });
+  assert.equal((await U.handler({ signal_id: ID(1), action: "drop" }, { db })).state, "dropped");
+  assert.equal(signalUpdates(db)[0].reason, "dropped by Alex");
+  await assert.rejects(U.handler({ signal_id: ID(1), action: "drop" }, { db: actionDb({ signal: sig(1, { state: "delivered" }) }) }),
+    /is delivered, so it cannot be dropped/);
+});
+
+test("update_signal: deliver as inbox makes the item from details.item and logs it", async () => {
+  const db = actionDb({ signal: sig(1, { state: "held", details: { item: ITEM } }) });
+  const out = await U.handler({ signal_id: ID(1), action: "deliver" }, { db });
+  assert.equal(out.as, "inbox");
+  assert.equal(out.state, "delivered");
+  assert.equal(inserts(db)[0].captured_text, ITEM.captured_text);
+  assert.equal(inserts(db)[0].source_metadata.task_name, "money-cleanup");
+  const log = logs(db)[0];
+  assert.equal(log.p_channel, "inbox_item");
+  assert.equal(signalUpdates(db)[0].outcome, "inbox");
+  assert.equal(signalUpdates(db)[0].decided_by, "chat");
+});
+
+test("update_signal: deliver still folds into an open item for the subject", async () => {
+  const db = actionDb({ signal: sig(1), prior: [{ id: ID(7), inbox_id: "open-1" }], openIds: ["open-1"] });
+  const out = await U.handler({ signal_id: ID(1), action: "deliver", as: "inbox" }, { db });
+  assert.equal(out.state, "merged");
+  assert.equal(inserts(db).length, 0);
+  const up = signalUpdates(db).find((u) => u.state === "merged");
+  assert.equal(up.merged_into, ID(7));
+  assert.match(up.reason, /folded into the open inbox item/);
+  assert.ok(db.calls.some(([t, k]) => t === "inbox" && k === "update"), "the open item gets its repeat");
+});
+
+test("update_signal: deliver as a notification skips window and limits, links to its item", async () => {
+  sends.length = 0;
+  const db = actionDb({ signal: sig(1, { severity: "high" }) });
+  const out = await U.handler({ signal_id: ID(1), action: "deliver" }, { db });
+  assert.equal(out.as, "notification");
+  assert.ok(!db.calls.some(([t, n]) => t === "rpc" && n === "dispatch_signals"), "no dispatch plan consulted");
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].url, `/${inserts(db)[0].id}`);
+  assert.equal(inserts(db)[0].source_metadata.task_name, "Notification: Title 1");
+  assert.equal(logs(db)[0].p_started_by, "chat");
+  assert.equal(signalUpdates(db)[0].outcome, "pop");
+});
+
+test("update_signal: bad input, as without deliver, and a race are refused", async () => {
+  const db = actionDb({ signal: sig(1) });
+  await assert.rejects(U.handler({ signal_id: ID(1), action: "snooze" }, { db }), /action/);
+  await assert.rejects(U.handler({ signal_id: "nope", action: "hold" }, { db }), /signal's id/);
+  await assert.rejects(U.handler({ signal_id: ID(1), action: "hold", as: "inbox" }, { db }), /only for action "deliver"/);
+  await assert.rejects(U.handler({ signal_id: ID(1), action: "hold" }, { db: actionDb({ signal: null }) }), /no signal/);
+  await assert.rejects(U.handler({ signal_id: ID(1), action: "hold" }, { db: actionDb({ signal: sig(1), moved: false }) }),
+    /changed while this ran/);
 });
 
 test("kindFor: details.kind wins, else flag for high and urgent, info otherwise", () => {

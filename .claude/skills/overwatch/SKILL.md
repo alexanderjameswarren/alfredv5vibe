@@ -138,6 +138,28 @@ in its group, out of fading. `update_overwatch_watch` changes one; a null `inten
 instructions and the whole settings, with a reason; show Alex the proposal; confirm only
 after he approves.
 
+### "Hold it", "drop it", "send it now" (one signal)
+
+When Alex points at one signal (from the Dispatcher screen, a get_signals list, or "that Money one"):
+1. **Find it.** `get_signals` (state `queued` or `held`, the app or subject he means). If more than one
+   fits, name them and ask which. Say it back in plain words: its title, app, and what it is waiting for.
+2. **Do it** with `update_signal` and its `signal_id`:
+   - "hold it", "not now": `action: "hold"` (queued only). It waits as held; the dispatcher will not deliver it.
+   - "drop it", "forget it": `action: "drop"` (queued or held). Gone for good.
+   - "send it now", "show me now": `action: "deliver"` (queued or held), with `as: "notification"` for
+     "notify me" or `as: "inbox"` for "put it in my inbox"; leave `as` out and High and Urgent go as a
+     notification, the rest as an inbox item. It skips the window and the hourly limit, but when the subject
+     already has an open inbox item it folds into that item instead (say so: "it joined the open item").
+3. **Say what happened** from the result: the new state, and the inbox item as a link for a delivery. A
+   refusal (already delivered, merged or dropped) is said plainly; never retry another way.
+
+Each action is recorded on the signal: `decided_by` "chat" (the screen records "alex") and `decided_at`.
+
+**Items the dispatcher writes are titled for Alex**, never "dispatcher": an item behind a notification reads
+"Notification: <what popped>", and an inbox item carries the task's own title, else the signal's. When he
+asks "what was that notification?", the item with that title is it.
+This is for one signal. "Stop DJ notifications this week" is an exception (below), not a hold.
+
 ### Notification exceptions (delivery overrides)
 
 Alex says what he wants in his own words: "DJ is too chatty", "let Arnold reach me at any hour this

@@ -347,7 +347,7 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_SWITCHBOARD_84 = ["queue_switchboard_git"];
   // Notification routing steps 3 and 4, +5; step 7, +1; step 10j, +2 (delivery overrides).
   const EXPECTED_ADDED_NOTIFICATION_ROUTING = ["raise_signal", "get_signals", "get_dispatch_plan", "deliver_signals",
-    "get_delivery_rules", "resolve_signal", "add_delivery_override", "end_delivery_override"];
+    "get_delivery_rules", "resolve_signal", "add_delivery_override", "end_delivery_override", "update_signal"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
@@ -368,10 +368,10 @@ test("the tool count is 72 after the job-search tools", () => {
   // 2026-11-02, +1 for Warren Buffet Phase 4 Step 8b: Amazon and Whole Foods items. +2 for Step 8f: item tags and splits.
   // +1 for nightly counts. 2026-11-03, +1 for the Warren Buffet money chat: record_wb_subscription_review.
   // +5 for notification routing (signals, dispatcher, delivery rules). 2026-11-04, +1: resolve_signal.
-  // 2026-11-05, +1: queue_switchboard_git. +2: add_delivery_override, end_delivery_override.
+  // 2026-11-05, +1: queue_switchboard_git. +2: add_delivery_override, end_delivery_override. 2026-11-06, +1: update_signal.
   assert.ok(registered.some((r) => r.name === "record_wb_subscription_review"), "record_wb_subscription_review is not registered");
-  assert.equal(registered.length, 197,
-    `expected 197 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 198,
+    `expected 198 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
@@ -416,7 +416,7 @@ test("Restructure P3: get_apps and archive_inbox_item schemas match their handle
   }
 });
 
-test("Notification routing: signal tools and started_by schemas match their handlers, at tier 1", () => {
+test("Notification routing: signal tools and started_by schemas match their handlers, at tier 1 (update_signal 2)", () => {
   const blocks = [];
   for (const b of readFileSync(join(TOOLS, "signals.ts"), "utf-8").split("defineTool({").slice(1)) blocks.push(b);
   for (const [file, name] of [["alfred-push.ts", "send_alfred_push"], ["claude-notifications.ts", "log_claude_notification"]]) {
@@ -426,7 +426,7 @@ test("Notification routing: signal tools and started_by schemas match their hand
   for (const b of blocks) {
     const name = /name:\s*"([^"]+)"/.exec(b)[1];
     names.push(name);
-    assert.equal(Number(/tier:\s*(\d)/.exec(b)[1]), 1, name);
+    assert.equal(Number(/tier:\s*(\d)/.exec(b)[1]), name === "update_signal" ? 2 : 1, name);
     const read = new Set([...b.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]));
     const t = registered.find((r) => r.name === name);
     assert.ok(t, `${name} not registered`);
@@ -434,7 +434,7 @@ test("Notification routing: signal tools and started_by schemas match their hand
     assert.deepEqual(Object.keys(t.cfg.inputSchema ?? {}).sort(), [...read].sort(), name);
   }
   assert.deepEqual(names, ["raise_signal", "resolve_signal", "get_signals", "get_dispatch_plan", "deliver_signals",
-    "send_alfred_push", "log_claude_notification"]);
+    "update_signal", "send_alfred_push", "log_claude_notification"]);
   for (const name of ["send_alfred_push", "log_claude_notification"]) {
     assert.ok("started_by" in registered.find((r) => r.name === name).cfg.inputSchema, name);
   }
