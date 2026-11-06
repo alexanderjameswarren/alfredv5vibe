@@ -23,6 +23,10 @@ const DELIVERY = {
   window: { start: "05:00", end: "20:00" },
   pace: { max_pops_per_hour: 3 },
   defaults: { low: "hold", normal: "inbox", high: "pop", urgent: "pop" },
+  overrides: [
+    { label: "DJ is too chatty", match: { app: "dj" }, effect: { decision: "inbox" } },
+    { label: "Old mute", match: { app: "ken" }, effect: { decision: "hold" }, when: { ends_at: "2026-11-01T17:00:00Z" } },
+  ],
 };
 const NO_HISTORY = { notifications: [], signals: [], next: null };
 const EMPTY = { signals: [], history: NO_HISTORY, reminders: [], steps: [], executionNames: {}, delivery: null, appNames: {} };
@@ -83,6 +87,12 @@ test("populated: queued, unprocessed, held and history read in plain words", asy
   expect(await screen.findByText("Notifications from 5:00 AM to 8:00 PM Pacific.")).toBeInTheDocument();
   expect(screen.getByText("At most 3 notifications an hour, no daily limit, no minimum gap.")).toBeInTheDocument();
   expect(screen.getByText("By default Low: hold · Normal: inbox · High: notify · Urgent: notify.")).toBeInTheDocument();
+  const rules = screen.getByRole("region", { name: "Delivery rules" });
+  expect(within(rules).getByText("Exceptions")).toBeInTheDocument();
+  expect(within(rules).getByText("DJ: inbox instead of a notification")).toBeInTheDocument();
+  expect(within(rules).getByText("In force · DJ is too chatty")).toBeInTheDocument();
+  expect(within(rules).getByText("Ken: held. Ended Nov 1, 9:00 AM")).toBeInTheDocument();
+  expect(within(rules).getByText("Ended · Old mute")).toBeInTheDocument();
 
   const icon = (card) => card.querySelector("svg").getAttribute("class");
   const queued = screen.getByRole("region", { name: "Queued (2)" });

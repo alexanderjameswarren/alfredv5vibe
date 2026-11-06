@@ -52,7 +52,26 @@ function List({ rows, empty }) {
   return <div className="space-y-2">{rows.map((r) => <Row key={r.id} row={r} />)}</div>;
 }
 
-function Rules({ rules, inside }) {
+const STATUS_WORDS = { "in force": "In force", "not yet": "Not started yet", ended: "Ended" };
+
+function Overrides({ lines }) {
+  if (!lines.length) return null;
+  return (
+    <div className="pt-2 space-y-1">
+      <h3 className="m-0 text-sm font-medium text-foreground">Exceptions</h3>
+      <ul className="m-0 p-0 list-none space-y-1">
+        {lines.map((o) => (
+          <li key={o.label} className={`text-sm ${o.status === "in force" ? "text-foreground" : "text-muted-foreground"}`}>
+            <span>{o.text}</span>
+            <span className="block text-xs text-muted-foreground">{STATUS_WORDS[o.status]} · {o.label}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function Rules({ rules, inside, overrides }) {
   if (!rules) {
     return <p className="m-0 px-4 py-3 rounded-lg bg-muted text-sm text-foreground">The active Overwatch plan has no delivery rules.</p>;
   }
@@ -64,6 +83,7 @@ function Rules({ rules, inside }) {
       <p className="m-0 text-sm text-foreground">{rules.window}</p>
       <p className="m-0 text-sm text-foreground">{rules.pace}</p>
       <p className="m-0 text-sm text-foreground">{rules.defaults}</p>
+      <Overrides lines={overrides} />
     </section>
   );
 }
@@ -113,7 +133,7 @@ export default function DispatcherPage() {
         <Radio className="w-6 h-6 shrink-0 mt-0.5 text-primary" aria-hidden="true" />
         <span className="min-w-0">Dispatcher</span>
       </h2>
-      <Rules rules={view.rules} inside={view.inside} />
+      <Rules rules={view.rules} inside={view.inside} overrides={view.overrides} />
       {SECTIONS.filter((s) => s.id !== "history").map((s) => (
         <OverwatchSection key={s.id} id={`dispatcher-${s.id}`} title={title(s)} count={view[s.id].length}
           defaultOpen={OPEN_BY_DEFAULT.has(s.id)}>

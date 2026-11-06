@@ -1,5 +1,5 @@
 import {
-  appendHistory, deliveryWords, dispatcherView, newestFirst, timeKey, historyRows, insideWindow, mergedRow, nextRunLabel, pacificClock, pacificTime,
+  appendHistory, deliveryWords, dispatcherView, newestFirst, overrideLines, timeKey, historyRows, insideWindow, mergedRow, nextRunLabel, pacificClock, pacificTime,
   queuedRows, reasonWords, reminderRow, sentRow, signalRow, summaryLine, twelveHour,
 } from "./dispatcherModel";
 
@@ -124,6 +124,37 @@ test("history order: to the microsecond whatever the fraction width, then id; pa
     { id: "b", at: "2026-11-05T16:00:01Z" }];
   expect(rows.sort(newestFirst).map((r) => r.id)).toEqual(["b", "c", "a"]);
   expect(appendHistory([{ id: "1" }, { id: "2" }], [{ id: "2" }, { id: "3" }]).map((r) => r.id)).toEqual(["1", "2", "3"]);
+});
+
+test("overrides in plain words, 12-hour Pacific times, ended ones marked ended", () => {
+  const now = new Date("2026-11-06T18:00:00Z");
+  const lines = overrideLines([
+    { label: "Arnold any hour", match: { app: "arnold" }, effect: { window: { ignore: true } },
+      when: { ends_at: "2026-11-12T23:00:00Z" } },
+    { label: "DJ is too chatty", match: { app: "dj" }, effect: { decision: "inbox" } },
+    { label: "Big ones", match: { severity: ["high", "urgent"] }, effect: { pace: { exempt: true } } },
+    { label: "Mute Ken", match: { app: "ken", kind: ["failure"] }, effect: { decision: "hold" },
+      when: { ends_at: "2026-11-05T17:00:00Z" } },
+    { label: "Later", effect: { severity: -1 }, when: { starts_at: "2026-11-08T17:00:00Z", days_of_week: ["mon", "fri"],
+      time_from: "09:00", time_to: "17:00" } },
+  ], { arnold: "Arnold", dj: "DJ", ken: "Ken" }, now);
+  expect(lines.map((l) => l.text)).toEqual([
+    "Arnold notifications: any hour, until Nov 12, 3:00 PM",
+    "DJ: inbox instead of a notification",
+    "High and Urgent notifications: no hourly or daily limit",
+    "Ken failures: held. Ended Nov 5, 9:00 AM",
+    "Everything: one step less important, Mon and Fri, 9:00 AM to 5:00 PM, from Nov 8, 9:00 AM",
+  ]);
+  expect(lines.map((l) => l.status)).toEqual(["in force", "in force", "in force", "ended", "not yet"]);
+  expect(lines.map((l) => l.text).join(" ")).not.toMatch(/\bpop/i);
+  expect(overrideLines(undefined)).toEqual([]);
+  expect(dispatcherView({ delivery: { ...DELIVERY, overrides: [{ label: "x", effect: { decision: "drop" } }] } }).overrides)
+    .toEqual([{ label: "x", text: "Everything: dropped", status: "in force" }]);
+});
+
+test("the daily limit reads max_per_day_all first", () => {
+  expect(deliveryWords({ ...DELIVERY, pace: { max_pops_per_hour: 3, max_pops_per_day: null, max_per_day_all: 8 } }).pace)
+    .toBe("At most 3 notifications an hour, 8 a day, no minimum gap.");
 });
 
 test("the one-line summary", () => {
