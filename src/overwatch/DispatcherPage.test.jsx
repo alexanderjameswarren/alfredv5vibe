@@ -6,7 +6,7 @@ import DispatcherPage from "./DispatcherPage";
 import * as api from "./overwatchApi";
 
 jest.mock("./overwatchApi", () => ({ ...jest.requireActual("./overwatchApi"), getDispatcher: jest.fn(),
-  getDispatcherHistory: jest.fn() }));
+  getDispatcherHistory: jest.fn(), actOnSignal: jest.fn() }));
 
 // Invented data only.
 const S1 = "2e0f6bc8-e59a-4b75-94e1-cb3d9f5cf217";
@@ -120,10 +120,11 @@ test("populated: queued, unprocessed, held and history read in plain words", asy
   expect(icon(cards[0])).toContain("lucide-bell-ring");
   expect(within(cards[1]).getByRole("link", { name: "Sleep check-in done" })).toHaveAttribute("href", `/${INBOX}`);
   expect(within(cards[1]).getByText("Sent Thu, Nov 5, 8:10 AM")).toBeInTheDocument();
-  expect(within(cards[1]).getByText("Started by task:claude-hourly-notifications")).toBeInTheDocument();
+  expect(within(cards[1]).getByText("Started by Claude hourly notifications")).toBeInTheDocument();
   expect(within(cards[1]).getByText("Dispatcher: normal signals default to inbox")).toBeInTheDocument();
   expect(icon(cards[1])).toContain("lucide-inbox");
-  expect(within(cards[2]).getByText("Not sent")).toBeInTheDocument();
+  expect(within(cards[2]).getByText("Not sent Thu, Nov 5, 7:12 AM")).toBeInTheDocument();
+  expect(within(cards[2]).queryByText("Thu, Nov 5, 7:12 AM")).toBeNull();
   expect(within(cards[2]).getByText("Dispatcher: an item already exists in the Inbox")).toBeInTheDocument();
   expect(within(cards[2]).getByRole("link", { name: "Sleep check-in logged" })).toHaveAttribute("href", `/${INBOX}`);
   expect(icon(cards[2])).toContain("lucide-ban");
@@ -150,6 +151,71 @@ test("Show older appends the next page past the oldest card, then disappears on 
   const titles = within(history).getAllByRole("article").map((a) => within(a).getByRole("link").textContent);
   expect(titles.slice(48)).toEqual(["Sent 48", "Sent 49", "Sent 50", "Sent 51"]);
   expect(within(history).queryByRole("button", { name: "Show older" })).toBeNull();
+});
+
+const ACTIONS = {
+  ...EMPTY,
+  signals: [
+    { id: S4, title: "Waiting one", app: "ken", severity: "high", state: "queued", created_at: "2026-11-05T16:30:00Z" },
+    { id: S3, title: "Held one", app: "dj", severity: "low", state: "held", reason: "low signals are held",
+      created_at: "2026-11-05T15:00:00Z", decided_at: "2026-11-05T15:00:05Z" },
+  ],
+  reminders: [{ id: R1, text: "Call the bank", due_at: "2026-11-06T17:00:00Z", state: "scheduled" }],
+};
+
+test("⋯ is on Unprocessed and Held cards only, above the link, and opens the actions", async () => {
+  api.getDispatcher.mockResolvedValue(ACTIONS);
+  renderPage();
+  const waiting = await screen.findByRole("region", { name: /^Unprocessed – next run/ });
+  const queued = screen.getByRole("region", { name: "Queued (1)" });
+  expect(within(queued).queryByRole("button", { name: /^Actions for/ })).toBeNull();
+  const more = within(waiting).getByRole("button", { name: "Actions for Waiting one" });
+  expect(more.className).toContain("z-10");
+  expect(more.querySelector("svg").getAttribute("class")).toContain("lucide-ellipsis");
+  expect(within(screen.getByRole("region", { name: "Held (1)" })).getByRole("button", { name: "Actions for Held one" }))
+    .toBeInTheDocument();
+  fireEvent.click(more);
+  const dialog = screen.getByRole("dialog", { name: "Actions for Waiting one" });
+  expect(within(dialog).getByRole("button", { name: "Hold" })).toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(api.actOnSignal).not.toHaveBeenCalled();
+});
+
+test("hold moves the card to Held; send now moves it to History, by you, with no reload", async () => {
+  api.getDispatcher.mockResolvedValue(ACTIONS);
+  api.actOnSignal.mockResolvedValueOnce({ state: "held" })
+    .mockResolvedValueOnce({ state: "delivered", as: "notification", inbox_id: INBOX });
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for Waiting one" }));
+  fireEvent.click(screen.getByRole("button", { name: "Hold" }));
+  const held = await screen.findByRole("region", { name: "Held (2)" });
+  expect(within(held).getByRole("link", { name: "Waiting one" })).toBeInTheDocument();
+  expect(within(held).getByText(/^Held by you · /)).toBeInTheDocument();
+  expect(within(held).queryByText("Dispatcher: held by Alex")).toBeNull();
+  expect(within(held).getByText("Dispatcher: low signals are held")).toBeInTheDocument();
+  expect(api.actOnSignal).toHaveBeenCalledWith(S4, "hold", null);
+
+  fireEvent.click(within(held).getByRole("button", { name: "Actions for Waiting one" }));
+  expect(screen.queryByRole("button", { name: "Hold" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Send now as a notification" }));
+  expect(await screen.findByRole("region", { name: "Held (1)" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "History (1 shown)" }));
+  const history = screen.getByRole("region", { name: "History (1 shown)" });
+  expect(within(history).getByRole("link", { name: "Waiting one" })).toHaveAttribute("href", `/${INBOX}`);
+  expect(within(history).getByText(/^Sent .* · by you$/)).toBeInTheDocument();
+  expect(api.getDispatcher).toHaveBeenCalledTimes(1);
+});
+
+test("an action's error stays in the dialog and the card stays put", async () => {
+  api.getDispatcher.mockResolvedValue(ACTIONS);
+  api.actOnSignal.mockRejectedValueOnce(new Error("The signal is sent, so it cannot be dropped. Only a queued or held signal can."));
+  renderPage();
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for Held one" }));
+  fireEvent.click(screen.getByRole("button", { name: "Drop" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Already sent. Nothing changed.");
+  expect(screen.getByRole("region", { name: "Held (1)" })).toBeInTheDocument();
+  expect(screen.getByRole("dialog")).toBeInTheDocument();
 });
 
 test("a failed read says so", async () => {

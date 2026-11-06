@@ -353,36 +353,65 @@ export async function getNeedsYou() {
   return data || [];
 }
 
-// --- The Dispatcher screen (notification_routing-d7v, step 10). Read only. ---
+// --- The Dispatcher screen (notification_routing-d7v, step 10; actions step 11f). ---
 
 const SIGNAL_COLUMNS = "id, app, job, severity, subject_key, title, link, started_by, state, outcome, reason, "
-  + "decided_at, inbox_id, merged_into, details, created_at";
-const NOTIFICATION_COLUMNS = "id, app, job, kind, channel, title, link, local_date, delivery_status, started_by, signal_id, created_at";
+  + "decided_at, decided_by, inbox_id, merged_into, details, created_at";
+const HISTORY_SIGNAL_STATES = ["merged", "dropped"];
+
+/**
+ * Alex's own action on one signal: action "hold", "drop" or "deliver" (as "notification" or "inbox"), through
+ * push-send's signal route, which records decided_by "alex". Returns the server's result; throws its message.
+ */
+export async function actOnSignal(signalId, action, as = null) {
+  const body = { signal_id: signalId, action, ...(as ? { as } : {}) };
+  const { data, error } = await supabase.functions.invoke("push-send", { body });
+  if (error) {
+    // A non-2xx comes back as a generic error; the server's own words are in the response body.
+    let message = "";
+    try {
+      if (error.context && typeof error.context.json === "function") message = (await error.context.json())?.error || "";
+    } catch { /* not JSON */ }
+    console.warn("[overwatch] signal action failed:", message || error.message); // eslint-disable-line no-console
+    throw new Error(message ? plainError(message) : "That didn't work. Please try again.");
+  }
+  if (data?.error) throw new Error(plainError(data.error));
+  return data;
+}
+
+/** The server's message without its tool-name prefix, e.g. "push-send: the signal is held, ..." -> "The signal is held, ...". */
+export function plainError(message) {
+  const text = String(message).replace(/^push-send( failed)?:\s*/i, "")
+    .replace(/\bdelivered\b/g, "sent").replace(/\bdeliver\b/g, "send").replace(/\bpop(s?)\b/g, "notification$1").trim();
+  return text ? text[0].toUpperCase() + text.slice(1) : "That didn't work. Please try again.";
+}
+const NOTIFICATION_COLUMNS = "id, app, job, kind, channel, title, body, link, local_date, delivery_status, started_by, signal_id, created_at";
 const SHOWN_SIGNAL_STATES = ["queued", "held"];
 export const HISTORY_PAGE = 50;
 
 /**
- * One page of History: sent rows and merged signals, newest first, at most HISTORY_PAGE.
- * `before` is { at, id } of the oldest card already shown. Each source is read past it in the same
- * order (created_at desc, id desc), one extra row each says whether anything older is left, and
- * `next` is the cursor for the page after, or null.
+ * One page of History: sent rows and merged or dropped signals, newest first by when it happened (a send's
+ * created_at, a signal's decided_at), at most HISTORY_PAGE. `before` is { at, id } of the oldest card already
+ * shown. Each source is read past it in the same order (that time desc, id desc), one extra row each says
+ * whether anything older is left, and `next` is the cursor for the page after, or null.
  */
 export async function getDispatcherHistory(before = null) {
-  const page = (q) => {
+  const page = (q, col) => {
     const after = before
-      ? q.or(`created_at.lt."${before.at}",and(created_at.eq."${before.at}",id.lt.${before.id})`)
+      ? q.or(`${col}.lt."${before.at}",and(${col}.eq."${before.at}",id.lt.${before.id})`)
       : q;
-    return after.order("created_at", { ascending: false }).order("id", { ascending: false }).limit(HISTORY_PAGE + 1);
+    return after.order(col, { ascending: false }).order("id", { ascending: false }).limit(HISTORY_PAGE + 1);
   };
   const [sent, merged] = await Promise.all([
-    page(supabase.from("claude_notifications").select(NOTIFICATION_COLUMNS)),
-    page(supabase.from("signals").select(SIGNAL_COLUMNS).eq("state", "merged")),
+    page(supabase.from("claude_notifications").select(NOTIFICATION_COLUMNS), "created_at"),
+    // Every merged and dropped signal has a decided_at: each way into those states sets it.
+    page(supabase.from("signals").select(SIGNAL_COLUMNS).in("state", HISTORY_SIGNAL_STATES), "decided_at"),
   ]);
   if (sent.error) fail("Could not load the sent log", sent.error);
-  if (merged.error) fail("Could not load the merged signals", merged.error);
+  if (merged.error) fail("Could not load the merged and dropped signals", merged.error);
   const all = [
     ...(sent.data || []).map((row) => ({ sent: true, at: row.created_at, id: row.id, row })),
-    ...(merged.data || []).map((row) => ({ sent: false, at: row.created_at, id: row.id, row })),
+    ...(merged.data || []).map((row) => ({ sent: false, at: row.decided_at, id: row.id, row })),
   ].sort(newestFirst);
   const shown = all.slice(0, HISTORY_PAGE);
   const last = shown[shown.length - 1];
@@ -390,7 +419,7 @@ export async function getDispatcherHistory(before = null) {
   const signalIds = [...new Set(notifications.map((n) => n.signal_id).filter(Boolean))];
   let reasons = [];
   if (signalIds.length) {
-    const res = await supabase.from("signals").select("id, reason").in("id", signalIds);
+    const res = await supabase.from("signals").select("id, reason, decided_by, started_by").in("id", signalIds);
     if (res.error) fail("Could not load the dispatcher's reasons", res.error);
     reasons = res.data || [];
   }

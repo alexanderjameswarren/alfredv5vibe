@@ -1,6 +1,7 @@
 import {
   appendHistory, deliveryWords, dispatcherView, newestFirst, overrideLines, timeKey, historyRows, insideWindow, mergedRow, nextRunLabel, pacificClock, pacificTime,
-  queuedRows, reasonWords, reminderRow, sentRow, signalRow, summaryLine, twelveHour,
+  queuedRows, reasonWords, reminderRow, sentRow, signalRow, summaryLine, twelveHour, applyAction, actedRow, droppedRow, byHand,
+  startedByWords, cardLink,
 } from "./dispatcherModel";
 
 // Invented data only.
@@ -71,13 +72,29 @@ test("queued: scheduled reminders and step timers with a send time, soonest firs
 
 test("unprocessed and held signal rows", () => {
   const queued = signalRow({ id: UUID, title: "t", app: "warren_buffet", severity: "high", state: "queued",
-    details: { inbox_id: INBOX }, created_at: "2026-11-05T16:10:28Z" });
+    details: { inbox_id: INBOX }, created_at: "2026-11-05T16:10:28Z", started_by: "task:wb-sync" });
   expect(queued).toMatchObject({ kind: "pending", path: `/${INBOX}`, status: "", dispatcher: "",
-    meta: ["Money", "High", "Raised Thu, Nov 5, 8:10 AM"] });
+    meta: ["Money", "High", "Raised Thu, Nov 5, 8:10 AM", "Started by Wb sync"] });
   const held = signalRow({ id: UUID, title: "t", app: "dj", severity: "low", state: "held", reason: "low signals are held",
-    created_at: "2026-11-05T16:00:00Z", decided_at: "2026-11-05T17:00:00Z" }, { dj: "DJ" });
+    created_at: "2026-11-05T16:00:00Z", decided_at: "2026-11-05T17:00:00Z", started_by: "task:dj-daily" }, { dj: "DJ" });
   expect(held).toMatchObject({ kind: "notsent", path: `/${UUID}`, status: "Held", dispatcher: "low signals are held",
-    meta: ["DJ", "Low", "Held Thu, Nov 5, 9:00 AM"] });
+    meta: ["DJ", "Low", "Held Thu, Nov 5, 9:00 AM", "Started by DJ daily"] });
+});
+
+test("a signal Alex held reads 'Held by you · <time>', with no dispatcher line", () => {
+  const row = signalRow({ id: UUID, title: "t", app: "dj", severity: "low", state: "held", reason: "held by Alex",
+    decided_by: "alex", created_at: "2026-11-06T16:00:00Z", decided_at: "2026-11-06T16:36:00Z", started_by: "chat" });
+  expect(row.status).toBe("Held by you · Fri, Nov 6, 8:36 AM");
+  expect(row.dispatcher).toBe("");
+  expect(row.meta.filter(Boolean)).toEqual(["Dj", "Low", "Started by Claude"]);
+});
+
+test("started by, in plain words", () => {
+  expect(startedByWords("alex")).toBe("you");
+  expect(startedByWords("chat")).toBe("Claude");
+  expect(startedByWords("task:arnold-morning-review")).toBe("Arnold morning review");
+  expect(startedByWords("task:claude_hourly_notifications")).toBe("Claude hourly notifications");
+  expect(startedByWords(null)).toBe("not recorded");
 });
 
 test("reasons read notification, not pop", () => {
@@ -88,12 +105,20 @@ test("reasons read notification, not pop", () => {
 });
 
 test("sent rows: how, who, and the dispatcher's reason when a signal sent it", () => {
-  const signals = { [UUID]: { id: UUID, reason: "normal signals default to inbox" } };
+  const signals = { [UUID]: { id: UUID, reason: "normal signals default to inbox", started_by: "task:arnold-morning-review" } };
   const disp = sentRow({ id: "n1", title: "Sleep check-in done", app: "arnold", channel: "inbox_item", delivery_status: "sent",
     started_by: "task:claude-hourly-notifications", signal_id: UUID, link: `/${INBOX}`, created_at: "2026-11-05T16:10:34Z" },
   signals, { arnold: "Arnold" });
   expect(disp).toMatchObject({ kind: "inbox", path: `/${INBOX}`, status: "Sent Thu, Nov 5, 8:10 AM",
-    dispatcher: "normal signals default to inbox", meta: ["Arnold", "Inbox item", "Started by task:claude-hourly-notifications"] });
+    dispatcher: "normal signals default to inbox", meta: ["Arnold", "Inbox item", "Started by Arnold morning review"] });
+  // The signal's own started_by, not who sent it.
+  const handSent = sentRow({ id: "n4", channel: "alfred_push", started_by: "alex", signal_id: "s1" },
+    { s1: { started_by: "chat", decided_by: "alex" } });
+  expect(handSent.meta[2]).toBe("Started by Claude");
+  const step = sentRow({ id: "n5", job: "step_timer", title: "Alfred", body: "Slot 2 — Heel-elevated air squats",
+    channel: "alfred_push", started_by: "alex", created_at: "2026-11-06T16:33:00Z" });
+  expect(step.title).toBe("Slot 2 — Heel-elevated air squats");
+  expect(step.meta[2]).toBe("Started by you");
   const popped = sentRow({ id: "n3", channel: "alfred_push", signal_id: "s9" }, { s9: { reason: "high signals default to pop" } });
   expect(popped).toMatchObject({ kind: "notify", dispatcher: "high signals default to notification" });
   const direct = sentRow({ id: "n2", title: "Alfred", app: "alfred", channel: "alfred_push", delivery_status: "no_subscription",
@@ -104,15 +129,28 @@ test("sent rows: how, who, and the dispatcher's reason when a signal sent it", (
 
 test("merged rows and the history order", () => {
   const merged = { id: UUID, title: "Sleep check-in done", app: "arnold", state: "merged", inbox_id: INBOX,
-    created_at: "2026-11-05T15:12:26Z", decided_at: "2026-11-05T15:12:35Z" };
-  expect(mergedRow(merged)).toMatchObject({ kind: "notsent", path: `/${INBOX}`, status: "Not sent",
-    dispatcher: "an item already exists in the Inbox", meta: ["Arnold", "Thu, Nov 5, 7:12 AM"] });
+    created_at: "2026-11-05T15:12:26Z", decided_at: "2026-11-05T15:12:35Z", started_by: "task:claude-hourly-notifications" };
+  expect(mergedRow(merged)).toMatchObject({ kind: "notsent", path: `/${INBOX}`, status: "Not sent Thu, Nov 5, 7:12 AM",
+    dispatcher: "an item already exists in the Inbox",
+    meta: ["Arnold", "Started by Claude hourly notifications"] });
   const rows = historyRows(
     [{ id: "n1", title: "a", app: "x", channel: "alfred_push", created_at: "2026-11-05T16:00:00Z" },
       { id: "n2", title: "b", app: "x", channel: "alfred_push", created_at: "2026-11-05T14:00:00Z" }],
     [merged, { id: "q1", state: "queued", title: "q", app: "x" }],
   );
   expect(rows.map((r) => r.id)).toEqual(["n1", UUID, "n2"]);
+});
+
+test("history is newest first by when it happened: decided_at for signals, the send time for sends", () => {
+  // Alex's test on Nov 6: B raised first and dropped 8:37, A sent 8:36, C dropped 8:39, a step at 8:33.
+  const t = (hm) => `2026-11-06T16:${hm}:00Z`;
+  const rows = historyRows(
+    [{ id: "nA", title: "A", channel: "inbox_item", created_at: t("36") },
+      { id: "nStep", job: "step_timer", title: "Alfred", body: "Squats", channel: "alfred_push", created_at: t("33") }],
+    [{ id: "B", title: "B", state: "dropped", created_at: t("00"), decided_at: t("37") },
+      { id: "C", title: "C", state: "dropped", created_at: t("38"), decided_at: t("39") }],
+  );
+  expect(rows.map((r) => r.title)).toEqual(["C", "B", "A", "Squats"]);
 });
 
 test("history order: to the microsecond whatever the fraction width, then id; pages append without repeats", () => {
@@ -171,4 +209,91 @@ test("the whole view", () => {
   expect(view.held).toHaveLength(1);
   expect(view.unprocessed).toHaveLength(1);
   expect(view.queued).toEqual([]);
+});
+
+const SENT_AT = "2026-11-06T16:20:00Z"; // 8:20 AM Pacific
+const SIG = { id: UUID, title: "Bank sync failed", app: "warren_buffet", severity: "high", state: "queued",
+  created_at: "2026-11-06T15:00:00Z", reason: null };
+
+test("by you: History says when Alex decided it, the dispatcher's reason only when it did", () => {
+  expect(byHand("alex")).toBe(true);
+  expect(byHand("chat")).toBe(true);
+  expect(byHand(null)).toBe(false);
+  const n = { id: "n1", channel: "alfred_push", title: "t", link: `/${INBOX}`, created_at: SENT_AT, signal_id: UUID };
+  expect(sentRow(n, { [UUID]: { reason: "sent now", decided_by: "alex" } }).status).toBe("Sent Fri, Nov 6, 8:20 AM · by you");
+  expect(sentRow(n, { [UUID]: { reason: "sent now", decided_by: "alex" } }).dispatcher).toBe("");
+  expect(sentRow(n, { [UUID]: { reason: "high signals default to pop" } }).status).toBe("Sent Fri, Nov 6, 8:20 AM");
+  const dropped = droppedRow({ ...SIG, state: "dropped", decided_at: SENT_AT, decided_by: "chat", reason: "dropped by Alex" });
+  expect(dropped.status).toBe("Dropped Fri, Nov 6, 8:20 AM · by you");
+  expect(dropped.kind).toBe("notsent");
+  expect(droppedRow({ ...SIG, state: "dropped", decided_at: SENT_AT, started_by: "chat" }).meta[2]).toBe("Started by Claude");
+  expect(droppedRow({ ...SIG, state: "dropped", decided_at: SENT_AT, reason: "override 'mute': dropped" }).dispatcher)
+    .toBe("override 'mute': dropped");
+  const folded = mergedRow({ ...SIG, state: "merged", inbox_id: INBOX, decided_at: SENT_AT, decided_by: "alex" });
+  expect(folded.status).toBe("Added to the open inbox item Fri, Nov 6, 8:20 AM · by you");
+  expect(folded.path).toBe(`/${INBOX}`);
+});
+
+test("history includes dropped signals", () => {
+  const rows = historyRows([], [{ ...SIG, state: "dropped", decided_at: SENT_AT }, { ...SIG, id: "m", state: "merged" }]);
+  expect(rows.map((r) => r.status)).toEqual(expect.arrayContaining(["Not sent Fri, Nov 6, 7:00 AM", "Dropped Fri, Nov 6, 8:20 AM"]));
+});
+
+test("a reminder send is titled with the reminder's text", () => {
+  const row = sentRow({ id: "n6", job: "reminder", title: "Alfred reminder", body: "Call the bank", channel: "alfred_push",
+    started_by: "alex", created_at: SENT_AT });
+  expect(row.title).toBe("Call the bank");
+  expect(sentRow({ id: "n7", job: "reminder", title: "Alfred reminder", channel: "alfred_push" }).title).toBe("Alfred reminder");
+});
+
+test("task names use the app's own name", () => {
+  const names = { dj: "DJ", sam: "SAM", ken: "Ken", warren_buffet: "Money", drive_mix: "Drive Mix", arnold: "Arnold" };
+  expect(startedByWords("task:dj-weekly-review", names)).toBe("DJ weekly review");
+  expect(startedByWords("task:sam-daily-review", names)).toBe("SAM daily review");
+  expect(startedByWords("task:money-cleanup", names)).toBe("Money cleanup");
+  expect(startedByWords("task:drive-mix-daily-refresh", names)).toBe("Drive Mix daily refresh");
+  expect(startedByWords("task:ken-seed-check", names)).toBe("Ken seed check");
+  expect(startedByWords("task:claude-hourly-notifications", names)).toBe("Claude hourly notifications");
+  expect(droppedRow({ ...SIG, state: "dropped", decided_at: SENT_AT, started_by: "task:dj-daily" }, names).meta[2])
+    .toBe("Started by DJ daily");
+});
+
+test("every card links /<id>: the long inbox and execution forms are shortened", () => {
+  expect(cardLink("/inbox/detail/6847fee0-1a1b-421f-8c47-bb655693765a")).toBe("/6847fee0-1a1b-421f-8c47-bb655693765a");
+  expect(cardLink("/schedule/execution/mw29j6q2c75vpw7pg5b")).toBe("/mw29j6q2c75vpw7pg5b");
+  expect(cardLink(`/${INBOX}`)).toBe(`/${INBOX}`);
+  expect(cardLink("//evil.example")).toBeNull();
+  expect(cardLink("https://x")).toBeNull();
+  const sent = sentRow({ id: "n8", channel: "alfred_push", link: "/schedule/execution/mw29j6q2c75vpw7pg5b", created_at: SENT_AT });
+  expect(sent.path).toBe("/mw29j6q2c75vpw7pg5b");
+  expect(queuedRows([], [{ id: "t1", state: "scheduled", due_at: SENT_AT, execution_id: "mw29j6q2c75vpw7pg5b", text: "Squats" }])[0].path)
+    .toBe("/mw29j6q2c75vpw7pg5b");
+});
+
+test("after an action: held moves to Held, dropped and sent move to History, without a reload", () => {
+  const data = { signals: [SIG, { ...SIG, id: "other", title: "Other" }], history: { notifications: [], signals: [] },
+    reminders: [], steps: [] };
+  const held = applyAction(data, UUID, { state: "held" }, SENT_AT);
+  let view = dispatcherView(held, { now: new Date(SENT_AT) });
+  expect(view.held.map((r) => r.id)).toEqual([UUID]);
+  expect(view.unprocessed.map((r) => r.id)).toEqual(["other"]);
+
+  const sent = applyAction(held, UUID, { state: "delivered", as: "notification", inbox_id: INBOX }, SENT_AT);
+  view = dispatcherView(sent, { now: new Date(SENT_AT) });
+  expect(view.held).toEqual([]);
+  expect(view.history[0]).toMatchObject({ id: UUID, kind: "notify", path: `/${INBOX}`,
+    status: "Sent Fri, Nov 6, 8:20 AM · by you" });
+
+  const dropped = applyAction(data, "other", { state: "dropped" }, SENT_AT);
+  view = dispatcherView(dropped, { now: new Date(SENT_AT) });
+  expect(view.history[0].status).toBe("Dropped Fri, Nov 6, 8:20 AM · by you");
+  expect(applyAction(data, "missing", { state: "held" })).toBe(data);
+});
+
+test("acted rows: an inbox send opens the item; a fold says it joined the open item", () => {
+  const row = actedRow({ signal: SIG, result: { state: "delivered", as: "inbox", inbox_id: INBOX }, at: SENT_AT });
+  expect(row).toMatchObject({ kind: "inbox", path: `/${INBOX}` });
+  expect(row.meta[1]).toBe("Inbox item");
+  expect(actedRow({ signal: SIG, result: { state: "merged", inbox_id: INBOX }, at: SENT_AT }).status)
+    .toBe("Added to the open inbox item Fri, Nov 6, 8:20 AM · by you");
 });

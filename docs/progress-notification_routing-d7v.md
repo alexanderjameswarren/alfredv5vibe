@@ -711,7 +711,43 @@ updated.
 - s11d was refused by the plan guard (SQL: none, and the files name signals and inbox); s11e declared them.
 - Renumbered: the screen's buttons are now **11f**.
 
-#### Step 11f scope (planned; was "11d"): the Dispatcher screen's hold, drop and deliver-now buttons
+#### 11f. The Dispatcher screen's buttons — WRITTEN 2026-11-06 (`s11f-j8p5`), waiting on Alex's test
+- Main at 9ace358 with steps 11 to 11e. mcp/index.ts and index.test.mjs matched main and were yielded to
+  switchboard2-h8r.
+- **⋯ on Unprocessed and Held cards** opens `SignalActionDialog.jsx`: Hold (Unprocessed only), Drop, Send now as a
+  notification, Send now as an inbox item; the title at the top; no "pop" or "deliver". `actOnSignal()` in
+  overwatchApi.js calls push-send's signal route. `applyAction()` moves the card without a reload. History reads
+  dropped signals too and says "· by you" for a hand decision. Errors stay in the dialog in plain words.
+- Tests: src/overwatch 135/135 (15 suites); the app suite 3276 passed, 7 skipped (222 suites, 1 skipped); scripts 54/54.
+- **Next:** Alex tests in Chrome mobile view, then checkpoints the src/ files.
+
+#### 11g. Five fixes from Alex's test — WRITTEN 2026-11-06 (`s11g-x3d8`)
+Alex's 11f test passed: hold, send now as an inbox item, drop, the second-tab error and the reload. Fixed, screen only:
+- "Held by you · <time>" for a card Alex held; the dispatcher's reason only when it held it.
+- "Started by" from the signal's own started_by, in plain words (you, Claude, the task's name), on every signal card,
+  dropped ones included. Test signal A (c2a13904, chat) now reads "Started by Claude".
+- A step-timer send in History is titled with its step text, not "Alfred".
+- History ordered by when it happened (decided_at for signals, the send time for sends), paging on each.
+- "Already dropped | sent | held. Nothing changed." for an action that no longer applies.
+- Tests: src/overwatch 139/139 (15 suites); the app suite 3280 passed, 7 skipped.
+
+#### 11h. Five more screen fixes — WRITTEN 2026-11-06 (`s11h-f7k2`)
+Alex checked 11g's History: order, 12-hour times and Started by are right. Fixed, model only:
+- Reminder sends titled with the reminder's text.
+- "Not sent <time>" on the status line; no date in the meta line.
+- Task names use the app's display name: "DJ weekly review", "SAM daily review", "Money cleanup".
+- Every card links /<id>: /inbox/detail/<id> and /schedule/execution/<id> are shortened; Queued step timers too.
+- /<signal id> opens the generic "Record from signals" page, so those cards stay links (no change).
+- Tests: src/overwatch 142/142 (15 suites); the app suite 3283 passed, 7 skipped.
+
+#### Step 12 scope (planned): a skill for task prompts; the weekly drift check; get_sql_read can read decided_by
+- create: .claude/skills/task-prompts/SKILL.md, supabase/migrations/_pending_notification_routing-d7v_reader_decided_by.sql, supabase/tests/notification_routing-d7v/8_reader_decided_by_verify.sql
+- update: docs/overwatch-weekly-task-prompt.md, .claude/skills/overwatch/SKILL.md, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
+- delete: nothing
+- deploy: nothing
+- SQL: signals (a column grant to claude_reader)
+
+#### Step 11f scope (as planned; was "11d"): the Dispatcher screen's hold, drop and deliver-now buttons
 - create: src/overwatch/SignalActionDialog.jsx, src/overwatch/SignalActionDialog.test.jsx
 - update: src/overwatch/DispatcherPage.jsx, src/overwatch/DispatcherPage.test.jsx, src/overwatch/dispatcherModel.js, src/overwatch/dispatcherModel.test.js, src/overwatch/overwatchApi.js, src/overwatch/overwatchApi.test.js, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
 - delete: nothing
@@ -824,4 +860,7 @@ Files: this file. DB: none.
 | 11b | 15m | 3m 18s | item titles, 212 numbered, 213 written, three queued |
 | 11c | 3m | 1m 44s | mcp and push-send deployed, conformant, db claims released |
 | 11d | 3m | 1m 3s | renumber refused by the plan guard (SQL: none) |
-| 11e | 3m | see report | 212 and 213 renamed to 214 and 215 |
+| 11e | 3m | 56s | 212 and 213 renamed to 214 and 215 |
+| 11f | 20m | 8m 38s | Dispatcher screen buttons, dialog, model, API; app suite green |
+| 11g | 15m | 5m 39s | five screen fixes from Alex's test |
+| 11h | 12m | see report | five more screen fixes; /<signal id> opens the generic record page |
