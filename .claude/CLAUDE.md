@@ -14,6 +14,14 @@ installed Switchboard, `%LOCALAPPDATA%\Switchboard\git\`, and they do commit,
 merge and push — which is exactly why you never run them. Ask him to. Reading
 them is fine.
 
+**Alex can run them by link.** A claude.ai chat queues the command and he clicks
+to approve; the desktop helper then runs it. For you nothing changes. When a step
+needs one, stop and name the command, the mode and the exact paths, so the chat
+can queue it. A prompt that says "run gitsync first" still means: check whether
+it's needed, and if it is, stop and ask. After a git step, start by checking its
+effect read-only, for example that main is merged with `git merge-base
+--is-ancestor main HEAD`.
+
 **Claims, clip, the guards and the git commands are Switchboard's.** They run from
 the installed copy in `%LOCALAPPDATA%\Switchboard`, as `claims.cmd`, `clip.cmd`
 and the user-level hooks. The code lives in the `C:\Users\Alex\projects\switchboard`

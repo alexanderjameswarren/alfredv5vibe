@@ -5,7 +5,7 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
-Skill version: 2026-11-06a
+Skill version: 2026-11-06b
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -285,6 +285,13 @@ or do before sending goes above the prompt.
 Why: the CLI's report might flag a problem, and instructions written before
 the report would have him push or finish over it. It also leaves the report
 sitting unread in the Alfred inbox, because the thread never asked for it.
+
+**A reply with a git link or git step carries no prompt at all** ("Git by link").
+The prompt waits for the next reply, after the result.
+
+**A prompt offered again is repeated whole**: the full prompt block, with its Send
+link directly under it, in the same reply. A Send link on its own, pointing at an
+earlier reply's prompt, can't be sent by the extension.
 
 ### The Send link
 
@@ -740,6 +747,30 @@ holds now**: its claims and uncommitted work, from `get_claim_blocks`, or
 `claims.cmd status` and `git status` from Alex or the CLI. Say what it shows. If
 main holds another project's unfinished work, say so and recommend a worktree
 instead of unbind.
+
+### Git by link
+
+**gitcom, gitsync, gitnewtree and gitpush can run by link.** Claude queues one with
+`queue_switchboard_git`, which returns an approval link. Alex clicks it, and the
+desktop helper runs the command in that project's checkout, in a visible window.
+The click is the yes: a command run by link never stops to ask, and where it
+would have asked, it refuses and says why. The CLI still never runs any of them.
+
+1. **Build the call from the same facts as the terminal command**: the project
+   code, and a mode that matches the checkout (below). For a Checkpoint, give the
+   exact paths, or `all: true`.
+2. **In chat, show the headline and the link**, as a labelled markdown link on its
+   own line with its URL whole. One link is live per project code; it lasts 30
+   minutes.
+3. **The reply ends there.** A reply that gives Alex a git link or any git step
+   carries no CLI prompt. The next prompt comes in the reply after the result:
+   the `git <id> done` line, or his report.
+4. **The result arrives by itself**: `git <action id> done`, `failed` or
+   `cancelled` (see "What comes back in the chat"). Read it with
+   `get_switchboard_run`, and report the summary's "Result:" line. For git,
+   succeeded means completed, even when nothing changed.
+5. **The terminal command is the fallback**: when the tool refuses, the helper
+   isn't running, or Alex asks for it. Give it as a step, as below.
 
 ### Git commands are steps
 
