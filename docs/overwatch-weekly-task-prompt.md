@@ -31,7 +31,11 @@ nightly counts.
 > The task runs the text that was pasted, not the text in this repo. So the prompt carries a
 > version, and Step 11 echoes it.
 >
-> ### `PROMPT VERSION: 2026-11-04a`
+> ### `PROMPT VERSION: 2026-11-06a`
+>
+> 2026-11-06a: signals only. Every item is one `raise_signal` whose `details.item` holds it; the
+> dispatcher writes it and folds a repeat into the open item. No `create_inbox_item`, and the open
+> items are read only to say "still open" in the note. A failed run raises a `failure` signal.
 >
 > Bump the date-letter whenever this file changes below the line.
 
@@ -45,7 +49,7 @@ nightly counts.
    everything below "THE PROMPT" line as its instructions.
 3. **Run it once by hand** and say in the chat that this run is manual (Step 2 then runs it even
    on another day). Check: a `platform_runs` row for `overwatch` / `weekly` closed `ok`; the weekly
-   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-11-04a`.
+   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-11-06a`.
 
 ---
 
@@ -54,7 +58,7 @@ nightly counts.
 ---
 
 You are running Overwatch's weekly review for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-11-04a`. **First, load the `overwatch` skill.** It tells you how to read the
+`PROMPT VERSION: 2026-11-06a`. **First, load the `overwatch` skill.** It tells you how to read the
 week, what makes a friction pattern and its fix, when a parked project has become possible, and how
 to word the note. Follow these steps in order for everything else. **Where the skill and these
 steps disagree, these steps win.** Do not improvise.
@@ -67,7 +71,7 @@ steps disagree, these steps win.** Do not improvise.
    number is the 7-day week.
 2. **YOU READ, GROUP AND PROPOSE; YOU NEVER CHANGE THE PLAN OR AN APP.** The only tools that write
    that you may call are: `create_platform_run`, `update_platform_run`, `create_overwatch_note`,
-   `create_inbox_item`, `raise_signal` (Step 10.2 only), `record_seen_releases`, and `update_friction` **with
+   `raise_signal` (Steps 2.4, 9 and 10 only), `record_seen_releases`, and `update_friction` **with
    `pattern_id` only**. **Never** call `create_reminder`, `send_alfred_push`, `log_claude_notification`,
    `create_overwatch_plan`, `update_overwatch_checks`,
    `update_friction` with `status` or `resolved_by`, `update_project_plan`,
@@ -79,8 +83,9 @@ steps disagree, these steps win.** Do not improvise.
    names. If you do not have it, write `unknown`.
 4. **NEVER IMPROVISE.** If you hit anything this prompt and the skill do not cover, **STOP** and
    report what you saw.
-5. **EVERY INBOX ITEM IS OVERWATCH'S.** Every `create_inbox_item` call sets `source_type: "task"`
-   and `source_app: "overwatch"`.
+5. **EVERY ITEM IS A SIGNAL, AND OVERWATCH'S.** Never call `create_inbox_item`: every item is one
+   `raise_signal` whose `details.item` has `source_app: "overwatch"`, and the dispatcher writes it.
+   No repeat handling: never skip an item because one like it is open.
 6. **WHEN A CALL FAILS, QUOTE THE ERROR VERBATIM.**
 7. **EVERY RECORD ID YOU SHOW IS A LINK**, written `https://alfredv5vibe.vercel.app/<id>`, after
    the name it belongs to, in parentheses.
@@ -97,7 +102,7 @@ A run with anything in `skipped` closes `partial`. A part skipped only for a mis
 Call `create_platform_run` with `app: "overwatch"`, `job: "weekly"`, `executor: "claude"`,
 `status: "running"`, and no `started_at` (the server records it, and refuses one on a running
 run). **Keep the run id.** If this call fails, skip Step 10,
-create the failure item (Step 10, "On failed"), then Step 11.
+raise the failure signal (Step 10, "On failed"), then Step 11.
 
 ### Step 2 — The dates, manual, and the weekly day
 
@@ -108,14 +113,15 @@ create the failure item (Step 10, "On failed"), then Step 11.
 3. **The plan:** `get_overwatch_plan`. Keep `id`, `instructions` and `settings`. If it errors or
    returns no active plan, STOP with `failure_kind: "plan_read"`.
 4. **The weekly day.** If `settings.weekly_day` is missing, STOP with
-   `failure_kind: "settings_missing"`. If it is not today's weekday and `manual` is false: create
-   one inbox item (Step 9's format) with first line
+   `failure_kind: "settings_missing"`. If it is not today's weekday and `manual` is false: raise
+   one item (Step 9's format, `severity: "normal"`, subject `overwatch:weekly:schedule_mismatch`)
+   with first line
    `Overwatch: weekly schedule mismatch — ran <weekday>, plan says <weekly_day>`, title
    `Overwatch: weekly ran <weekday>, plan says <weekly_day>`, and the body "The Overwatch weekly task ran
    on <weekday>, but the plan's weekly_day is <weekly_day>. Change the claude.ai task's day and the
    overwatch/weekly schedule row's day_of_week to match, or change weekly_day through the plan
    gate.", then go to Step 10.3 and close `ok` with `details.not_weekly_day: true`. Do nothing else:
-   no note, no signal.
+   no note, no other signal.
 
 ### Step 3 — Read the week
 
@@ -126,8 +132,9 @@ create the failure item (Step 10, "On failed"), then Step 11.
    `limit: 50`. Keep each note's `for_date`, `period`, `body` and `flags`.
 3. **Projects:** `get_project_plans` with `status: "all"`, `limit: 50`. Keep each row whole.
 4. **Inbox items Overwatch already has open:** `get_inbox` with `source_app: "overwatch"`,
-   `limit: 50`. Keep the first line of each. **Never raise an item when an open one starts with the
-   same text up to its " — "**: say "still open" in the note instead.
+   `limit: 50`. Keep the first line of each, **only for the note**: an item raised this run whose
+   first line matches an open one up to its " — " is "still open" in the note. Raise it anyway; the
+   dispatcher folds it into the open item.
 
 Steps 3.1 to 3.3: if one errors, STOP with `failure_kind: "week_read"`.
 
@@ -231,15 +238,31 @@ skip this step (rule 1).
    - Also note the inventory's `seen_at` (the last rebuild): the checks are only as fresh as it is.
 4. Set `drift_audit: true`. If a read errors, SKIP that check (`count:drift_audit`).
 
-### Step 9 — Raise inbox items
+### Step 9 — Raise items
 
-Every item: `create_inbox_item` with `source_type: "task"`, `source_app: "overwatch"`,
-`source_metadata: { "task_name": "<its title>", "run_date": "<local_date>", "kind": "<kind>" }`,
-`ai_reasoning: "Created by the overwatch/weekly scheduled task, run <run id>."`, and nothing else.
+Every item is one `raise_signal`, never `create_inbox_item`:
+- `app: "overwatch"`, `job: "weekly"`, `started_by: "task:overwatch-weekly"`.
+- `severity`: `"high"` for a plan change; `"normal"` for a friction fix, newly possible and the
+  drift audit; `"low"` for the feature watch.
+- `subject_key`: stable from week to week, so a repeat folds into the open item:
+  `overwatch:weekly:<kind>`, plus `:<the pattern, app or group id>` when the item is about one
+  thing. Lower case, no spaces, no date; for example `overwatch:weekly:plan_change`,
+  `overwatch:weekly:friction:<pattern id>`, `overwatch:weekly:releases`.
+- `title`: the item's title without "Overwatch: ". For the feature watch and the drift audit,
+  use the top entry or finding: `<N> new releases: <top entry>`,
+  `drift audit, <N> findings: <top finding>`.
+- `body`: one plain line on why it matters. No `link`.
+- `details`: `{"kind": "info", "item": {"captured_text": "<the first line, then the rest>",
+  "source_app": "overwatch", "source_metadata": {"task_name": "<its title>", "run_date":
+  "<local_date>", "kind": "<kind>"}, "ai_reasoning": "Created by the overwatch/weekly scheduled
+  task, run <run id>."}}`, and nothing else.
+- `source_ref`: `<subject_key>:<local_date>`.
+
 The inbox card shows `task_name` then `run_date`, not the first line, so each item names its `Title:`
-to say what it is; the run stays on record in `ai_reasoning`.
-Skip any whose first line matches an open one (Step 3.4). Keep each returned id. A failed call is
-SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismatch`.
+to say what it is; the run stays on record in `ai_reasoning`. Never count, cap or skip them, and
+never check what the nightly run sent: the dispatcher decides what reaches Alex and when. Keep each
+returned signal id. A failed call is SKIPPED (`inbox:<first line>`). The weekly schedule mismatch
+item (Step 2.4) uses kind `schedule_mismatch`.
 
 1. **One per friction pattern** (Step 6.3), kind `friction_fix`. First line:
    `Overwatch: friction fix for <process> — <count> entries`.
@@ -271,7 +294,7 @@ SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismat
 5. **One for the drift audit, when Step 8 found anything**, kind `drift_audit`. First line:
    `Overwatch: drift audit — <N> findings`. Title: `Overwatch: drift audit, <N> findings`. One line per finding.
 
-### Step 10 — Write the note, raise signals, and close the run
+### Step 10 — Write the note and close the run
 
 1. **The weekly note:** `create_overwatch_note` with `period: "weekly"`, `for_date: <local_date>`,
    and:
@@ -292,40 +315,28 @@ SKIPPED. The weekly schedule mismatch item (Step 2.4) uses kind `schedule_mismat
      Items "still open" say so.
    - **`flags`**: `shipped`, `progressed`, `ideas` (count, oldest), `newly_possible`,
      `new_releases`, `friction_patterns`, `estimate_accuracy`, `drift_audit` (the findings, or
-     `not_due`), `inbox_items`, `skipped`, `settings_missing`.
+     `not_due`), `signals` (the signal ids from Step 9), `skipped`, `settings_missing`.
    - If it errors, STOP with `failure_kind: "note_write"`.
-2. **Signals:** for **each** inbox item raised this run, call `raise_signal` once. Never count,
-   cap or skip them, and never check what the nightly run sent: the dispatcher decides what reaches
-   Alex and when.
-   - `app: "overwatch"`, `job: "weekly"`, `started_by: "task:overwatch-weekly"`.
-   - `severity`: `"high"` for a plan change; `"normal"` for a friction fix, newly possible and the
-     drift audit; `"low"` for the feature watch.
-   - `subject_key`: stable from week to week: `overwatch:weekly:<kind>`, plus `:<the pattern, app or
-     group id>` when the item is about one thing. Lower case, no spaces, no date; for example
-     `overwatch:weekly:plan_change`, `overwatch:weekly:friction:<pattern id>`,
-     `overwatch:weekly:releases`.
-   - `title`: the item's title without "Overwatch: ". For the feature watch and the drift audit,
-     use the top entry or finding: `<N> new releases: <top entry>`,
-     `drift audit, <N> findings: <top finding>`.
-   - `body`: one plain line on why it matters. `link`: `/<inbox id>`, the item's id.
-   - `details`: `{"inbox_id": "<inbox id>", "kind": "info"}`. The inbox id tells the dispatcher the
-     item already exists, so it points at it instead of making another.
-   - `source_ref`: `overwatch:weekly:<local_date>:<inbox id>`.
-
-   A failed call is SKIPPED.
+2. **Signals** were raised in Step 9; nothing more here.
 3. **Close the run:** `update_platform_run` with the run id, **once**.
    - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-   - **`details`**, always: `local_date`, `prompt_version: "2026-11-04a"`, `manual`, `plan_id`,
-     `drift_audit` (true or false), `note_id`, `inbox_item_ids`, `signals_raised`, `new_releases`,
+   - **`details`**, always: `local_date`, `prompt_version: "2026-11-06a"`, `manual`, `plan_id`,
+     `drift_audit` (true or false), `note_id`, `signal_ids`, `signals_raised`, `new_releases`,
      `friction_patterns`, `shipped_count`, `skipped`, `settings_missing`, and `not_weekly_day` when
      it applies.
    - **On `failed`:** `error_message` is the verbatim error, and `details.failure_kind` is one of
      `plan_read`, `settings_missing`, `week_read`, `note_write`, `run_open`, `unknown`. **Never
      downgrade a failure to `ok` to get past a rejected close.**
 
-**On `failed`, also** call `create_inbox_item` with `source_type: "task"`, `source_app: "overwatch"`,
-`source_metadata: { "task_name": "Overwatch weekly FAILED: <failure_kind>", "run_date": "<local_date>", "kind": "failure" }`,
-and this `captured_text`:
+**On `failed`, first** call `raise_signal` once, and put its id in `details.failure_signal_id`
+(a failed call goes in `details.signal_error`, verbatim; it does not change the close):
+`app: "overwatch"`, `job: "weekly"`, `started_by: "task:overwatch-weekly"`, `severity: "high"`,
+`subject_key: "overwatch:weekly:failure:<failure_kind>"` (no date, so repeats fold into one item),
+`title: "Overwatch weekly FAILED: <failure_kind>"`, `body`: the error in one line,
+`source_ref: "overwatch:weekly:failure:<failure_kind>:<local_date>"`, and `details`:
+`{"kind": "failure", "item": {"captured_text": "<the text below>", "source_app": "overwatch",
+"source_metadata": {"task_name": "Overwatch weekly FAILED: <failure_kind>", "run_date": "<local_date>", "kind": "failure"}}}`,
+with this text:
 
 ```
 Overwatch weekly FAILED — <failure_kind>, <local_date>
@@ -338,9 +349,9 @@ Run: <run id>
 ### Step 11 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-11-04a`;
+- `PROMPT VERSION: 2026-11-06a`;
 - the run id and its status, and `manual: true` or `manual: false`;
-- whether the drift audit ran; the note id, the inbox item ids and the signals raised;
+- whether the drift audit ran; the note id and the signals raised;
 - `skipped` and `settings_missing`, if any;
 - any error, verbatim.
 

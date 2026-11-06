@@ -19,9 +19,14 @@ no Workshop code for this job. The prompt below is the whole program.
 > version and Step 8 echoes it. An older version (or none) in a report means the task is running
 > stale text.
 >
-> ### `PROMPT VERSION: 2026-11-05b`
+> ### `PROMPT VERSION: 2026-11-06a`
 >
 > Bump the date-letter whenever this file changes below the line.
+>
+> 2026-11-06a: signals only. The nudge and the failure item are each one `raise_signal` whose
+> `details.item` holds the item, and the dispatcher writes it; no `create_inbox_item`. The
+> pending-nudge check, the weekly failure de-dup, `notified_at` and "STILL FAILING" are gone: the
+> dispatcher folds repeats of a subject key into one item with a "Seen n times since..." line.
 >
 > 2026-11-05b: the nudge and the failure item carry `source_app: "ken"` again.
 >
@@ -33,14 +38,14 @@ no Workshop code for this job. The prompt below is the whole program.
 | | when | where |
 |---|---|---|
 | **Record** | **every run**: off days, zero counts, suppressed runs and failures included | `platform_runs` |
-| **Nudge** | **only** when at least one seed is unseeded AND no Ken nudge is already pending | one Alfred **inbox item** |
-| **Failure item** | **only** when the run failed, re-raised at most **once a week** while unfixed | one Alfred **inbox item** |
+| **Nudge** | **only** when at least one seed is unseeded | one **signal**, carrying the inbox item; the dispatcher folds it into the open nudge if there is one |
+| **Failure item** | **only** when the run failed | one **signal** (`kind: "failure"`), carrying the inbox item; repeats fold into one item |
 
-A clean run raises nothing: no nudge for zero, no nudge while one is pending, and no "it worked".
+A clean run raises nothing: no nudge for zero, and no "it worked".
 A signal that fires on the normal case teaches its reader to skip it.
 
-**Failures need their own item because staleness cannot see them.** Staleness alarms when no
-run arrives. A run that arrives and closes `failed` satisfies it, so without an item a broken
+**Failures need their own signal because staleness cannot see them.** Staleness alarms when no
+run arrives. A run that arrives and closes `failed` satisfies it, so without a signal a broken
 job would look alive indefinitely.
 
 ---
@@ -49,7 +54,7 @@ job would look alive indefinitely.
 
 ---
 
-You are running the Ken seed check. `prompt version: 2026-11-05b`. Follow these steps in order.
+You are running the Ken seed check. `prompt version: 2026-11-06a`. Follow these steps in order.
 **Do not improvise.**
 
 ### The rules that override everything else
@@ -61,31 +66,32 @@ You are running the Ken seed check. `prompt version: 2026-11-05b`. Follow these 
    `unknown`.
 3. **WHEN A CALL FAILS, QUOTE THE ERROR VERBATIM**, with the HTTP status if there is one. Never
    write "the call failed".
-4. **YOU NEVER NOTIFY.** The only writes are `create_platform_run`, `update_platform_run`,
-   `create_inbox_item` and `raise_signal`. Never call `send_alfred_push`, `create_reminder` or
-   `log_claude_notification`, and never send a Claude app push. Each inbox item you create is
-   followed by one `raise_signal` for it; the dispatcher decides what reaches Alex.
+4. **YOU ONLY RAISE SIGNALS.** The only writes are `create_platform_run`, `update_platform_run`
+   and `raise_signal`. Never call `create_inbox_item`, `send_alfred_push`, `create_reminder` or
+   `log_claude_notification`, and never send a Claude app push. Each item is one `raise_signal`
+   that carries it in `details.item`; the dispatcher writes it and decides what reaches Alex.
+5. **NO REPEAT HANDLING.** Never read the inbox, earlier runs or earlier signals to decide
+   whether to raise. Raise every time; the dispatcher folds repeats of the same `subject_key`
+   into one item with a "Seen n times since..." line.
 
 **Whenever a step below says STOP: go to Step 6 and close the run as `failed`, then Step 7,
-then Step 8.** Stopping still means stamping the run and raising a failure item. It does not
+then Step 8.** Stopping still means stamping the run and raising a failure signal. It does not
 mean going quiet.
 
-**Raising a signal for an item.** Straight after each `create_inbox_item`, call `raise_signal`
-once, with the new inbox id:
+**Raising an item.** Call `raise_signal` once:
 - `app: "ken"`, `job: "ken_seed_check"`, `started_by: "task:ken-seed-check"`;
-- `severity`: `"normal"` for a nudge, `"high"` for a failure item;
+- `severity` and kind: `"normal"` and `"flag"` for a nudge, `"high"` and `"failure"` for a
+  failure item;
 - `subject_key`: `"ken:ken_seed_check:nudge"` for a nudge,
-  `"ken:ken_seed_check:failure:<failure_kind>"` for a failure item;
-- `title`: the item's first line; `body`: one plain line saying what it holds; `link: "/<inbox id>"`;
-- `details: { "inbox_id": "<inbox id>", "kind": "flag" }`. The inbox id tells the dispatcher the
-  item already exists, so it points at it instead of making another;
+  `"ken:ken_seed_check:failure:<failure_kind>"` for a failure item. Never a date in it;
+- `title`: the item's first line; `body`: one plain line saying what it holds; no `link`;
+- `details: { "kind": "<flag or failure>", "item": { "captured_text": "<the item's text>", "source_app": "ken", "source_metadata": { "task_name": "Ken seed check", "run_date": "<local_date>" }, "ai_reasoning": "Created by the ken_seed_check scheduled task, run <run id>." } }`.
+  The dispatcher writes the inbox item from `details.item`, with `source_type: "task"`;
 - `source_ref: "<subject_key>:<local_date>"`.
 
 Keep the returned `signal_id`. If it says `created: false`, it was already raised today: note that.
 **A failed `raise_signal` never fails the run:** record its verbatim error as `signal_error` in the
-run details (or, for a failure item, in the report) and carry on. The item stands either way.
-Whether an item exists is decided by the steps below (zero, a pending nudge, the weekly de-dup);
-the signal only follows an item.
+run details (or, for a failure item, in the report) and carry on.
 
 ---
 
@@ -147,28 +153,12 @@ areas returned in 3.2. A seed with no area simply does not come back, and that a
 > An area whose name looks like a seed but whose `source_ref` is null does not seed it. A seed
 > renamed in Alfred is still seeded if its id matches.
 
-**N = 0:** go to Step 6 and close as `ok`. **Never create an inbox item for zero.**
+**N = 0:** go to Step 6 and close as `ok`. **Never raise a nudge for zero.**
 
-### Step 5 — Check for a pending nudge, then nudge
+### Step 5 — Nudge
 
-1. `get_inbox` with `limit: 50`. It returns only **untriaged, unarchived** items.
-
-   A **Ken nudge** is an item whose `captured_text` **begins with exactly** `Ken seed check —`.
-   A failure item (Step 7) begins `Ken seed check FAILED` and is **not** a nudge. It never
-   suppresses one.
-
-   **If a nudge exists:** go to Step 6 and close as `ok`, with `suppressed_by: <that item's id>`
-   in `details`. **Do not update, merge, archive or re-word the existing item.** Skipping is the
-   whole dedupe strategy.
-
-   If the response starts with `NOTE: results truncated` and no nudge appears in the rows you
-   were given, carry on to 5.2 and set `inbox_read_truncated: true` in `details`. A duplicate
-   nudge is visible and harmless. A nudge suppressed on a guess is neither.
-
-   If `get_inbox` errors, STOP with `failure_kind: "inbox_read"`.
-
-2. `create_inbox_item` with:
-   - `captured_text`, exactly this shape:
+1. Raise the nudge ("Raising an item", above), with:
+   - the item's text, exactly this shape:
 
      ```
      Ken seed check — <N> new seed(s), <local_date>
@@ -180,48 +170,29 @@ areas returned in 3.2. A seed with no area simply does not come back, and that a
      - <name> (<alfred id>)
      ```
 
-     ⚠️ **The first line is the dedupe marker.** It must begin `Ken seed check —`, with an em
-     dash, character for character. The next run finds it by that prefix and nothing else.
-   - `source_type: "task"`
-   - `source_app: "ken"`
-   - `source_metadata: { "task_name": "Ken seed check", "run_date": "<local_date>" }`
-   - `ai_reasoning: "Created by the ken_seed_check scheduled task, run <run id>."`
+     The first line begins `Ken seed check —`, with an em dash.
+   - `details.item` holds only `captured_text`, `source_app`, `source_metadata` and
+     `ai_reasoning`. This is a nudge, not a capture to file, so there is no item, intent or event
+     to suggest, **and no context either**: this row's only action is **Copy**.
 
-   Set nothing else. This is a nudge, not a capture to file, so there is no item, intent or
-   event to suggest — **and no context either.** `suggested_context_id` used to be set here and
-   was removed on 2026-09-25: a suggestion is something to accept or reject during triage, and
-   this row's only action is **Copy**.
-
-   🛑 **`source_type: "task"` IS LOAD-BEARING.** It is what says a scheduled run produced this
-   rather than Alex typing it. The row then shows the task glyph, is titled
-   `"<task_name> · <run_date>"` in the inbox list, offers **Copy** instead of **Process** — copying
-   appends `Alfred inbox item: <id>`, which is how the thread that picks it up knows what to
-   archive — and is skipped by the hourly enrichment job (`alfred/inbox_enrich_hourly`). Left as
-   the default `mcp`, this nudge arrives looking hand-typed and the enrichment job writes GTD
-   suggestions over it.
-
-   `task_name` is written as it reads, because the inbox renders it: *Ken seed check*. The
-   registered job slug stays `ken_seed_check`, in `platform_runs` and `platform_schedules`.
-
-   **Keep the returned inbox id.** If the call errors, STOP with `failure_kind: "inbox_write"`.
-
-3. Raise its signal ("Raising a signal for an item", above), as a nudge.
+   The dispatcher writes the item with `source_type: "task"`, so the row shows the task glyph, is
+   titled `"<task_name> · <run_date>"`, offers **Copy** instead of **Process**, and is skipped by
+   the hourly enrichment job. `task_name` is written as it reads: *Ken seed check*. The job slug
+   stays `ken_seed_check`.
 
 ### Step 6 — Close the run
 
 Call `update_platform_run` with the run id from Step 1. **One call.** A closed run cannot be
 re-stamped, and `details` can only be written while closing.
 
-- **`status`:** `ok` for every outcome in Steps 2–5 (off day, zero, suppressed, nudged).
+- **`status`:** `ok` for every outcome in Steps 2–5 (off day, zero, nudged).
   `failed` **only** when a step said STOP.
 - **`details`**, always: `run_day`, `local_date`, `weekday`. On a run day, also `seeds_read`,
-  `areas_matched` (the number of areas 3.2 returned), `unseeded_count` (N), and `unseeded_ids`. Then **one** of `inbox_item_id`
-  (nudged), `suppressed_by` (pending nudge found), or neither (N = 0). With `inbox_item_id`, also
-  `signal_id`, or `signal_error` when `raise_signal` failed. Add
-  `inbox_read_truncated: true` if Step 5 set it. If this run was started by hand rather than by
-  the schedule, add `manual: true`.
+  `areas_matched` (the number of areas 3.2 returned), `unseeded_count` (N), and `unseeded_ids`.
+  When nudged, also `signal_id`, or `signal_error` when `raise_signal` failed. If this run was
+  started by hand rather than by the schedule, add `manual: true`.
 - **On `failed`:** `error_message` holds the **verbatim** error, and `details.failure_kind` is
-  one of `alfred_read`, `ken_read`, `read_truncated`, `inbox_read`, `inbox_write`, `unknown`.
+  one of `alfred_read`, `ken_read`, `read_truncated`, `unknown`.
 
 > 🛑 **A `failed` close REQUIRES both `error_message` and `details.failure_kind`. The tool
 > rejects the write without them.** If it is rejected for that reason, supply them. **Never
@@ -234,38 +205,10 @@ was closed `ok`, stop after Step 8. **Step 7 is for failures only.**
 
 ### Step 7 — Raise a failure item (failed runs only)
 
-**An `ok` run skips this step entirely.**
+**An `ok` run skips this step entirely.** A failed run raises its failure item every time.
+Never read earlier runs first: the dispatcher folds a repeat into the open item and counts it.
 
-#### 7.1 — Is this failure already notified this week?
-
-Call `get_platform_runs` with `app: "ken"`, `job: "ken_seed_check"`, `limit: 20`. **Ignore
-this run's own row.** Suppress the item **only if all three hold**:
-
-1. The most recent **other** run with the **same `details.failure_kind`** has `notified_at` set,
-   **and**
-2. there has been **no `ok` run since** that one, **and**
-3. that `notified_at` is **less than 7 days old**.
-
-This is a **lookup against the run log, not a judgement**. Read the fields; do not reason about
-what you probably reported before.
-
-**If suppressed:** raise nothing and go to Step 8. **Do not set `notified_at`** on this run: it
-was not notified, and the next run's lookup has to see that.
-
-If `get_platform_runs` itself errors, do not suppress. Raise the item. A duplicate failure item
-costs a glance; a silent failure costs the job.
-
-**Condition 3 is a deliberate floor.** Without it, one item is raised and the failure is then
-silent forever, so a notification missed during a busy week means never hearing about it again.
-**Once a week for something genuinely broken is a reminder, not noise.** An `ok` run in between
-resets all of this: a thing that broke, was fixed, and broke again is new, and gets a new item
-worded as new.
-
-#### 7.2 — Raise it
-
-Call `create_inbox_item` with `source_type: "task"`, `source_app: "ken"`,
-`source_metadata: { "task_name": "Ken seed check", "run_date": "<local_date>" }`, **no
-`suggested_*` field of any kind**, and a `captured_text` of exactly this shape:
+Raise it ("Raising an item", above, as a failure item), with item text of exactly this shape:
 
 ```
 Ken seed check FAILED — <failure_kind>, <local_date>
@@ -275,47 +218,23 @@ Ken seed check FAILED — <failure_kind>, <local_date>
 ACTION: <the action for this failure_kind, from the table below>
 ```
 
-**If this is a repeat**, meaning there is an earlier unfixed run with the same `failure_kind`
-and no `ok` since, the first line reads instead:
-
-```
-Ken seed check STILL FAILING since <date of the first failure in this streak> — <failure_kind>, <N> consecutive runs
-```
-
-`N` counts the runs with this `failure_kind` since the last `ok` one, this run included. A
-standing outage and a fresh one must be distinguishable at a glance.
-
-⚠️ **The first line must never begin `Ken seed check —`.** That prefix marks a nudge, and a
-failure item wearing it would suppress every nudge until it was triaged.
-
 | `failure_kind` | ACTION |
 |---|---|
 | `run_open` | If the error is an **input validation error naming the allowed `app` values**: *"Redeploy the mcp function, then reconnect the Alfred connector so it refetches the tool manifest."* If it is a **Postgres check-constraint error**: *"platform_runs does not accept app 'ken' — check migration ken_003 is applied."* |
 | `read_truncated` | If it came from **`get_items`**: *"The Alfred Ken context holds more than 50 seeds, and get_items does not page. This job cannot count correctly past 50 — needs a code change, not a retry. Triaging seeds out of the Ken context also clears it."* If it came from **`get_ken_areas`**: *"get_ken_areas truncated a source_refs read, which should be impossible because source_ref is unique per user. Needs investigation."* |
-| `alfred_read`, `ken_read`, `inbox_read`, `inbox_write` | If the error mentions **JWT, token, auth or connector**: *"Reconnect the Alfred v5 connector. Use 'Use your own OAuth client' with client_id `2804f812-ea1a-4827-9443-3421fc4771f5` and a blank secret. Do NOT use 'No client ID — register one automatically'; dynamic registration fails on reconnect."* Otherwise: *"No known remedy for this error — needs investigation."* |
+| `alfred_read`, `ken_read` | If the error mentions **JWT, token, auth or connector**: *"Reconnect the Alfred v5 connector. Use 'Use your own OAuth client' with client_id `2804f812-ea1a-4827-9443-3421fc4771f5` and a blank secret. Do NOT use 'No client ID — register one automatically'; dynamic registration fails on reconnect."* Otherwise: *"No known remedy for this error — needs investigation."* |
 | `unknown` | *"No known remedy for this error — needs investigation."* |
 
 **Never invent a remedy that is not in this table.** An honest "needs investigation" beats a
 made-up instruction.
 
-**If Step 1 could not create the run row**, add this line to the item, because the weekly
-de-dup has nothing to read or write:
+**If Step 1 could not create the run row**, add this line to the item: *"No run row exists for
+this failure."*
 
-> *"No run row exists for this failure, so the once-per-week de-duplication does not apply.
-> Every run will raise this item until the cause is fixed."*
-
-Then raise its signal ("Raising a signal for an item", above), as a failure item. The run is
-already closed, so its `signal_id` goes in the Step 8 report, not the run details.
-
-#### 7.3 — Stamp `notified_at`
-
-If the item was created and a run row exists, call `update_platform_run` with this run's id and
-`notified_at` set to the current time. This is the **one** field settable on a closed run, and
-it is what the next failed run's 7.1 lookup reads. **Stamp it only after the item exists.**
-
-If `create_inbox_item` fails here, do not set `notified_at`. Report both errors verbatim in
-Step 8 and finish. When the inbox and `platform_runs` sit behind the same broken connector, this
-is the one failure the task cannot record. Staleness covers it only if no run arrives at all.
+The run is already closed, so its `signal_id` goes in the Step 8 report, not the run details.
+If `raise_signal` fails here, report both errors verbatim in Step 8 and finish. When signals and
+`platform_runs` sit behind the same broken connector, this is the one failure the task cannot
+record; the Overwatch nightly's failure check sees a failed run with no failure signal.
 
 ### Step 8 — Report to the chat
 
@@ -323,17 +242,14 @@ Nobody may read this. Write it anyway, in exactly this shape:
 
 ```
 Ken seed check — <local_date> (<weekday>)
-  prompt version: 2026-11-05b
+  prompt version: 2026-11-06a
   run id: <id | none — run_open failed>
   run day: <yes | no — skipped>
   seeds read: <n>   areas matched: <n>
   unseeded: <n>   <names, if any>
-  nudge: <created <id> | suppressed — pending nudge <id> | none — zero unseeded |
-          none — off day | none — failed>
+  nudge: <raised | none — zero unseeded | none — off day | none — failed>
   status stamped: <ok | failed | NOT STAMPED — <why>>
-  failure item: <n/a — ok run | raised, new <id> | raised, repeat (N runs) <id> |
-                 suppressed — notified <n> day(s) ago | FAILED TO RAISE — <error>>
-  notified_at stamped: <yes | no — <why>>
+  failure item: <n/a — ok run | raised | FAILED TO RAISE — <error>>
   signal: <none — no item | <signal_id> | not created — already raised today | FAILED — <error>>
 ```
 
@@ -354,8 +270,9 @@ sync does the same). The schedule row currently says `executor: "workshop"`.
 
 **What this task deliberately does NOT do:**
 
-- **No update or merge of a pending nudge.** It skips. A pending nudge stays exactly as it was
-  written, even if more seeds have arrived since. Its list is as of the day it was written.
+- **No repeat handling.** It raises a nudge every run day with unseeded seeds. While a nudge is
+  open the dispatcher folds the repeat into it: the item's list stays as of the day it was
+  written, and its last line says how many times it has been seen since.
 - **No name matching**, and no area creation. It counts and nudges, nothing else.
 - **No notification on success.** See the table at the top.
 
@@ -364,7 +281,8 @@ sync does the same). The schedule row currently says `executor: "workshop"`.
 `update_ken_area id=<area uuid> source_ref=<alfred id>` rather than by creating a second area.
 
 **Known ceiling: 50 seeds.** `get_items` caps at 50 and does not page, so past 50 seeds in the
-Ken context Step 3 fails every run with `read_truncated` and raises a weekly failure item. That
+Ken context Step 3 fails every run with `read_truncated` and raises a failure signal, which the
+dispatcher folds into one item. That
 is deliberate: a wrong count is worse than a loud failure. The areas side has no ceiling. The
 `source_refs` read returns at most one area per seed passed, however many areas exist.
 

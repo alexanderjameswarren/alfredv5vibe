@@ -642,6 +642,24 @@ Main was at c92873a, with 209 and the 10e files checkpointed. 210 was free (orig
 #### Step 10k scope (planned; was "10j")
 Every task prompt raises signals only, using details.item, with no repeat logic of its own. The hourly dispatcher prompt drops "in_window false deliver nothing". Overwatch nightly gets the silence, importance and failure checks.
 
+#### 10k. Task prompts on signals only; nightly dispatcher checks — DONE 2026-11-06 (`s10k-h3q8`)
+- Main at 44584bd (10i, 10j and the Dispatcher screen checkpointed). The first override, "High and Urgent over the limit", is live in plan 4c22c1ac.
+- **All ten prompts at 2026-11-06a.** No `create_inbox_item` except the Overwatch nightly's dispatcher checks. Each item is one `raise_signal` with `details.item`; no link, no `inbox_id`. Gone: Arnold's open-item and 7-day checks, the weekly failure de-dup, `notified_at` look-ups and "STILL FAILING" in Ken, DJ daily and SAM, Ken's pending-nudge check, Money's last-week check, and the open-item skip for Overwatch's signalled items. Failures are `kind: "failure"` with a dateless subject key; Arnold, DJ weekly and Overwatch weekly now raise one too. Report items (DJ weekly, Money weekly) carry the date in the subject key so a new report never folds into last week's.
+- **Dispatcher prompt:** delivers whatever `get_dispatch_plan` decides at any hour; `in_window` is for the report only; counts `drop`.
+- **overwatch-nightly.ts:** `dispatcher_checks` (importance, silence, failures), no SQL. The silence threshold is `settings.nightly_checks.silence_hours`, default 36. Nightly prompt count 13 and Step 6.8; skill section "The dispatcher checks". Spec §11 has the rules.
+- **overwatch-plan.ts:** the dry-run note says "limits".
+- **Tests:** overwatch-nightly 14/14, overwatch-plan 21/21; shared and mcp function tests 951/951. mcp deployed 06:52, CONFORMANT (103 tables), live call returned `dispatcher_checks`. db:deploy released.
+- **Not done (out of scope):** mcp/index.ts's description of get_overwatch_nightly_counts does not yet mention `dispatcher_checks`.
+- **Next:** Alex checkpoints; Claude updates the ten scheduled tasks from the files.
+
+#### Step 11 scope (planned): the Dispatcher's actions, server side first
+- create: supabase/migrations/_pending_notification_routing-d7v_update_signal.sql, supabase/tests/notification_routing-d7v/7_update_signal_verify.sql
+- update: supabase/functions/_shared/tools/signals.ts, supabase/functions/_shared/tools/signals.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, supabase/functions/push-send/index.ts, .claude/skills/overwatch/SKILL.md, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
+- delete: nothing
+- deploy: mcp, push-send
+- SQL: signals (an update_signal function for hold, drop and deliver now, if RLS does not let the owner change state directly)
+- DB: db:fn:update_signal, db:table:signals, db:deploy at the deploy step. The screen's buttons (src/) follow in 11b.
+
 #### Step 10i scope (as planned; was "10f", "10g", then "10h")
 - create: nothing
 - update: supabase/functions/_shared/tools/overwatch-plan.ts, supabase/functions/_shared/tools/overwatch-plan.test.mjs, supabase/functions/mcp/index.ts (register the tools), src/overwatch/dispatcherModel.js, src/overwatch/dispatcherModel.test.js, src/overwatch/DispatcherPage.jsx, src/overwatch/DispatcherPage.test.jsx, .claude/skills/overwatch/SKILL.md, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
@@ -734,3 +752,4 @@ Files: this file. DB: none.
 | 10h | 3m | 48s | 210 started_by backfill (15 rows) and test 1 queued |
 | 10i | 25m | 6m 36s | 211 queued; override tools, Exceptions card, skill built; registration and deploy blocked by switchboard2-h8r |
 | 10j | 5m | see report | override tools registered, tool count 197, mcp deployed, conformant |
+| 10k | 30m | 18m | ten prompts at 2026-11-06a, nightly dispatcher checks, mcp deployed, conformant |

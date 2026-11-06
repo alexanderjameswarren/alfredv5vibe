@@ -1,13 +1,16 @@
 # Weekly DJ review — RUN THIS
 
-`PROMPT VERSION: 2026-11-05b`. The run's details record it (see "The run"). Bump the date-letter
+`PROMPT VERSION: 2026-11-06a`. The run's details record it (see "The run"). Bump the date-letter
 whenever this file changes, and paste it into the task: the task runs the pasted text, not this
 file. 2026-11-05a, the first version line: the inbox item is followed by one `raise_signal` for it,
 and the dispatcher decides what reaches Alex. 2026-11-05b restores `source_app: "dj"` on the item.
+2026-11-06a: signals only. The report is one `raise_signal` whose `details.item` holds the inbox
+item, and the dispatcher writes it; no `create_inbox_item`. A failed run raises a `failure` signal.
 
-🛑 **YOU NEVER NOTIFY.** Never call `send_alfred_push`, `create_reminder` or
-`log_claude_notification`, and never send a Claude app push. The inbox item is followed by one
-`raise_signal` for it; the dispatcher decides what reaches Alex.
+🛑 **YOU ONLY RAISE SIGNALS.** Never call `create_inbox_item`, `send_alfred_push`,
+`create_reminder` or `log_claude_notification`, and never send a Claude app push. The report is
+one `raise_signal` that carries the inbox item in `details.item`; the dispatcher writes it and
+decides what reaches Alex. No repeat handling: never check for an earlier report or signal.
 
 🛑 **YOU ARE RUNNING THIS JOB, NOT REVIEWING IT.** Make the calls in "The run" below and write
 the item. Do not critique this document, summarise it, or report on its structure. If something
@@ -15,8 +18,8 @@ here looks wrong, do the run anyway and put the concern in one line at the end.
 
 ## Output — an inbox item, and its first two lines are load-bearing
 
-**Run as the scheduled task, this writes ONE inbox item** (`create_inbox_item`, tier 1) whose body
-is exactly:
+**Run as the scheduled task, this raises ONE signal** (`raise_signal`, tier 1) carrying ONE inbox
+item, which the dispatcher writes, whose body is exactly:
 
 ```
 Weekly DJ review, <YYYY-MM-DD>.
@@ -31,19 +34,7 @@ first version of this prompt got critiqued instead of run (§14.30).
 
 ### The call, in full
 
-```
-create_inbox_item
-  captured_text:    the body above
-  source_type:      "task"
-  source_app:       "dj"
-  source_metadata:  { "task_name": "Weekly DJ review", "run_date": "<YYYY-MM-DD>" }
-```
-
-**Nothing else. No `suggested_*` field of any kind, and no `suggest_item` / `suggest_intent`.**
-
-### Then its signal, in full
-
-Keep the new inbox id, then call, once:
+Call, once:
 
 ```
 raise_signal
@@ -51,22 +42,27 @@ raise_signal
   job:          "weekly_review"
   started_by:   "task:dj-weekly-review"
   severity:     "normal"
-  subject_key:  "dj:weekly_review:report"
+  subject_key:  "dj:weekly_review:report:<YYYY-MM-DD>"
   title:        "Weekly DJ review, <YYYY-MM-DD>"
   body:         one plain line, e.g. "<n> upcoming concerts, <n> decisions waiting"
-  link:         "/<inbox id>"
-  details:      { "inbox_id": "<inbox id>", "kind": "info" }
+  details:      { "kind": "info",
+                  "item": { "captured_text":   "<the body above>",
+                            "source_app":      "dj",
+                            "source_metadata": { "task_name": "Weekly DJ review", "run_date": "<YYYY-MM-DD>" } } }
   source_ref:   "dj:weekly_review:report:<YYYY-MM-DD>"
 ```
 
-The inbox id tells the dispatcher the item already exists, so it points at it instead of making
-another. Keep the returned `signal_id`. If it says `created: false`, it was already raised today.
-**A failed `raise_signal` never fails the run:** record its verbatim error as `signal_error` in the
-close and carry on. The item stands either way. Run by hand with the inbox write skipped, raise no
-signal either.
+**Nothing else. No link, no `suggested_*` field of any kind, and no `suggest_item` /
+`suggest_intent`.** The subject key carries the date because each week's report is a new report:
+an undated key would fold this week's report into last week's item if that one is still open.
 
-🛑 **`source_type: "task"` IS NOT OPTIONAL AND IT IS NOT COSMETIC.** It is what stops this
-item being mistaken for something Alex typed. A task row shows the task glyph, is titled
+The dispatcher writes the inbox item from `details.item`. Keep the returned `signal_id`. If it
+says `created: false`, it was already raised today. **If `raise_signal` fails, the report was not
+filed:** close the run `failed` with `failure_kind: "signal_write"` and its verbatim error. Run by
+hand in a conversation, raise no signal.
+
+🛑 **THE DISPATCHER WRITES IT WITH `source_type: "task"`, AND THAT IS NOT COSMETIC.** It is what
+stops this item being mistaken for something Alex typed. A task row shows the task glyph, is titled
 `"<task_name> · <run_date>"` in the inbox list, offers **Copy** rather than **Process** — copying
 appends `Alfred inbox item: <id>` so the thread that picks it up can archive it — and is skipped
 by the hourly enrichment job. Left as the default `mcp`, this report arrives looking like a
@@ -89,7 +85,7 @@ instructions is frozen at the moment it was written — §14.25 records a prompt
 apart with neither able to reveal it, and every item already sitting in the inbox would have that
 failure permanently.
 
-**Run by hand in a conversation:** print the report, skip the inbox write, and say you skipped it.
+**Run by hand in a conversation:** print the report, skip the signal, and say you skipped it.
 
 **Either way: nothing is published, and nothing is written to YouTube.**
 
@@ -100,10 +96,18 @@ failure permanently.
 **First, before anything else:** call `create_platform_run` with app `"dj"`, job `"weekly_review"`,
 executor `"claude"`, status `"running"`. Keep the run id.
 
-**Last, after the inbox item and its signal, and also if the run stops early:** call `update_platform_run` with that id:
-- `"ok"` when the inbox item was written, with details `{ "prompt_version": "2026-11-05b", "inbox_item_id": "<id>", "signal_id": "<id>", "concerts": <n> }` (`signal_error` in place of `signal_id` if `raise_signal` failed);
+**Last, after the signal, and also if the run stops early:** call `update_platform_run` with that id:
+- `"ok"` when the report's signal was raised, with details `{ "prompt_version": "2026-11-06a", "signal_id": "<id>", "concerts": <n> }`;
 - `"partial"` when the report says it is partial, with the same details;
-- `"failed"` otherwise, with a one-line `error_message` and details `{ "prompt_version": "2026-11-05b", "failure_kind": "<short slug>" }`.
+- `"failed"` otherwise, with a one-line `error_message` and details `{ "prompt_version": "2026-11-06a", "failure_kind": "<short slug>" }`.
+
+**Before closing `failed`**, raise one failure signal (unless `raise_signal` is what failed):
+`app: "dj"`, `job: "weekly_review"`, `started_by: "task:dj-weekly-review"`, `severity: "high"`,
+`subject_key: "dj:weekly_review:failure"` (no date, so repeats fold into one item),
+`title: "Weekly DJ review failed"`, `body`: the error in one line,
+`source_ref: "dj:weekly_review:failure:<YYYY-MM-DD>"`, and
+`details: { "kind": "failure", "item": { "captured_text": "Weekly DJ review failed <YYYY-MM-DD>\n<the error, verbatim, and the call that failed>", "source_app": "dj", "source_metadata": { "task_name": "Weekly DJ review failed", "run_date": "<YYYY-MM-DD>" } } }`.
+Put its id in the close's `signal_id`.
 
 A run with no row means the task never fired; that is what the schedule row is for.
 
@@ -142,8 +146,7 @@ partial report that says so beats a complete one that guessed.
 |---|---|---|
 | the run stamp | first (open) and last (close) | `create_platform_run`, `update_platform_run` |
 | derived tag facts (`derivable_as` non-null) | **immediately, without asking** — they are facts, not proposals | `record_dj_artist_tag` |
-| the inbox item | last, once the report is written | `create_inbox_item`, `source_type: "task"`, `source_app: "dj"`, no suggestions |
-| its signal | straight after the inbox item | `raise_signal` |
+| the report's signal | last, once the report is written | `raise_signal`, carrying the inbox item in `details.item`, `source_app: "dj"`, no suggestions |
 
 🛑 **THIS JOB DOES NOT ACT ON THE REPORT. IT WRITES IT.** Concert statuses, tagging answers and
 playlist edits all happen later, in the conversation Alex opens from the inbox item, governed by

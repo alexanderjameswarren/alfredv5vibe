@@ -361,6 +361,25 @@ Plan and Briefing, opened from a Dispatcher row on the Overwatch tab. Files:
 
 ## 11. Nightly checks (step 12)
 
+**Built in step 10k, without SQL.** `get_overwatch_nightly_counts` adds `dispatcher_checks`,
+worked out in `overwatch-nightly.ts` from `signals`, `platform_runs` and the active plan (a failed
+read puts `{error}` there and never fails the counts):
+- `importance`: signals held in the last day that were `kind: "failure"` or High/Urgent, by subject.
+- `silence`: hours since the last `delivered` signal against `settings.nightly_checks.silence_hours`
+  (outside `delivery`, so no validator change; **36 hours** when absent), the last day's signals by
+  state, and overrides in force that hold or drop with no app, job, subject_key or started_by.
+- `failures`: failed or partial runs in the last day with no signal for them: same app and job from
+  5 minutes before the start to 6 hours after the finish (or `details.run_id` naming the run); a
+  failed run needs a failure signal (`kind: "failure"` or a `failure` segment in the subject key), a
+  partial one any signal. Partial `overwatch/nightly` runs are left out (their gaps are scan gaps).
+
+The nightly writes these three straight to the inbox (decision 10's one exception), each with a
+paste-ready prompt. Every other Overwatch item, and every other task's item, is a signal with
+`details.item`. Report-style items (DJ weekly, Money cleanup) put the date in the subject key, so a
+new week never folds into last week's open item; failures keep a dateless key.
+
+The block below is still to come in step 12:
+
 `overwatch_nightly_counts` gains a `dispatcher` block: runs yesterday (expected about 15),
 failures, signals by decision, held subjects with repeats, pops against the caps, and pops logged
 by each sender and `started_by`. The nightly prompt:
