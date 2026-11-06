@@ -302,6 +302,42 @@ test("create_sam_practice_plan: shape errors are collected, and more than 20 ite
     /`songs` must be a non-empty array/);
 });
 
+// --- one range twice, plan-wide positions (migration 216) ---------------------
+const TWICE = () => ({
+  review_instructions: "x",
+  songs: [
+    { song_id: SONG_PLAIN, items: [
+      { snippet_id: SNIP_RH, position: 1, target_bpm: 50, target_passes: 2, accuracy_target: 80, instruction: "Warm up." },
+      { snippet_id: SNIP_RH, position: 3, target_bpm: 70, target_passes: 2, accuracy_target: 85, instruction: "The climb." },
+    ] },
+    { song_id: SONG_AUDIO, items: [{ position: 2, target_bpm: 67, target_playback_speed: 80, target_passes: 1, accuracy_target: 80 }] },
+  ],
+});
+
+test("create_sam_practice_plan: one range twice is allowed, and the proposal lists the plan-wide order", async () => {
+  const out = await call(mod.createSamPracticePlanTool, TWICE(), makeDb());
+  const text = out.data.proposal.text;
+  assert.match(text, /1\. Bars 5-12 \(m\.5–12, RH\) · 50 BPM heard/);
+  assert.match(text, /3\. Bars 5-12 \(m\.5–12, RH\) · 70 BPM heard/);
+  assert.match(text, /CHECKLIST ORDER \(by position\):\n  1\. Pastorale · Bars 5-12.*\n  2\. Someone Like You · Whole song\n  3\. Pastorale · Bars 5-12/);
+});
+
+test("create_sam_practice_plan confirmed: positions reach the function", async () => {
+  let received;
+  const db = makeDb({ rpc: { sam_create_practice_plan: (args) => { received = args; return { data: PLAN_ACTIVE, error: null }; } } });
+  await call(mod.createSamPracticePlanTool, { ...TWICE(), confirmed: true }, db);
+  assert.deepEqual(received.p_plan.songs.flatMap((s) => s.items.map((i) => i.position)), [1, 3, 2]);
+});
+
+test("create_sam_practice_plan: positions on some items only, or two alike, or not whole, are refused", async () => {
+  const some = TWICE(); delete some.songs[1].items[0].position;
+  await assert.rejects(call(mod.createSamPracticePlanTool, some, makeDb()), /Give every item a position, or none: 2 of 3/);
+  const alike = TWICE(); alike.songs[1].items[0].position = 1;
+  await assert.rejects(call(mod.createSamPracticePlanTool, alike, makeDb()), /Two items have the same position/);
+  const zero = TWICE(); zero.songs[1].items[0].position = 0;
+  await assert.rejects(call(mod.createSamPracticePlanTool, zero, makeDb()), /items\[0\]\.position must be a positive whole number/);
+});
+
 test("create_sam_practice_plan confirmed: the function receives the §6.2 plan and the new plan comes back", async () => {
   const NEW = U(29);
   let received;

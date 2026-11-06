@@ -484,6 +484,8 @@ export const getSamGoalsTool = defineTool({
 
 interface PlanItemInput {
   snippet_id?: string | null;
+  // Plan-wide checklist position (migration 216). Every item or none.
+  position?: number;
   is_free_play: boolean;
   target_bpm?: number;
   target_playback_speed?: number;
@@ -533,6 +535,7 @@ export function normalisePlanInput(args: Record<string, unknown>): PlanInput {
   const songs: PlanSongInput[] = [];
   const seen = new Set<string>();
   let itemCount = 0;
+  const positions: number[] = [];
   for (const [si, raw] of (Array.isArray(songsIn) ? songsIn : []).entries()) {
     const s = (raw ?? {}) as Row;
     const where = `songs[${si}]`;
@@ -556,6 +559,10 @@ export function normalisePlanInput(args: Record<string, unknown>): PlanInput {
       if (isSet(it.is_free_play) && typeof it.is_free_play !== "boolean") {
         errors.push(`${iw}.is_free_play must be true or false.`);
       }
+      if (isSet(it.position)) {
+        if (!positiveInt(it.position)) errors.push(`${iw}.position must be a positive whole number.`);
+        positions.push(it.position as number);
+      }
       for (const k of ["target_bpm", "target_playback_speed", "target_passes"]) {
         if (isSet(it[k]) && !positiveInt(it[k])) errors.push(`${iw}.${k} must be a positive whole number.`);
       }
@@ -574,6 +581,7 @@ export function normalisePlanInput(args: Record<string, unknown>): PlanInput {
       }
       items.push({
         snippet_id: (it.snippet_id as string | null | undefined) ?? null,
+        ...(isSet(it.position) ? { position: it.position as number } : {}),
         is_free_play: it.is_free_play === true,
         ...(isSet(it.target_bpm) ? { target_bpm: it.target_bpm as number } : {}),
         ...(isSet(it.target_playback_speed) ? { target_playback_speed: it.target_playback_speed as number } : {}),
@@ -594,6 +602,12 @@ export function normalisePlanInput(args: Record<string, unknown>): PlanInput {
       items,
     });
   }
+  // The same rule as sam_create_practice_plan: every item positioned, or none; no two alike.
+  // A range may repeat (a warm-up early, the same bars as a climb later); a song may not.
+  if (positions.length > 0 && positions.length < itemCount) {
+    errors.push(`Give every item a position, or none: ${positions.length} of ${itemCount} items have one.`);
+  }
+  if (new Set(positions).size < positions.length) errors.push("Two items have the same position.");
   if (itemCount > MAX_PLAN_ITEMS) {
     errors.push(`A plan holds at most ${MAX_PLAN_ITEMS} items; this one has ${itemCount}.`);
   }
@@ -719,7 +733,7 @@ export async function proposePlan(db: Db, plan: PlanInput) {
           (song.goal_set_at ? ")" : " — an unconfirmed placeholder)");
       }
       const parts = [
-        `${position}. ${rangeText(it.snippet_id, snippets)}`,
+        `${it.position ?? position}. ${rangeText(it.snippet_id, snippets)}`,
         tempo,
         it.goal_is_warmup
           ? `warm-up is the goal (${warmupNote.get(iw) ?? "ladder unresolved"})`
@@ -734,6 +748,14 @@ export async function proposePlan(db: Db, plan: PlanInput) {
   }
   if (errors.length) {
     throw fail(tool, `${errors.length} validation error(s). Nothing was proposed or written:\n` + errors.join("\n"));
+  }
+  // Positions given: the checklist runs in that order, across songs.
+  const order = plan.songs.flatMap((ps) => ps.items.map((it) => ({ it, title: songs.get(ps.song_id)?.title })))
+    .filter(({ it }) => isSet(it.position))
+    .sort((a, b) => a.it.position! - b.it.position!);
+  if (order.length) {
+    lines.push("", "CHECKLIST ORDER (by position):");
+    for (const { it, title } of order) lines.push(`  ${it.position}. ${title} · ${rangeText(it.snippet_id, snippets)}`);
   }
   return {
     text: lines.join("\n"),

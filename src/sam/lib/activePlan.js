@@ -145,6 +145,15 @@ export function matchPlanItem(plan, songId, snippetId, itemId = null) {
   return (plan.items || []).find(onRange) || null;
 }
 
+/** Every plan item on (songId, snippetId), in plan position order. */
+export function planItemsOnRange(plan, songId, snippetId) {
+  if (!plan || !songId) return [];
+  const snip = snippetId || null;
+  return (plan.items || [])
+    .filter((i) => i.song_id === songId && (i.snippet_id || null) === snip)
+    .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+}
+
 /**
  * The two link columns written on sam_passes and sam_sessions. Both null when
  * there is no active plan, or it has not loaded yet. Never throws.

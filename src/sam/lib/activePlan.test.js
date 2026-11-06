@@ -3,7 +3,7 @@ import {
   itemState, planSummary, itemTargetText, itemRangeText, todayKey,
   heardTempo, itemForLoadedRange, planSongFor, planLineText, planBadgeText, snippetTagText,
   planItemsInOrder, firstIncompleteItem, nextIncompleteItem, planIsComplete, itemShortRange,
-  nextItemLabel, passQualifies, planTempoCheck, planTempoText, openSearch, parseOpenSearch,
+  nextItemLabel, passQualifies, planTempoCheck, planTempoText, openSearch, parseOpenSearch, planItemsOnRange,
 } from "./activePlan";
 
 describe("the opened item and the URL (s3c)", () => {
@@ -16,6 +16,16 @@ describe("the opened item and the URL (s3c)", () => {
     expect(planLinkFor(twice, "s", "n", "b").plan_item_id).toBe("b");
     expect(matchPlanItem(twice, "s", null, "b")).toBeNull();
     expect(matchPlanItem(twice, "s", "n", "gone").id).toBe("a");
+  });
+  test("planItemsOnRange: every item on the range, in position order", () => {
+    const p = { id: "p", items: [
+      { id: "late", song_id: "s", snippet_id: "n", position: 9 },
+      { id: "other", song_id: "s", snippet_id: null, position: 2 },
+      { id: "early", song_id: "s", snippet_id: "n", position: 1 },
+    ] };
+    expect(planItemsOnRange(p, "s", "n").map((i) => i.id)).toEqual(["early", "late"]);
+    expect(planItemsOnRange(p, "s", "x")).toEqual([]);
+    expect(planItemsOnRange(null, "s", "n")).toEqual([]);
   });
   test("openSearch and parseOpenSearch", () => {
     expect(openSearch({ itemId: "i", snippetId: "n" })).toBe("?item=i");

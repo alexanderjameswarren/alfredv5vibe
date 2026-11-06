@@ -84,6 +84,19 @@ Not claimed yet, each claimed by the step that needs it:
     - There is no shared number-input component, so it copies TempoControls'
       markup. SongRail needed no change.
     - Tests: +2 in TransportControls.test.
+- [x] **s7 done 2026-11-06.**
+  - `planItemsOnRange` was added. The snippet-row tag lists every item on its
+    range, in position order ("Plan · 60 BPM · 1/4 / Plan · 75 BPM · 1/2"), and
+    its tone follows the opened item. The row ladder editor prefers the opened
+    item.
+  - 4 SamPlayer.plan tests with two items on one range: the checklist order,
+    Next, the plan line, the tag, and the session and pass link. Shared counts
+    are marked TODO(s8). Plus 1 activePlan test.
+  - Still range-keyed, with only the first item on the range shown: a snippet
+    loaded by hand from the tray (it clears the opened item) and the stale-URL
+    fallback. These are fine as they are. The counts come from
+    `sam_plan_item_progress`, and `sam_plan_unplanned_practice` also matches by
+    range; both go to s8.
 - [ ] **s7. Part 6a, app side.** Mostly done at s3c: the opened item's id is
   kept (from the URL), written as `plan_item_id`, and preferred over song plus
   range. What remains:
@@ -94,6 +107,56 @@ Not claimed yet, each claimed by the step that needs it:
     and the snippet tag.
   - The counts stay range-matched until s8 changes `sam_plan_item_progress`.
   - *Check:* plan 32's items still link and count as before.
+- **s8 stopped 2026-11-06.**
+  - The plan guard refused `_pending_sam_cleanup-m4t_plan_item_positions.sql`
+    because the SQL touches `sam_practice_plans`, which was not in scope. The
+    function supersedes and inserts plans, and the progress functions check the
+    plan exists. Nothing was written.
+  - The mcp files are now claimed by this thread (free at s8). The `db:` claims
+    were taken, then released at the stop.
+  - The retry needs, under SQL: sam_practice_plans, sam_practice_plan_songs,
+    sam_practice_plan_items, sam_passes, sam_songs, sam_snippets and
+    platform.conformance_failures.
+- [x] **s8r 2026-11-06 (the retry).**
+  - Claimed the 7 `db:` items; the mcp files were already held.
+  - `216_sam_plan_item_positions.sql`: drops `sam_practice_plan_items_one_per_range`
+    and replaces the three functions. The function bodies were diffed against
+    the snapshot, and only the marked changes differ.
+  - Queued, not applied:
+    - test `2_plan_item_positions_test.sql`, action 0ce798d4-29c6-4eb7-b46d-467f0d451ad1,
+      to be run AFTER 216;
+    - migration 216, action 43559849-cd80-490b-a0c8-432c7180b60f.
+  - `sam-plans.ts` takes `position` (every item or none, no two alike) and the
+    proposal lists the checklist order. It never had an item-level "appears
+    twice" check; the song-level one stays. +3 tests.
+  - The `create_sam_practice_plan` text and its schema now have `position`, with
+    repeats allowed. +1 index test.
+  - Skill updated to 2026-11-06a.
+  - Plan-test lint is down to 0 errors. TODO(s8) is gone, and the tag test now
+    asserts per-item counts.
+- **s8b stopped 2026-11-06.**
+  - Migration 216 applied (run c3902d60, conformant). Its first test run
+    (cf03b03f) failed 3 checks, all bugs in the test script. They are fixed:
+    - a smallint[] cast;
+    - the unplanned rows filtered to the test song;
+    - the active plan recorded at run time instead of plan 32 (74b06905 is
+      active now).
+  - Re-queued as action 982a341f-5a48-44b8-92f4-02a11121289a.
+  - Claimed `db:deploy` and the 7 items. Then the plan guard refused a read-only
+    `git grep` for the text "supabase functions deploy" as an undeclared deploy.
+    Stopped before deploying. `db:deploy` was released while waiting; the 7
+    items are held.
+- [x] **s8c 2026-11-06.**
+  - The re-queued test passed (run a716adc0, 17 of 17).
+  - Claimed `db:deploy`, then ran `npx supabase functions deploy mcp`:
+    "Deployed Functions." Conformance: CONFORMANT, 103 tables.
+  - Live check, an unconfirmed `create_sam_practice_plan` that wrote nothing:
+    the La Candeur 1-38 snippet appears twice at positions 2 and 1, it is
+    accepted, and the proposal lists "CHECKLIST ORDER (by position)". So the
+    deployed bundle carries s8r's code.
+  - The tool description this session sees is the connector's copy from before
+    the deploy, so the new text is confirmed by the bundle, not read live.
+  - The 8 `db:` claims (with `db:deploy`) are held for the Checkpoint.
 - [ ] **s8. Part 6b, database and tool, just in time.**
   - Database: `gitsync`, a drift check, claim the `db:` items and the mcp files,
     and number the migration. It drops `sam_practice_plan_items_one_per_range`,
@@ -117,30 +180,18 @@ Not claimed yet, each claimed by the step that needs it:
 | s8 | 60m |
 | **Total** | **3h00m** (3h10m with s2) |
 
-## Next step's scope (s4b2: the delete)
-After `gitsync` (to number the migration) and the s4b test result.
-- create: supabase/migrations/_pending_sam_cleanup-m4t_delete_beats_songs.sql, supabase/migrations/<next>_sam_cleanup_delete_beats_songs.sql
+## Next step's scope (s8b)
+Starts after Alex approves migration 216 (43559849) and then the test (0ce798d4,
+expected ok true). Claim `db:deploy` and re-claim the 7 `db:` items. Deploy mcp,
+run `check_platform_conformance`, and check that the live
+`create_sam_practice_plan` text mentions `position`. Then Checkpoint, which
+releases the `db:` claims.
+- create: nothing
 - update: docs/progress-sam_cleanup-m4t.md
-- delete: supabase/migrations/_pending_sam_cleanup-m4t_delete_beats_songs.sql
-- deploy: nothing
-- SQL: sam_songs, sam_sessions, sam_session_events, sam_goals, sam_passes, sam_snippets, sam_song_measures, sam_song_scores, sam_song_lyrics, sam_song_fingerings, sam_practice_plan_songs
+- delete: nothing
+- deploy: mcp
+- SQL: none
 Estimated run: 10m
-
-## Next step's scope (s4c)
-- create: nothing
-- update: src/sam/components/ScoreRenderer.jsx, src/sam/lib/scoreRender.js, src/sam/lib/measureUtils.js, src/sam/components/ScoreRenderer.padding.test.jsx, src/sam/components/ScoreRenderer.labels.vexflow.test.jsx, docs/progress-sam_cleanup-m4t.md
-- delete: nothing
-- deploy: nothing
-- SQL: none
-Estimated run: 20m
-
-## Next step's scope (s7)
-- create: nothing
-- update: src/sam/SamPlayer.jsx, src/sam/lib/activePlan.js, src/sam/lib/activePlan.test.js, src/sam/SamPlayer.plan.test.jsx, docs/progress-sam_cleanup-m4t.md
-- delete: nothing
-- deploy: nothing
-- SQL: none
-Estimated run: 20m
 
 ## Timing log
 
@@ -161,6 +212,11 @@ Estimated run: 20m
 | s5 | 07:55:02 | 07:56:27 | 1m25s |
 | s6 | 08:02:07 | 08:07:38 | 5m31s |
 | s6b | 08:13:22 | 08:14:31 | 1m09s |
+| s7 | 08:25:36 | 08:28:55 | 3m19s |
+| s8 (stopped) | 08:49:00 | 08:52:25 | 3m25s |
+| s8r | 09:01:37 | 09:11:26 | 9m49s |
+| s8b (stopped) | 09:59:55 | 10:01:44 | 1m49s |
+| s8c | 10:06:21 | 10:07:43 | 1m22s |
 
 ## Log
 

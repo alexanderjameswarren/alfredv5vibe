@@ -5,7 +5,7 @@ description: Plan and review Alex's piano practice in SAM. Use whenever he asks 
 
 # SAM practice
 
-Skill version: 2026-10-27a
+Skill version: 2026-11-06a
 
 ## What this is for
 
@@ -247,9 +247,14 @@ can carry a ladder alone, leaving the goal tempo and `goal_set_at` untouched.
    `confirmed: true`.
 
 **Tool rules that will reject a plan:**
-- **A song appears once**, with all its items nested under it - including when one item is the
-  warm-up and another is Free Play. Free Play is listed last by the app whatever its position.
-- **One item per exact range per plan**, so the same snippet cannot appear twice at two tempos.
+- **A song appears once in `songs[]`**, with all its items nested under it - including when one
+  item is the warm-up and another is Free Play. Free Play is listed last by the app whatever its
+  position.
+- **Its items can repeat a range and go anywhere in the checklist.** The same snippet may appear
+  twice at two tempos, e.g. a La Candeur warm-up early and the same bars as the climb at the end.
+  Give every item a `position` (1, 2, 3 ... across the whole plan, no two alike) to set the
+  order independently of song order; give none and items run song by song in array order. Some
+  but not all is refused. Each pass counts for the item it was opened from.
 - **Songs with audio:** `target_bpm` must equal the song's `default_bpm`, and the target is set
   through `target_playback_speed`. Without audio, speed is 100.
 - **Plans are never edited.** Any change is a new plan that supersedes the old one, which takes

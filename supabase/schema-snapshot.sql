@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-06 08:18, through migration 215 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-06 10:12, through migration 216 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -6901,7 +6901,7 @@ COMMENT ON FUNCTION "public"."resolve_signal"("p_app" "text", "p_subject_key" "t
 CREATE OR REPLACE FUNCTION "public"."sam_create_practice_plan"("p_plan" "jsonb") RETURNS "uuid"
     LANGUAGE "plpgsql"
     SET "search_path" TO 'public'
-    AS $$
+    AS $_$
 declare
   v_uid          uuid := auth.uid();
   v_prev_plan_id uuid;
@@ -6927,6 +6927,12 @@ declare
   v_goal_warmup  boolean;
   v_consecutive  boolean;
   v_resolved     jsonb;
+  -- s8: plan-wide positions. Either every item gives one, or none does.
+  v_n_items      integer;
+  v_n_positioned integer;
+  v_n_distinct   integer;
+  v_explicit     boolean;
+  v_position     integer;
 begin
   if v_uid is null then
     raise exception 'sam_create_practice_plan: not authenticated.';
@@ -6940,6 +6946,31 @@ begin
   if jsonb_typeof(p_plan->'songs') is distinct from 'array'
      or jsonb_array_length(p_plan->'songs') = 0 then
     raise exception 'sam_create_practice_plan: songs must be a non-empty array.';
+  end if;
+
+  -- s8: item positions. Absent everywhere = today's order (song by song). Present
+  -- everywhere = whole numbers from 1, no two alike, the order across the plan.
+  select count(*),
+         count(*) filter (where it->>'position' is not null),
+         count(distinct it->>'position') filter (where it->>'position' is not null)
+    into v_n_items, v_n_positioned, v_n_distinct
+    from jsonb_array_elements(p_plan->'songs') s,
+         jsonb_array_elements(case when jsonb_typeof(s->'items') = 'array' then s->'items' else '[]'::jsonb end) it;
+  v_explicit := v_n_positioned > 0;
+  if v_explicit and v_n_positioned < v_n_items then
+    raise exception 'sam_create_practice_plan: give every item a position, or none (% of % have one).',
+      v_n_positioned, v_n_items;
+  end if;
+  if v_explicit and exists (
+       select 1
+         from jsonb_array_elements(p_plan->'songs') s,
+              jsonb_array_elements(case when jsonb_typeof(s->'items') = 'array' then s->'items' else '[]'::jsonb end) it
+        -- One check, no cast: Postgres does not promise to short-circuit OR. No zero, no leading zeros.
+        where not (it->>'position' ~ '^[1-9][0-9]{0,5}$')) then
+    raise exception 'sam_create_practice_plan: item positions must be whole numbers from 1.';
+  end if;
+  if v_explicit and v_n_distinct < v_n_items then
+    raise exception 'sam_create_practice_plan: two items have the same position.';
   end if;
 
   -- Supersede the current active plan. Everything below runs in this one
@@ -7007,6 +7038,8 @@ begin
 
     for v_item in select value from jsonb_array_elements(v_song_json->'items') loop
       v_item_pos   := v_item_pos + 1;
+      -- s8: the stored position is the plan-wide one when given, else the running count as before.
+      v_position   := case when v_explicit then (v_item->>'position')::integer else v_item_pos end;
       v_snippet_id := nullif(v_item->>'snippet_id', '')::uuid;
       v_free       := coalesce((v_item->>'is_free_play')::boolean, false);
       v_bpm        := (v_item->>'target_bpm')::integer;
@@ -7041,13 +7074,7 @@ begin
         end if;
       end if;
 
-      if exists (select 1 from sam_practice_plan_items
-                  where plan_id = v_plan_id
-                    and song_id = v_song_id
-                    and snippet_id is not distinct from v_snippet_id) then
-        raise exception 'sam_create_practice_plan: item %: song "%" already has an item for this exact range. One item per range per plan.',
-          v_item_pos, v_song.title;
-      end if;
+      -- s8: the one-item-per-range check is gone. A range may be planned more than once.
 
       -- Pass and accuracy checks
       if v_passes is null or v_passes < 1 then
@@ -7129,7 +7156,7 @@ begin
         warmup_ladder, goal_is_warmup, consecutive
       )
       values (
-        v_plan_id, v_plan_song_id, v_song_id, v_snippet_id, v_item_pos, v_free,
+        v_plan_id, v_plan_song_id, v_song_id, v_snippet_id, v_position, v_free,
         v_bpm, v_speed, v_passes, v_accuracy, nullif(btrim(v_item->>'instruction'), ''),
         v_ladder, v_goal_warmup, v_consecutive
       );
@@ -7142,7 +7169,7 @@ begin
 
   return v_plan_id;
 end;
-$$;
+$_$;
 
 
 ALTER FUNCTION "public"."sam_create_practice_plan"("p_plan" "jsonb") OWNER TO "postgres";
@@ -7150,11 +7177,17 @@ ALTER FUNCTION "public"."sam_create_practice_plan"("p_plan" "jsonb") OWNER TO "p
 
 COMMENT ON FUNCTION "public"."sam_create_practice_plan"("p_plan" "jsonb") IS 'SAM: the ONLY way to create a practice plan. Atomically supersedes the active plan and inserts
 the plan, its songs and items, returning the new plan id. All-or-nothing validation: authenticated,
-songs and snippets exist and are not archived, snippet belongs to its song, one item per range,
+songs and snippets exist and are not archived, snippet belongs to its song, a song listed once in songs[],
 required targets, free play has no accuracy target, tempo rules (songs with audio: target_bpm =
 default_bpm, target via speed; without audio: speed 100). Free play tempo defaults to the song''s
 goal pair. At most 20 items. The new plan records supersedes_plan_id, so plan history is a chain and
 not a set of unconnected rows.
+
+ITEM POSITIONS AND REPEATS (added 2026-11-06, migration 216): a song''s items may repeat a range (one
+item per range per plan is no longer required), and an item may carry a plan-wide position, so its
+place in the checklist is independent of song order (a warm-up early, the same bars as a climb last).
+Either every item gives a position (whole numbers from 1, no two alike) or none does; with none,
+positions run song by song in the order given, exactly as before.
 
 WARM-UP LADDER (added 2026-09-27): an item may carry warmup_ladder, goal_is_warmup and consecutive.
 The ladder''s SHAPE is checked by the table''s own constraint (sam_warmup_ladder_is_valid); this
@@ -7166,7 +7199,7 @@ Omitting all three keeps the old behaviour exactly: null, false, false.
 Input shape:
 { day_note, internal_notes, review_instructions,
   songs: [ { song_id, song_note, internal_notes,
-             items: [ { snippet_id?, is_free_play?, target_bpm?, target_playback_speed?,
+             items: [ { snippet_id?, position?, is_free_play?, target_bpm?, target_playback_speed?,
                         target_passes, accuracy_target?, instruction?,
                         warmup_ladder?, goal_is_warmup?, consecutive? } ] } ] }';
 
@@ -7255,8 +7288,8 @@ begin
      where jsonb_array_length(t.ladder) > 0
   ),
   -- Every attempt on every item, with the three facts the aggregates below
-  -- need. The join, the notes_played rule, the window and the qualifying
-  -- expression are unchanged from migration 054.
+  -- need. The notes_played rule, the window and the qualifying expression are
+  -- unchanged from migration 054; the match is s8's (see the join).
   att as (
     select t.item_id,
            t.item_position,
@@ -7280,8 +7313,12 @@ begin
                     false)                                            as qualifies
       from itm t
       join sam_passes pa
-        on pa.song_id = t.item_song_id
-       and pa.snippet_id is not distinct from t.item_snippet_id
+        -- s8: linked to this item; or, with no link to any item of this plan, on its song and range.
+        on pa.plan_item_id = t.item_id
+        or (pa.song_id = t.item_song_id
+            and pa.snippet_id is not distinct from t.item_snippet_id
+            and (pa.plan_item_id is null
+                 or not exists (select 1 from itm t2 where t2.item_id = pa.plan_item_id)))
      where pa.notes_played > 0
        and pa.completed_at >= (p_from::timestamp at time zone 'America/Los_Angeles')
        and pa.completed_at <  ((p_to + 1)::timestamp at time zone 'America/Los_Angeles')
@@ -7407,12 +7444,13 @@ ALTER FUNCTION "public"."sam_plan_item_progress"("p_plan_id" "uuid", "p_from" "d
 COMMENT ON FUNCTION "public"."sam_plan_item_progress"("p_plan_id" "uuid", "p_from" "date", "p_to" "date") IS 'SAM: THE single source of plan progress, used by both the app and Claude''s tools. Nothing else
 counts passes. One row per plan item per Pacific day with at least one attempt.
 
-UNCHANGED (first seven columns, same expressions as migration 054): a pass MATCHES an item when
-song_id is equal and snippet_id is not distinct from the item''s (both null = whole song). ATTEMPT =
-a matching pass with notes_played > 0. QUALIFYING = an attempt with effective_bpm >=
-target_effective_bpm and, unless free play, accuracy_percent >= accuracy_target. Day =
-completed_at in America/Los_Angeles. Matching ignores sam_passes.plan_item_id. Range capped at 31
-days.
+MATCHING (changed 2026-11-06, migration 216): a pass MATCHES the item its sam_passes.plan_item_id names,
+when that is an item of this plan, and no other item. A pass with no plan_item_id, or one naming an
+item of another plan (practice before the plan was saved), falls back to the old rule: song_id is
+equal and snippet_id is not distinct from the item''s (both null = whole song), so it counts for every
+item of this plan on that range. ATTEMPT = a matching pass with notes_played > 0. QUALIFYING = an
+attempt with effective_bpm >= target_effective_bpm and, unless free play, accuracy_percent >=
+accuracy_target. Day = completed_at in America/Los_Angeles. Range capped at 31 days.
 
 longest_qualifying_streak — the longest run of CONSECUTIVE qualifying passes within ONE SESSION on
 that day. Consecutive means passes in a row with no non-qualifying pass between them; a stop or a
@@ -7472,8 +7510,10 @@ begin
        select 1
          from sam_practice_plan_items i
         where i.plan_id = p_plan_id
-          and i.song_id = pa.song_id
-          and i.snippet_id is not distinct from pa.snippet_id
+          -- s8: linked to an item of this plan, or on an item's range.
+          and (i.id = pa.plan_item_id
+               or (i.song_id = pa.song_id
+                   and i.snippet_id is not distinct from pa.snippet_id))
      )
    group by 1, 2, 3
    order by 3, 1, 2;
@@ -7485,7 +7525,9 @@ ALTER FUNCTION "public"."sam_plan_unplanned_practice"("p_plan_id" "uuid", "p_fro
 
 
 COMMENT ON FUNCTION "public"."sam_plan_unplanned_practice"("p_plan_id" "uuid", "p_from" "date", "p_to" "date") IS 'SAM: attempts (notes_played > 0) per song, snippet and Pacific day that match NO item in the given
-plan. Shows practice outside the plan, including snippets made on the fly. Range capped at 31 days.';
+plan. Shows practice outside the plan, including snippets made on the fly. A pass is planned when its
+plan_item_id names an item of this plan, or when it is on the song and range of one (migration 216;
+the same matching as sam_plan_item_progress). Range capped at 31 days.';
 
 
 
@@ -20571,10 +20613,6 @@ CREATE INDEX "sam_passes_plan" ON "public"."sam_passes" USING "btree" ("plan_id"
 
 
 CREATE INDEX "sam_passes_plan_item" ON "public"."sam_passes" USING "btree" ("plan_item_id") WHERE ("plan_item_id" IS NOT NULL);
-
-
-
-CREATE UNIQUE INDEX "sam_practice_plan_items_one_per_range" ON "public"."sam_practice_plan_items" USING "btree" ("plan_id", "song_id", COALESCE("snippet_id", '00000000-0000-0000-0000-000000000000'::"uuid"));
 
 
 
