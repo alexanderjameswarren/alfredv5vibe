@@ -202,6 +202,19 @@ test("switchboard s86: sf_check has no link and asks for the queued line; sb_set
   assert.ok(!Object.keys(sb.cfg.inputSchema).some((k) => /contract/i.test(k)));
 });
 
+test("switchboard s86h: no project code at setup or for a check; from_sandbox asks for the folder", () => {
+  const sf = registered.find((r) => r.name === "queue_switchboard_sf_check");
+  assert.ok(sf.cfg.inputSchema.project_code.isOptional());
+  assert.match(sf.cfg.description, /finds the client's repo from the alias/);
+  const sb = registered.find((r) => r.name === "queue_switchboard_sb_setup");
+  assert.equal(sb.cfg.inputSchema.project_code, undefined);
+  assert.ok(sb.cfg.inputSchema.folder.isOptional());
+  assert.match(sb.cfg.description, /ASK ALEX for it/);
+  assert.match(sb.cfg.description, /C:\\Users\\Alex\\projects\\<client>/);
+  assert.match(sb.cfg.description, /C:\\Users\\Alex\\projects\\actblue\\<nonprofit>/);
+  assert.match(sb.cfg.description, /leave project out at setup/);
+});
+
 test("update_platform_run accepts the outcome fields", () => {
   // Their absence from the input schema stripped them silently, before the
   // handler that validates them ever saw them.

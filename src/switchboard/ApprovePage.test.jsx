@@ -454,3 +454,20 @@ test('sb setup: client start lists its source, orgs and every file it writes', (
   expect(sbFiles(p)).toEqual(['repos.json', 'orgs.json', 'projects.json', "the repo's .git/info/exclude"]);
   expect(sbFiles({ ...p, project: undefined })).not.toContain('projects.json');
 });
+
+test('sb setup: from_sandbox shows the whole folder it writes and that it must be empty', async () => {
+  const folder = 'C:\\Users\\Alex\\projects\\actblue\\acme-nonprofit';
+  runner({ preview: reply({ ...SB, project_code: 'sb-acme', payload: { command: 'client start', client: 'acme', from_sandbox: 'acme-dev', folder,
+    orgs: SB.payload.orgs } }) });
+  open();
+  const shown = await screen.findByTestId('approve-sb-folder');
+  expect(shown).toHaveTextContent(`Writes the code into ${folder}. The folder must be empty.`);
+  expect(screen.getByText(new RegExp(`from sandbox acme-dev into ${folder.replace(/\\/g, '\\\\')}, which must be empty`))).toBeInTheDocument();
+});
+
+test('sb setup: no folder line without from_sandbox', async () => {
+  runner({ preview: reply(SB) });
+  open();
+  await screen.findByTestId('approve-sb-writes');
+  expect(screen.queryByTestId('approve-sb-folder')).toBeNull();
+});

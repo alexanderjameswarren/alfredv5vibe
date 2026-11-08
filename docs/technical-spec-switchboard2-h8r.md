@@ -534,7 +534,9 @@ A refusal is posted to `/result` as failed, with the reason, and sf never runs.
 
 **Output.** Only the kept fields go into `/result`, as JSON plus a one-line summary ending in `Result:`. Never sf's raw text: the helper reads only the JSON fields above, and on an sf error keeps only `sfJson`'s cleaned message. The row cap is §8.2's: 200 items, then it says how many more there are.
 
-**No click.** A check is `kind: sf_check`, needs_click false (decision D3), queued by Claude with `queue_switchboard_sf_check` (s86d), which never issues a link, and run one at a time per project when the helper next picks up. The tool's reply tells Claude to end its message with `sf <action id> queued`. The result line in the chat is `sf <action id> done` or `failed`. Claude reads it with `get_switchboard_run`.
+**No click.** A check is `kind: sf_check`, needs_click false (decision D3), queued by Claude with `queue_switchboard_sf_check` (s86d), which never issues a link, and run one at a time per project when the helper next picks up. The tool's reply tells Claude to end its message with `sf <action id> queued`.
+
+**No project code (Alex, s86h).** A check needs none: the helper finds the client's repo from the alias (switchboard s86g). `project_code` is optional on the tool. Without it, `switchboard_queue_helper` gives the row `sf-<alias>`: lower case, other characters folded to `_`, cut to 40. So checks run one at a time per alias. A given code keeps the old rule, one at a time with that project's git actions. The result line in the chat is `sf <action id> done` or `failed`. Claude reads it with `get_switchboard_run`.
 
 **Expiry.** A queued no-click action that hasn't been picked up 10 minutes after it was queued is never run. The next pickup marks it failed, with a run whose summary reads "expired before the helper picked it up" (s86b1, in `switchboard_pickup_helper`).
 
@@ -577,6 +579,15 @@ Each config file it writes then waits for a typed yes, and a login that isn't st
    - `sf org login web` still opens the browser, and Alex logs in there.
 5. **The result line** is `sb <action id> done` or `failed`, and the summary ends with `sb`'s own last line.
 
+**Per client, no project code (Alex, s86h).**
+- Setup needs no project code; one appears only when the first fix starts. `queue_switchboard_sb_setup` takes no `project_code`, and its description says to leave `project` out at setup.
+- The row's code is `sb-<client>` (cut to 40), set by `switchboard_queue_helper`. So it's one live link per client. A derived code that collides with another only makes the limits stricter.
+- **The folder.** `from_sandbox` needs `folder`, Alex's answer, which Claude asks for. It offers sb's default, `C:\Users\Alex\projects\<client>`. ActBlue clients live at `C:\Users\Alex\projects\actblue\<nonprofit>`.
+  - The folder must be a full path strictly inside `C:\Users\Alex\projects\`, with no `..`, no trailing `\`, no `/ : * ? " < > |` and at most 240 characters.
+  - `repo`, `adopt` and org add take none.
+  - The tool and the `switchboard_actions_sb_setup_folder` check both hold this. That check is NOT VALID, because one cancelled from_sandbox row predates it.
+- The approve page shows the folder in full, and says it must be empty.
+
 **Kinds.** `sf_check` (no click) and `sb_setup` (always a click) are new values for `switchboard_actions.kind`, so s86 needs a migration (§11.6).
 
 ### 11.6 s86's database change
@@ -591,7 +602,7 @@ Each config file it writes then waits for a typed yes, and a login that isn't st
 - **`switchboard_queue_helper(p_kind, p_project_code, p_payload, p_headline, p_chat_url)`:** 208's function for any helper kind (git, sf_check, sb_setup), SECURITY DEFINER, authenticated only. `switchboard_queue_git` stays and calls it.
 - **NULL-safe checks (s86b1).** A CHECK passes on NULL, so every payload condition is coalesced to false: a missing key, a JSON null or a non-string fails. The array lengths sit behind a CASE, since `jsonb_array_length` raises on a non-array.
 - **`switchboard_pickup_helper(p_user)`:** `switchboard_pickup_git` for those three kinds, still one running per project. It returns `kind` too. First, it fails any queued no-click action more than 10 minutes old, with a run saying why (§11.4). `switchboard_pickup_git` stays until the runner has moved over (s86c), and goes later.
-- The test is `supabase/tests/switchboard2-h8r/8_verify_helper_kinds.sql`; s87's becomes `9_verify_panel_snapshot.sql`.
+- The test is `supabase/tests/switchboard2-h8r/8_verify_helper_kinds.sql`; s86h's is `9_verify_setup_folder.sql`, so s87's becomes `10_verify_panel_snapshot.sql`.
 
 ### 11.7 s86 decisions
 
