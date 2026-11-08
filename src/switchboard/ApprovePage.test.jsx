@@ -413,3 +413,44 @@ test('git: plain words for each command', () => {
   expect(w({ command: 'gitnewtree', install: false })).toMatch(/Skips npm install/);
   expect(w({ command: 'gitnewtree' })).toMatch(/Runs npm install/);
 });
+
+// --- sb setup (spec §11.5) ---
+
+const SB = { ok: true, kind: 'sb_setup', action_id: 's1', headline: 'SB ORG ADD acme-dev FOR CLIENT acme', fingerprint: 'fps',
+  project_code: 'switchboard2-h8r',
+  payload: { command: 'org add', client: 'acme', orgs: [{ alias: 'acme-dev', type: 'developer', level: 'objects', login: 'admin', cli_deploy: true }] } };
+
+test('sb setup: the answers, the files it writes and the login warning; Approve sends it, marked sb_setup', async () => {
+  runner({ preview: reply(SB), approve: reply({ ok: true, action_id: 's1', sent: true }) });
+  const { container } = open();
+  expect(await screen.findByText(/Org acme-dev: type developer, level objects, login admin, CLI may deploy: yes/)).toBeInTheDocument();
+  expect(screen.getByText(/client data may reach claude: no/i)).toBeInTheDocument();
+  expect(screen.getByTestId('approve-sb-writes')).toHaveTextContent('Approving writes: orgs.json.');
+  expect(screen.getByTestId('approve-sb-writes')).toHaveTextContent(/salesforce login may open/i);
+  expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'sb_setup');
+  expect(called('dry-run')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: /^approve and run$/i }));
+  expect(await screen.findByText('Sent to the desktop helper')).toBeInTheDocument();
+  expect(JSON.parse(called('approve')[0][1].body)).toEqual({ token: 'tok1', fingerprint: 'fps' });
+  expect(container.querySelector('[data-switchboard-run-id]')).toHaveAttribute('data-switchboard-run-id', 's1');
+  expect(screen.getByText('sb s1')).toBeInTheDocument();
+});
+
+test('sb setup: Don\'t run gives the sb cancelled line', async () => {
+  runner({ preview: reply(SB), cancel: reply({ ok: true, cancelled: true, reason: '' }) });
+  open();
+  fireEvent.click(await screen.findByRole('button', { name: /don't run/i }));
+  expect(await screen.findByText('sb s1 cancelled')).toBeInTheDocument();
+});
+
+test('sb setup: client start lists its source, orgs and every file it writes', () => {
+  const { sbLines, sbFiles } = jest.requireActual('./ApprovePage');
+  const p = { command: 'client start', client: 'acme', repo: 'https://github.com/a/b.git', project: 'acme-x1', name: 'Acme',
+    sandboxes: ['acme-dev'], integration_ok: false,
+    orgs: [{ alias: 'acme-dev', type: 'developer', level: 'metadata' }, { alias: 'acme-uat', type: 'partial', level: 'objects', shared: true }] };
+  const w = sbLines(p).join(' ');
+  expect(w).toMatch(/sb client start for client acme.*Clones https:\/\/github.com\/a\/b.git.*Project: acme-x1.*Panel name: Acme/);
+  expect(w).toMatch(/Sandboxes that may run: acme-dev.*integration user: no.*Org acme-dev: type developer, level metadata\..*Org acme-uat: type partial, level objects, shared: yes/);
+  expect(sbFiles(p)).toEqual(['repos.json', 'orgs.json', 'projects.json', "the repo's .git/info/exclude"]);
+  expect(sbFiles({ ...p, project: undefined })).not.toContain('projects.json');
+});

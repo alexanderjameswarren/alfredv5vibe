@@ -78,6 +78,7 @@ import {
 import { createArnoldPlanTool, getArnoldPlanTool, getArnoldProgressTool } from "../_shared/tools/arnold.ts";
 import {
   getSqlReadTool, getSwitchboardRunTool, issueSwitchboardLinkTool, queueSwitchboardGitTool,
+  queueSwitchboardSbSetupTool, queueSwitchboardSfCheckTool,
 } from "../_shared/tools/switchboard.ts";
 import {
   getClaudeNotificationSettingsTool,
@@ -3104,9 +3105,11 @@ export function createMcpServer(token: string) {
     {
       title: "Get Switchboard Run",
       description:
-        "One action in the Switchboard approval queue and one of its runs. Pass exactly one of action_id, run_id or project_code. With action_id (the id in a chat line \"git <action id> done\"): the action and its latest run (null if it has never run); use this to review queued SQL before issuing a link. With run_id (the id in a chat message \"sql <run id>\"): that run and its action. With project_code (\"check the git run for switchboard2-h8r\"): that project's latest action, of any kind, and its latest run. " +
+        "One action in the Switchboard approval queue and one of its runs. Pass exactly one of action_id, run_id or project_code. With action_id (the id in a chat line \"git <action id> done\", \"sf <action id> done\" or \"sb <action id> done\"): the action and its latest run (null if it has never run); use this to review queued SQL before issuing a link. With run_id (the id in a chat message \"sql <run id>\"): that run and its action. With project_code (\"check the git run for switchboard2-h8r\"): that project's latest action, of any kind, and its latest run. " +
         "Returns { action, run }. action: id, kind, project_code, status (queued | link_issued | consumed | succeeded | failed | cancelled), headline, fingerprint, payload (for kind sql, the whole SQL in payload.sql, never cut), chat_url, needs_click, link_expires_at, link_used_at, created_by, created_at, updated_at. run: id, action_id, mode (dry_run | real), summary, result (null once pruned after 30 days), result_pruned_at, started_at, finished_at. " +
-        "For kind git: status succeeded means the command ran and exited 0, so it COMPLETED, even if it changed nothing (a gitsync with nothing to merge); failed means a non-zero exit or a helper refusal. The run summary ends with the command's own \"Result:\" line; report that. Tier 1.",
+        "For kind git: status succeeded means the command ran and exited 0, so it COMPLETED, even if it changed nothing (a gitsync with nothing to merge); failed means a non-zero exit or a helper refusal. The run summary ends with the command's own \"Result:\" line; report that. " +
+        "For kind sf_check, the same: succeeded means the check ran and returned (result.output holds the kept fields as JSON, then a \"Result:\" line); failed means sf failed or the helper refused before sf ran (not a sandbox, production, not in orgs.json), or it expired unrun after 10 minutes (result.expired true). " +
+        "For kind sb_setup, the same: succeeded means sb exited 0; failed means sb or the helper refused, or a write was declined; the summary ends with sb's own last line. Tier 1.",
       inputSchema: {
         action_id: z.string().optional().describe("UUID of the action."),
         run_id: z.string().optional().describe("UUID of the run."),
@@ -3154,6 +3157,59 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardGitTool, args, token),
+  );
+
+  server.registerTool(
+    "queue_switchboard_sf_check",
+    {
+      title: "Queue Switchboard Sf Check",
+      description:
+        "Queue one read-only check of a Salesforce SANDBOX for a project. It needs no click and NO LINK is ever issued: the desktop helper runs it when it next picks up. Before sf runs, the helper proves the org is a sandbox listed for that project's repo (Salesforce asked fresh, orgs.json matched); production is always refused. " +
+        "check is one of: org-verify (is the alias the org orgs.json says), limits, metadata-types, metadata (needs metadata_type, letters only, e.g. ApexClass), retrieve-preview and deploy-preview (what differs from the project's checkout). No records, objects or SOQL. " +
+        "Returns { action_id, payload, queued_line, next }. END YOUR MESSAGE with the line \"sf <action id> queued\" on a line of its own (queued_line): the extension wakes the helper on it. The result arrives in this chat by itself as \"sf <action id> done\" or \"failed\" when the check finishes; read it with get_switchboard_run. If the chat isn't open on the desktop, the check expires unrun after 10 minutes; then ask Alex to open the chat on the desktop and queue it again. Tier 2.",
+      inputSchema: {
+        project_code: z.string().describe("The project code, e.g. ti-x1: whose repo the sandbox is listed for."),
+        check: z.enum(["org-verify", "limits", "metadata-types", "metadata", "retrieve-preview", "deploy-preview"]).describe("The check."),
+        alias: z.string().describe("The sandbox's org alias, as in orgs.json."),
+        metadata_type: z.string().optional().describe("metadata only: one metadata type, letters only, e.g. ApexClass."),
+        chat_url: z.string().optional().describe("Optional; don't guess it. Only a https://claude.ai/chat/<uuid> address is used."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardSfCheckTool, args, token),
+  );
+
+  server.registerTool(
+    "queue_switchboard_sb_setup",
+    {
+      title: "Queue Switchboard Sb Setup",
+      description:
+        "Queue Switchboard's sb client start or sb org add with every answer up front, and issue its single-use approval link in the same call. FIRST ASK ALEX THE QUESTIONS IN THE CHAT and use only his answers; never guess one. Nothing runs until he clicks Approve; the page lists every answer and the files it writes, and the click is his yes. Then the desktop helper runs sb ... --by-link, and a Salesforce login may open in the browser on his desktop. No dry run. " +
+        "By link only sandboxes are set up: each org's type is developer, developer_pro, partial or full, never production; level is objects or metadata, never ids or data; the contract flag (client data may reach Claude) is never set and stays no. Those stay with Alex in the terminal (sb org add or sb org set); a payload that tries them is refused. " +
+        "org add: client, exactly one org, and optionally project (its repo), sandboxes, integration_ok. client start: client, exactly one of repo (a git URL to clone), adopt (an existing checkout) or from_sandbox (an alias to retrieve from), and optionally project, name (the panel's display name, at most 60 characters), sandboxes (all or a list), integration_ok, with 1 to 10 orgs; each org becomes one --org-setup <alias>:type=..,level=..,login=..,cli-deploy=..,shared=.. " +
+        "One live link per project code, as issue_switchboard_link. Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole. The result line (sb <action id> done or failed) arrives in this chat by itself when sb finishes; read it with get_switchboard_run. If it says queued but no link, issue its link later with issue_switchboard_link. Tier 2.",
+      inputSchema: {
+        project_code: z.string().describe("The project code of the chat's window, e.g. switchboard2-h8r."),
+        command: z.enum(["client start", "org add"]).describe("The sb command."),
+        client: z.string().describe("The client name: lower case letters, digits, _ and -."),
+        repo: z.string().optional().describe("client start: a git URL to clone."),
+        adopt: z.string().optional().describe("client start: an existing checkout to adopt as it is."),
+        from_sandbox: z.string().optional().describe("client start: an org alias to retrieve the code from."),
+        project: z.string().optional().describe("A project code to add for the client (client start) or whose repo the org is for (org add)."),
+        name: z.string().optional().describe("client start: the panel's display name."),
+        sandboxes: z.union([z.literal("all"), z.array(z.string())]).optional().describe("Which sandboxes may run: all, or a list of aliases."),
+        integration_ok: z.boolean().optional().describe("Whether the client allows an integration user."),
+        orgs: z.array(z.object({
+          alias: z.string(),
+          type: z.string().describe("developer, developer_pro, partial or full."),
+          level: z.string().describe("objects or metadata."),
+          login: z.string().optional().describe("integration or admin."),
+          cli_deploy: z.boolean().optional().describe("Whether the CLI may deploy to it."),
+          shared: z.boolean().optional().describe("Whether the org is shared with other work."),
+        }).passthrough()).describe("org add: exactly one org. client start: 1 to 10."),
+        chat_url: z.string().optional().describe("Optional; don't guess it. Only a https://claude.ai/chat/<uuid> address is used."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardSbSetupTool, args, token),
   );
 
   server.registerTool(

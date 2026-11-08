@@ -581,6 +581,129 @@ test("git: the reply says the result arrives in this chat", async () => {
   assert.doesNotMatch(out.next, /send git/);
 });
 
+// --- queue_switchboard_sf_check and queue_switchboard_sb_setup --------------------------------------------------------
+
+function helperDb({ queue = ok({ action_id: ACTION_ID }), link = ok(LINK) } = {}) {
+  const calls = [];
+  return {
+    calls,
+    from() { throw new Error("the helper tools must not touch a table directly"); },
+    rpc(name, params) {
+      calls.push([name, params]);
+      return Promise.resolve(name === "switchboard_queue_helper" ? queue : link);
+    },
+  };
+}
+const queueSf = (args, db = helperDb()) => m.queueSwitchboardSfCheckTool.handler(args, { db });
+const queueSb = (args, db = helperDb()) => m.queueSwitchboardSbSetupTool.handler(args, { db });
+const ORG = { alias: "acme-dev", type: "developer", level: "objects" };
+const ORG_ADD = { project_code: "p-a1", command: "org add", client: "acme", orgs: [ORG] };
+
+test("sf_check and sb_setup: tier 2", () => {
+  assert.equal(m.queueSwitchboardSfCheckTool.tier, 2);
+  assert.equal(m.queueSwitchboardSbSetupTool.tier, 2);
+});
+
+test("sf_check: queued with kind sf_check, no link ever, and the reply asks for the queued line", async () => {
+  const db = helperDb();
+  const out = await queueSf({ project_code: "p-a1", check: "metadata", alias: "acme-dev", metadata_type: "ApexClass" }, db);
+  assert.equal(db.calls.length, 1);
+  const [name, params] = db.calls[0];
+  assert.equal(name, "switchboard_queue_helper");
+  assert.equal(params.p_kind, "sf_check");
+  assert.deepEqual(params.p_payload, { check: "metadata", alias: "acme-dev", metadata_type: "ApexClass" });
+  assert.equal(params.p_headline, "SF CHECK p-a1: METADATA ApexClass ON SANDBOX acme-dev, READ ONLY");
+  assert.equal(out.url, undefined);
+  assert.equal(out.queued_line, `sf ${ACTION_ID} queued`);
+  assert.match(out.next, new RegExp(`line of its own: sf ${ACTION_ID} queued`));
+  assert.match(out.next, new RegExp(`sf ${ACTION_ID} done or failed`));
+  assert.match(out.next, /expires unrun after 10 minutes/);
+});
+
+test("sf_check: each of the six checks is accepted", async () => {
+  for (const check of m.SF_CHECKS) {
+    const args = { check, alias: "a1", ...(check === "metadata" ? { metadata_type: "Flow" } : {}) };
+    assert.ok("payload" in m.sfCheckPayload(args), check);
+  }
+});
+
+test("sf_check: refused before anything is queued", async () => {
+  for (const args of [
+    { check: "sobject-list", alias: "a" }, { check: "limits" }, { check: "limits", alias: "-rf" }, { check: "limits", alias: "a b" },
+    { check: "metadata", alias: "a" }, { check: "metadata", alias: "a", metadata_type: "Apex Class" },
+    { check: "limits", alias: "a", metadata_type: "Flow" }, { check: "limits", alias: "a", soql: "select" },
+  ]) {
+    const db = helperDb();
+    await assert.rejects(queueSf({ project_code: "p-a1", ...args }, db), /refused/, JSON.stringify(args));
+    assert.equal(db.calls.length, 0);
+  }
+  await assert.rejects(queueSf({ project_code: "BAD CODE", check: "limits", alias: "a" }), /project_code/);
+});
+
+test("sb_setup: org add is queued with kind sb_setup, then its link is issued", async () => {
+  const db = helperDb();
+  const out = await queueSb({ ...ORG_ADD, orgs: [{ ...ORG, login: "admin", cli_deploy: true, shared: false }], project: "acme-x1" }, db);
+  assert.deepEqual(db.calls.map((c) => c[0]), ["switchboard_queue_helper", "switchboard_issue_link"]);
+  assert.equal(db.calls[0][1].p_kind, "sb_setup");
+  assert.equal(db.calls[0][1].p_payload.project_code, undefined);
+  assert.equal(db.calls[0][1].p_headline, "SB ORG ADD p-a1: ADDS SANDBOX acme-dev FOR CLIENT acme TO ORGS.JSON");
+  assert.equal(out.url, LINK.url);
+  assert.match(out.next, new RegExp(`sb ${ACTION_ID} done or failed`));
+});
+
+test("sb_setup: client start with several orgs, each becoming an --org-setup", async () => {
+  const db = helperDb();
+  await queueSb({ project_code: "p-a1", command: "client start", client: "acme", repo: "https://github.com/a/b.git", name: "Acme",
+    sandboxes: "all", integration_ok: true, orgs: [ORG, { alias: "acme-uat", type: "partial", level: "metadata", shared: true }] }, db);
+  assert.equal(db.calls[0][1].p_payload.orgs.length, 2);
+  assert.match(db.calls[0][1].p_headline, /SB CLIENT START p-a1: SETS UP CLIENT acme WITH 2 SANDBOXES/);
+});
+
+test("sb_setup: Alex's D2 limits are refused in the tool, before anything is queued", async () => {
+  for (const [args, why] of [
+    [{ ...ORG_ADD, orgs: [{ ...ORG, type: "production" }] }, /production is never set up by link/],
+    [{ ...ORG_ADD, orgs: [{ ...ORG, type: "scratch" }] }, /must be a sandbox/],
+    [{ ...ORG_ADD, orgs: [{ ...ORG, level: "ids" }] }, /objects or metadata only/],
+    [{ ...ORG_ADD, orgs: [{ ...ORG, level: "data" }] }, /objects or metadata only/],
+    [{ ...ORG_ADD, orgs: [{ ...ORG, contract_ok: true }] }, /never set by link/],
+    [{ ...ORG_ADD, orgs: [{ ...ORG, "contract-ok": false }] }, /never set by link/],
+    [{ ...ORG_ADD, contract_ok: true }, /never set by link/],
+    [{ ...ORG_ADD, orgs: [{ ...ORG, production_allowed: true }] }, /never set by link/],
+  ]) {
+    const db = helperDb();
+    await assert.rejects(queueSb(args, db), why, JSON.stringify(args));
+    assert.equal(db.calls.length, 0);
+  }
+});
+
+test("sb_setup: shape refusals, before anything is queued", async () => {
+  for (const args of [
+    { ...ORG_ADD, command: "org set" }, { ...ORG_ADD, client: "Acme Co" }, { ...ORG_ADD, orgs: [] }, { ...ORG_ADD, orgs: ORG },
+    { ...ORG_ADD, orgs: [ORG, { ...ORG, alias: "acme-uat" }] },
+    { ...ORG_ADD, orgs: [{ ...ORG, login: "root" }] }, { ...ORG_ADD, orgs: [{ ...ORG, cli_deploy: "yes" }] },
+    { ...ORG_ADD, orgs: [{ ...ORG, password: "x" }] }, { ...ORG_ADD, repo: "x" }, { ...ORG_ADD, extra: 1 },
+    { ...ORG_ADD, sandboxes: "some" }, { ...ORG_ADD, integration_ok: "no" }, { ...ORG_ADD, project: "Bad Code" },
+    { ...ORG_ADD, command: "client start" },
+    { ...ORG_ADD, command: "client start", repo: "a", adopt: "b" },
+    { ...ORG_ADD, command: "client start", repo: "-x" },
+    { ...ORG_ADD, command: "client start", from_sandbox: "a b" },
+    { ...ORG_ADD, command: "client start", adopt: "C:/x", name: "n".repeat(61) },
+    { ...ORG_ADD, command: "client start", adopt: "C:/x", orgs: [ORG, ORG] },
+    { ...ORG_ADD, command: "client start", adopt: "C:/x", orgs: Array.from({ length: 11 }, (_, i) => ({ ...ORG, alias: `a${i}` })) },
+  ]) {
+    const db = helperDb();
+    await assert.rejects(queueSb(args, db), /refused/, JSON.stringify(args));
+    assert.equal(db.calls.length, 0);
+  }
+});
+
+test("sf_check and sb_setup: a database refusal is passed on; a link refusal says it was queued", async () => {
+  await assert.rejects(queueSf({ project_code: "p-a1", check: "limits", alias: "a" }, helperDb({ queue: { data: null, error: { code: "23514", message: "payload check" } } })),
+    /refused: payload check/);
+  await assert.rejects(queueSb(ORG_ADD, helperDb({ link: { data: null, error: { code: "55000", message: "another link is live" } } })),
+    (e) => e.message.includes(`queued as ${ACTION_ID}`));
+});
+
 test("git: a queue or link refusal is passed on, and says when the action was queued", async () => {
   await assert.rejects(queueGit({ project_code: "p-a1", command: "gitsync" }, gitDb({ queue: { data: null, error: { code: "23514", message: "payload check" } } })),
     /refused: payload check/);

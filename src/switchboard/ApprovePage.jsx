@@ -11,6 +11,7 @@ import CopyButton from '../shared/CopyButton';
 // way (approved, or a test, which runs on open), so the panel can say so.
 // A git action (preview.kind 'git', spec §11.3) has no dry run: the page says what will run, Approve hands it to the
 // desktop helper, and the action id is the run mark, since the helper opens its run only when it picks the action up.
+// An sb setup (kind 'sb_setup', §11.5) is shown the same way, with its answers and the files the click writes.
 
 // As on OAuthConsent (primary) and ItemAddToCollection (secondary).
 const BUTTON = 'w-full sm:w-auto px-4 py-3 min-h-[44px] bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50';
@@ -58,6 +59,34 @@ export function gitLines(payload, projectCode) {
   if (p.message) lines.push(`Commit message: ${p.message}`);
   if (p.command === 'gitpush' && p.include_unclaimed === 'all') lines.push('Also commits every unclaimed change.');
   return lines;
+}
+
+const onOff = (b) => (b ? 'yes' : 'no');
+
+/** An sb setup's answers in plain words, one line each (spec §11.5). */
+export function sbLines(payload) {
+  const p = payload ?? {};
+  const lines = [`Runs sb ${p.command ?? '(no command)'} for client ${p.client ?? '(none)'}.`];
+  if (p.repo) lines.push(`Clones ${p.repo} into the client's folder.`);
+  if (p.adopt) lines.push(`Adopts the existing checkout ${p.adopt} as it is.`);
+  if (p.from_sandbox) lines.push(`Retrieves the code from sandbox ${p.from_sandbox} into the client's folder.`);
+  if (p.project) lines.push(`Project: ${p.project}`);
+  if (p.name) lines.push(`Panel name: ${p.name}`);
+  if (p.sandboxes !== undefined) lines.push(`Sandboxes that may run: ${p.sandboxes === 'all' ? 'all' : (p.sandboxes ?? []).join(', ')}`);
+  if (p.integration_ok !== undefined) lines.push(`Client allows an integration user: ${onOff(p.integration_ok)}`);
+  for (const o of p.orgs ?? []) {
+    const parts = [`type ${o.type}`, `level ${o.level}`, o.login && `login ${o.login}`,
+      o.cli_deploy !== undefined && `CLI may deploy: ${onOff(o.cli_deploy)}`, o.shared !== undefined && `shared: ${onOff(o.shared)}`];
+    lines.push(`Org ${o.alias}: ${parts.filter(Boolean).join(', ')}.`);
+  }
+  lines.push('Client data may reach Claude: no. That flag is set only in the terminal.');
+  return lines;
+}
+
+/** The config files the click writes. */
+export function sbFiles(payload) {
+  if (payload?.command === 'org add') return ['orgs.json'];
+  return ['repos.json', 'orgs.json', ...(payload?.project ? ['projects.json'] : []), "the repo's .git/info/exclude"];
 }
 
 async function callRunner(route, body) {
@@ -196,7 +225,8 @@ export default function ApprovePage() {
 
   // Git has no dry run: the page shows what will run and offers Approve straight away. The runner's kind decides;
   // the address's kind is for display only.
-  const isGit = preview?.kind === 'git';
+  const isSb = preview?.kind === 'sb_setup';
+  const isGit = preview?.kind === 'git' || isSb;
 
   useEffect(() => {
     if (!preview || dryStarted.current || isGit) return;
@@ -264,15 +294,22 @@ export default function ApprovePage() {
   if (isGit) {
     // The action id is the chat's handle: the helper's run row only exists once it picks the action up.
     const id = preview.action_id;
+    const word = isSb ? 'sb' : 'git';
     return (
       <Shell>
-        {approving && <span hidden data-switchboard-running="git" />}
+        {approving && <span hidden data-switchboard-running={preview.kind} />}
         <p className="font-bold text-dark mb-2 break-words">{preview.headline}</p>
         <p className="text-sm text-dark">Project</p>
-        <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code} data-switchboard-kind="git">{preview.project_code}</p>
-        <ul data-testid="approve-git" className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">
-          {gitLines(preview.payload, preview.project_code).map((l) => <li key={l}>{l}</li>)}
+        <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code} data-switchboard-kind={preview.kind}>{preview.project_code}</p>
+        <ul data-testid={isSb ? 'approve-sb' : 'approve-git'} className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">
+          {(isSb ? sbLines(preview.payload) : gitLines(preview.payload, preview.project_code)).map((l) => <li key={l}>{l}</li>)}
         </ul>
+        {isSb && !real && !cancelled && (
+          <div data-testid="approve-sb-writes" className="mb-4 text-sm text-dark break-words">
+            <p className="mb-1">Approving writes: {sbFiles(preview.payload).join(', ')}.</p>
+            <p>A Salesforce login may open in the browser on your desktop; log in there. Approving is your yes to each write.</p>
+          </div>
+        )}
 
         {note && (
           <>
@@ -285,18 +322,18 @@ export default function ApprovePage() {
           <>
             <RunResult title="Not run" summary={cancelled.reason || 'No reason given.'} runId={id}
               marks={{ 'data-switchboard-cancelled': '', 'data-switchboard-reason': cancelled.reason }} />
-            <ResultLine line={`git ${id} cancelled${cancelled.reason ? `: ${cancelled.reason}` : ''}`} />
+            <ResultLine line={`${word} ${id} cancelled${cancelled.reason ? `: ${cancelled.reason}` : ''}`} />
           </>
         ) : real ? (
           <>
             <RunResult title="Sent to the desktop helper"
               summary="It runs in a terminal window on your computer. The result comes back to the chat when it finishes."
               runId={id} />
-            <ResultLine line={`git ${id}`} />
+            <ResultLine line={`${word} ${id}`} />
           </>
         ) : (
           <>
-            <p className="mb-4 text-sm text-dark">Git has no dry run. Approve runs this once, on your computer.</p>
+            <p className="mb-4 text-sm text-dark">{isSb ? 'An sb setup' : 'Git'} has no dry run. Approve runs this once, on your computer.</p>
             <div className="mb-4">
               <label htmlFor="dont-run-reason" className="block text-sm text-dark mb-1">Reason for not running (optional)</label>
               <input id="dont-run-reason" type="text" maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)}
