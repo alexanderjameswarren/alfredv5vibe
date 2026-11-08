@@ -240,7 +240,9 @@ export const queueSwitchboardGitTool = defineTool({
 export const SF_CHECKS = ["org-verify", "limits", "metadata-types", "metadata", "retrieve-preview", "deploy-preview"];
 const SF_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
 const METADATA_TYPE = /^[A-Za-z]{1,80}$/;
-const SB_KEYS = ["command", "client", "repo", "adopt", "from_sandbox", "project", "name", "sandboxes", "integration_ok", "orgs"];
+const SB_KEYS = ["command", "client", "repo", "adopt", "from_sandbox", "folder", "project", "name", "sandboxes", "integration_ok", "orgs"];
+// Strictly inside C:\Users\Alex\projects\, as the payload check in the database holds it; ".." is refused separately.
+export const SB_FOLDER = /^c:\\users\\alex\\projects(\\[^\\/:*?"<>|\x00-\x1f]+)+$/i;
 const SB_ORG_KEYS = ["alias", "type", "level", "login", "cli_deploy", "shared"];
 const SB_TYPES = ["developer", "developer_pro", "partial", "full"];
 // Alex's D2: none of these is ever set by link. Named so the refusal says why, not just "unknown key".
@@ -301,7 +303,7 @@ export function sbSetupPayload(args: Record<string, unknown>): { payload: Record
   if (p.integration_ok !== undefined && !isBool(p.integration_ok)) return r("`integration_ok` must be true or false.");
   if (p.project !== undefined && (typeof p.project !== "string" || !PROJECT_CODE.test(p.project))) return r("`project` must be a project code.");
   if (p.command === "org add") {
-    const notHere = ["repo", "adopt", "from_sandbox", "name"].filter((k) => p[k] !== undefined);
+    const notHere = ["repo", "adopt", "from_sandbox", "folder", "name"].filter((k) => p[k] !== undefined);
     if (notHere.length) return r(`org add does not take ${notHere.join(", ")}.`);
     if (aliases.length !== 1) return r("org add by link sets up exactly one org; queue one action per org.");
   } else {
@@ -311,6 +313,10 @@ export function sbSetupPayload(args: Record<string, unknown>): { payload: Record
     if (src === "from_sandbox" ? typeof p[src] !== "string" || !SF_ALIAS.test(p[src] as string) : !plainArg(p[src])) {
       return r(`\`${src}\` is not usable: one line, no double quote, not starting with - or a space.`);
     }
+    if (src !== "from_sandbox" && p.folder !== undefined) return r(`\`folder\` is only for from_sandbox; ${src} has its own folder.`);
+    if (src === "from_sandbox" && (typeof p.folder !== "string" || p.folder.length > 240 || !SB_FOLDER.test(p.folder) || p.folder.includes(".."))) {
+      return r("from_sandbox needs `folder`: Alex's answer, a full path inside C:\\Users\\Alex\\projects\\ (not that folder itself), no .., no trailing \\.");
+    }
     if (p.name !== undefined && (!plainArg(p.name) || (p.name as string).length > 60)) {
       return r("`name` must be one line of at most 60 characters, with no double quote.");
     }
@@ -318,18 +324,18 @@ export function sbSetupPayload(args: Record<string, unknown>): { payload: Record
   return { payload: p };
 }
 
-export function sfCheckHeadline(code: string, p: Record<string, unknown>): string {
-  return `SF CHECK ${code}: ${String(p.check).toUpperCase()}${p.metadata_type ? ` ${p.metadata_type}` : ""} ON SANDBOX ${p.alias}, READ ONLY`;
+export function sfCheckHeadline(code: string | null, p: Record<string, unknown>): string {
+  return `SF CHECK${code ? ` ${code}` : ""}: ${String(p.check).toUpperCase()}${p.metadata_type ? ` ${p.metadata_type}` : ""} ON SANDBOX ${p.alias}, READ ONLY`;
 }
 
-export function sbSetupHeadline(code: string, p: Record<string, unknown>): string {
+export function sbSetupHeadline(p: Record<string, unknown>): string {
   const orgs = p.orgs as { alias: string }[];
-  if (p.command === "org add") return `SB ORG ADD ${code}: ADDS SANDBOX ${orgs[0].alias} FOR CLIENT ${p.client} TO ORGS.JSON`;
-  return `SB CLIENT START ${code}: SETS UP CLIENT ${p.client} WITH ${orgs.length} SANDBOX${orgs.length === 1 ? "" : "ES"}, WRITES SWITCHBOARD CONFIG`;
+  if (p.command === "org add") return `SB ORG ADD ${p.client}: ADDS SANDBOX ${orgs[0].alias} TO ORGS.JSON`;
+  return `SB CLIENT START ${p.client}: SETS UP THE CLIENT WITH ${orgs.length} SANDBOX${orgs.length === 1 ? "" : "ES"}, WRITES SWITCHBOARD CONFIG`;
 }
 
-/** switchboard_queue_helper as the signed-in caller, and the action id. */
-async function queueHelper(tool: string, ctx: { db: any }, kind: string, code: string, payload: Record<string, unknown>,
+/** switchboard_queue_helper as the signed-in caller, and the action id. A null code: the database derives one. */
+async function queueHelper(tool: string, ctx: { db: any }, kind: string, code: string | null, payload: Record<string, unknown>,
                            headline: string, chatUrl: string | null): Promise<string> {
   const { data, error } = await ctx.db.rpc("switchboard_queue_helper", {
     p_kind: kind, p_project_code: code, p_payload: payload, p_headline: headline, p_chat_url: chatUrl,
@@ -343,12 +349,8 @@ async function queueHelper(tool: string, ctx: { db: any }, kind: string, code: s
   return id;
 }
 
-function codeAndChat(tool: string, args: Record<string, unknown>) {
-  const code = typeof args.project_code === "string" ? args.project_code.trim() : "";
-  if (!PROJECT_CODE.test(code)) throw fail(tool, "`project_code` must be a project code such as switchboard2-h8r.");
-  const chatUrl = typeof args.chat_url === "string" && CHAT_URL.test(args.chat_url.trim()) ? args.chat_url.trim() : null;
-  return { code, chatUrl };
-}
+const chatOf = (args: Record<string, unknown>) =>
+  typeof args.chat_url === "string" && CHAT_URL.test(args.chat_url.trim()) ? args.chat_url.trim() : null;
 
 export const queueSwitchboardSfCheckTool = defineTool({
   name: "queue_switchboard_sf_check",
@@ -356,7 +358,11 @@ export const queueSwitchboardSfCheckTool = defineTool({
   tables: { reads: ["switchboard_actions", "switchboard_settings"], writes: ["switchboard_actions"] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "queue_switchboard_sf_check";
-    const { code, chatUrl } = codeAndChat(tool, args);
+    // Optional: the helper finds the repo from the alias. Without one, the row's code is sf-<alias>.
+    const given = typeof args.project_code === "string" ? args.project_code.trim() : "";
+    if (given && !PROJECT_CODE.test(given)) throw fail(tool, "`project_code` must be a project code such as ti-x1, or left out.");
+    const code = given || null;
+    const chatUrl = chatOf(args);
     const checked = sfCheckPayload(args);
     if ("refused" in checked) throw fail(tool, `refused: ${checked.refused}`);
     // No link, ever: an sf_check needs no click (D3), and the runner refuses one on every link route.
@@ -377,10 +383,10 @@ export const queueSwitchboardSbSetupTool = defineTool({
   tables: { reads: ["switchboard_actions", "switchboard_settings"], writes: ["switchboard_actions"] },
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "queue_switchboard_sb_setup";
-    const { code, chatUrl } = codeAndChat(tool, args);
     const checked = sbSetupPayload(args);
     if ("refused" in checked) throw fail(tool, `refused: ${checked.refused}`);
-    const actionId = await queueHelper(tool, ctx, "sb_setup", code, checked.payload, sbSetupHeadline(code, checked.payload), chatUrl);
+    // Setup is per client: no project code, so the row's code is sb-<client> and one link is live per client.
+    const actionId = await queueHelper(tool, ctx, "sb_setup", null, checked.payload, sbSetupHeadline(checked.payload), chatOf(args));
     const { data, error } = await ctx.db.rpc("switchboard_issue_link", { p_action_id: actionId });
     if (error) {
       if (REFUSALS.has(error.code ?? "")) throw fail(tool, `queued as ${actionId}, but no link: ${error.message}`);

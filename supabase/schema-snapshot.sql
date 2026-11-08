@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-08 12:02, through migration 219 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-08 12:13, through migration 220 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -8490,6 +8490,7 @@ CREATE OR REPLACE FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", 
     AS $$
 declare
   v_user uuid := auth.uid();
+  v_code text := nullif(btrim(coalesce(p_project_code, '')), '');
   v_id   uuid;
 begin
   if v_user is null then
@@ -8506,11 +8507,22 @@ begin
     raise exception 'switchboard_queue_helper: a headline is required.' using errcode = '23514';
   end if;
 
+  -- Only the strings the payload checks accept are used; anything else leaves the code null and is refused below.
+  if v_code is null and p_kind = 'sf_check' and jsonb_typeof(p_payload->'alias') = 'string' then
+    v_code := 'sf-' || left(regexp_replace(lower(p_payload->>'alias'), '[^a-z0-9_-]', '_', 'g'), 37);
+  elsif v_code is null and p_kind = 'sb_setup' and jsonb_typeof(p_payload->'client') = 'string' then
+    v_code := 'sb-' || left(p_payload->>'client', 37);
+  end if;
+  if v_code is null then
+    raise exception 'switchboard_queue_helper: % needs a project code (sf_check and sb_setup derive one from the alias or client).',
+      p_kind using errcode = '23514';
+  end if;
+
   -- The guard trigger sets fingerprint, status and needs_click; the table's checks refuse a bad code or payload.
   insert into public.switchboard_actions (user_id, kind, project_code, payload, headline, chat_url, created_by)
-  values (v_user, p_kind, p_project_code, p_payload, btrim(p_headline), p_chat_url, 'claude')
+  values (v_user, p_kind, v_code, p_payload, btrim(p_headline), p_chat_url, 'claude')
   returning id into v_id;
-  return jsonb_build_object('action_id', v_id);
+  return jsonb_build_object('action_id', v_id, 'project_code', v_code);
 end;
 $$;
 
@@ -8518,7 +8530,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") IS 'Switchboard: queue an action the desktop helper runs (kind git, sf_check or sb_setup) for the signed-in caller, as created_by claude, and return {action_id}. The guard trigger sets fingerprint, status and needs_click; the payload checks refuse what the kind does not allow. A link, where the kind needs a click, is issued separately by switchboard_issue_link (spec 11.3-11.6).';
+COMMENT ON FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") IS 'Switchboard: queue an action the desktop helper runs (kind git, sf_check or sb_setup) for the signed-in caller, as created_by claude, and return {action_id, project_code}. git needs p_project_code; with none, an sf_check uses sf-<alias> and an sb_setup sb-<client>, so the one-live-link and one-running limits hold per alias and per client. The guard trigger sets fingerprint, status and needs_click; the payload checks refuse what the kind does not allow. A link, where the kind needs a click, is issued separately by switchboard_issue_link (spec 11.3-11.6).';
 
 
 
@@ -17120,7 +17132,7 @@ CREATE TABLE IF NOT EXISTS "public"."switchboard_actions" (
     CONSTRAINT "switchboard_actions_kind_valid" CHECK (("kind" = ANY (ARRAY['sql'::"text", 'git'::"text", 'sf_check'::"text", 'sb_setup'::"text", 'sf_deploy'::"text", 'sf_test'::"text", 'sf_read_prod_data'::"text", 'docs'::"text"]))),
     CONSTRAINT "switchboard_actions_link_complete" CHECK ((("link_hash" IS NULL) = ("link_expires_at" IS NULL))),
     CONSTRAINT "switchboard_actions_project_format" CHECK (("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text")),
-    CONSTRAINT "switchboard_actions_sb_setup_payload" CHECK ((("kind" <> 'sb_setup'::"text") OR ((COALESCE(("payload" ->> 'command'::"text"), ''::"text") = ANY (ARRAY['client start'::"text", 'org add'::"text"])) AND (COALESCE(("payload" ->> 'client'::"text"), ''::"text") ~ '^[a-z0-9][a-z0-9_-]{0,40}$'::"text") AND COALESCE((("payload" - ARRAY['command'::"text", 'client'::"text", 'repo'::"text", 'adopt'::"text", 'from_sandbox'::"text", 'project'::"text", 'name'::"text", 'sandboxes'::"text", 'integration_ok'::"text", 'orgs'::"text"]) = '{}'::"jsonb"), false) AND
+    CONSTRAINT "switchboard_actions_sb_setup_payload" CHECK ((("kind" <> 'sb_setup'::"text") OR ((COALESCE(("payload" ->> 'command'::"text"), ''::"text") = ANY (ARRAY['client start'::"text", 'org add'::"text"])) AND (COALESCE(("payload" ->> 'client'::"text"), ''::"text") ~ '^[a-z0-9][a-z0-9_-]{0,40}$'::"text") AND COALESCE((("payload" - ARRAY['command'::"text", 'client'::"text", 'repo'::"text", 'adopt'::"text", 'from_sandbox'::"text", 'folder'::"text", 'project'::"text", 'name'::"text", 'sandboxes'::"text", 'integration_ok'::"text", 'orgs'::"text"]) = '{}'::"jsonb"), false) AND
 CASE
     WHEN COALESCE(("jsonb_typeof"(("payload" -> 'orgs'::"text")) = 'array'::"text"), false) THEN ((("jsonb_array_length"(("payload" -> 'orgs'::"text")) >= 1) AND ("jsonb_array_length"(("payload" -> 'orgs'::"text")) <= 10)) AND ("jsonb_array_length"(("payload" -> 'orgs'::"text")) = "jsonb_array_length"("jsonb_path_query_array"("payload", '$."orgs"[*]?((@."alias" like_regex "^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$" && (((@."type" == "developer" || @."type" == "developer_pro") || @."type" == "partial") || @."type" == "full")) && (@."level" == "objects" || @."level" == "metadata"))'::"jsonpath"))))
     ELSE false
@@ -17155,7 +17167,7 @@ COMMENT ON COLUMN "public"."switchboard_actions"."kind" IS 'sql, git, sf_deploy,
 
 
 
-COMMENT ON COLUMN "public"."switchboard_actions"."project_code" IS 'The project that queued it, e.g. switchboard2-h8r.';
+COMMENT ON COLUMN "public"."switchboard_actions"."project_code" IS 'The project that queued it, e.g. switchboard2-h8r. With none given, an sf_check has sf-<alias> and an sb_setup sb-<client>, derived by switchboard_queue_helper.';
 
 
 
@@ -17163,7 +17175,7 @@ COMMENT ON COLUMN "public"."switchboard_actions"."chat_url" IS 'Address of the c
 
 
 
-COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...} (spec 11.3). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], ...} (spec 11.5). Fixed after insert.';
+COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...} (spec 11.3). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], "folder" with from_sandbox, ...} (spec 11.5). Fixed after insert.';
 
 
 
@@ -19941,6 +19953,11 @@ ALTER TABLE ONLY "public"."signals"
 
 ALTER TABLE ONLY "public"."switchboard_actions"
     ADD CONSTRAINT "switchboard_actions_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE "public"."switchboard_actions"
+    ADD CONSTRAINT "switchboard_actions_sb_setup_folder" CHECK ((("kind" <> 'sb_setup'::"text") OR ((COALESCE(("payload" ? 'folder'::"text"), false) = COALESCE(((("payload" ->> 'command'::"text") = 'client start'::"text") AND ("payload" ? 'from_sandbox'::"text")), false)) AND ((NOT COALESCE(("payload" ? 'folder'::"text"), false)) OR (COALESCE(("jsonb_typeof"(("payload" -> 'folder'::"text")) = 'string'::"text"), false) AND COALESCE(("length"(("payload" ->> 'folder'::"text")) <= 240), false) AND COALESCE((("payload" ->> 'folder'::"text") ~* '^c:\\users\\alex\\projects(\\[^\\/:*?"<>|[:cntrl:]]+)+$'::"text"), false) AND COALESCE(("strpos"(("payload" ->> 'folder'::"text"), '..'::"text") = 0), false)))))) NOT VALID;
 
 
 

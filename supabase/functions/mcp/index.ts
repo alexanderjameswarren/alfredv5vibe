@@ -3164,11 +3164,11 @@ export function createMcpServer(token: string) {
     {
       title: "Queue Switchboard Sf Check",
       description:
-        "Queue one read-only check of a Salesforce SANDBOX for a project. It needs no click and NO LINK is ever issued: the desktop helper runs it when it next picks up. Before sf runs, the helper proves the org is a sandbox listed for that project's repo (Salesforce asked fresh, orgs.json matched); production is always refused. " +
+        "Queue one read-only check of a Salesforce SANDBOX. No project code is needed: the helper finds the client's repo from the alias. It needs no click and NO LINK is ever issued: the desktop helper runs it when it next picks up. Before sf runs, the helper proves the org is a sandbox listed in orgs.json for that repo (Salesforce asked fresh); production is always refused. " +
         "check is one of: org-verify (is the alias the org orgs.json says), limits, metadata-types, metadata (needs metadata_type, letters only, e.g. ApexClass), retrieve-preview and deploy-preview (what differs from the project's checkout). No records, objects or SOQL. " +
         "Returns { action_id, payload, queued_line, next }. END YOUR MESSAGE with the line \"sf <action id> queued\" on a line of its own (queued_line): the extension wakes the helper on it. The result arrives in this chat by itself as \"sf <action id> done\" or \"failed\" when the check finishes; read it with get_switchboard_run. If the chat isn't open on the desktop, the check expires unrun after 10 minutes; then ask Alex to open the chat on the desktop and queue it again. Tier 2.",
       inputSchema: {
-        project_code: z.string().describe("The project code, e.g. ti-x1: whose repo the sandbox is listed for."),
+        project_code: z.string().optional().describe("Optional; usually left out. When given, the check runs one at a time with that project's git actions; without it, one at a time per alias."),
         check: z.enum(["org-verify", "limits", "metadata-types", "metadata", "retrieve-preview", "deploy-preview"]).describe("The check."),
         alias: z.string().describe("The sandbox's org alias, as in orgs.json."),
         metadata_type: z.string().optional().describe("metadata only: one metadata type, letters only, e.g. ApexClass."),
@@ -3185,16 +3185,18 @@ export function createMcpServer(token: string) {
       description:
         "Queue Switchboard's sb client start or sb org add with every answer up front, and issue its single-use approval link in the same call. FIRST ASK ALEX THE QUESTIONS IN THE CHAT and use only his answers; never guess one. Nothing runs until he clicks Approve; the page lists every answer and the files it writes, and the click is his yes. Then the desktop helper runs sb ... --by-link, and a Salesforce login may open in the browser on his desktop. No dry run. " +
         "By link only sandboxes are set up: each org's type is developer, developer_pro, partial or full, never production; level is objects or metadata, never ids or data; the contract flag (client data may reach Claude) is never set and stays no. Those stay with Alex in the terminal (sb org add or sb org set); a payload that tries them is refused. " +
-        "org add: client, exactly one org, and optionally project (its repo), sandboxes, integration_ok. client start: client, exactly one of repo (a git URL to clone), adopt (an existing checkout) or from_sandbox (an alias to retrieve from), and optionally project, name (the panel's display name, at most 60 characters), sandboxes (all or a list), integration_ok, with 1 to 10 orgs; each org becomes one --org-setup <alias>:type=..,level=..,login=..,cli-deploy=..,shared=.. " +
-        "One live link per project code, as issue_switchboard_link. Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole. The result line (sb <action id> done or failed) arrives in this chat by itself when sb finishes; read it with get_switchboard_run. If it says queued but no link, issue its link later with issue_switchboard_link. Tier 2.",
+        "Setup is per client and takes NO project code; a project code only appears when the first fix starts, so leave project out at setup. " +
+        "org add: client, exactly one org, and optionally sandboxes, integration_ok. client start: client, exactly one of repo (a git URL to clone), adopt (an existing checkout) or from_sandbox (an alias to retrieve from), and optionally name (the panel's display name, at most 60 characters), sandboxes (all or a list), integration_ok, with 1 to 10 orgs; each org becomes one --org-setup <alias>:type=..,level=..,login=..,cli-deploy=..,shared=.. " +
+        "from_sandbox also needs folder: ASK ALEX for it, offering sb's default, C:\\Users\\Alex\\projects\\<client>, or C:\\Users\\Alex\\projects\\actblue\\<nonprofit> for an ActBlue client. It is the full path of an empty folder strictly inside C:\\Users\\Alex\\projects\\, with no ..; repo, adopt and org add take no folder. " +
+        "One live link per client. Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole. The result line (sb <action id> done or failed) arrives in this chat by itself when sb finishes; read it with get_switchboard_run. If it says queued but no link, issue its link later with issue_switchboard_link. Tier 2.",
       inputSchema: {
-        project_code: z.string().describe("The project code of the chat's window, e.g. switchboard2-h8r."),
         command: z.enum(["client start", "org add"]).describe("The sb command."),
         client: z.string().describe("The client name: lower case letters, digits, _ and -."),
         repo: z.string().optional().describe("client start: a git URL to clone."),
         adopt: z.string().optional().describe("client start: an existing checkout to adopt as it is."),
         from_sandbox: z.string().optional().describe("client start: an org alias to retrieve the code from."),
-        project: z.string().optional().describe("A project code to add for the client (client start) or whose repo the org is for (org add)."),
+        folder: z.string().optional().describe("from_sandbox only, and then required: Alex's answer, the full path of the empty folder to write, inside C:\\Users\\Alex\\projects\\."),
+        project: z.string().optional().describe("Leave out at setup. Only for adding a project code a client already has."),
         name: z.string().optional().describe("client start: the panel's display name."),
         sandboxes: z.union([z.literal("all"), z.array(z.string())]).optional().describe("Which sandboxes may run: all, or a list of aliases."),
         integration_ok: z.boolean().optional().describe("Whether the client allows an integration user."),

@@ -69,7 +69,7 @@ export function sbLines(payload) {
   const lines = [`Runs sb ${p.command ?? '(no command)'} for client ${p.client ?? '(none)'}.`];
   if (p.repo) lines.push(`Clones ${p.repo} into the client's folder.`);
   if (p.adopt) lines.push(`Adopts the existing checkout ${p.adopt} as it is.`);
-  if (p.from_sandbox) lines.push(`Retrieves the code from sandbox ${p.from_sandbox} into the client's folder.`);
+  if (p.from_sandbox) lines.push(`Retrieves the code from sandbox ${p.from_sandbox} into ${p.folder ?? '(no folder)'}, which must be empty.`);
   if (p.project) lines.push(`Project: ${p.project}`);
   if (p.name) lines.push(`Panel name: ${p.name}`);
   if (p.sandboxes !== undefined) lines.push(`Sandboxes that may run: ${p.sandboxes === 'all' ? 'all' : (p.sandboxes ?? []).join(', ')}`);
@@ -306,6 +306,11 @@ export default function ApprovePage() {
         </ul>
         {isSb && !real && !cancelled && (
           <div data-testid="approve-sb-writes" className="mb-4 text-sm text-dark break-words">
+            {preview.payload?.from_sandbox && (
+              <p data-testid="approve-sb-folder" className="mb-1">
+                Writes the code into <span className="font-mono break-all">{preview.payload.folder ?? '(no folder)'}</span>. The folder must be empty.
+              </p>
+            )}
             <p className="mb-1">Approving writes: {sbFiles(preview.payload).join(', ')}.</p>
             <p>A Salesforce login may open in the browser on your desktop; log in there. Approving is your yes to each write.</p>
           </div>

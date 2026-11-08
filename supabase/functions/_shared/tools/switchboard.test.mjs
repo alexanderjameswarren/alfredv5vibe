@@ -640,13 +640,21 @@ test("sf_check: refused before anything is queued", async () => {
   await assert.rejects(queueSf({ project_code: "BAD CODE", check: "limits", alias: "a" }), /project_code/);
 });
 
+test("sf_check: project_code is optional; without one the database derives it", async () => {
+  const db = helperDb();
+  await queueSf({ check: "limits", alias: "acme-dev" }, db);
+  assert.equal(db.calls[0][1].p_project_code, null);
+  assert.equal(db.calls[0][1].p_headline, "SF CHECK: LIMITS ON SANDBOX acme-dev, READ ONLY");
+});
+
 test("sb_setup: org add is queued with kind sb_setup, then its link is issued", async () => {
   const db = helperDb();
   const out = await queueSb({ ...ORG_ADD, orgs: [{ ...ORG, login: "admin", cli_deploy: true, shared: false }], project: "acme-x1" }, db);
   assert.deepEqual(db.calls.map((c) => c[0]), ["switchboard_queue_helper", "switchboard_issue_link"]);
   assert.equal(db.calls[0][1].p_kind, "sb_setup");
   assert.equal(db.calls[0][1].p_payload.project_code, undefined);
-  assert.equal(db.calls[0][1].p_headline, "SB ORG ADD p-a1: ADDS SANDBOX acme-dev FOR CLIENT acme TO ORGS.JSON");
+  assert.equal(db.calls[0][1].p_project_code, null);
+  assert.equal(db.calls[0][1].p_headline, "SB ORG ADD acme: ADDS SANDBOX acme-dev TO ORGS.JSON");
   assert.equal(out.url, LINK.url);
   assert.match(out.next, new RegExp(`sb ${ACTION_ID} done or failed`));
 });
@@ -656,7 +664,30 @@ test("sb_setup: client start with several orgs, each becoming an --org-setup", a
   await queueSb({ project_code: "p-a1", command: "client start", client: "acme", repo: "https://github.com/a/b.git", name: "Acme",
     sandboxes: "all", integration_ok: true, orgs: [ORG, { alias: "acme-uat", type: "partial", level: "metadata", shared: true }] }, db);
   assert.equal(db.calls[0][1].p_payload.orgs.length, 2);
-  assert.match(db.calls[0][1].p_headline, /SB CLIENT START p-a1: SETS UP CLIENT acme WITH 2 SANDBOXES/);
+  assert.match(db.calls[0][1].p_headline, /SB CLIENT START acme: SETS UP THE CLIENT WITH 2 SANDBOXES/);
+});
+
+test("sb_setup: from_sandbox needs a folder inside projects", async () => {
+  const start = { command: "client start", client: "acme", from_sandbox: "acme-dev", orgs: [ORG] };
+  for (const folder of ["C:\\Users\\Alex\\projects\\acme", "C:\\Users\\Alex\\projects\\actblue\\acme", "c:\\users\\alex\\projects\\acme"]) {
+    const db = helperDb();
+    await queueSb({ ...start, folder }, db);
+    assert.equal(db.calls[0][1].p_payload.folder, folder);
+  }
+  for (const args of [
+    start, { ...start, folder: "C:\\Users\\Alex\\projects" }, { ...start, folder: "C:\\Users\\Alex\\projects\\" },
+    { ...start, folder: "C:\\Users\\Alex\\projects\\a\\..\\b" }, { ...start, folder: "C:\\Users\\Alex\\projectsx\\a" },
+    { ...start, folder: "D:\\Users\\Alex\\projects\\a" }, { ...start, folder: "C:/Users/Alex/projects/a" },
+    { ...start, folder: "C:\\Users\\Alex\\projects\\a:b" }, { ...start, folder: 5 },
+    { ...start, folder: "C:\\Users\\Alex\\projects\\" + "a".repeat(230) },
+    { ...start, from_sandbox: undefined, repo: "https://x/a.git", folder: "C:\\Users\\Alex\\projects\\a" },
+    { ...start, from_sandbox: undefined, adopt: "C:/a", folder: "C:\\Users\\Alex\\projects\\a" },
+    { ...ORG_ADD, folder: "C:\\Users\\Alex\\projects\\a" },
+  ]) {
+    const db = helperDb();
+    await assert.rejects(queueSb(args, db), /refused/, JSON.stringify(args));
+    assert.equal(db.calls.length, 0);
+  }
 });
 
 test("sb_setup: Alex's D2 limits are refused in the tool, before anything is queued", async () => {
