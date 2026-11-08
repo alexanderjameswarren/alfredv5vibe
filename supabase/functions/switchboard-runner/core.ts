@@ -34,9 +34,11 @@ export type Action = {
   project_code: string;
 };
 export type PickedAction = {
-  action_id: string; run_id: string; project_code: string; payload: Record<string, unknown>;
+  action_id: string; run_id: string; kind?: string; project_code: string; payload: Record<string, unknown>;
   fingerprint: string; headline: string; chat_url: string | null;
 };
+/** The kinds the desktop helper runs (spec 11.3-11.6). */
+export const HELPER_KINDS = ["git", "sf_check", "sb_setup"] as const;
 export type Picked = {
   action: { id: string; user_id: string; kind: string; status: string; picked_up_at: string | null };
   run: { id: string; action_id: string; mode: string; finished_at: string | null } | null;
@@ -46,9 +48,11 @@ export type Deps = {
   /** The desktop helper's key, SWITCHBOARD_PICKUP_KEY. Separate from the queue key. */
   pickupKey: string;
   userId: string;
-  /** switchboard_pickup_git, with the service role. */
+  /** switchboard_pickup_git, with the service role: git only, for a helper that asks for no other kind. */
   pickupGit(userId: string): Promise<PickedAction | null>;
-  /** Git actions still consumed that were picked before `before`, with their open real run if any. */
+  /** switchboard_pickup_helper (218), with the service role: any helper kind. */
+  pickupHelper(userId: string): Promise<PickedAction | null>;
+  /** Helper-kind actions still consumed that were picked before `before`, with their open real run if any. */
   stalePicks(userId: string, before: string): Promise<{ action_id: string; run_id: string | null }[]>;
   findPicked(actionId: string, runId: string): Promise<Picked | null>;
   finishRun(runId: string, fields: Record<string, unknown>): Promise<void>;
@@ -386,11 +390,15 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
   const hash = createHash("sha256").update(token).digest("hex");
   const action = await deps.findByLinkHash(hash, user);
   if (!action) return reply({ ok: false, error: "no such link." }, 404);
+  if (action.kind === "sf_check") {
+    return reply({ ok: false, error: "an sf_check runs with no click, so it has no link to preview, approve or cancel." }, 409);
+  }
   if (action.link_used_at) return reply({ ok: false, error: "this link has already been used." }, 410);
   if (!action.link_expires_at || Date.parse(action.link_expires_at) <= Date.now()) {
     return reply({ ok: false, error: "this link has expired." }, 410);
   }
-  if (action.kind === "git") return handleGitRun(route, body, action, jwt, token, deps, reply);
+  if (action.kind === "git" || action.kind === "sb_setup") return handleHelperRun(route, body, action, jwt, token, deps, reply);
+  if (action.kind && action.kind !== "sql") return reply({ ok: false, error: `a ${action.kind} action has no link here yet.` }, 409);
 
   const sql = action.payload?.sql ?? "";
   const test = action.payload?.test === true;
@@ -464,20 +472,20 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
 }
 
 /**
- * A git link (spec 11.3). Nothing runs here: Approve spends the link, which marks the action consumed, and
- * switchboard_pickup_git hands it to the desktop helper. No dry run exists, so none is asked for.
+ * A git or sb_setup link (spec 11.3, 11.5). Nothing runs here: Approve spends the link, which marks the action
+ * consumed, and the pickup hands it to the desktop helper. No dry run exists, so none is asked for.
  */
-async function handleGitRun(
+async function handleHelperRun(
   route: string, body: Record<string, unknown> | null, action: Action, jwt: string, token: string, deps: Deps,
   reply: (body: unknown, status?: number) => Response,
 ): Promise<Response> {
   if (route === "preview") {
     return reply({
-      ok: true, kind: "git", action_id: action.id, headline: action.headline, payload: action.payload,
+      ok: true, kind: action.kind, action_id: action.id, headline: action.headline, payload: action.payload,
       fingerprint: action.fingerprint, project_code: action.project_code, expires_at: action.link_expires_at,
     });
   }
-  if (route === "dry-run") return reply({ ok: false, error: "a git action has no dry run." }, 409);
+  if (route === "dry-run") return reply({ ok: false, error: `a ${action.kind} action has no dry run.` }, 409);
 
   const spend = async (fingerprint: string): Promise<Response | null> => {
     try {
@@ -518,9 +526,29 @@ const TIMED_OUT = "timed out: the helper picked this up but never reported a res
 const pickupAuthorised = (req: Request, deps: Deps) =>
   secretMatches(req.headers.get("x-switchboard-pickup-key"), deps.pickupKey);
 
-/** Fail every pick older than the timeout, then hand out the next ready git action, or null. */
+const isHelperKind = (k: unknown): k is string => typeof k === "string" && (HELPER_KINDS as readonly string[]).includes(k);
+
+/**
+ * The kinds the helper says it runs: body `kinds`, an array. None given means git only, the helper before s86e.
+ * switchboard_pickup_helper has no kind filter, so only git alone or every helper kind can be served exactly.
+ */
+function pickupKinds(body: Record<string, unknown> | null): { pick?: "git" | "helper"; error?: string } {
+  const kinds = body?.kinds;
+  if (kinds === undefined || kinds === null) return { pick: "git" };
+  if (!Array.isArray(kinds) || !kinds.length || !kinds.every(isHelperKind)) {
+    return { error: `kinds must be a list of helper kinds: ${HELPER_KINDS.join(", ")}.` };
+  }
+  const set = new Set(kinds);
+  if (set.size === 1 && set.has("git")) return { pick: "git" };
+  if (HELPER_KINDS.every((k) => set.has(k))) return { pick: "helper" };
+  return { error: `kinds must be ["git"] or all of ${HELPER_KINDS.join(", ")}; the pickup cannot serve a part of them.` };
+}
+
+/** Fail every pick older than the timeout, then hand out the next ready action of a kind the helper asked for, or null. */
 async function handlePickup(req: Request, deps: Deps, now: number): Promise<Response> {
   if (!pickupAuthorised(req, deps)) return json({ ok: false, error: "unauthorized" }, 401);
+  const { pick, error } = pickupKinds(await readBody(req));
+  if (error) return json({ ok: false, error }, 400);
   const stale = await deps.stalePicks(deps.userId, new Date(now - PICK_TIMEOUT_MS).toISOString());
   for (const s of stale) {
     if (s.run_id) {
@@ -528,7 +556,9 @@ async function handlePickup(req: Request, deps: Deps, now: number): Promise<Resp
     }
     await deps.setStatus(s.action_id, "failed");
   }
-  const action = await deps.pickupGit(deps.userId);
+  const picked = pick === "helper" ? await deps.pickupHelper(deps.userId) : await deps.pickupGit(deps.userId);
+  // pickup_git returns no kind; everything it hands out is git.
+  const action = picked && pick === "git" ? { ...picked, kind: "git" } : picked;
   return json({ ok: true, action, timed_out: stale.map((s) => s.action_id) });
 }
 
@@ -553,7 +583,7 @@ async function handleResult(req: Request, deps: Deps, now: number): Promise<Resp
   const picked = await deps.findPicked(actionId, runId);
   const a = picked?.action;
   const r = picked?.run;
-  if (!a || a.user_id !== deps.userId || a.kind !== "git" || !r || r.action_id !== a.id) {
+  if (!a || a.user_id !== deps.userId || !isHelperKind(a.kind) || !r || r.action_id !== a.id) {
     return json({ ok: false, error: "no such picked action and run." }, 404);
   }
   if (a.status !== "consumed" || !a.picked_up_at || r.mode !== "real" || r.finished_at) {
