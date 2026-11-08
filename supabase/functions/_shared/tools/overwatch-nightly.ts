@@ -12,8 +12,10 @@ import { defineTool, describeDbError } from "../platform.ts";
 
 const WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/i;
 const HOUR = 3_600_000;
-/** Used when the plan has no settings.nightly_checks.silence_hours. */
+/** Only for counts from before migration 219, which carry no limits; from 219 the counts apply the default. */
 export const DEFAULT_SILENCE_HOURS = 36;
+const SILENCE_KEY = "nightly_checks.silence_hours";
+const positiveInt = (v: unknown): v is number => Number.isInteger(v) && (v as number) > 0;
 const MAX_SIGNALS = 1000;
 
 type Row = Record<string, unknown>;
@@ -40,6 +42,8 @@ function inForce(o: Row, at: number): boolean {
 export function dispatcherChecks(input: {
   asOf: string;
   settings: Row | null;
+  /** counts.limits; its silence value already holds the plan's or the default. */
+  limits?: Row | null;
   signals: Row[];
   lastDeliveredAt: string | null;
   runs: Row[];
@@ -48,7 +52,8 @@ export function dispatcherChecks(input: {
   const since = at - 24 * HOUR;
   const nightly = (input.settings?.nightly_checks as Row | undefined) ?? {};
   const planHours = nightly.silence_hours;
-  const threshold = Number.isInteger(planHours) && (planHours as number) > 0 ? planHours as number : DEFAULT_SILENCE_HOURS;
+  const fromLimits = input.limits?.[SILENCE_KEY];
+  const threshold = positiveInt(fromLimits) ? fromLimits : positiveInt(planHours) ? planHours : DEFAULT_SILENCE_HOURS;
 
   const groups = new Map<string, Row>();
   for (const s of input.signals) {
@@ -156,6 +161,7 @@ export const getOverwatchNightlyCountsTool = defineTool({
       const checks = dispatcherChecks({
         asOf,
         settings: ((plan.data ?? []) as Row[])[0]?.settings as Row ?? null,
+        limits: ((data as Row).limits as Row | undefined) ?? null,
         signals: (sig.data ?? []) as Row[],
         lastDeliveredAt: (((last.data ?? []) as Row[])[0]?.decided_at as string | undefined) ?? null,
         runs: (runs.data ?? []) as Row[],
