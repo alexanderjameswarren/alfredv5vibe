@@ -39,6 +39,7 @@ function fakes(over = {}) {
     conformance: async () => "CONFORMANT (97 tables)",
     pickupKey: PICKUP,
     pickupGit: async (u) => (calls.picked = u, PICKED),
+    pickupHelper: async (u) => (calls.pickedHelper = u, { ...PICKED, kind: "sf_check" }),
     stalePicks: async (u, before) => (calls.staleBefore = before, []),
     findPicked: async (a, r) => (a === "git-1" && r === "run-g" ? {
       action: { id: "git-1", user_id: USER, kind: "git", status: "consumed", picked_up_at: "2026-11-05T08:00:00Z" },
@@ -524,8 +525,9 @@ test("pickup and result: refused with no key, a wrong or short one, the queue ke
 test("pickup: returns the next git action for Alex's user, or null", async () => {
   const { deps, calls } = fakes();
   const body = await (await handle(helper("pickup"), deps)).json();
-  assert.deepEqual(body, { ok: true, action: PICKED, timed_out: [] });
+  assert.deepEqual(body, { ok: true, action: { ...PICKED, kind: "git" }, timed_out: [] });
   assert.equal(calls.picked, USER);
+  assert.equal(calls.pickedHelper, undefined);
   const none = fakes({ pickupGit: async () => null });
   assert.equal((await (await handle(helper("pickup"), none.deps)).json()).action, null);
 });
@@ -680,4 +682,133 @@ test("sql with kind sql keeps its clean-dry-run rule, and cancel still needs a d
   const preview = await (await handle(post("preview", { token: TOKEN }, jwt()), deps)).json();
   assert.equal(preview.sql, "delete from wb_rules where id = 1;");
   assert.equal(preview.kind, undefined);
+});
+
+// --- helper kinds (spec 11.4-11.6) ---
+
+const ALL_KINDS = ["git", "sf_check", "sb_setup"];
+
+test("pickup: an old helper with no kinds, or only git, gets git from pickup_git and never the helper pickup", async () => {
+  for (const req of [helper("pickup"), helper("pickup", { kinds: ["git"] }), helper("pickup", { kinds: null }),
+    new Request("https://x/switchboard-runner/pickup", { method: "POST", headers: { "x-switchboard-pickup-key": PICKUP } })]) {
+    const { deps, calls } = fakes();
+    const body = await (await handle(req, deps)).json();
+    assert.equal(body.action.kind, "git");
+    assert.equal(calls.picked, USER);
+    assert.equal(calls.pickedHelper, undefined);
+  }
+});
+
+test("pickup: all three kinds use the helper pickup and return its kind", async () => {
+  const { deps, calls } = fakes();
+  const body = await (await handle(helper("pickup", { kinds: ["sb_setup", "git", "sf_check"] }), deps)).json();
+  assert.equal(body.action.kind, "sf_check");
+  assert.equal(calls.pickedHelper, USER);
+  assert.equal(calls.picked, undefined);
+  const none = fakes({ pickupHelper: async () => null });
+  assert.equal((await (await handle(helper("pickup", { kinds: ALL_KINDS }), none.deps)).json()).action, null);
+});
+
+test("pickup: a part of the kinds, an unknown kind or a malformed list is refused and picks nothing", async () => {
+  for (const kinds of [["git", "sf_check"], ["sf_check"], ["sb_setup"], ["git", "sql"], ["docs"], [], "git", [1], {}]) {
+    const { deps, calls } = fakes({ stalePicks: async () => { throw new Error("not reached"); } });
+    const res = await handle(helper("pickup", { kinds }), deps);
+    assert.equal(res.status, 400, JSON.stringify(kinds));
+    assert.match((await res.json()).error, /kinds/);
+    assert.equal(calls.picked, undefined);
+    assert.equal(calls.pickedHelper, undefined);
+  }
+});
+
+test("pickup: the 30-minute rule runs before the helper pickup too", async () => {
+  const now = Date.parse("2026-11-05T09:00:00Z");
+  const { deps, calls } = fakes({ stalePicks: async (u, before) => (calls.staleBefore = before, [{ action_id: "sf-old", run_id: "run-sf" }]) });
+  const body = await (await handle(helper("pickup", { kinds: ALL_KINDS }), deps, now)).json();
+  assert.equal(calls.staleBefore, "2026-11-05T08:30:00.000Z");
+  assert.deepEqual(body.timed_out, ["sf-old"]);
+  assert.deepEqual(calls.status, [{ id: "sf-old", status: "failed" }]);
+  assert.match(calls.finished[0].summary, /timed out/);
+});
+
+test("result: sf_check and sb_setup are accepted like git; sql and other kinds are not", async () => {
+  for (const kind of ["sf_check", "sb_setup"]) {
+    for (const ok of [true, false]) {
+      const { deps, calls } = fakes({ findPicked: async () => ({
+        action: { id: "git-1", user_id: USER, kind, status: "consumed", picked_up_at: "t" },
+        run: { id: "run-g", action_id: "git-1", mode: "real", finished_at: null },
+      }) });
+      const res = await handle(helper("result", result({ ok, output: "out" })), deps);
+      assert.equal(res.status, 200, kind);
+      assert.deepEqual(calls.status, [{ id: "git-1", status: ok ? "succeeded" : "failed" }]);
+      assert.equal(calls.finished[0].result.output, "out");
+    }
+  }
+  for (const kind of ["sql", "sf_deploy", "docs", undefined]) {
+    const { deps, calls } = fakes({ findPicked: async () => ({
+      action: { id: "git-1", user_id: USER, kind, status: "consumed", picked_up_at: "t" },
+      run: { id: "run-g", action_id: "git-1", mode: "real", finished_at: null },
+    }) });
+    assert.equal((await handle(helper("result", result()), deps)).status, 404, String(kind));
+    assert.deepEqual(calls.status, []);
+  }
+});
+
+const SB_PAYLOAD = { command: "org add", client: "acme", orgs: [{ alias: "acme-dev", type: "developer", level: "objects" }] };
+const sbFakes = (over = {}) => {
+  const f = gitFakes(over);
+  Object.assign(f.action, { kind: "sb_setup", payload: SB_PAYLOAD });
+  return f;
+};
+
+test("sb_setup preview: kind and payload, nothing spent", async () => {
+  const { deps, calls } = sbFakes();
+  const out = await (await handle(post("preview", { token: TOKEN }, jwt()), deps)).json();
+  assert.equal(out.kind, "sb_setup");
+  assert.deepEqual(out.payload, SB_PAYLOAD);
+  assert.equal(out.sql, undefined);
+  assert.equal(calls.consumed.length, 0);
+  nothingRan(calls);
+});
+
+test("sb_setup approve: no dry run, spends the link with the fingerprint for pickup; cancel marks it cancelled", async () => {
+  const a = sbFakes();
+  assert.equal((await handle(post("approve", { token: TOKEN }, jwt()), a.deps)).status, 400);
+  const res = await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), a.deps);
+  assert.deepEqual(await res.json(), { ok: true, action_id: "act-1", sent: true });
+  assert.deepEqual(a.calls.consumed, [{ jwt: "good", token: TOKEN, fp: "fp-1" }]);
+  assert.deepEqual(a.calls.status, []);
+  const b = sbFakes();
+  const out = await (await handle(post("cancel", { token: TOKEN }, jwt()), b.deps)).json();
+  assert.equal(out.cancelled, true);
+  assert.deepEqual(b.calls.status, [{ id: "act-1", status: "cancelled" }]);
+  for (const x of [a, b]) nothingRan(x.calls);
+});
+
+test("sb_setup dry run: refused, nothing spent", async () => {
+  const { deps, calls } = sbFakes();
+  const res = await handle(post("dry-run", { token: TOKEN }, jwt()), deps);
+  assert.equal(res.status, 409);
+  assert.match((await res.json()).error, /sb_setup action has no dry run/);
+  assert.equal(calls.consumed.length, 0);
+});
+
+test("sf_check: every link route refuses it, even on a live link, and nothing is spent or run", async () => {
+  for (const route of ["preview", "dry-run", "approve", "cancel"]) {
+    const { deps, calls, action } = gitFakes();
+    Object.assign(action, { kind: "sf_check", payload: { check: "limits", alias: "acme-dev" } });
+    const res = await handle(post(route, { token: TOKEN, fingerprint: "fp-1" }, jwt()), deps);
+    assert.equal(res.status, 409, route);
+    assert.match((await res.json()).error, /sf_check runs with no click/);
+    assert.equal(calls.consumed.length, 0);
+    assert.deepEqual(calls.status, []);
+    nothingRan(calls);
+  }
+});
+
+test("other kinds with a link are refused, not read as SQL", async () => {
+  const { deps, calls, action } = fakes();
+  action.kind = "sf_deploy";
+  const res = await handle(post("dry-run", { token: TOKEN }, jwt()), deps);
+  assert.equal(res.status, 409);
+  assert.equal(calls.runSql.length, 0);
 });

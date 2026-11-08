@@ -5,7 +5,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import postgres from "npm:postgres@3.4.5";
 import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts";
 import {
-  type Action, type Deps, handle, type Picked, type PickedAction, type RunOutcome, type Statement, type StatementResult,
+  type Action, type Deps, handle, HELPER_KINDS, type Picked, type PickedAction, type RunOutcome, type Statement, type StatementResult,
 } from "./core.ts";
 
 // switchboard-runner: the only code that executes queued SQL, and the only code using SUPABASE_DB_URL.
@@ -19,10 +19,12 @@ import {
 //                  unless it's a test action, whose one run this is.
 //   POST /approve  Alex's JWT. { token, fingerprint } -> { run_id, summary, conformance, counts }. Needs a clean latest dry run.
 //   POST /cancel   Alex's JWT. { token, reason? } -> { run_id, cancelled, reason }. Spends the link; runs nothing.
-//   A git link (spec 11.3): /preview adds kind and payload; /approve only spends the link, so the action is consumed
-//   for the helper, and runs nothing here; /cancel needs no dry run; /dry-run is refused.
-//   POST /pickup   x-switchboard-pickup-key. {} -> { action | null, timed_out }. The desktop helper; git actions only (spec 11).
-//   POST /result   x-switchboard-pickup-key. { action_id, run_id, ok, summary, exit_code?, output? } -> { status }.
+//   A git or sb_setup link (spec 11.3, 11.5): /preview adds kind and payload; /approve only spends the link, so the
+//   action is consumed for the helper, and runs nothing here; /cancel needs no dry run; /dry-run is refused.
+//   An sf_check has no link (spec 11.4): all four refuse it.
+//   POST /pickup   x-switchboard-pickup-key. { kinds? } -> { action (with kind) | null, timed_out }. The desktop helper.
+//                  No kinds: git only, by switchboard_pickup_git. All of git, sf_check, sb_setup: switchboard_pickup_helper.
+//   POST /result   x-switchboard-pickup-key. { action_id, run_id, ok, summary, exit_code?, output? } -> { status }. Any helper kind.
 //
 // The pickup key is SWITCHBOARD_PICKUP_KEY: never logged, never in an error, separate from the queue key.
 // ⚠️ verify_jwt must be false in config.toml: /queue has no user token, so the run routes check the JWT themselves.
@@ -99,8 +101,9 @@ function deps(): Deps {
     pickupKey: Deno.env.get("SWITCHBOARD_PICKUP_KEY") ?? "",
     userId: Deno.env.get("CLIPBOARD_USER_ID") ?? "",
     pickupGit: async (userId) => must(await db.rpc("switchboard_pickup_git", { p_user: userId })) as PickedAction | null,
+    pickupHelper: async (userId) => must(await db.rpc("switchboard_pickup_helper", { p_user: userId })) as PickedAction | null,
     stalePicks: async (userId, before) => {
-      const actions = must(await db.from("switchboard_actions").select("id").eq("user_id", userId).eq("kind", "git")
+      const actions = must(await db.from("switchboard_actions").select("id").eq("user_id", userId).in("kind", [...HELPER_KINDS])
         .eq("status", "consumed").lt("picked_up_at", before)) as { id: string }[];
       if (!actions.length) return [];
       const runs = must(await db.from("switchboard_runs").select("id, action_id")
