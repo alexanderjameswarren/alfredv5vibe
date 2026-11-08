@@ -107,6 +107,22 @@ test("silence: hours since the last delivery against the default or the plan's t
   assert.equal(checks().silence.silent, true);
 });
 
+test("silence: the counts' limits set the threshold", () => {
+  const planned = { nightly_checks: { silence_hours: 72 } };
+  let s = checks({ lastDeliveredAt: "2026-11-04T12:20:00Z", settings: planned,
+    limits: { "nightly_checks.silence_hours": 72 } }).silence;
+  assert.deepEqual([s.threshold_hours, s.threshold_from, s.silent], [72, "plan", false]);
+  s = checks({ lastDeliveredAt: "2026-11-04T12:20:00Z", settings: {},
+    limits: { "nightly_checks.silence_hours": 36 } }).silence;
+  assert.deepEqual([s.threshold_hours, s.threshold_from, s.silent], [36, "default", true]);
+});
+
+test("the handler passes counts.limits to the silence check", async () => {
+  const db = fakeDb({ data: { local_date: "2026-11-02", limits: { "nightly_checks.silence_hours": 500 } }, error: null });
+  const out = await T.handler({}, { db });
+  assert.equal(out.dispatcher_checks.silence.threshold_hours, 500);
+});
+
 test("silence: only broad hold or drop overrides in force are listed", () => {
   const o = (label, decision, match, when = {}) => ({ label, match, when, effect: { decision } });
   const settings = { delivery: { overrides: [

@@ -17,9 +17,10 @@ nightly counts.
 - **App / job:** `overwatch` / `weekly` (schedule row from migration 177, with the nightly one).
 - **Tools:** the **Alfred** connector (mcp v174 or later, for `get_platform_inventory` in Step 8), the **Claude_Code_Remote** connector
   (`list_triggers`) and **web search**. The **`overwatch` skill** must be available to the task.
-- **Settings it reads** from the active plan: `weekly_day`, `audit_every_weeks`,
-  `friction_trigger_count`, `friction_window_days`, `estimate_accuracy_min_shipped`,
-  `estimate_correction_factor`. `pushes_per_day` and `push_time` are no longer read: what reaches
+- **Settings it reads** from the active plan. **With no default:** `weekly_day`, `audit_every_weeks`,
+  `friction_trigger_count`, `friction_window_days`, `estimate_accuracy_min_shipped` and
+  `estimate_correction_factor`. **With a default:** `release_watch_days` (14) and `drift_no_run_days`
+  (14). `pushes_per_day` and `push_time` are no longer read: what reaches
   Alex, and how often, is the dispatcher's (the plan's `delivery` section).
 - **Spec:** `docs/technical-spec-overwatch-q4n.md` section 6 ("On the weekly day"), 4.10, 4.11 and
   4.12.
@@ -31,7 +32,11 @@ nightly counts.
 > The task runs the text that was pasted, not the text in this repo. So the prompt carries a
 > version, and Step 11 echoes it.
 >
-> ### `PROMPT VERSION: 2026-11-06b`
+> ### `PROMPT VERSION: 2026-11-08a`
+>
+> 2026-11-08a: the release look-back is `release_watch_days` and the drift audit's no-run window is
+> `drift_no_run_days`, each with a stated default. A missing setting with a default uses it and shows
+> as "<key> (used <n>)"; only a setting with no default still skips its step.
 >
 > 2026-11-06b: Step 8b, every week: any non-Overwatch task prompt that writes to the inbox or notifies
 > directly, judged from each enabled task's live text (`list_triggers`), raised as one signal.
@@ -52,7 +57,7 @@ nightly counts.
    everything below "THE PROMPT" line as its instructions.
 3. **Run it once by hand** and say in the chat that this run is manual (Step 2 then runs it even
    on another day). Check: a `platform_runs` row for `overwatch` / `weekly` closed `ok`; the weekly
-   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-11-06b`.
+   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-11-08a`.
 
 ---
 
@@ -61,7 +66,7 @@ nightly counts.
 ---
 
 You are running Overwatch's weekly review for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-11-06b`. **First, load the `overwatch` skill.** It tells you how to read the
+`PROMPT VERSION: 2026-11-08a`. **First, load the `overwatch` skill.** It tells you how to read the
 week, what makes a friction pattern and its fix, when a parked project has become possible, and how
 to word the note. Follow these steps in order for everything else. **Where the skill and these
 steps disagree, these steps win.** Do not improvise.
@@ -69,9 +74,14 @@ steps disagree, these steps win.** Do not improvise.
 ### The rules that override everything else
 
 1. **THE PLAN SETS EVERY NUMBER.** Every threshold, limit, day and time comes from the active
-   plan's `settings` (Step 3.1). **Never use a number that is not there.** If a setting a step needs
-   is missing, skip that step and add the setting's name to `settings_missing`. The only fixed
-   number is the 7-day week.
+   plan's `settings` (Step 2.3). **Never use a number that is not there.** The only fixed number is
+   the 7-day week.
+   - A setting **with a default**, when the plan lacks it or does not give it as a positive whole
+     number, is never a reason to skip. Use the default and add `"<key> (used <n>)"` to
+     `settings_missing`. The settings with a default are `release_watch_days` (14) and
+     `drift_no_run_days` (14).
+   - A setting **with no default** that a step needs, when missing, means skip that step and add the
+     setting's name to `settings_missing`.
 2. **YOU READ, GROUP AND PROPOSE; YOU NEVER CHANGE THE PLAN OR AN APP.** The only tools that write
    that you may call are: `create_platform_run`, `update_platform_run`, `create_overwatch_note`,
    `raise_signal` (Steps 2.4, 9 and 10 only), `record_seen_releases`, and `update_friction` **with
@@ -155,7 +165,7 @@ From Step 3.3:
 ### Step 5 — Feature watch
 
 1. Search the web for Anthropic's Claude release notes, the Claude Code changelog and the API
-   release notes. Keep each entry from the last 14 days: its source (`claude_release_notes`,
+   release notes. Keep each entry from the last `release_watch_days` days: its source (`claude_release_notes`,
    `claude_code_changelog` or `api_release_notes`), `entry_key` (its version, date or heading),
    `title` and a one-line `summary`.
 2. Call `record_seen_releases` with every entry you kept. It returns which are `recorded` (new) and
@@ -206,7 +216,7 @@ skip this step (rule 1).
 2. When due, check what Phase 5 can see, and keep each finding:
    - **Schedules with no recent run:** `get_platform_schedules` with `limit: 50`; for each enabled
      one, `get_platform_runs` with its `app`, `job`, `status: "ok"`, `limit: 1`: none in the last
-     14 days. Also disabled schedules, listed once. **`alfred` / `notify-dispatch` writes no runs**,
+     `drift_no_run_days` days. Also disabled schedules, listed once. **`alfred` / `notify-dispatch` writes no runs**,
      so for it use `get_reminders` with `limit: 1` (scheduled only, soonest first) instead: a finding
      only when that reminder's `due_at` plus the schedule's `grace_hours` has passed.
    - **Scheduled tasks and schedule rows that do not match:** `list_triggers`. An enabled task with
@@ -361,7 +371,7 @@ item (Step 2.4) uses kind `schedule_mismatch`.
 2. **Signals** were raised in Step 9; nothing more here.
 3. **Close the run:** `update_platform_run` with the run id, **once**.
    - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-   - **`details`**, always: `local_date`, `prompt_version: "2026-11-06b"`, `manual`, `plan_id`,
+   - **`details`**, always: `local_date`, `prompt_version: "2026-11-08a"`, `manual`, `plan_id`,
      `drift_audit` (true or false), `direct_writes` (the count, or `"skipped"`), `prompts_checked`, `note_id`,
      `signal_ids`, `signals_raised`, `new_releases`,
      `friction_patterns`, `shipped_count`, `skipped`, `settings_missing`, and `not_weekly_day` when
@@ -391,7 +401,7 @@ Run: <run id>
 ### Step 11 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-11-06b`;
+- `PROMPT VERSION: 2026-11-08a`;
 - the run id and its status, and `manual: true` or `manual: false`;
 - whether the drift audit ran; how many task prompts Step 8b checked and any that write directly;
 - the note id and the signals raised;

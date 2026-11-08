@@ -5,7 +5,7 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
-Skill version: 2026-11-06b
+Skill version: 2026-11-08a
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
@@ -238,8 +238,8 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
   its table (`180_overwatch_platform_inventory.sql` is platform_inventory): match the inventory's
   table names against the words in each migration path, longest name first, and take every
   table named. Look at the summary's changed tools' tables only when it has no migration, or a
-  migration whose name matches no table. Five tables a night is plenty; take the ones the
-  migrations name first.
+  migration whose name matches no table. Take at most `impact_max_tables` a night (from
+  `counts.limits`), the ones the migrations name first.
 - **What counts as a follow-up** (count 11f). One is a thing Alex would otherwise forget that
   the Finish made necessary somewhere it did not touch:
   - `table_users`: a part that reads or writes a table the work changed, outside the work. A
@@ -260,8 +260,9 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
     override, or an override that lets that subject through; never propose loosening for every
     app. A wb-sync failure held once is by design (it raises Low, and escalation lifts the
     second), so it never shows here.
-  - **Silence:** nothing delivered for longer than `settings.nightly_checks.silence_hours` (36
-    hours when the plan does not set it), or an override in force that holds or drops with no
+  - **Silence:** nothing delivered for longer than the silence threshold, which is
+    `counts.limits["nightly_checks.silence_hours"]`: the plan's value, or its default, named in
+    `settings_missing`. Or an override in force that holds or drops with no
     app, job, subject or sender in its match. Look at `signals_last_day` first: nothing raised
     at all means the apps are quiet or the dispatcher is not running (its own runs are in the
     stopped-schedules count); signals held or waiting means the rules are holding them. A broad
@@ -286,6 +287,11 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
   - every record by name, as a link: `[Renew passport](https://alfredv5vibe.vercel.app/<id>)`,
     never a bare URL;
   - quiet apps as "Jobs (3 days)";
+  - a repeated claim-block pair as "switchboard2-h8r and warren_buffet_p4-r6d: 12 blocks on Nov 7.
+    A no_parallel link is proposed." It counts yesterday only. One wait over several files is one
+    block, and `supabase/functions/mcp/index.ts` counts like any file;
+  - a setting that used its default is said once, plainly: "Using the default of 10 for
+    claim_block_max_per_day (not in the plan yet)." It is never a reason to leave a count out;
   - a schedule or task that stopped is **a bug to log**, said that way: "Log a bug:
     wb-sync has had no ok run since Oct 20." notify-dispatch writes no runs, so it is stopped only
     when a reminder sits unsent past its grace: "Log a bug: notify-dispatch has left a reminder
