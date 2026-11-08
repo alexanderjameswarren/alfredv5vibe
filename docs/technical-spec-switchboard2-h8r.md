@@ -146,7 +146,7 @@ Each client entry also says whether it allows an integration user. Team IMPACT a
 
 The setup questions: which sandboxes (all, or named); whether production is allowed; the access level; integration user or admin login; whether the CLI may deploy; the sandbox type; whether the contract allows client data to reach Claude.
 
-`sb client start` and `sb client end` are terminal-only, never by link: they are interactive and change protected config.
+`sb client end` and `sb org set` are terminal-only, never by link. `sb client start` and `sb org add` were terminal-only too. From s86 they can run by link, for sandboxes only and within the limits in §11.5, if Alex agrees (decision D1 there). A Claude session still never runs any `sb` command (§5.5); only the helper does, after his click.
 
 ### 5.5 Protection
 
@@ -474,10 +474,10 @@ The two weeks (decided in s49) count from the day git links first go live. **The
 
 ### 11.2 The allowlist
 
-**Allowed:** `gitpush`, `gitsync`, `gitcom`, `gitnewtree`, `sb deploy` and `sb test`, with checked arguments. The folder is chosen from the project code.
+**Allowed:** `gitpush`, `gitsync`, `gitcom`, `gitnewtree`, `sb deploy` and `sb test`, with checked arguments. From s86: the read-only sandbox checks (§11.4), and `sb client start` and `sb org add` within §11.5's limits. The folder is chosen from the project code.
 
 **Refused:**
-- `sb client start` and `sb client end`, which are terminal-only (§5.4).
+- `sb client end` and `sb org set`, which are terminal-only (§5.4), and any `sb` setup outside §11.5's limits.
 - Known traps, for example Finish while that worktree's window is open.
 - Anything on production.
 
@@ -500,7 +500,113 @@ The headline names the command, the project and what the click changes, for exam
 
 The tool checks the same rules as the helper's `planAction` (switchboard `helper/lib/core.mjs`). The helper checks them again when it runs, plus what only the machine knows: projects.json, whether the project has a worktree or is main's, and the modes each checkout takes. A refusal there is posted to `/result` as failed.
 
-Authenticated can't insert into `switchboard_actions` (migration 189), so the tool queues through `switchboard_queue_git(p_project_code, p_payload, p_headline, p_chat_url)`. This is a SECURITY DEFINER function, granted to authenticated only, that inserts a `kind: git` row for `auth.uid()` with `created_by: 'claude'` and returns `{action_id}`. The table's checks and the guard trigger still apply. **The function doesn't exist yet;** s84's database step adds it.
+Authenticated can't insert into `switchboard_actions` (migration 189), so the tool queues through `switchboard_queue_git(p_project_code, p_payload, p_headline, p_chat_url)`. This is a SECURITY DEFINER function, granted to authenticated only, that inserts a `kind: git` row for `auth.uid()` with `created_by: 'claude'` and returns `{action_id}`. The table's checks and the guard trigger still apply. Migration 208 added it (s84c).
+
+### 11.4 Read-only sandbox checks (s86)
+
+**What they're for.** They let Claude see the state of a sandbox without asking Alex to run anything: is the alias the org we think it is, what metadata does it hold, and what differs from the worktree. They never touch records, objects or SOQL; those are §10's reads (s88-s92). The two never overlap: s86 has no `sobject`, no describe and no query, and s89 has no CLI command.
+
+**The checks.** Six, each one fixed template. The helper builds the argument list itself. The payload gives only the check's name, the alias and, for `metadata`, a type. The helper always adds `--target-org <alias> --json`.
+
+| Check | Command | Kept from the JSON | Lowest level |
+|---|---|---|---|
+| `org-verify` | `orgIdentity` (`sf org display`, then `sf org list`, as `sb org verify`) | orgId, isSandbox, how, and whether they match orgs.json | `objects` |
+| `limits` | `sf org list limits` | name, max and remaining for each limit | `objects` |
+| `metadata-types` | `sf org list metadata-types` | each type's xmlName | `metadata` |
+| `metadata` | `sf org list metadata --metadata-type <T>`, where T matches `^[A-Za-z]{1,80}$` | fullName, type and lastModifiedDate. Never lastModifiedByName or createdByName, which are people's names | `metadata` |
+| `retrieve-preview` | `sf project retrieve preview`, in the project's checkout | each component's fullName, type, state and path | `metadata` |
+| `deploy-preview` | `sf project deploy preview`, in the project's checkout | the same | `metadata` |
+
+**Left out, and why:**
+- `sf sobject list` and `describe` are §10's job, under its levels.
+- `sf data *`, `sf api request` and `apex run` are refused by the guard (§9.6).
+- `sf apex list log` and `get log`: debug logs carry record data.
+- Raw `sf org display`: its output carries the access token. `org-verify` keeps only identity fields.
+- `project deploy validate` and test runs run code in the org; they belong to the deploy wrapper (§9.7).
+
+**How the helper proves the target is a sandbox.** Before every check, it calls the guard's `checkOrg(alias, { repoRoot, fresh: true })` from `salesforce/guard.mjs`. That's the same function the shell guard and `sb deploy` use, with no cache.
+- **Salesforce is asked.** `sf org display` must say isSandbox true, or else `sf org list` or the sandbox instance URL must. If none says so, the org is treated as production.
+- **The org is matched.** The orgId must match an orgs.json entry listed for that project's repo. The alias name is never trusted.
+- **orgs.json agrees.** The entry must not record the org as production, and its `sandboxType` must not be `production`.
+- **Production is refused by link even when `productionAllowed` is on.** Production sf commands stay in Alex's terminal.
+
+A refusal is posted to `/result` as failed, with the reason, and sf never runs.
+
+**Output.** Only the kept fields go into `/result`, as JSON plus a one-line summary ending in `Result:`. Never sf's raw text: the helper reads only the JSON fields above, and on an sf error keeps only `sfJson`'s cleaned message. The row cap is §8.2's: 200 items, then it says how many more there are.
+
+**No click.** A check is `kind: sf_check`, needs_click false (decision D3), queued by Claude, and run one at a time per project when the helper next picks up. The result line in the chat is `sf <action id> done` or `failed`. Claude reads it with `get_switchboard_run`.
+
+**Expiry.** A queued no-click action that hasn't been picked up 10 minutes after it was queued is never run. The next pickup marks it failed, with a run whose summary reads "expired before the helper picked it up" (s86b1, in `switchboard_pickup_helper`).
+
+**Waking the helper (s86b1, proposed, not built).** The helper picks up only when it starts and when the panel writes `helper-pickup.json`. That happens when the extension sees an approval, and a check has no approval to see. (Alex refused a 15-second poll.)
+- **A. The extension sees the queue reply** *(recommended)*. `queue_switchboard_sf_check` tells Claude to end its message with a line `sf <action id> queued`. claude-watch already reads every Claude message for `sql` and `git` lines. On that line it asks the panel to write `helper-pickup.json`, as a git approval does. The helper's own header already expects this.
+  - Cost: none on the server, and the check runs within seconds.
+  - Limit: it only works while that chat is open in Chrome on the desktop. Elsewhere, from the Chromebook or a chat that isn't open, the check waits for the next approval or helper start, and fails after 10 minutes with the expiry summary. Claude then tells Alex to open the chat on the desktop, or just to approve something.
+- **B. Long-poll `/pickup`.** The helper keeps one `/pickup` open, and the runner holds it for up to about 50 seconds, checking the queue every few seconds, before it answers empty.
+  - It works from any device.
+  - But it is polling on the server side: about 1,700 runner calls a day while idle, and the Edge Function wall-clock limit to stay under. It's close to what Alex refused.
+- **C. A Realtime wake-up.** The helper keeps a Supabase Realtime socket open on a broadcast channel. `switchboard_queue_helper` sends an empty "wake" broadcast (`realtime.send`) for a no-click action, and the helper then does its usual authenticated `/pickup`.
+  - It's immediate and works from any device. The message carries nothing, so a stray wake only causes an empty pickup.
+  - But it costs the helper a supabase-js dependency, a socket and its reconnects, and the migration has to grant a realtime send. That's more moving parts than A.
+
+**Recommendation:** A in s86e. The 10-minute expiry is the backstop. Revisit C only if checks are often queued from somewhere other than the desktop.
+
+### 11.5 `sb` setup answers by link (s86)
+
+**Today** `sb client start` and `sb org add` ask up to eleven questions in the terminal:
+- `client start` asks for the aliases, which sandboxes may run, whether the client allows an integration user, and the panel display name;
+- then, per org: the type, whether production is allowed, the level, the login, whether the CLI may deploy, whether the contract allows client data to reach Claude, and whether the org is shared.
+
+Each config file it writes then waits for a typed yes, and a login that isn't stored opens the browser.
+
+**By link** (decision D1):
+1. Claude asks Alex the questions in the chat. Then it calls `queue_switchboard_sb_setup` with the answers: `command` (`client start` or `org add`), `client`, one source (`repo`, `adopt` or `from_sandbox`), `project`, `name`, `sandboxes`, `integration_ok`, and an `orgs` list of `{ alias, type, level, login, cli_deploy, shared }`. It returns an approval link, as git does.
+2. **The limits by link** (decision D2):
+   - the type is never `production`;
+   - the level is `objects` or `metadata`;
+   - `contract-ok` is not a payload key, so it's always no.
+
+   Production, `ids`, `data` and the contract flag stay with Alex in the terminal (`sb org add` or `sb org set`), where the typed yes is his.
+3. **The approve page** shows every answer in plain words. It names the files the click writes (repos.json, projects.json, orgs.json, and the repo's `.git/info/exclude`), and says that a Salesforce login may open in the browser on the desktop. The click is the yes. There's no dry run.
+4. **The helper** runs `sb client start` or `sb org add` in a visible window, with every answer as a flag plus `--by-link`. `sb` gains flags for the four start questions that have none: `--aliases`, `--sandboxes`, `--integration-ok` and `--name`. Under `--by-link`:
+   - a question with no answer refuses ("not answered in the link: <question>; nothing was written") instead of asking;
+   - each config write prints its diff and takes the click as its yes;
+   - `sf org login web` still opens the browser, and Alex logs in there.
+5. **The result line** is `sb <action id> done` or `failed`, and the summary ends with `sb`'s own last line.
+
+**Kinds.** `sf_check` (no click) and `sb_setup` (always a click) are new values for `switchboard_actions.kind`, so s86 needs a migration (§11.6).
+
+### 11.6 s86's database change
+
+- **Kinds:** `switchboard_actions_kind_valid` adds `sf_check` and `sb_setup`.
+- **Payload checks**, as constraints:
+  - an `sf_check` has a `check` from the six and an `alias` string;
+  - an `sb_setup` has a `command` of `client start` or `org add`, and an `orgs` array.
+
+  The full rules are in the tool and the helper, as for git.
+- **`switchboard_needs_click`:** `sf_check` false, `sb_setup` true.
+- **`switchboard_queue_helper(p_kind, p_project_code, p_payload, p_headline, p_chat_url)`:** 208's function for any helper kind (git, sf_check, sb_setup), SECURITY DEFINER, authenticated only. `switchboard_queue_git` stays and calls it.
+- **NULL-safe checks (s86b1).** A CHECK passes on NULL, so every payload condition is coalesced to false: a missing key, a JSON null or a non-string fails. The array lengths sit behind a CASE, since `jsonb_array_length` raises on a non-array.
+- **`switchboard_pickup_helper(p_user)`:** `switchboard_pickup_git` for those three kinds, still one running per project. It returns `kind` too. First, it fails any queued no-click action more than 10 minutes old, with a run saying why (§11.4). `switchboard_pickup_git` stays until the runner has moved over (s86c), and goes later.
+- The test is `supabase/tests/switchboard2-h8r/8_verify_helper_kinds.sql`; s87's becomes `9_verify_panel_snapshot.sql`.
+
+### 11.7 s86 decisions
+
+**Decided by Alex at s86b:**
+- D1: A, sb client start and sb org add by link.
+- D2: A. The database refuses the rest too: the sb_setup payload check in s86b's migration.
+- D3: A, no click.
+- D4: a developer sandbox, with sb org add by link in the live test. He names the alias at s86f.
+
+The options as s86a put them:
+
+- **D1, `sb` setup by link or not.**
+  - A, by link within §11.5's limits *(recommended: it is what the s48 plan asked for, and the answers are checked twice)*;
+  - B, terminal only, with Claude giving one line that carries every answer as a flag. This drops `sb_setup`, its tool, its approve-page view and its helper code, and saves about 15m;
+  - C, both.
+- **D2, the limits by link.** A, sandboxes only, level objects or metadata, the contract flag never *(recommended: Claude must not be able to raise its own access by link)*; B, any level, with a warning on the page.
+- **D3, sandbox checks without a click.** A, no click from day one *(recommended: read-only, sandbox-proven and field-filtered)*; B, a click for the first two weeks, as gitcom and gitsync had.
+- **D4, the live test's sandbox.** Which listed developer sandbox alias to use, and whether to try `sb org add` by link on a real second sandbox or skip that test.
 
 ## 12. Phase 6 — spec files and archiving
 

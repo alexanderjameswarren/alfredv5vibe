@@ -100,7 +100,11 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 5 git | s84t2 | The mcp half of s84s | `db:deploy` | done (s84t2-r6mh), after confirming main is merged. mcp/index.ts: get_switchboard_run advertises `project_code` and says what succeeded and failed mean for git; queue_switchboard_git says the result line arrives by itself, also mentions "check the git run", and says chat_url is optional, chat addresses only. 1 new test, 91 pass. mcp deployed. Live: project_code switchboard2-h8r returned the gitsync action 440ff091 (succeeded, summary ending "Merged main into worktree-switchboard2-h8r"); "Bad Code" was refused | 2026-11-06 |
 | 5 git | s84f | Git result lines in the chat (switchboard repo) | — | todo. The extension posts `sql <id>` for every approval (`runLine` ignores kind; POST_LINE allows only `sql <uuid>`), so a git approval posts the wrong line. Nothing posts the outcome after the helper's /result: the panel tile shows Git done or Git failed, and that's all | |
 | 5 git | s85 | Skill and CLAUDE.md for git by link; dot-folder paths; stale claims | `db:deploy` | done (s85-h3cz), live test pending. cli-workflow 2026-11-06b adds a "Git by link" section; a reply with a git link carries no prompt; a prompt offered again is repeated whole with its Send link. CLAUDE.md: Alex runs git by link, and nothing changes for the CLI. switchboard.ts: `usablePath` accepts dot-folder segments (.claude/...) and refuses ., .., a leading / or -, drive letters, backslashes and empty segments; 2 new tests, 51 pass. mcp deployed. Released the 20 docs-tidy claims, mcp/index.ts and index.test.mjs. **Open:** the helper's PATH_WORD (switchboard helper/lib/core.mjs:31) still refuses .claude paths at run time | 2026-11-06 |
-| 5 git | s86-s87 | Sandbox sf checks, `sb client` answers and the panel snapshot | see below | todo | |
+| 5 git | s86a | Design of s86 | — | done (s86a-p5ke): spec §11.4-11.7. Six read-only checks, with the guard's `checkOrg` run fresh before each; production refused by link; sb setup by link within limits; new kinds `sf_check` and `sb_setup` (a migration). Split into s86b, s86c, s86e, s86d and s86f, in that order. Spec §5.4 and §11.2 updated to match; §11.3's "doesn't exist yet" corrected. Alex decided at s86b: D1 A, D2 A, D3 A, and D4 a developer sandbox with sb org add by link, the alias named at s86f | 2026-11-06 |
+| 5 git | s86b | Helper kinds: migration and test | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_needs_click`, `db:fn:switchboard_queue_helper`, `db:fn:switchboard_queue_git`, `db:fn:switchboard_pickup_helper` | written (s86b-d2sq), not numbered or applied. `_pending_switchboard2-h8r_helper_kinds.sql`: kinds sf_check and sb_setup; an sf_check payload check (the six checks, the alias, metadata_type only for metadata, no other key); an sb_setup payload check holding D2 (types developer, developer_pro, partial or full; level objects or metadata; no contract key; only known keys); needs_click (sf_check false, sb_setup true); `switchboard_queue_helper`; `switchboard_queue_git` through it; `switchboard_pickup_helper` (returns kind). `8_verify_helper_kinds.sql`: 45 checks, or 43 when a real action is ready and the pickup checks are skipped. Live: the migration plus the test, in one rolled-back --test run, queued as action d5d5c58c-a0ce-468c-a3eb-2b242a3cde3a; result not in yet. db claims released at the end of the step. That run (11a56942) passed 43 of 45: sf_missing_alias_refused and sf_metadata_without_type_refused failed, because a CHECK passes on NULL | 2026-11-06 |
+| 5 git | s86b1 | NULL-safe checks, expiry, wake-up options | as s86b, plus `db:deploy` | written (s86b1-f7wr), not numbered or applied. Both payload checks coalesce every condition to false, and the array lengths sit behind a CASE; the NULL paths are now tested (6 for sf_check, 9 for sb_setup). switchboard_pickup_helper fails queued no-click actions over 10 minutes old, with a run saying "expired before the helper picked it up"; tested with back-dated rows, including an old clicked action that must not expire. The test has 64 checks, or 58 when the pickup checks are skipped. Wake-up options A, B and C are in spec §11.4; A (the extension sees `sf <id> queued`) is recommended. Rolled-back test queued as action f24fe176-f6e6-48dc-8571-a943bb542b7f; it passed 64 of 64 | 2026-11-06 |
+| 5 git | s86ba | Number and queue the helper-kinds migration (was s86b2) | as s86b, plus `db:deploy` | queued (s86ba-m3jt), not applied yet. Alex's gitsync (b865a364) brought in 216 and 217, which don't touch switchboard (217 only names 206 in a comment), so it's 218. 218_switchboard_helper_kinds.sql is byte-identical to the tested pending file, which is deleted. Apply queued as a91ed98a-921a-4e3a-a5b9-9c41c1d787ce; 8_verify_helper_kinds.sql queued with --test to run after it, as f154bc53-a728-41af-b0a1-897143083263. Conformance before: CONFORMANT (103). The schema snapshot is left to gitpush. db claims held until the checkpoint | 2026-11-06 |
+| 5 git | s86b-s86f, s87 | Sandbox checks and sb setup by link (see below), the panel snapshot | see below | todo | |
 | 4 | s88-s92 | Salesforce reads: spec §10 | see below | todo | |
 | 5 SF | s93-s96 | Salesforce actions by link: spec §11 | see below | todo | |
 | 6-8 | | Spec §12-§14 | | todo | |
@@ -585,12 +589,51 @@ The helper arrives here rather than with Phase 4. Every git link needs a click f
 **s85, skill, CLAUDE.md, live test of all four** (estimated run: 8m).
 - update: .claude/CLAUDE.md, .claude/skills/cli-workflow/SKILL.md
 
-**s86, sandbox sf checks and `sb client` answers by link** (estimated run: 12m). Read-only sf checks on a sandbox run as no-click links; the answers `sb client` setup asks for are sent by link. Production sf commands stay in Alex's terminal, never by link.
-- update: helper/, sb/, supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs
+**s86, sandbox sf checks and `sb` setup answers by link.** Designed in s86a: spec §11.4-11.7. Read-only checks on a sandbox run without a click; `sb client start` and `sb org add` answers go by link; production stays in Alex's terminal. Decided at s86b: D1-D3 are A, so every part below stays (spec §11.7). Run in this order.
+
+**s86ba, number and queue the migration** (renamed from s86b2: the Send extension still misreads a digit after a letter in a step name; database step; window switchboard2-h8r; estimated run: 6m). After Alex's gitsync, and after the rolled-back test passes. Done in s86ba-m3jt: see the table.
+- Take the next free number, write it, and delete the `_pending_` file.
+- Queue the migration. After it's approved, queue `8_verify_helper_kinds.sql` with --test, and run check_platform_conformance.
+- create: supabase/migrations/<NNN>_switchboard_helper_kinds.sql. Declare the exact number in the prompt.
+- delete: supabase/migrations/_pending_switchboard2-h8r_helper_kinds.sql
+- SQL: switchboard_actions, switchboard_runs
+- db items: the s86b list, plus `db:deploy`
+
+**s86b, helper kinds** (database step; window switchboard2-h8r; estimated run: 12m). Spec §11.6. Written as `_pending_`, then numbered in s86b2 after gitsync. Live test: the test script with --test.
+- create: supabase/migrations/_pending_switchboard2-h8r_helper_kinds.sql, supabase/tests/switchboard2-h8r/8_verify_helper_kinds.sql
+- SQL: switchboard_actions, switchboard_runs
+- db items: `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_needs_click`, `db:fn:switchboard_queue_helper`, `db:fn:switchboard_queue_git`, `db:fn:switchboard_pickup_helper`, `db:deploy`
+
+**s86c, runner: helper kinds** (window switchboard2-h8r; estimated run: 10m).
+- /pickup calls `switchboard_pickup_helper` and returns `kind`.
+- /preview, /approve and /cancel treat `sb_setup` as they treat git.
+- An `sf_check` has no link. Live check: a bad token gets 401 or 404.
+- update: supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs, supabase/functions/switchboard-runner/index.ts
+- deploy: switchboard-runner
+- db items: `db:deploy`
+
+**s86e, helper, sb and extension** (window switchboard_repo-k7m; estimated run: 20m).
+- planAction for `sf_check`: the six templates, `checkOrg` fresh, production refused, the kept fields only. And for `sb_setup`: the limits, then `sb ... --by-link`.
+- `sb` gains `--aliases`, `--sandboxes`, `--integration-ok`, `--name` and `--by-link`.
+- The extension posts `sf <id> done|failed` and `sb <id> done|failed|cancelled`.
+- Reinstall Switchboard and reload the extension in one step, with an Expected line naming the version.
+- update: helper/lib/core.mjs, helper/lib/core.test.mjs, helper/helper.mjs, sb/lib/client.mjs, sb/lib/client.test.mjs, sb/lib/org.mjs, sb/lib/store.mjs, sb/lib/sb.test.mjs, extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, extension/claude-watch.js, README.md
+
+**s86d, tools and approve page** (window switchboard2-h8r; estimated run: 15m). After s86e, so the helper understands what the tools queue.
+- Two new tools: `queue_switchboard_sf_check` (no link; returns the action id and says the result line arrives by itself) and `queue_switchboard_sb_setup` (a link).
+- The approve page shows `sb_setup` in plain words.
+- Live check: a bad payload is refused for each tool.
+- update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, docs/technical-spec-switchboard2-h8r.md
 - deploy: mcp
+- db items: `db:deploy`
+
+**s86f, live test** (claude.ai only, no code; about 10m of Alex's time).
+- `org-verify` and `limits` on D4's sandbox.
+- A check on an alias not listed for the repo is refused before sf runs.
+- If D4 says so, `sb org add` by link for a second sandbox.
 
 **s87, panel snapshot in Supabase** (database step; estimated run: 12m). After git by link: the panel writes a snapshot of its tiles to Supabase, and an Alfred tool reads it.
-- create: supabase/migrations/_pending_switchboard2-h8r_panel_snapshot.sql, supabase/tests/switchboard2-h8r/8_verify_panel_snapshot.sql
+- create: supabase/migrations/_pending_switchboard2-h8r_panel_snapshot.sql, supabase/tests/switchboard2-h8r/9_verify_panel_snapshot.sql
 - update: panel/, supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts
 - deploy: mcp
 
@@ -639,7 +682,8 @@ Each is claimed at its step, never before, and released by Checkpoint.
 | s80 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_issue_link` |
 | s81 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:deploy` |
 | s84 | `db:table:switchboard_actions`, `db:deploy` |
-| s86 | `db:table:switchboard_actions`, `db:deploy` |
+| s86b | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_needs_click`, `db:fn:switchboard_queue_helper`, `db:fn:switchboard_queue_git`, `db:fn:switchboard_pickup_helper`, `db:deploy` |
+| s86c, s86d | `db:deploy` |
 | s87 | the snapshot table (named at s87), `db:deploy` |
 | s88 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:switchboard_settings` |
 | s90, s91 | `db:table:switchboard_runs`, `db:deploy` |
