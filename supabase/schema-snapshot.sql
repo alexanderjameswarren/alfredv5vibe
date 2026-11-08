@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-08 09:30, through migration 218 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-08 12:02, through migration 219 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -4956,6 +4956,7 @@ declare
   v_plan     public.overwatch_plans%rowtype;
   v_s        jsonb;
   v_missing  jsonb;
+  v_lim      jsonb;
   v_since    timestamptz;
   v_stall    int;
   v_wait     int;
@@ -4966,6 +4967,10 @@ declare
   v_backlog  int;
   v_low      numeric;
   v_stale    int;
+  v_cb_max   int;
+  v_unrouted int;
+  v_bl_old   int;
+  v_gap      int;
   v_seen     timestamptz;
   v_projects jsonb;
   v_count    int;
@@ -4990,16 +4995,52 @@ begin
   v_limit   := (v_s ->> 'active_project_limit')::int;
   v_backlog := (v_s ->> 'inbox_backlog_threshold')::int;
   v_low     := (v_s ->> 'routing_low_confidence')::numeric;
-  v_stale   := coalesce((v_s ->> 'inventory_stale_days')::int, 7);
 
+  -- Keys with no default: a missing one leaves its count out.
   select coalesce(jsonb_agg(k), '[]'::jsonb) into v_missing
     from unnest(array['stall_days', 'waiting_on_alex_days', 'fading_days', 'overdue_days', 'overrun_factor',
                       'active_project_limit', 'inbox_backlog_threshold', 'routing_low_confidence',
                       'urgent_within_days']) k
    where not v_s ? k;
-  if not v_s ? 'inventory_stale_days' then
-    v_missing := v_missing || '["inventory_stale_days (used 7)"]'::jsonb;
-  end if;
+
+  -- Keys with a default: the plan's value when it is a positive whole number, else the default, named as missing.
+  with d(ord, k, path, dflt) as (values
+    (1, 'inventory_stale_days', array['inventory_stale_days'], 7),
+    (2, 'claim_block_max_per_day', array['claim_block_max_per_day'], 10),
+    (3, 'unrouted_stale_hours', array['unrouted_stale_hours'], 24),
+    (4, 'inbox_backlog_old_days', array['inbox_backlog_old_days'], 5),
+    (5, 'scan_gap_nights', array['scan_gap_nights'], 3),
+    (6, 'pull_max_calls_per_app', array['pull_max_calls_per_app'], 2),
+    (7, 'fading_max_items', array['fading_max_items'], 10),
+    (8, 'finish_summaries_per_night', array['finish_summaries_per_night'], 3),
+    (9, 'impact_max_tables', array['impact_max_tables'], 5),
+    (10, 'impact_max_follow_ups', array['impact_max_follow_ups'], 5),
+    (11, 'impact_max_profile_rewrites', array['impact_max_profile_rewrites'], 2),
+    (12, 'nightly_checks.silence_hours', array['nightly_checks', 'silence_hours'], 36)
+  ), e as (
+    select d.ord, d.k, d.dflt,
+           -- case, not and: the cast must never see a string.
+           case when jsonb_typeof(v_s #> d.path) = 'number'
+                then (v_s #>> d.path)::numeric > 0 and (v_s #>> d.path)::numeric = trunc((v_s #>> d.path)::numeric)
+                else false end as ok,
+           v_s #>> d.path as given
+      from d
+  )
+  select jsonb_object_agg(e.k, case when e.ok then e.given::int else e.dflt end),
+         v_missing || coalesce(jsonb_agg(format('%s (used %s)', e.k, e.dflt) order by e.ord) filter (where not e.ok), '[]'::jsonb)
+    into v_lim, v_missing
+    from e;
+
+  v_lim := jsonb_build_object(
+    'stall_days', v_stall, 'waiting_on_alex_days', v_wait, 'fading_days', v_fading, 'overdue_days', v_overdue,
+    'overrun_factor', v_factor, 'active_project_limit', v_limit, 'inbox_backlog_threshold', v_backlog,
+    'routing_low_confidence', v_low, 'urgent_within_days', (v_s ->> 'urgent_within_days')::int) || v_lim;
+
+  v_stale    := (v_lim ->> 'inventory_stale_days')::int;
+  v_cb_max   := (v_lim ->> 'claim_block_max_per_day')::int;
+  v_unrouted := (v_lim ->> 'unrouted_stale_hours')::int;
+  v_bl_old   := (v_lim ->> 'inbox_backlog_old_days')::int;
+  v_gap      := (v_lim ->> 'scan_gap_nights')::int;
 
   select n.created_at into v_since from public.overwatch_notes n
    where n.period = 'nightly' and n.for_date < v_local
@@ -5057,26 +5098,30 @@ begin
       'checks_later', (select coalesce(jsonb_agg(c), '[]'::jsonb) from jsonb_array_elements(v_plan.checks_next_run) c
                         where (c ->> 'check_on')::date > v_local)),
     'settings_missing', v_missing,
+    'limits', v_lim,
     'checks_due', (select coalesce(jsonb_agg(c), '[]'::jsonb) from jsonb_array_elements(v_plan.checks_next_run) c
                     where (c ->> 'check_on')::date <= v_local),
     'projects', v_projects,
     'estimated_finish', v_finish);
 
-  -- The run's own row is in today's list; Claude leaves out its own id.
-  v_r := v_r || jsonb_build_object('prior_runs', jsonb_build_object(
-    'today', (select coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'started_at', t.started_at, 'status', t.status,
-                                                           'reminders_sent', t.details -> 'reminders_sent')
-                                        order by t.started_at desc), '[]'::jsonb)
-                from public.platform_runs t
-               where t.app = 'overwatch' and t.job = 'nightly' and (t.started_at at time zone c_tz)::date = v_local),
-    'last_two', (select coalesce(jsonb_agg(jsonb_build_object('id', l.id, 'started_at', l.started_at,
-                                                              'skipped', l.details -> 'skipped')
-                                           order by l.started_at desc), '[]'::jsonb)
-                   from (select * from public.platform_runs t
-                          where t.app = 'overwatch' and t.job = 'nightly' and t.status <> 'running'
-                            and not t.details ? 'duplicate_of'
-                            and (t.started_at at time zone c_tz)::date < v_local
-                          order by t.started_at desc limit 2) l)));
+  -- The run's own row is in today's list; Claude leaves out its own id. previous holds scan_gap_nights - 1 runs for the
+  -- scan-gap rule; last_two is the same list cut to two, kept until the s4 prompt (which reads previous) is pasted.
+  v_r := v_r || jsonb_build_object('prior_runs', (
+    select jsonb_build_object(
+      'today', (select coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'started_at', t.started_at, 'status', t.status,
+                                                             'reminders_sent', t.details -> 'reminders_sent')
+                                          order by t.started_at desc), '[]'::jsonb)
+                  from public.platform_runs t
+                 where t.app = 'overwatch' and t.job = 'nightly' and (t.started_at at time zone c_tz)::date = v_local),
+      'previous', coalesce(jsonb_agg(l.entry order by l.started_at desc) filter (where l.rn <= v_gap - 1), '[]'::jsonb),
+      'last_two', coalesce(jsonb_agg(l.entry order by l.started_at desc) filter (where l.rn <= 2), '[]'::jsonb))
+      from (select t.started_at, row_number() over (order by t.started_at desc) as rn,
+                   jsonb_build_object('id', t.id, 'started_at', t.started_at, 'skipped', t.details -> 'skipped') as entry
+              from public.platform_runs t
+             where t.app = 'overwatch' and t.job = 'nightly' and t.status <> 'running'
+               and not t.details ? 'duplicate_of'
+               and (t.started_at at time zone c_tz)::date < v_local
+             order by t.started_at desc limit greatest(v_gap - 1, 2)) l));
 
   -- Apps, activity and quiet.
   with last_use as (
@@ -5164,12 +5209,14 @@ begin
     'followup_open_first_lines', (select coalesce(jsonb_agg(b.first_line), '[]'::jsonb) from b where b.first_line like 'Overwatch: follow-up%'),
     'unrouted', jsonb_build_array(jsonb_build_object(
       'total', (select count(*) from b where b.source_app is null),
-      'older_than_one_day', (select count(*) from b where b.source_app is null and b.created_at < p_as_of - interval '1 day'))),
+      'older_than_stale', (select count(*) from b where b.source_app is null
+                             and b.created_at < p_as_of - make_interval(hours => v_unrouted)),
+      'stale_hours', v_unrouted)),
     'inbox_urgent', jsonb_build_object(
       'unrouted_old', (select coalesce(jsonb_agg(jsonb_build_object('id', b.id, 'first_line', b.first_line)), '[]'::jsonb)
-                         from b where b.source_app is null and b.created_at < p_as_of - interval '1 day'),
+                         from b where b.source_app is null and b.created_at < p_as_of - make_interval(hours => v_unrouted)),
       'backlog_old', (select coalesce(jsonb_agg(by_app.app), '[]'::jsonb) from by_app
-                       where by_app.total > v_backlog and by_app.oldest_days > v_stall),
+                       where by_app.total > v_backlog and by_app.oldest_days > v_bl_old),
       'low_confidence', (select coalesce(jsonb_agg(low.id), '[]'::jsonb) from low)))
   || case when v_backlog is null then '{}'::jsonb else jsonb_build_object('backlogs', (
        select coalesce(jsonb_agg(jsonb_build_object('app', by_app.app, 'total', by_app.total, 'oldest_days', by_app.oldest_days)
@@ -5231,16 +5278,19 @@ begin
                                 order by r.started_at), '[]'::jsonb)
         from public.platform_runs r
        where r.status = 'running' and (r.started_at at time zone c_tz)::date < v_local),
-    -- Three or more episodes between one pair in 30 days, unless the pair already has a no_parallel link.
+    -- Yesterday's Pacific day only. One wait is one episode however many files it covered; both directions of a pair
+    -- add together. Flagged above claim_block_max_per_day, unless the pair already has a no_parallel link.
     'claim_blocks', (
-      select coalesce(jsonb_agg(jsonb_build_object('code_a', c.code_a, 'code_b', c.code_b, 'episodes', c.episodes,
-                                                   'group_a', pa.group_id, 'group_b', pb.group_id)
-                                order by c.episodes desc), '[]'::jsonb)
-        from (select least(k.waiter_code, k.holder_code) as code_a, greatest(k.waiter_code, k.holder_code) as code_b,
-                     count(distinct k.blocked_at)::int as episodes
-                from public.claim_blocks k
-               where k.blocked_at >= ((v_local - 30)::timestamp at time zone c_tz)
-               group by 1, 2 having count(distinct k.blocked_at) >= 3) c
+      select coalesce(jsonb_agg(jsonb_build_object('code_a', c.code_a, 'code_b', c.code_b, 'day', v_local - 1,
+                                                   'episodes', c.episodes, 'group_a', pa.group_id, 'group_b', pb.group_id)
+                                order by c.episodes desc, c.code_a, c.code_b), '[]'::jsonb)
+        from (select least(e.waiter_code, e.holder_code) as code_a, greatest(e.waiter_code, e.holder_code) as code_b,
+                     count(*)::int as episodes
+                from (select distinct k.waiter_code, k.holder_code, k.blocked_at
+                        from public.claim_blocks k
+                       where k.blocked_at >= ((v_local - 1)::timestamp at time zone c_tz)
+                         and k.blocked_at < (v_local::timestamp at time zone c_tz)) e
+               group by 1, 2 having count(*) > v_cb_max) c
         left join public.project_plans pa on pa.project_code = c.code_a
         left join public.project_plans pb on pb.project_code = c.code_b
        where not exists (
@@ -5340,7 +5390,7 @@ $$;
 ALTER FUNCTION "public"."overwatch_nightly_counts"("p_as_of" timestamp with time zone) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."overwatch_nightly_counts"("p_as_of" timestamp with time zone) IS 'Overwatch: most of the nightly counts as one JSON object, its flags keys matching overwatch_notes.flags. Reads the active plan itself and works in America/Los_Angeles days from p_as_of, which pins the clock and does not rewind the data. A count whose setting is missing is left out and named in settings_missing. Fading is one-off active intentions only: items never fade. Invoker: RLS decides the rows. Backs get_overwatch_nightly_counts. Spec: docs/technical-spec-nightly_counts-f8k.md.';
+COMMENT ON FUNCTION "public"."overwatch_nightly_counts"("p_as_of" timestamp with time zone) IS 'Overwatch: most of the nightly counts as one JSON object, its flags keys matching overwatch_notes.flags. Reads the active plan itself and works in America/Los_Angeles days from p_as_of, which pins the clock and does not rewind the data. A count whose setting has no default and is missing is left out and named in settings_missing; a setting with a default that is missing or not a positive whole number uses the default and is named as "<key> (used <n>)". limits holds every effective value. Fading is one-off active intentions only: items never fade. Invoker: RLS decides the rows. Backs get_overwatch_nightly_counts. Spec: docs/technical-spec-overwatch_settings-t3k.md.';
 
 
 
@@ -12876,7 +12926,7 @@ CREATE TABLE IF NOT EXISTS "public"."claim_blocks" (
 ALTER TABLE "public"."claim_blocks" OWNER TO "postgres";
 
 
-COMMENT ON TABLE "public"."claim_blocks" IS 'OVERWATCH. History of claims blocks between CLI threads, one row per episode: a waiting project refused a file or folder another project holds, from blocked_at until the holder let go (cleared_at). The local blocks file keeps only live blocks; this keeps them all. Written only by the overwatch-ingest edge function from events the claims script sends. Three or more episodes between the same pair of codes inside 30 days make the nightly job propose a no_parallel project link. Spec: docs/technical-spec-overwatch-q4n.md section 4.5.';
+COMMENT ON TABLE "public"."claim_blocks" IS 'OVERWATCH. History of claims blocks between CLI threads, one row per episode: a waiting project refused a file or folder another project holds, from blocked_at until the holder let go (cleared_at). The local blocks file keeps only live blocks; this keeps them all. Written only by the overwatch-ingest edge function from events the claims script sends. One wait over several files is one episode (same waiter_code, holder_code, blocked_at). More than the plan''s claim_block_max_per_day episodes between a pair on one Pacific day make the nightly job propose a no_parallel project link. Spec: docs/technical-spec-overwatch_settings-t3k.md.';
 
 
 
