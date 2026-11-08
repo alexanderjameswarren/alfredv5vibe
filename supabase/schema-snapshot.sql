@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-06 10:28, through migration 217 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-08 09:30, through migration 218 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -8273,8 +8273,10 @@ CREATE OR REPLACE FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "
     AS $$
   select case
     when p_kind = 'git' and p_payload->>'command' in ('gitpush', 'gitnewtree') then true  -- touches main: always
-    when p_kind = 'git' then true  -- gitcom, gitsync: a click for the first two weeks
-    else true                      -- sql, docs and Salesforce: a click until their own steps say otherwise
+    when p_kind = 'git' then true       -- gitcom, gitsync: a click for the first two weeks
+    when p_kind = 'sf_check' then false -- read-only, on a sandbox the helper proves first (spec 11.4)
+    when p_kind = 'sb_setup' then true  -- writes Switchboard's config: always
+    else true                           -- sql, docs and the rest of Salesforce: a click until their own steps say otherwise
   end;
 $$;
 
@@ -8282,7 +8284,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_payload" "jsonb", "p_created_by" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_payload" "jsonb", "p_created_by" "text") IS 'Switchboard: whether an action waits for Alex''s click, from its kind, payload and who queued it (spec 11.1). gitpush and gitnewtree always do. gitcom and gitsync do for the first two weeks of git links. Everything else does for now. Called by the guard trigger, so a caller never sets needs_click.';
+COMMENT ON FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_payload" "jsonb", "p_created_by" "text") IS 'Switchboard: whether an action waits for Alex''s click, from its kind, payload and who queued it (spec 11.1, 11.4). git always does for now; sf_check never does; sb_setup always does; everything else does. Called by the guard trigger, so a caller never sets needs_click.';
 
 
 
@@ -8333,6 +8335,67 @@ COMMENT ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") IS 'Switc
 
 
 
+CREATE OR REPLACE FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_action public.switchboard_actions;
+  v_run    uuid;
+begin
+  if p_user is null then
+    raise exception 'switchboard_pickup_helper: no user.' using errcode = '22004';
+  end if;
+
+  -- A no-click action must not run long after it was queued: past 10 minutes it fails, with a run saying why.
+  with expired as (
+    update public.switchboard_actions
+       set status = 'failed'
+     where user_id = p_user and kind in ('git', 'sf_check', 'sb_setup') and status = 'queued' and not needs_click
+       and picked_up_at is null and created_at < now() - interval '10 minutes'
+    returning id
+  )
+  insert into public.switchboard_runs (user_id, action_id, mode, summary, result, finished_at)
+  select p_user, id, 'real', 'expired before the helper picked it up: queued over 10 minutes ago, never run',
+         jsonb_build_object('ok', false, 'expired', true), now()
+    from expired;
+
+  -- Ready: clicked (consumed), or queued and needing no click. Not while that project has one running.
+  select a.* into v_action from public.switchboard_actions a
+   where a.user_id = p_user and a.kind in ('git', 'sf_check', 'sb_setup') and a.picked_up_at is null
+     and (a.status = 'consumed' or (a.status = 'queued' and not a.needs_click))
+     and not exists (select 1 from public.switchboard_actions b
+                      where b.user_id = p_user and b.kind in ('git', 'sf_check', 'sb_setup')
+                        and b.project_code = a.project_code
+                        and b.picked_up_at is not null and b.status = 'consumed')
+   order by a.created_at, a.id
+   limit 1
+   for update skip locked;
+  if not found then
+    return null;
+  end if;
+
+  update public.switchboard_actions
+     set picked_up_at = now(), status = 'consumed'
+   where id = v_action.id;
+  insert into public.switchboard_runs (user_id, action_id, mode, summary)
+  values (p_user, v_action.id, 'real', 'picked up by the helper')
+  returning id into v_run;
+
+  return jsonb_build_object('action_id', v_action.id, 'run_id', v_run, 'kind', v_action.kind,
+                            'project_code', v_action.project_code, 'payload', v_action.payload,
+                            'fingerprint', v_action.fingerprint, 'headline', v_action.headline, 'chat_url', v_action.chat_url);
+end;
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid") IS 'Switchboard: hand the helper the oldest action of p_user, of kind git, sf_check or sb_setup, that is ready to run: clicked, or queued and needing no click. A queued no-click action over 10 minutes old is marked failed first, with a run whose summary says it expired, and is never run. One running at a time per project code, across those kinds. Sets picked_up_at, marks it consumed and opens a real run row. Returns {action_id, run_id, kind, project_code, payload, fingerprint, headline, chat_url}, or null. Called by switchboard-runner with the service role after it checks the pickup key. switchboard_pickup_git stays until the runner moves over (s86c).';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."switchboard_prune_runs"() RETURNS integer
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public', 'pg_temp'
@@ -8357,6 +8420,21 @@ COMMENT ON FUNCTION "public"."switchboard_prune_runs"() IS 'Switchboard: clear t
 
 
 CREATE OR REPLACE FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text" DEFAULT NULL::"text") RETURNS "jsonb"
+    LANGUAGE "sql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+  select public.switchboard_queue_helper('git', p_project_code, p_payload, p_headline, p_chat_url);
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") IS 'Switchboard: queue a git action for the signed-in caller and return {action_id}: switchboard_queue_helper with kind git. Called by the queue_switchboard_git tool (spec 11.3).';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text" DEFAULT NULL::"text") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public', 'pg_temp'
     AS $$
@@ -8365,28 +8443,32 @@ declare
   v_id   uuid;
 begin
   if v_user is null then
-    raise exception 'switchboard_queue_git: no signed-in user.' using errcode = '28000';
+    raise exception 'switchboard_queue_helper: no signed-in user.' using errcode = '28000';
+  end if;
+  if p_kind is null or p_kind not in ('git', 'sf_check', 'sb_setup') then
+    raise exception 'switchboard_queue_helper: % is not a helper kind (git, sf_check, sb_setup).', coalesce(p_kind, 'null')
+      using errcode = '23514';
   end if;
   if p_payload is null or jsonb_typeof(p_payload) <> 'object' then
-    raise exception 'switchboard_queue_git: the payload must be a JSON object.' using errcode = '23514';
+    raise exception 'switchboard_queue_helper: the payload must be a JSON object.' using errcode = '23514';
   end if;
   if p_headline is null or btrim(p_headline) = '' then
-    raise exception 'switchboard_queue_git: a headline is required.' using errcode = '23514';
+    raise exception 'switchboard_queue_helper: a headline is required.' using errcode = '23514';
   end if;
 
   -- The guard trigger sets fingerprint, status and needs_click; the table's checks refuse a bad code or payload.
   insert into public.switchboard_actions (user_id, kind, project_code, payload, headline, chat_url, created_by)
-  values (v_user, 'git', p_project_code, p_payload, btrim(p_headline), p_chat_url, 'claude')
+  values (v_user, p_kind, p_project_code, p_payload, btrim(p_headline), p_chat_url, 'claude')
   returning id into v_id;
   return jsonb_build_object('action_id', v_id);
 end;
 $$;
 
 
-ALTER FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") IS 'Switchboard: queue a git action for the signed-in caller, as created_by claude, and return {action_id}. Kind git only. The guard trigger sets fingerprint, status and needs_click; the git payload check refuses an unknown command or a gitpush with no mode. The link is issued separately by switchboard_issue_link. Called by the queue_switchboard_git tool (spec 11.3).';
+COMMENT ON FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") IS 'Switchboard: queue an action the desktop helper runs (kind git, sf_check or sb_setup) for the signed-in caller, as created_by claude, and return {action_id}. The guard trigger sets fingerprint, status and needs_click; the payload checks refuse what the kind does not allow. A link, where the kind needs a click, is issued separately by switchboard_issue_link (spec 11.3-11.6).';
 
 
 
@@ -16985,9 +17067,19 @@ CREATE TABLE IF NOT EXISTS "public"."switchboard_actions" (
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "picked_up_at" timestamp with time zone,
     CONSTRAINT "switchboard_actions_git_payload" CHECK ((("kind" <> 'git'::"text") OR (COALESCE(("payload" ->> 'command'::"text"), ''::"text") = ANY (ARRAY['gitcom'::"text", 'gitsync'::"text", 'gitnewtree'::"text"])) OR ((COALESCE(("payload" ->> 'command'::"text"), ''::"text") = 'gitpush'::"text") AND (COALESCE(("payload" ->> 'mode'::"text"), ''::"text") = ANY (ARRAY['push'::"text", 'checkpoint'::"text", 'finish'::"text"]))))),
-    CONSTRAINT "switchboard_actions_kind_valid" CHECK (("kind" = ANY (ARRAY['sql'::"text", 'git'::"text", 'sf_deploy'::"text", 'sf_test'::"text", 'sf_read_prod_data'::"text", 'docs'::"text"]))),
+    CONSTRAINT "switchboard_actions_kind_valid" CHECK (("kind" = ANY (ARRAY['sql'::"text", 'git'::"text", 'sf_check'::"text", 'sb_setup'::"text", 'sf_deploy'::"text", 'sf_test'::"text", 'sf_read_prod_data'::"text", 'docs'::"text"]))),
     CONSTRAINT "switchboard_actions_link_complete" CHECK ((("link_hash" IS NULL) = ("link_expires_at" IS NULL))),
     CONSTRAINT "switchboard_actions_project_format" CHECK (("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text")),
+    CONSTRAINT "switchboard_actions_sb_setup_payload" CHECK ((("kind" <> 'sb_setup'::"text") OR ((COALESCE(("payload" ->> 'command'::"text"), ''::"text") = ANY (ARRAY['client start'::"text", 'org add'::"text"])) AND (COALESCE(("payload" ->> 'client'::"text"), ''::"text") ~ '^[a-z0-9][a-z0-9_-]{0,40}$'::"text") AND COALESCE((("payload" - ARRAY['command'::"text", 'client'::"text", 'repo'::"text", 'adopt'::"text", 'from_sandbox'::"text", 'project'::"text", 'name'::"text", 'sandboxes'::"text", 'integration_ok'::"text", 'orgs'::"text"]) = '{}'::"jsonb"), false) AND
+CASE
+    WHEN COALESCE(("jsonb_typeof"(("payload" -> 'orgs'::"text")) = 'array'::"text"), false) THEN ((("jsonb_array_length"(("payload" -> 'orgs'::"text")) >= 1) AND ("jsonb_array_length"(("payload" -> 'orgs'::"text")) <= 10)) AND ("jsonb_array_length"(("payload" -> 'orgs'::"text")) = "jsonb_array_length"("jsonb_path_query_array"("payload", '$."orgs"[*]?((@."alias" like_regex "^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$" && (((@."type" == "developer" || @."type" == "developer_pro") || @."type" == "partial") || @."type" == "full")) && (@."level" == "objects" || @."level" == "metadata"))'::"jsonpath"))))
+    ELSE false
+END AND (NOT COALESCE("jsonb_path_exists"("payload", '$."orgs"[*].keyvalue()?(!(((((@."key" == "alias" || @."key" == "type") || @."key" == "level") || @."key" == "login") || @."key" == "cli_deploy") || @."key" == "shared"))'::"jsonpath", '{}'::"jsonb", true), true))))),
+    CONSTRAINT "switchboard_actions_sf_check_payload" CHECK ((("kind" <> 'sf_check'::"text") OR ((COALESCE(("payload" ->> 'check'::"text"), ''::"text") = ANY (ARRAY['org-verify'::"text", 'limits'::"text", 'metadata-types'::"text", 'metadata'::"text", 'retrieve-preview'::"text", 'deploy-preview'::"text"])) AND COALESCE(("jsonb_typeof"(("payload" -> 'alias'::"text")) = 'string'::"text"), false) AND COALESCE((("payload" ->> 'alias'::"text") ~ '^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$'::"text"), false) AND
+CASE
+    WHEN (("payload" ->> 'check'::"text") = 'metadata'::"text") THEN (COALESCE(("jsonb_typeof"(("payload" -> 'metadata_type'::"text")) = 'string'::"text"), false) AND COALESCE((("payload" ->> 'metadata_type'::"text") ~ '^[A-Za-z]{1,80}$'::"text"), false))
+    ELSE (NOT COALESCE(("payload" ? 'metadata_type'::"text"), false))
+END AND COALESCE((("payload" - ARRAY['check'::"text", 'alias'::"text", 'metadata_type'::"text"]) = '{}'::"jsonb"), false)))),
     CONSTRAINT "switchboard_actions_sql_payload" CHECK ((("kind" <> 'sql'::"text") OR ("jsonb_typeof"(("payload" -> 'sql'::"text")) = 'string'::"text"))),
     CONSTRAINT "switchboard_actions_status_valid" CHECK (("status" = ANY (ARRAY['queued'::"text", 'link_issued'::"text", 'consumed'::"text", 'succeeded'::"text", 'failed'::"text", 'cancelled'::"text"]))),
     CONSTRAINT "switchboard_actions_used_needs_link" CHECK ((("link_used_at" IS NULL) OR ("link_hash" IS NOT NULL)))
@@ -17021,7 +17113,7 @@ COMMENT ON COLUMN "public"."switchboard_actions"."chat_url" IS 'Address of the c
 
 
 
-COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. For kind sql: {"sql": "..."}. For kind git: {"command": "gitcom|gitsync|gitnewtree|gitpush", "mode" for gitpush: "push|checkpoint|finish", ...}. Fixed after insert.';
+COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...} (spec 11.3). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], ...} (spec 11.5). Fixed after insert.';
 
 
 
@@ -24924,6 +25016,11 @@ GRANT ALL ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") TO "ser
 
 
 
+REVOKE ALL ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."switchboard_prune_runs"() FROM PUBLIC;
 
 
@@ -24931,6 +25028,12 @@ REVOKE ALL ON FUNCTION "public"."switchboard_prune_runs"() FROM PUBLIC;
 REVOKE ALL ON FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") TO "service_role";
 
 
 
