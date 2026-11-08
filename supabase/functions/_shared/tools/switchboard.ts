@@ -7,6 +7,8 @@
 //   issue_switchboard_link  tier 2  issue the approval link for the SQL Claude reviewed
 //   get_sql_read            tier 1  one read-only query, as claude_reader (§8.2)
 //   queue_switchboard_git   tier 2  queue a git action and issue its link (§11)
+//   queue_switchboard_sf_check  tier 2  queue a read-only sandbox check; no link (§11.4)
+//   queue_switchboard_sb_setup  tier 2  queue sb client start or org add answers and issue its link (§11.5)
 //
 // Database access ONLY through ctx.db, except get_sql_read's query itself: see readerSeam.
 // ============================================================================
@@ -226,6 +228,168 @@ export const queueSwitchboardGitTool = defineTool({
       ...(data as Record<string, unknown>), action_id: actionId, payload: checked.payload,
       next: "Give Alex the url. Once he approves, the result line (git <action id> done or failed) arrives in this chat " +
         "by itself when the command finishes; he can also say \"check the git run\" (get_switchboard_run).",
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// queue_switchboard_sf_check (§11.4) and queue_switchboard_sb_setup (§11.5): the payloads the helper accepts
+// (switchboard helper/lib/core.mjs planSfCheck and planSbSetup), checked here first, then by 218's constraints.
+// ---------------------------------------------------------------------------
+
+export const SF_CHECKS = ["org-verify", "limits", "metadata-types", "metadata", "retrieve-preview", "deploy-preview"];
+const SF_ALIAS = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
+const METADATA_TYPE = /^[A-Za-z]{1,80}$/;
+const SB_KEYS = ["command", "client", "repo", "adopt", "from_sandbox", "project", "name", "sandboxes", "integration_ok", "orgs"];
+const SB_ORG_KEYS = ["alias", "type", "level", "login", "cli_deploy", "shared"];
+const SB_TYPES = ["developer", "developer_pro", "partial", "full"];
+// Alex's D2: none of these is ever set by link. Named so the refusal says why, not just "unknown key".
+const TERMINAL_ONLY = /^(contract|contract_ok|contract-ok|contract_allows_claude|contractallowsclaude|production_allowed|productionallowed|ids|data)$/i;
+const CLIENT = /^[a-z0-9][a-z0-9_-]{0,40}$/;
+const plainArg = (v: unknown) => typeof v === "string" && v.length > 0 && v.length <= 300 && !/^[-\s]|[\r\n"]/.test(v);
+const isBool = (v: unknown) => typeof v === "boolean";
+
+/** args minus project_code and chat_url, with undefined and null dropped. */
+function payloadOf(args: Record<string, unknown>): Record<string, unknown> {
+  const { project_code: _c, chat_url: _u, ...p } = args;
+  for (const k of Object.keys(p)) if (p[k] === undefined || p[k] === null) delete p[k];
+  return p;
+}
+
+export function sfCheckPayload(args: Record<string, unknown>): { payload: Record<string, unknown> } | { refused: string } {
+  const p = payloadOf(args);
+  const extra = Object.keys(p).filter((k) => !["check", "alias", "metadata_type"].includes(k));
+  if (extra.length) return { refused: `an sf_check does not take ${extra.join(", ")}.` };
+  if (!SF_CHECKS.includes(p.check as string)) return { refused: `\`check\` must be one of ${SF_CHECKS.join(", ")}.` };
+  if (typeof p.alias !== "string" || !SF_ALIAS.test(p.alias)) return { refused: "`alias` must be an org alias (letters, digits, _ . -)." };
+  if (p.check === "metadata") {
+    if (typeof p.metadata_type !== "string" || !METADATA_TYPE.test(p.metadata_type)) return { refused: "metadata needs `metadata_type`, letters only, such as ApexClass." };
+  } else if (p.metadata_type !== undefined) return { refused: `\`metadata_type\` is only for metadata, not ${p.check}.` };
+  return { payload: p };
+}
+
+export function sbSetupPayload(args: Record<string, unknown>): { payload: Record<string, unknown> } | { refused: string } {
+  const r = (refused: string) => ({ refused });
+  const p = payloadOf(args);
+  const terminal = Object.keys(p).filter((k) => TERMINAL_ONLY.test(k));
+  if (terminal.length) return r(`${terminal.join(", ")} is never set by link; it stays with Alex in the terminal (sb org add or sb org set).`);
+  const extra = Object.keys(p).filter((k) => !SB_KEYS.includes(k));
+  if (extra.length) return r(`an sb setup does not take ${extra.join(", ")}.`);
+  if (!["client start", "org add"].includes(p.command as string)) return r("`command` must be client start or org add.");
+  if (typeof p.client !== "string" || !CLIENT.test(p.client)) return r("`client` must be a client name: lower case letters, digits, _ and -.");
+  if (!Array.isArray(p.orgs) || p.orgs.length < 1 || p.orgs.length > 10) return r("`orgs` must list 1 to 10 orgs.");
+  for (const o of p.orgs as Record<string, unknown>[]) {
+    if (!o || typeof o !== "object" || Array.isArray(o)) return r("each org must be an object.");
+    const name = typeof o.alias === "string" ? o.alias : "an org";
+    const term = Object.keys(o).filter((k) => TERMINAL_ONLY.test(k));
+    if (term.length) return r(`${name}: ${term.join(", ")} is never set by link; it stays with Alex in the terminal.`);
+    const bad = Object.keys(o).filter((k) => !SB_ORG_KEYS.includes(k));
+    if (bad.length) return r(`${name}: an org does not take ${bad.join(", ")} by link.`);
+    if (typeof o.alias !== "string" || !SF_ALIAS.test(o.alias)) return r(`${JSON.stringify(o.alias ?? null)} is not an org alias.`);
+    if (o.type === "production") return r(`${name}: production is never set up by link; Alex adds it in the terminal.`);
+    if (!SB_TYPES.includes(o.type as string)) return r(`${name}: \`type\` must be a sandbox: ${SB_TYPES.join(", ")}.`);
+    if (!["objects", "metadata"].includes(o.level as string)) return r(`${name}: \`level\` by link is objects or metadata only; ids and data stay in the terminal.`);
+    if (o.login !== undefined && !["integration", "admin"].includes(o.login as string)) return r(`${name}: \`login\` must be integration or admin.`);
+    for (const k of ["cli_deploy", "shared"]) if (o[k] !== undefined && !isBool(o[k])) return r(`${name}: \`${k}\` must be true or false.`);
+  }
+  const aliases = (p.orgs as { alias: string }[]).map((o) => o.alias);
+  if (new Set(aliases).size !== aliases.length) return r("an alias is listed twice.");
+  if (p.sandboxes !== undefined && p.sandboxes !== "all" &&
+      !(Array.isArray(p.sandboxes) && p.sandboxes.length && p.sandboxes.every((a) => typeof a === "string" && SF_ALIAS.test(a)))) {
+    return r("`sandboxes` must be all or a list of aliases.");
+  }
+  if (p.integration_ok !== undefined && !isBool(p.integration_ok)) return r("`integration_ok` must be true or false.");
+  if (p.project !== undefined && (typeof p.project !== "string" || !PROJECT_CODE.test(p.project))) return r("`project` must be a project code.");
+  if (p.command === "org add") {
+    const notHere = ["repo", "adopt", "from_sandbox", "name"].filter((k) => p[k] !== undefined);
+    if (notHere.length) return r(`org add does not take ${notHere.join(", ")}.`);
+    if (aliases.length !== 1) return r("org add by link sets up exactly one org; queue one action per org.");
+  } else {
+    const sources = ["repo", "adopt", "from_sandbox"].filter((k) => p[k] !== undefined);
+    if (sources.length !== 1) return r("client start needs exactly one of `repo`, `adopt` or `from_sandbox`.");
+    const src = sources[0];
+    if (src === "from_sandbox" ? typeof p[src] !== "string" || !SF_ALIAS.test(p[src] as string) : !plainArg(p[src])) {
+      return r(`\`${src}\` is not usable: one line, no double quote, not starting with - or a space.`);
+    }
+    if (p.name !== undefined && (!plainArg(p.name) || (p.name as string).length > 60)) {
+      return r("`name` must be one line of at most 60 characters, with no double quote.");
+    }
+  }
+  return { payload: p };
+}
+
+export function sfCheckHeadline(code: string, p: Record<string, unknown>): string {
+  return `SF CHECK ${code}: ${String(p.check).toUpperCase()}${p.metadata_type ? ` ${p.metadata_type}` : ""} ON SANDBOX ${p.alias}, READ ONLY`;
+}
+
+export function sbSetupHeadline(code: string, p: Record<string, unknown>): string {
+  const orgs = p.orgs as { alias: string }[];
+  if (p.command === "org add") return `SB ORG ADD ${code}: ADDS SANDBOX ${orgs[0].alias} FOR CLIENT ${p.client} TO ORGS.JSON`;
+  return `SB CLIENT START ${code}: SETS UP CLIENT ${p.client} WITH ${orgs.length} SANDBOX${orgs.length === 1 ? "" : "ES"}, WRITES SWITCHBOARD CONFIG`;
+}
+
+/** switchboard_queue_helper as the signed-in caller, and the action id. */
+async function queueHelper(tool: string, ctx: { db: any }, kind: string, code: string, payload: Record<string, unknown>,
+                           headline: string, chatUrl: string | null): Promise<string> {
+  const { data, error } = await ctx.db.rpc("switchboard_queue_helper", {
+    p_kind: kind, p_project_code: code, p_payload: payload, p_headline: headline, p_chat_url: chatUrl,
+  });
+  if (error) {
+    if (REFUSALS.has(error.code ?? "") || error.code === "23514") throw fail(tool, `refused: ${error.message}`);
+    throw dbError(tool, `queueing the ${kind} action`, error);
+  }
+  const id = (data as Record<string, unknown> | null)?.action_id as string | undefined;
+  if (!id) throw fail(tool, "the queue returned no action id.");
+  return id;
+}
+
+function codeAndChat(tool: string, args: Record<string, unknown>) {
+  const code = typeof args.project_code === "string" ? args.project_code.trim() : "";
+  if (!PROJECT_CODE.test(code)) throw fail(tool, "`project_code` must be a project code such as switchboard2-h8r.");
+  const chatUrl = typeof args.chat_url === "string" && CHAT_URL.test(args.chat_url.trim()) ? args.chat_url.trim() : null;
+  return { code, chatUrl };
+}
+
+export const queueSwitchboardSfCheckTool = defineTool({
+  name: "queue_switchboard_sf_check",
+  tier: 2,
+  tables: { reads: ["switchboard_actions", "switchboard_settings"], writes: ["switchboard_actions"] },
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "queue_switchboard_sf_check";
+    const { code, chatUrl } = codeAndChat(tool, args);
+    const checked = sfCheckPayload(args);
+    if ("refused" in checked) throw fail(tool, `refused: ${checked.refused}`);
+    // No link, ever: an sf_check needs no click (D3), and the runner refuses one on every link route.
+    const actionId = await queueHelper(tool, ctx, "sf_check", code, checked.payload, sfCheckHeadline(code, checked.payload), chatUrl);
+    return {
+      action_id: actionId, payload: checked.payload, queued_line: `sf ${actionId} queued`,
+      next: `End your message with this line, on a line of its own: sf ${actionId} queued — the extension wakes the ` +
+        `desktop helper on it. The result arrives in this chat by itself as sf ${actionId} done or failed when the check ` +
+        "finishes; read it with get_switchboard_run. If this chat isn't open on the desktop, nothing wakes the helper " +
+        "and the check expires unrun after 10 minutes: then ask Alex to open the chat on the desktop and queue it again.",
+    };
+  },
+});
+
+export const queueSwitchboardSbSetupTool = defineTool({
+  name: "queue_switchboard_sb_setup",
+  tier: 2,
+  tables: { reads: ["switchboard_actions", "switchboard_settings"], writes: ["switchboard_actions"] },
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "queue_switchboard_sb_setup";
+    const { code, chatUrl } = codeAndChat(tool, args);
+    const checked = sbSetupPayload(args);
+    if ("refused" in checked) throw fail(tool, `refused: ${checked.refused}`);
+    const actionId = await queueHelper(tool, ctx, "sb_setup", code, checked.payload, sbSetupHeadline(code, checked.payload), chatUrl);
+    const { data, error } = await ctx.db.rpc("switchboard_issue_link", { p_action_id: actionId });
+    if (error) {
+      if (REFUSALS.has(error.code ?? "")) throw fail(tool, `queued as ${actionId}, but no link: ${error.message}`);
+      throw dbError(tool, `issuing the link for ${actionId}`, error);
+    }
+    return {
+      ...(data as Record<string, unknown>), action_id: actionId, payload: checked.payload,
+      next: "Give Alex the url. The page lists every answer and the files it writes; his click is the yes. Once the " +
+        `helper finishes, the result line (sb ${actionId} done or failed) arrives in this chat by itself; read it with get_switchboard_run.`,
     };
   },
 });

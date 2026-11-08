@@ -534,7 +534,7 @@ A refusal is posted to `/result` as failed, with the reason, and sf never runs.
 
 **Output.** Only the kept fields go into `/result`, as JSON plus a one-line summary ending in `Result:`. Never sf's raw text: the helper reads only the JSON fields above, and on an sf error keeps only `sfJson`'s cleaned message. The row cap is §8.2's: 200 items, then it says how many more there are.
 
-**No click.** A check is `kind: sf_check`, needs_click false (decision D3), queued by Claude, and run one at a time per project when the helper next picks up. The result line in the chat is `sf <action id> done` or `failed`. Claude reads it with `get_switchboard_run`.
+**No click.** A check is `kind: sf_check`, needs_click false (decision D3), queued by Claude with `queue_switchboard_sf_check` (s86d), which never issues a link, and run one at a time per project when the helper next picks up. The tool's reply tells Claude to end its message with `sf <action id> queued`. The result line in the chat is `sf <action id> done` or `failed`. Claude reads it with `get_switchboard_run`.
 
 **Expiry.** A queued no-click action that hasn't been picked up 10 minutes after it was queued is never run. The next pickup marks it failed, with a run whose summary reads "expired before the helper picked it up" (s86b1, in `switchboard_pickup_helper`).
 
@@ -567,8 +567,11 @@ Each config file it writes then waits for a typed yes, and a login that isn't st
    - `contract-ok` is not a payload key, so it's always no.
 
    Production, `ids`, `data` and the contract flag stay with Alex in the terminal (`sb org add` or `sb org set`), where the typed yes is his.
-3. **The approve page** shows every answer in plain words. It names the files the click writes (repos.json, projects.json, orgs.json, and the repo's `.git/info/exclude`), and says that a Salesforce login may open in the browser on the desktop. The click is the yes. There's no dry run.
-4. **The helper** runs `sb client start` or `sb org add` in a visible window, with every answer as a flag plus `--by-link`. `sb` gains flags for the four start questions that have none: `--aliases`, `--sandboxes`, `--integration-ok` and `--name`. Under `--by-link`:
+3. **The approve page** shows every answer in plain words. It names the files the click writes, and says that a Salesforce login may open in the browser on the desktop. The click is the yes. There's no dry run.
+   - client start writes repos.json, orgs.json, the repo's `.git/info/exclude`, and projects.json when it's given a project.
+   - org add writes orgs.json.
+   - The page carries `data-switchboard-kind="sb_setup"` for the extension.
+4. **The helper** runs `sb client start` or `sb org add` in a visible window, with every answer as a flag plus `--by-link`. `sb` gains flags for the four start questions that have none: `--aliases`, `--sandboxes`, `--integration-ok` and `--name`. For client start, each org's answers go in one repeatable `--org-setup <alias>:type=..,level=..,login=..,cli-deploy=..,shared=..` (s86e), with 1 to 10 orgs. **org add by link takes exactly one org**: one action per org. Both `queue_switchboard_sb_setup` (s86d) and the helper refuse otherwise. Under `--by-link`:
    - a question with no answer refuses ("not answered in the link: <question>; nothing was written") instead of asking;
    - each config write prints its diff and takes the click as its yes;
    - `sf org login web` still opens the browser, and Alex logs in there.

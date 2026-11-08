@@ -185,6 +185,23 @@ test("switchboard git: project_code is advertised, the reply says the result arr
   assert.doesNotMatch(q.cfg.description, /send git/);
 });
 
+test("switchboard s86: sf_check has no link and asks for the queued line; sb_setup asks first and states D2", () => {
+  const get = registered.find((r) => r.name === "get_switchboard_run");
+  assert.match(get.cfg.description, /For kind sf_check, the same/);
+  assert.match(get.cfg.description, /For kind sb_setup, the same/);
+  const sf = registered.find((r) => r.name === "queue_switchboard_sf_check");
+  assert.deepEqual(Object.keys(sf.cfg.inputSchema).sort(), ["alias", "chat_url", "check", "metadata_type", "project_code"]);
+  assert.match(sf.cfg.description, /NO LINK is ever issued/);
+  assert.match(sf.cfg.description, /"sf <action id> queued" on a line of its own/);
+  assert.match(sf.cfg.description, /expires unrun after 10 minutes/);
+  const sb = registered.find((r) => r.name === "queue_switchboard_sb_setup");
+  assert.match(sb.cfg.description, /FIRST ASK ALEX THE QUESTIONS IN THE CHAT/);
+  assert.match(sb.cfg.description, /never production/);
+  assert.match(sb.cfg.description, /exactly one org/);
+  assert.match(sb.cfg.description, /--org-setup <alias>:type=..,level=..,login=..,cli-deploy=..,shared=../);
+  assert.ok(!Object.keys(sb.cfg.inputSchema).some((k) => /contract/i.test(k)));
+});
+
 test("update_platform_run accepts the outcome fields", () => {
   // Their absence from the input schema stripped them silently, before the
   // handler that validates them ever saw them.
@@ -355,6 +372,8 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_SWITCHBOARD_25 = ["get_switchboard_run", "issue_switchboard_link", "get_sql_read"];
   // Switchboard s84d, +1.
   const EXPECTED_ADDED_SWITCHBOARD_84 = ["queue_switchboard_git"];
+  // Switchboard s86d, +2.
+  const EXPECTED_ADDED_SWITCHBOARD_86 = ["queue_switchboard_sf_check", "queue_switchboard_sb_setup"];
   // Notification routing steps 3 and 4, +5; step 7, +1; step 10j, +2 (delivery overrides).
   const EXPECTED_ADDED_NOTIFICATION_ROUTING = ["raise_signal", "get_signals", "get_dispatch_plan", "deliver_signals",
     "get_delivery_rules", "resolve_signal", "add_delivery_override", "end_delivery_override", "update_signal"];
@@ -365,7 +384,7 @@ test("the tool count is 72 after the job-search tools", () => {
                       ...EXPECTED_ADDED_READ, ...EXPECTED_ADDED_OVERWATCH_13, ...EXPECTED_ADDED_OVERWATCH_14,
                       ...EXPECTED_ADDED_OVERWATCH_22, ...EXPECTED_ADDED_OVERWATCH_46, ...EXPECTED_ADDED_OVERWATCH_54,
                       ...EXPECTED_ADDED_ARNOLD_5, ...EXPECTED_ADDED_ARNOLD_8, ...EXPECTED_ADDED_SWITCHBOARD_25,
-                      ...EXPECTED_ADDED_SWITCHBOARD_84, ...EXPECTED_ADDED_NOTIFICATION_ROUTING]) {
+                      ...EXPECTED_ADDED_SWITCHBOARD_84, ...EXPECTED_ADDED_SWITCHBOARD_86, ...EXPECTED_ADDED_NOTIFICATION_ROUTING]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
   const orderItems = registered.find((r) => r.name === "get_wb_order_items");
@@ -379,9 +398,10 @@ test("the tool count is 72 after the job-search tools", () => {
   // +1 for nightly counts. 2026-11-03, +1 for the Warren Buffet money chat: record_wb_subscription_review.
   // +5 for notification routing (signals, dispatcher, delivery rules). 2026-11-04, +1: resolve_signal.
   // 2026-11-05, +1: queue_switchboard_git. +2: add_delivery_override, end_delivery_override. 2026-11-06, +1: update_signal.
+  // 2026-11-08, +2: queue_switchboard_sf_check, queue_switchboard_sb_setup.
   assert.ok(registered.some((r) => r.name === "record_wb_subscription_review"), "record_wb_subscription_review is not registered");
-  assert.equal(registered.length, 198,
-    `expected 198 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 200,
+    `expected 200 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
