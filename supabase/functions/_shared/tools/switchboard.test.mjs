@@ -608,8 +608,9 @@ function helperDb({ queue = ok({ action_id: ACTION_ID }), link = ok(LINK) } = {}
 }
 const queueSf = (args, db = helperDb()) => m.queueSwitchboardSfCheckTool.handler(args, { db });
 const queueSb = (args, db = helperDb()) => m.queueSwitchboardSbSetupTool.handler(args, { db });
-const ORG = { alias: "acme-dev", type: "developer", level: "objects" };
+const ORG = { alias: "acme-dev", type: "developer", level: "objects", login: "integration", cli_deploy: true, shared: false };
 const ORG_ADD = { project_code: "p-a1", command: "org add", client: "acme", orgs: [ORG] };
+const START = { sandboxes: "all", integration_ok: false, name: "Acme" };
 
 test("sf_check and sb_setup: tier 2", () => {
   assert.equal(m.queueSwitchboardSfCheckTool.tier, 2);
@@ -674,13 +675,13 @@ test("sb_setup: org add is queued with kind sb_setup, then its link is issued", 
 test("sb_setup: client start with several orgs, each becoming an --org-setup", async () => {
   const db = helperDb();
   await queueSb({ project_code: "p-a1", command: "client start", client: "acme", repo: "https://github.com/a/b.git", name: "Acme",
-    sandboxes: "all", integration_ok: true, orgs: [ORG, { alias: "acme-uat", type: "partial", level: "metadata", shared: true }] }, db);
+    sandboxes: "all", integration_ok: true, orgs: [ORG, { ...ORG, alias: "acme-uat", type: "partial", level: "metadata", shared: true }] }, db);
   assert.equal(db.calls[0][1].p_payload.orgs.length, 2);
   assert.match(db.calls[0][1].p_headline, /SB CLIENT START acme: SETS UP THE CLIENT WITH 2 SANDBOXES/);
 });
 
 test("sb_setup: from_sandbox needs a folder inside projects", async () => {
-  const start = { command: "client start", client: "acme", from_sandbox: "acme-dev", orgs: [ORG] };
+  const start = { command: "client start", client: "acme", from_sandbox: "acme-dev", ...START, orgs: [ORG] };
   for (const folder of ["C:\\Users\\Alex\\projects\\acme", "C:\\Users\\Alex\\projects\\actblue\\acme", "c:\\users\\alex\\projects\\acme"]) {
     const db = helperDb();
     await queueSb({ ...start, folder }, db);
@@ -726,18 +727,63 @@ test("sb_setup: shape refusals, before anything is queued", async () => {
     { ...ORG_ADD, orgs: [{ ...ORG, login: "root" }] }, { ...ORG_ADD, orgs: [{ ...ORG, cli_deploy: "yes" }] },
     { ...ORG_ADD, orgs: [{ ...ORG, password: "x" }] }, { ...ORG_ADD, repo: "x" }, { ...ORG_ADD, extra: 1 },
     { ...ORG_ADD, sandboxes: "some" }, { ...ORG_ADD, integration_ok: "no" }, { ...ORG_ADD, project: "Bad Code" },
-    { ...ORG_ADD, command: "client start" },
-    { ...ORG_ADD, command: "client start", repo: "a", adopt: "b" },
-    { ...ORG_ADD, command: "client start", repo: "-x" },
-    { ...ORG_ADD, command: "client start", from_sandbox: "a b" },
-    { ...ORG_ADD, command: "client start", adopt: "C:/x", name: "n".repeat(61) },
-    { ...ORG_ADD, command: "client start", adopt: "C:/x", orgs: [ORG, ORG] },
-    { ...ORG_ADD, command: "client start", adopt: "C:/x", orgs: Array.from({ length: 11 }, (_, i) => ({ ...ORG, alias: `a${i}` })) },
+    { ...ORG_ADD, ...START, command: "client start", repo: "a", adopt: "b" },
+    { ...ORG_ADD, ...START, command: "client start", repo: "-x" },
+    { ...ORG_ADD, ...START, command: "client start", from_sandbox: "a b", folder: "C:\\Users\\Alex\\projects\\a" },
+    { ...ORG_ADD, ...START, command: "client start", adopt: "C:/x", name: "n".repeat(61) },
+    { ...ORG_ADD, ...START, command: "client start", adopt: "C:/x", orgs: [ORG, ORG] },
+    { ...ORG_ADD, ...START, command: "client start", adopt: "C:/x", orgs: Array.from({ length: 11 }, (_, i) => ({ ...ORG, alias: `a${i}` })) },
   ]) {
     const db = helperDb();
-    await assert.rejects(queueSb(args, db), /refused/, JSON.stringify(args));
+    await assert.rejects(queueSb(args, db), (e) => /refused/.test(e.message) && !/missing/.test(e.message), JSON.stringify(args));
     assert.equal(db.calls.length, 0);
   }
+});
+
+// s86aa: sb by link refuses the first question it meets, so the tool names every missing answer at once.
+const FULL_START = { command: "client start", client: "acme", adopt: "C:/x", ...START, orgs: [ORG] };
+
+test("sb_setup s86aa: a full client start or org add queues", async () => {
+  for (const args of [FULL_START, ORG_ADD]) {
+    const db = helperDb();
+    await queueSb(args, db);
+    assert.equal(db.calls.length, 2, args.command);
+  }
+});
+
+test("sb_setup s86aa: each missing setting alone is refused by name, nothing queued", async () => {
+  const cases = [
+    ...["sandboxes", "integration_ok", "name"].map((k) => [{ ...FULL_START, [k]: undefined }, k]),
+    ...["login", "cli_deploy", "shared", "type", "level"].flatMap((k) => [
+      [{ ...FULL_START, orgs: [{ ...ORG, [k]: undefined }] }, `acme-dev ${k}`],
+      [{ ...ORG_ADD, orgs: [{ ...ORG, [k]: undefined }] }, `acme-dev ${k}`],
+    ]),
+    [{ ...FULL_START, adopt: undefined }, "repo, adopt or from_sandbox"],
+    [{ ...FULL_START, adopt: undefined, from_sandbox: "acme-dev" }, "folder"],
+    [{ ...FULL_START, client: undefined }, "client"],
+    [{ ...ORG_ADD, orgs: undefined }, "orgs"],
+    [{ ...ORG_ADD, orgs: [{ ...ORG, alias: undefined }] }, "org 1 alias"],
+  ];
+  for (const [args, key] of cases) {
+    const db = helperDb();
+    await assert.rejects(queueSb(args, db), (e) => e.message.includes("1 setting missing") && e.message.includes(`\n- ${key}: `), key);
+    assert.equal(db.calls.length, 0);
+  }
+});
+
+test("sb_setup s86aa: everything missing is one refusal listing all of it", async () => {
+  const db = helperDb();
+  const start = { command: "client start", client: "common-defense", adopt: "C:/x", orgs: [{ alias: "cd-dev", type: "developer", level: "objects" }, { alias: "cd-uat" }] };
+  const err = await queueSb(start, db).catch((e) => e);
+  assert.equal(db.calls.length, 0);
+  const keys = ["sandboxes", "integration_ok", "name", "cd-dev login", "cd-dev cli_deploy", "cd-dev shared",
+    "cd-uat type", "cd-uat level", "cd-uat login", "cd-uat cli_deploy", "cd-uat shared"];
+  assert.match(err.message, new RegExp(`${keys.length} settings missing.*all of them at once`));
+  assert.match(err.message, /Nothing was queued/);
+  for (const k of keys) assert.ok(err.message.includes(`\n- ${k}: `), k);
+  const org = await queueSb({ command: "org add", client: "acme", orgs: [{ alias: "a1" }] }, helperDb()).catch((e) => e);
+  assert.match(org.message, /5 settings missing/);
+  assert.doesNotMatch(org.message, /sandboxes|integration_ok|- name/);
 });
 
 test("sf_check and sb_setup: a database refusal is passed on; a link refusal says it was queued", async () => {

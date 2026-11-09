@@ -212,6 +212,17 @@ test("switchboard s86pa: sf_check issues its link; sb_setup asks first and state
   assert.ok(!Object.keys(sb.cfg.inputSchema).some((k) => /contract/i.test(k)));
 });
 
+test("switchboard s86aa: sb_setup says which settings each command requires", () => {
+  const sb = registered.find((r) => r.name === "queue_switchboard_sb_setup");
+  assert.match(sb.cfg.description, /every org needs alias, type, level, login, cli_deploy and shared/);
+  assert.match(sb.cfg.description, /org add: client and exactly one org; sandboxes and integration_ok are optional/);
+  assert.match(sb.cfg.description, /name \(the panel's display name, at most 60 characters\), sandboxes \(all or a list\) and integration_ok/);
+  assert.match(sb.cfg.description, /ask Alex for all of them at once/);
+  // z is a stub here, so the schema's describe() text is read from the source.
+  const src = readFileSync(join(HERE, "index.ts"), "utf-8");
+  for (const k of ["name", "sandboxes", "integration_ok"]) assert.match(src, new RegExp(`\\n\\s+${k}: z\\..*describe\\("client start: required`), k);
+});
+
 test("switchboard s86h: no project code at setup or for a check; from_sandbox asks for the folder", () => {
   const sf = registered.find((r) => r.name === "queue_switchboard_sf_check");
   assert.ok(sf.cfg.inputSchema.project_code.isOptional());

@@ -3187,7 +3187,8 @@ export function createMcpServer(token: string) {
         "Queue Switchboard's sb client start or sb org add with every answer up front, and issue its single-use approval link in the same call. FIRST ASK ALEX THE QUESTIONS IN THE CHAT and use only his answers; never guess one. Nothing runs until he clicks Approve; the page lists every answer and the files it writes, and the click is his yes. Then the desktop helper runs sb ... --by-link, and a Salesforce login may open in the browser on his desktop. No dry run. " +
         "By link only sandboxes are set up: each org's type is developer, developer_pro, partial or full, never production; level is objects or metadata, never ids or data; the contract flag (client data may reach Claude) is never set and stays no. Those stay with Alex in the terminal (sb org add or sb org set); a payload that tries them is refused. " +
         "Setup is per client and takes NO project code; a project code only appears when the first fix starts, so leave project out at setup. " +
-        "org add: client, exactly one org, and optionally sandboxes, integration_ok. client start: client, exactly one of repo (a git URL to clone), adopt (an existing checkout) or from_sandbox (an alias to retrieve from), and optionally name (the panel's display name, at most 60 characters), sandboxes (all or a list), integration_ok, with 1 to 10 orgs; each org becomes one --org-setup <alias>:type=..,level=..,login=..,cli-deploy=..,shared=.. " +
+        "REQUIRED, because sb by link asks no questions: every org needs alias, type, level, login, cli_deploy and shared. org add: client and exactly one org; sandboxes and integration_ok are optional. client start: client, exactly one of repo (a git URL to clone), adopt (an existing checkout) or from_sandbox (an alias to retrieve from), name (the panel's display name, at most 60 characters), sandboxes (all or a list) and integration_ok, with 1 to 10 orgs; each org becomes one --org-setup <alias>:type=..,level=..,login=..,cli-deploy=..,shared=.. " +
+        "A payload missing any of these is refused before anything is queued, with one line per missing setting: ask Alex for all of them at once, then call again. " +
         "from_sandbox also needs folder: ASK ALEX for it, offering sb's default, C:\\Users\\Alex\\projects\\<client>, or C:\\Users\\Alex\\projects\\actblue\\<nonprofit> for an ActBlue client. It is the full path of an empty folder strictly inside C:\\Users\\Alex\\projects\\, with no ..; repo, adopt and org add take no folder. " +
         "One live link per client. Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole. The result line (sb <action id> done or failed) arrives in this chat by itself when sb finishes; read it with get_switchboard_run. If it says queued but no link, issue its link later with issue_switchboard_link. Tier 2.",
       inputSchema: {
@@ -3198,17 +3199,17 @@ export function createMcpServer(token: string) {
         from_sandbox: z.string().optional().describe("client start: an org alias to retrieve the code from."),
         folder: z.string().optional().describe("from_sandbox only, and then required: Alex's answer, the full path of the empty folder to write, inside C:\\Users\\Alex\\projects\\."),
         project: z.string().optional().describe("Leave out at setup. Only for adding a project code a client already has."),
-        name: z.string().optional().describe("client start: the panel's display name."),
-        sandboxes: z.union([z.literal("all"), z.array(z.string())]).optional().describe("Which sandboxes may run: all, or a list of aliases."),
-        integration_ok: z.boolean().optional().describe("Whether the client allows an integration user."),
+        name: z.string().optional().describe("client start: required. The panel's display name, at most 60 characters. org add: leave out."),
+        sandboxes: z.union([z.literal("all"), z.array(z.string())]).optional().describe("client start: required; org add: optional. Which sandboxes checks may run on: all, or a list of aliases."),
+        integration_ok: z.boolean().optional().describe("client start: required; org add: optional. Whether the client allows an integration user."),
         orgs: z.array(z.object({
           alias: z.string(),
-          type: z.string().describe("developer, developer_pro, partial or full."),
-          level: z.string().describe("objects or metadata."),
-          login: z.string().optional().describe("integration or admin."),
-          cli_deploy: z.boolean().optional().describe("Whether the CLI may deploy to it."),
-          shared: z.boolean().optional().describe("Whether the org is shared with other work."),
-        }).passthrough()).describe("org add: exactly one org. client start: 1 to 10."),
+          type: z.string().describe("Required. developer, developer_pro, partial or full."),
+          level: z.string().describe("Required. objects or metadata."),
+          login: z.string().optional().describe("Required. integration or admin."),
+          cli_deploy: z.boolean().optional().describe("Required. Whether the CLI may deploy to it."),
+          shared: z.boolean().optional().describe("Required. Whether other developers use this org."),
+        }).passthrough()).describe("org add: exactly one org. client start: 1 to 10. Every key of each org is required."),
         chat_url: z.string().optional().describe("Optional; don't guess it. Only a https://claude.ai/chat/<uuid> address is used."),
       },
     },
