@@ -411,7 +411,8 @@ test('git: plain words for each command', () => {
   expect(w({ command: 'gitcom', message: 'fix x', include_unclaimed: 'all' })).toMatch(/claimed files.*every unclaimed change.*Commit message: fix x/);
   expect(w({ command: 'gitsync' })).toMatch(/merges main into its worktree/);
   expect(w({ command: 'gitnewtree', install: false })).toMatch(/Skips npm install/);
-  expect(w({ command: 'gitnewtree' })).toMatch(/Runs npm install/);
+  expect(w({ command: 'gitnewtree' })).toMatch(/project code already names.*Runs npm install/);
+  expect(w({ command: 'gitnewtree', repo: 'C:\\Users\\Alex\\projects\\alfred-v5' })).toMatch(/In the repo C:\\Users\\Alex\\projects\\alfred-v5\./);
 });
 
 // --- sb setup (spec §11.5) ---

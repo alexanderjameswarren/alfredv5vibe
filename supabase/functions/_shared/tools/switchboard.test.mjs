@@ -521,6 +521,9 @@ test("git: every accepted shape", () => {
     { command: "gitpush", mode: "finish", finish: "project-done", message: "done" },
   ]) assert.ok("payload" in m.gitPayload(p), JSON.stringify(p));
   assert.equal(m.gitPayload({ command: "gitcom", message: " x " }).payload.message, "x");
+  const nt = m.gitPayload({ command: "gitnewtree", install: true, repo: " C:\\Users\\Alex\\projects\\alfred-v5 " }).payload;
+  assert.equal(nt.repo, "C:\\Users\\Alex\\projects\\alfred-v5");
+  assert.equal(m.gitHeadline("p-a1", nt), "GITNEWTREE p-a1: CREATES A WORKTREE FROM ORIGIN/MAIN IN C:\\USERS\\ALEX\\PROJECTS\\ALFRED-V5");
 });
 
 test("git: refused keys and values, before anything is queued", async () => {
@@ -532,6 +535,15 @@ test("git: refused keys and values, before anything is queued", async () => {
     [{ command: "gitcom", message: "--force" }, /not starting with -/],
     [{ command: "gitcom", include_unclaimed: "some" }, /all or none/],
     [{ command: "gitnewtree", install: "yes" }, /true or false/],
+    [{ command: "gitsync", repo: "C:\\Users\\Alex\\projects\\alfred-v5" }, /gitsync does not take repo/],
+    [{ command: "gitpush", mode: "push", repo: "C:\\Users\\Alex\\projects\\alfred-v5" }, /does not take repo/],
+    [{ command: "gitnewtree", repo: "projects\\alfred-v5" }, /absolute path/],
+    [{ command: "gitnewtree", repo: "C:/Users/Alex/projects/alfred-v5" }, /absolute path/],
+    [{ command: "gitnewtree", repo: "C:\\Users\\Alex\\projects\\alfred-v5\\" }, /absolute path/],
+    [{ command: "gitnewtree", repo: "C:\\Users\\Alex\\..\\x" }, /absolute path/],
+    [{ command: "gitnewtree", repo: "\\\\server\\share" }, /absolute path/],
+    [{ command: "gitnewtree", repo: 5 }, /absolute path/],
+    [{ command: "gitnewtree", repo: "C:\\" + "a".repeat(240) }, /absolute path/],
     [{ command: "gitpush" }, /needs `mode`/],
     [{ command: "gitpush", mode: "finish" }, /phase .* project-done/],
     [{ command: "gitpush", mode: "push", finish: "phase" }, /only for a Finish/],

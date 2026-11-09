@@ -52,6 +52,7 @@ export function gitLines(payload, projectCode) {
     lines.push(`Runs gitsync for ${projectCode}: merges main into its worktree.`);
   } else if (p.command === 'gitnewtree') {
     lines.push(`Runs gitnewtree for ${projectCode}: creates its worktree from origin/main.`);
+    lines.push(p.repo ? `In the repo ${p.repo}.` : 'In the repo its project code already names.');
     lines.push(p.install === false ? 'Skips npm install.' : 'Runs npm install.');
   } else {
     lines.push(`Runs ${p.command ?? 'an unknown command'} for ${projectCode}.`);

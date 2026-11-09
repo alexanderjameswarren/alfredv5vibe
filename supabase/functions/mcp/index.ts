@@ -3140,7 +3140,7 @@ export function createMcpServer(token: string) {
       title: "Queue Switchboard Git",
       description:
         "Queue one git command (gitcom, gitsync, gitnewtree or gitpush) for a project and issue its single-use approval link in the same call. Nothing runs until Alex clicks Approve; then the desktop helper runs it in that project's worktree. Git has no dry run. " +
-        "Keys by command: gitcom takes message, include_unclaimed (main only); gitsync takes nothing; gitnewtree takes install; gitpush takes mode (push | checkpoint | finish), and for a Finish finish (phase | project-done), for a Checkpoint paths (a list) or all: true, and db (release | keep), plus message. Any other key is refused. " +
+        "Keys by command: gitcom takes message, include_unclaimed (main only); gitsync takes nothing; gitnewtree takes install and repo: FILL IN repo with the repo's absolute path (a repos.json key, e.g. C:\\Users\\Alex\\projects\\alfred-v5), since a code with no worktree yet names no repo; gitpush takes mode (push | checkpoint | finish), and for a Finish finish (phase | project-done), for a Checkpoint paths (a list) or all: true, and db (release | keep), plus message. Any other key is refused. " +
         "One live link per project code, as issue_switchboard_link. Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole. Nothing is posted at approval: once he approves, the result line (git <action id> done or failed) arrives in this chat by itself when the command finishes. Tell him that, and that he can also say \"check the git run\" (get_switchboard_run). If it says queued but no link, the action exists: issue its link later with issue_switchboard_link. Tier 2.",
       inputSchema: {
         project_code: z.string().describe("The project code, e.g. switchboard2-h8r; main's code for main."),
@@ -3153,6 +3153,7 @@ export function createMcpServer(token: string) {
         message: z.string().optional().describe("Commit message: one line, at most 200 characters, no double quote."),
         include_unclaimed: z.enum(["all", "none"]).optional().describe("gitcom or gitpush on main: unclaimed changes."),
         install: z.boolean().optional().describe("gitnewtree: run npm install."),
+        repo: z.string().optional().describe("gitnewtree only: the repo's absolute path, e.g. C:\\Users\\Alex\\projects\\alfred-v5, no trailing backslash."),
         chat_url: z.string().optional().describe("Optional; don't guess it, the extension remembers the chat. Only a https://claude.ai/chat/<uuid> address is used."),
       },
     },

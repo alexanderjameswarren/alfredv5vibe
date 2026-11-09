@@ -5,7 +5,7 @@ description: 'Runs both halves of the CLI loop for Alex''s personal projects. Us
 
 # CLI Workflow
 
-Skill version: 2026-11-06b
+Skill version: 2026-11-09a
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -758,13 +758,16 @@ would have asked, it refuses and says why. The CLI still never runs any of them.
 
 1. **Build the call from the same facts as the terminal command**: the project
    code, and a mode that matches the checkout (below). For a Checkpoint, give the
-   exact paths, or `all: true`.
+   exact paths, or `all: true`. **A gitnewtree names its repo**: the code has no
+   worktree yet, so nothing else says which repo to branch. Fill in `repo` with
+   the repo's absolute path, a repos.json key, e.g. `C:\Users\Alex\projects\alfred-v5`.
 2. **In chat, show the headline and the link**, as a labelled markdown link on its
    own line with its URL whole. One link is live per project code; it lasts 30
    minutes.
-3. **The reply ends there.** A reply that gives Alex a git link or any git step
-   carries no CLI prompt. The next prompt comes in the reply after the result:
-   the `git <id> done` line, or his report.
+3. **One git link per reply, never two, and the reply ends there.** A reply that
+   gives Alex a git link or any git step carries no CLI prompt. The next link or
+   prompt comes only in a reply after that link's result has arrived and been
+   read: the `git <id> done` line, or his report.
 4. **The result arrives by itself**: `git <action id> done`, `failed` or
    `cancelled` (see "What comes back in the chat"). Read it with
    `get_switchboard_run`, and report the summary's "Result:" line. For git,
@@ -811,7 +814,7 @@ Expected: a new VS Code window opens on the parallel_threads worktree.
 
 `--install` when the thread will run tests or a build, `--no-install` for
 docs-only work. Either way it runs `scripts/prebuild.js`, so the generated
-schema files exist.
+schema files exist. By link, the call also names the repo (`repo`, above).
 
 **A local commit, part-way through.** A commit of the thread's own work;
 nothing leaves the worktree.
@@ -916,15 +919,22 @@ At the step that needs the database, not before:
    released them, as it should have, the prompt says to re-claim here.
 5. **Number the migration now.** New SQL is written under
    `supabase/migrations/_pending_<owner>_<purpose>.sql` and only gets its real
-   number here, after the sync, when the folder listing is current. Then the
-   numbered file is written and the `_pending_` one deleted. This step's scope
+   number here, after the sync. The CLI runs, on its own,
+   `claims number-migration supabase/migrations/_pending_<owner>_<purpose>.sql`,
+   which prints the number and claims it (`db:migration:NNN`). Then the numbered
+   file is written, the `_pending_` one deleted, and the migration queued. **Never
+   pick a number by hand**: 197 to 220 were all numbered by hand, and that is how
+   two threads both took 219. This step's scope
    block declares the exact numbered file, never `<NNN>` or any placeholder; if
    the number isn't known when the prompt is written, the CLI numbers first and a
    letter follow-up (`s3b`) declares the exact file.
 6. The thread queues the migration with `scripts/sql-queue.mjs`, and Alex approves
    it by a link (next section). Function deploys the thread runs itself — **but
    only while holding `db:deploy`.** The guard blocks `supabase functions deploy`
-   and `supabase db push` otherwise.
+   and `supabase db push` otherwise. **It also refuses a function deploy from a
+   worktree missing main's commits**, since that deploy would undo what another
+   thread put live. When the CLI reports that refusal, give Alex a gitsync link
+   for that worktree, then send the deploy again after the result.
 7. Verify.
 8. Alex runs `gitpush` → that worktree → **Checkpoint**, naming the migration and
    function paths, so only those reach main. **Checkpoint releases the `db:`

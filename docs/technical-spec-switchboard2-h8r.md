@@ -491,7 +491,7 @@ Claude queues a git action with `queue_switchboard_git` (tier 2, in `_shared/too
 |---|---|
 | `gitcom` | `message`; `include_unclaimed`: all or none |
 | `gitsync` | none |
-| `gitnewtree` | `install`: true or false |
+| `gitnewtree` | `install`: true or false. `repo` (s86k): the repo's absolute path, `C:\...` with no trailing backslash and no `..`, which the helper also requires to be a repos.json key (switchboard s86j). Claude fills it in, because a code with no worktree yet names no repo. The database refuses `repo` on any other command (`switchboard_actions_git_repo`), and the approve page shows it |
 | `gitpush` | `mode`: push, checkpoint or finish. `finish`: phase or project-done (required for a Finish, refused otherwise). `paths` (a list) or `all: true` (Checkpoint only, exactly one). `db`: release or keep (Checkpoint only). `message`. `include_unclaimed` (main only, so never with checkpoint) |
 
 `message` is one line, at most 200 characters, with no double quote, and doesn't start with `-`. A path is a plain relative path with no `..`. Any other key or value is refused before anything is queued.

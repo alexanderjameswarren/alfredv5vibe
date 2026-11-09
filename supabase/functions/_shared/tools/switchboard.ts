@@ -110,12 +110,14 @@ export const issueSwitchboardLinkTool = defineTool({
 const GIT_KEYS: Record<string, string[]> = {
   gitcom: ["command", "message", "include_unclaimed"],
   gitsync: ["command"],
-  gitnewtree: ["command", "install"],
+  gitnewtree: ["command", "install", "repo"],
   gitpush: ["command", "mode", "finish", "paths", "all", "db", "message", "include_unclaimed"],
 };
 const PROJECT_CODE = /^[a-z0-9][a-z0-9_-]{1,40}$/;
 const CHAT_URL = /^https:\/\/claude\.ai\/chat\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SEGMENT = /^[A-Za-z0-9_.-]+$/;
+/** A gitnewtree's repo, as the database check holds it: C:\... with no trailing backslash; ".." is refused separately. */
+export const GIT_REPO = /^[A-Za-z]:(\\[^\\/:*?"<>|\x00-\x1f]+)+$/;
 
 /** A repo-relative path: segments may start with a dot (.claude), never . or .., no leading -, empty segment or \ or :. */
 export function usablePath(x: unknown): boolean {
@@ -149,6 +151,13 @@ export function gitPayload(args: Record<string, unknown>): { payload: Record<str
   if (command === "gitnewtree" && p.install !== undefined && typeof p.install !== "boolean") {
     return r("`install` must be true or false.");
   }
+  if (p.repo !== undefined) {
+    const repo = typeof p.repo === "string" ? p.repo.trim() : p.repo;
+    if (typeof repo !== "string" || repo.length > 240 || !GIT_REPO.test(repo) || repo.includes("..")) {
+      return r("`repo` must be the repo's absolute path, such as C:\\Users\\Alex\\projects\\alfred-v5, with no trailing backslash.");
+    }
+    p.repo = repo;
+  }
   if (command === "gitpush") {
     const mode = p.mode;
     if (!["push", "checkpoint", "finish"].includes(mode as string)) return r("gitpush needs `mode`: push, checkpoint or finish.");
@@ -181,7 +190,7 @@ export function gitHeadline(code: string, p: Record<string, unknown>): string {
     case "gitsync":
       return `GITSYNC ${code}: MERGES MAIN INTO THE WORKTREE`;
     case "gitnewtree":
-      return `GITNEWTREE ${code}: CREATES A WORKTREE FROM ORIGIN/MAIN`;
+      return `GITNEWTREE ${code}: CREATES A WORKTREE FROM ORIGIN/MAIN${p.repo ? ` IN ${(p.repo as string).toUpperCase()}` : ""}`;
     default: {
       if (p.mode === "push") return `GITPUSH PUSH ${code}: COMMITS AND PUSHES MAIN`;
       if (p.mode === "checkpoint") {

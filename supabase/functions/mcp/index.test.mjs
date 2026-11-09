@@ -185,6 +185,13 @@ test("switchboard git: project_code is advertised, the reply says the result arr
   assert.doesNotMatch(q.cfg.description, /send git/);
 });
 
+test("switchboard s86k: gitnewtree advertises repo", () => {
+  const q = registered.find((r) => r.name === "queue_switchboard_git");
+  assert.ok("repo" in q.cfg.inputSchema);
+  assert.match(q.cfg.description, /gitnewtree takes install and repo: FILL IN repo/);
+  assert.match(q.cfg.description, /C:\\Users\\Alex\\projects\\alfred-v5/);
+});
+
 test("switchboard s86: sf_check has no link and asks for the queued line; sb_setup asks first and states D2", () => {
   const get = registered.find((r) => r.name === "get_switchboard_run");
   assert.match(get.cfg.description, /For kind sf_check, the same/);
