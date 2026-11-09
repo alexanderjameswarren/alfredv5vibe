@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-09 12:05, through migration 223 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-09 15:13, through migration 224 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -1948,6 +1948,55 @@ ALTER FUNCTION "public"."claude_notifications_guard_update"() OWNER TO "postgres
 
 
 COMMENT ON FUNCTION "public"."claude_notifications_guard_update"() IS 'Shared: claude_notifications rows keep what Alex saw; only delivery_status and delivery_detail may change. Stamps updated_at.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."create_homer_plan"("p_instructions" "text", "p_settings" "jsonb", "p_change_summary" "text" DEFAULT NULL::"text", "p_written_by" "text" DEFAULT 'claude'::"text") RETURNS "jsonb"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_old     public.homer_plans%rowtype;
+  v_new     public.homer_plans%rowtype;
+  v_problem text;
+begin
+  if auth.uid() is null then
+    raise exception 'create_homer_plan: no signed-in user.' using errcode = '28000';
+  end if;
+  if coalesce(btrim(p_instructions), '') = '' then
+    raise exception 'create_homer_plan: instructions are required.' using errcode = '22023';
+  end if;
+  v_problem := public.homer_plan_settings_problem(p_settings);
+  if v_problem is not null then
+    raise exception 'create_homer_plan: %.', v_problem using errcode = '22023';
+  end if;
+  if coalesce(p_written_by, '') not in ('alex', 'claude') then
+    raise exception 'create_homer_plan: written_by must be alex or claude.' using errcode = '22023';
+  end if;
+
+  -- Lock the active plan so two writers cannot both supersede it.
+  select * into v_old from public.homer_plans where user_id = auth.uid() and status = 'active' for update;
+  if v_old.id is not null then
+    if coalesce(btrim(p_change_summary), '') = '' then
+      raise exception 'create_homer_plan: a change_summary is required when superseding version %.', v_old.version
+        using errcode = '22023';
+    end if;
+    update public.homer_plans set status = 'superseded', ended_at = now() where id = v_old.id;
+  end if;
+
+  insert into public.homer_plans (version, instructions, settings, change_summary, written_by, supersedes_plan_id)
+  values ((select coalesce(max(version), 0) + 1 from public.homer_plans where user_id = auth.uid()),
+          p_instructions, p_settings, nullif(btrim(p_change_summary), ''), p_written_by, v_old.id)
+  returning * into v_new;
+  return to_jsonb(v_new);
+end;
+$$;
+
+
+ALTER FUNCTION "public"."create_homer_plan"("p_instructions" "text", "p_settings" "jsonb", "p_change_summary" "text", "p_written_by" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."create_homer_plan"("p_instructions" "text", "p_settings" "jsonb", "p_change_summary" "text", "p_written_by" "text") IS 'Homer: the ONLY way to write a plan. In one transaction: validates settings, supersedes the caller''s active plan (change_summary required then) and inserts the next version. Returns the new row. Behind the tier-3 create_homer_plan tool.';
 
 
 
@@ -4317,6 +4366,241 @@ argument. Single-table: columns (with comments), indexes, constraints, RLS, gran
 registry. All-tables: { platform_schema_comment, conformance, tables:{...} } so the
 contract is the first thing a design chat sees. SECURITY DEFINER; structural metadata
 only, never row data.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."homer_devices_carry_reader"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  -- Reads that followed the old owner (or had none) follow the new one. Reads set to someone else by hand stay.
+  update public.homer_reads
+     set reader_id = new.reader_id
+   where device_id = new.id
+     and (reader_id is null or reader_id is not distinct from old.reader_id)
+     and reader_id is distinct from new.reader_id;
+  return null;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."homer_devices_carry_reader"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."homer_devices_carry_reader"() IS 'Homer: when a device''s owner changes, its reads that had no reader or the old owner take the new owner.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."homer_plan_settings_problem"("p" "jsonb") RETURNS "text"
+    LANGUAGE "plpgsql" IMMUTABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $_$
+declare
+  s jsonb;
+  v_keys text[] := '{}';
+  v_key text;
+  v_kind text;
+  dv jsonb;
+begin
+  if p is null or jsonb_typeof(p) <> 'object' then return 'settings must be a JSON object'; end if;
+  if jsonb_typeof(p -> 'scales') is distinct from 'array' then return 'settings.scales must be an array'; end if;
+  for s in select value from jsonb_array_elements(p -> 'scales') loop
+    if jsonb_typeof(s) <> 'object' then return 'each scale must be an object'; end if;
+    v_key := s ->> 'key';
+    v_kind := s ->> 'kind';
+    if v_key is null or v_key !~ '^[a-z][a-z0-9_]*$' then return format('scale key %s must be a lowercase slug', coalesce(v_key, 'null')); end if;
+    if v_key = any(v_keys) then return format('scale key %s appears twice', v_key); end if;
+    v_keys := v_keys || v_key;
+    if coalesce(btrim(s ->> 'label'), '') = '' then return format('scale %s needs a label', v_key); end if;
+    if v_kind = 'range' then
+      if jsonb_typeof(s -> 'min') is distinct from 'number' or jsonb_typeof(s -> 'max') is distinct from 'number'
+         or (s ->> 'min')::numeric >= (s ->> 'max')::numeric then
+        return format('range scale %s needs numbers min < max', v_key);
+      end if;
+    elsif v_kind in ('choice', 'multi') then
+      if jsonb_typeof(s -> 'choices') is distinct from 'array' or jsonb_array_length(s -> 'choices') = 0
+         or exists (select 1 from jsonb_array_elements(s -> 'choices') c where jsonb_typeof(c) <> 'string')
+         or (select count(distinct c) from jsonb_array_elements_text(s -> 'choices') c) <> jsonb_array_length(s -> 'choices') then
+        return format('%s scale %s needs a non-empty list of distinct text choices', v_kind, v_key);
+      end if;
+    else
+      return format('scale %s: kind must be range, choice or multi', v_key);
+    end if;
+  end loop;
+
+  dv := p -> 'default_verdict';
+  if jsonb_typeof(dv) is distinct from 'object'
+     or jsonb_typeof(dv -> 'liked_min_finished') is distinct from 'number'
+     or (dv ->> 'liked_min_finished')::numeric < 1
+     or (dv ->> 'liked_min_finished')::numeric <> trunc((dv ->> 'liked_min_finished')::numeric)
+     or coalesce(dv ->> 'otherwise', '') not in ('loved', 'liked', 'tired', 'didnt_click') then
+    return 'settings.default_verdict needs liked_min_finished (whole number, at least 1) and otherwise (loved, liked, tired or didnt_click; never is not allowed)';
+  end if;
+  if jsonb_typeof(p -> 'tired_gap_days') is distinct from 'number' or (p ->> 'tired_gap_days')::numeric < 0 then
+    return 'settings.tired_gap_days must be a number, 0 or more';
+  end if;
+  if jsonb_typeof(p -> 'quiet_after_days') is distinct from 'number' or (p ->> 'quiet_after_days')::numeric < 1 then
+    return 'settings.quiet_after_days must be a number, 1 or more';
+  end if;
+  if p ? 'suggestions' and jsonb_typeof(p -> 'suggestions') <> 'object' then
+    return 'settings.suggestions must be an object';
+  end if;
+  return null;
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."homer_plan_settings_problem"("p" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."homer_plan_settings_problem"("p" "jsonb") IS 'Homer: null when plan settings are valid, otherwise the first problem in plain words. Checks scales (key, label, kind range/choice/multi), default_verdict, tired_gap_days, quiet_after_days and suggestions.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."homer_plans_guard"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if (new.id, new.user_id, new.version, new.instructions, new.settings, new.change_summary, new.written_by,
+      new.supersedes_plan_id, new.created_at)
+     is distinct from
+     (old.id, old.user_id, old.version, old.instructions, old.settings, old.change_summary, old.written_by,
+      old.supersedes_plan_id, old.created_at) then
+    raise exception 'homer_plans rows are not edited: write a new version with create_homer_plan.' using errcode = '23514';
+  end if;
+  if old.status = 'superseded' and new.status = 'active' then
+    raise exception 'homer_plans: a superseded plan cannot become active again; write a new version.' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."homer_plans_guard"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."homer_plans_guard"() IS 'Homer: on homer_plans only status (active to superseded) and ended_at may change.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."homer_reads_fill_reader"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if new.reader_id is null and new.device_id is not null then
+    select reader_id into new.reader_id from public.homer_devices where id = new.device_id;
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."homer_reads_fill_reader"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."homer_reads_fill_reader"() IS 'Homer: a read with a device and no reader takes the device''s confirmed owner.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."homer_scores_problem"("p_scores" "jsonb", "p_settings" "jsonb") RETURNS "text"
+    LANGUAGE "plpgsql" IMMUTABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  e record;
+  s jsonb;
+begin
+  if p_scores is null or jsonb_typeof(p_scores) <> 'object' then return 'scores must be a JSON object'; end if;
+  for e in select key, value from jsonb_each(p_scores) loop
+    select value into s from jsonb_array_elements(coalesce(p_settings -> 'scales', '[]'::jsonb)) where value ->> 'key' = e.key;
+    if s is null then return format('%s is not a scale in the active plan', e.key); end if;
+    if s ->> 'kind' = 'range' then
+      if jsonb_typeof(e.value) <> 'number'
+         or (e.value #>> '{}')::numeric < (s ->> 'min')::numeric or (e.value #>> '{}')::numeric > (s ->> 'max')::numeric then
+        return format('%s must be a number from %s to %s', e.key, s ->> 'min', s ->> 'max');
+      end if;
+    elsif s ->> 'kind' = 'choice' then
+      if jsonb_typeof(e.value) <> 'string' or not (s -> 'choices') @> jsonb_build_array(e.value) then
+        return format('%s must be one of %s', e.key, s -> 'choices');
+      end if;
+    else
+      if jsonb_typeof(e.value) <> 'array'
+         or exists (select 1 from jsonb_array_elements(e.value) c where not (s -> 'choices') @> jsonb_build_array(c)) then
+        return format('%s must be a list drawn from %s', e.key, s -> 'choices');
+      end if;
+    end if;
+    s := null;
+  end loop;
+  return null;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."homer_scores_problem"("p_scores" "jsonb", "p_settings" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."homer_scores_problem"("p_scores" "jsonb", "p_settings" "jsonb") IS 'Homer: null when taste scores fit the given plan settings, otherwise the first problem. Every key must be a scale; range values within min..max, choice values one of the choices, multi values a list of choices.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."homer_taste_scores_check"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_plan    public.homer_plans%rowtype;
+  v_problem text;
+begin
+  -- Only when the scores themselves are written; scores kept from a dropped scale survive other edits.
+  if tg_op = 'UPDATE' and new.scores is not distinct from old.scores then
+    return new;
+  end if;
+  select * into v_plan from public.homer_plans where user_id = new.user_id and status = 'active';
+  if new.scores = '{}'::jsonb then
+    new.plan_id := v_plan.id;
+    return new;
+  end if;
+  if v_plan.id is null then
+    raise exception 'homer_taste_profiles: there is no active Homer plan, so there are no scales to score against.'
+      using errcode = '23514';
+  end if;
+  v_problem := public.homer_scores_problem(new.scores, v_plan.settings);
+  if v_problem is not null then
+    raise exception 'homer_taste_profiles: % (plan version %).', v_problem, v_plan.version using errcode = '23514';
+  end if;
+  new.plan_id := v_plan.id;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."homer_taste_scores_check"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."homer_taste_scores_check"() IS 'Homer: checks taste scores against the active plan''s scales when they are written, and stamps plan_id.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."homer_verdicts_guard"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if old.verdict = 'never' and new.verdict <> 'never' and new.set_by <> 'alex' then
+    raise exception 'homer_verdicts: only Alex can lift a "never" (set_by must be alex).' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."homer_verdicts_guard"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."homer_verdicts_guard"() IS 'Homer: a never verdict can be changed only with set_by = alex.';
 
 
 
@@ -14183,6 +14467,771 @@ COMMENT ON COLUMN "public"."group_types"."kind" IS 'Stable name for the three se
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."homer_books" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "asin" "text" NOT NULL,
+    "title" "text" NOT NULL,
+    "author" "text",
+    "series_id" "uuid",
+    "series_position" numeric(6,2),
+    "acquired" "text",
+    "content_type" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "homer_books_acquired_values" CHECK ((("acquired" IS NULL) OR ("acquired" = ANY (ARRAY['purchase'::"text", 'kindle_unlimited'::"text", 'prime_reading'::"text", 'sample'::"text", 'library'::"text", 'other'::"text"])))),
+    CONSTRAINT "homer_books_position_needs_series" CHECK ((("series_position" IS NULL) OR ("series_id" IS NOT NULL)))
+);
+
+
+ALTER TABLE "public"."homer_books" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."homer_books" IS 'HOMER. A Kindle book by ASIN, with its series and position and how it was acquired. Written by the import and by chat.';
+
+
+
+COMMENT ON COLUMN "public"."homer_books"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."homer_books"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."homer_books"."asin" IS 'Amazon''s book id. Unique per user.';
+
+
+
+COMMENT ON COLUMN "public"."homer_books"."title" IS 'Title as Amazon gives it.';
+
+
+
+COMMENT ON COLUMN "public"."homer_books"."author" IS 'Author.';
+
+
+
+COMMENT ON COLUMN "public"."homer_books"."series_id" IS 'The series, or null.';
+
+
+
+COMMENT ON COLUMN "public"."homer_books"."series_position" IS 'Position in the series ("Position In Collection"); may be fractional.';
+
+
+
+COMMENT ON COLUMN "public"."homer_books"."acquired" IS 'purchase | kindle_unlimited | prime_reading | sample | library | other, from Digital.Content.Ownership origin types.';
+
+
+
+COMMENT ON COLUMN "public"."homer_books"."content_type" IS 'E-Book, E-Book Sample, Personal Document… from the reading sessions.';
+
+
+
+COMMENT ON COLUMN "public"."homer_books"."created_at" IS 'When added.';
+
+
+
+COMMENT ON COLUMN "public"."homer_books"."updated_at" IS 'Last change.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."homer_devices" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "device_id" "text" NOT NULL,
+    "family" "text",
+    "friendly_name" "text",
+    "reader_id" "uuid",
+    "proposed_reader_id" "uuid",
+    "owner_reason" "text",
+    "owner_status" "text" GENERATED ALWAYS AS (
+CASE
+    WHEN ("reader_id" IS NOT NULL) THEN 'confirmed'::"text"
+    WHEN ("proposed_reader_id" IS NOT NULL) THEN 'proposed'::"text"
+    ELSE 'unknown'::"text"
+END) STORED,
+    "first_session" "date",
+    "last_session" "date",
+    "sessions" integer,
+    "hours" numeric(8,1),
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "homer_devices_sessions_order" CHECK ((("first_session" IS NULL) OR ("last_session" IS NULL) OR ("last_session" >= "first_session")))
+);
+
+
+ALTER TABLE "public"."homer_devices" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."homer_devices" IS 'HOMER. One row per device id seen in the Kindle reading sessions. Devices are how Alex, Elise and Vasti are told apart. reader_id is the confirmed owner; setting it carries the reader onto the device''s reads (homer_devices_carry_reader). Written by the import and by update_homer_device (tier 2).';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."device_id" IS 'The device id from the Amazon export (device_serial_number), stray quotes removed.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."family" IS 'Kindle E-reader, Audible, Kindle for PC… or "Kindle app - likely Android/iOS" inferred from the id format.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."friendly_name" IS 'Name from registration.csv, e.g. "Alexander''s Kindle". Usually null.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."reader_id" IS 'Confirmed owner. Null until Alex confirms one.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."proposed_reader_id" IS 'Owner Claude proposes (by series continuity), waiting for Alex.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."owner_reason" IS 'Why that owner: Alex''s label, or the series continuity evidence.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."owner_status" IS 'Derived: confirmed (reader_id set), proposed, or unknown.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."first_session" IS 'First session of 60 seconds or more.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."last_session" IS 'Last session of 60 seconds or more.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."sessions" IS 'Sessions of 60 seconds or more.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."hours" IS 'Reading hours (sessions under 60 s left out, each capped at 4 h).';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."created_at" IS 'When added.';
+
+
+
+COMMENT ON COLUMN "public"."homer_devices"."updated_at" IS 'Last change.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."homer_genre_series" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "genre_id" "uuid" NOT NULL,
+    "series_id" "uuid" NOT NULL,
+    "is_example" boolean DEFAULT false NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."homer_genre_series" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."homer_genre_series" IS 'HOMER. Which series belong to which genre; is_example marks the ones that define it. A series may sit in several genres. Written by update_homer_genre (tier 2).';
+
+
+
+COMMENT ON COLUMN "public"."homer_genre_series"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genre_series"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genre_series"."genre_id" IS 'The genre.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genre_series"."series_id" IS 'The series.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genre_series"."is_example" IS 'True for the series that define the genre.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genre_series"."created_at" IS 'When added.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."homer_genres" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "name" "text" NOT NULL,
+    "description" "text",
+    "status" "text" DEFAULT 'proposed'::"text" NOT NULL,
+    "sort_order" integer DEFAULT 0 NOT NULL,
+    "archived_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "homer_genres_name_not_blank" CHECK (("btrim"("name") <> ''::"text")),
+    CONSTRAINT "homer_genres_status_values" CHECK (("status" = ANY (ARRAY['proposed'::"text", 'accepted'::"text"])))
+);
+
+
+ALTER TABLE "public"."homer_genres" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."homer_genres" IS 'HOMER. A named cluster of series ("my genres"), each with its own read-next queue. Claude proposes (status proposed); Alex names, edits and accepts. Archived, never deleted. Written by update_homer_genre (tier 2).';
+
+
+
+COMMENT ON COLUMN "public"."homer_genres"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genres"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genres"."name" IS 'Alex''s name for it.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genres"."description" IS 'What belongs in it.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genres"."status" IS 'proposed | accepted.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genres"."sort_order" IS 'Order on the Homer tab.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genres"."archived_at" IS 'When dropped; null while in use.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genres"."created_at" IS 'When added.';
+
+
+
+COMMENT ON COLUMN "public"."homer_genres"."updated_at" IS 'Last change.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."homer_plans" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "version" integer NOT NULL,
+    "status" "text" DEFAULT 'active'::"text" NOT NULL,
+    "instructions" "text" NOT NULL,
+    "settings" "jsonb" NOT NULL,
+    "change_summary" "text",
+    "written_by" "text" DEFAULT 'claude'::"text" NOT NULL,
+    "supersedes_plan_id" "uuid",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "ended_at" timestamp with time zone,
+    CONSTRAINT "homer_plans_ended_with_status" CHECK ((("status" = 'superseded'::"text") = ("ended_at" IS NOT NULL))),
+    CONSTRAINT "homer_plans_settings_valid" CHECK (("public"."homer_plan_settings_problem"("settings") IS NULL)),
+    CONSTRAINT "homer_plans_status_values" CHECK (("status" = ANY (ARRAY['active'::"text", 'superseded'::"text"]))),
+    CONSTRAINT "homer_plans_summary_on_supersede" CHECK ((("supersedes_plan_id" IS NULL) OR ("length"("btrim"(COALESCE("change_summary", ''::"text"))) > 0))),
+    CONSTRAINT "homer_plans_written_by_values" CHECK (("written_by" = ANY (ARRAY['alex'::"text", 'claude'::"text"])))
+);
+
+
+ALTER TABLE "public"."homer_plans" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."homer_plans" IS 'HOMER. The plan: taste rules and what Alex wants in suggestions (instructions), and settings (scales, default verdict rule, tired gap, quiet threshold, suggestion rules). NEVER EDITED: a change is a new version written by create_homer_plan (tier 3), which supersedes the active one. One active per user. Spec: docs/homer-spec-homer-h4k.md.';
+
+
+
+COMMENT ON COLUMN "public"."homer_plans"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."homer_plans"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."homer_plans"."version" IS '1, 2, 3 … per user, set by create_homer_plan.';
+
+
+
+COMMENT ON COLUMN "public"."homer_plans"."status" IS 'active | superseded. A superseded plan never becomes active again.';
+
+
+
+COMMENT ON COLUMN "public"."homer_plans"."instructions" IS 'Plain text: the taste rules and what Alex wants in suggestions, in his words.';
+
+
+
+COMMENT ON COLUMN "public"."homer_plans"."settings" IS 'JSON object: scales [{key,label,kind range|choice|multi,min,max,labels,choices}], default_verdict {liked_min_finished, otherwise}, tired_gap_days, quiet_after_days, suggestions {...}. Checked by homer_plan_settings_problem.';
+
+
+
+COMMENT ON COLUMN "public"."homer_plans"."change_summary" IS 'What changed from the previous version and why. Required when superseding.';
+
+
+
+COMMENT ON COLUMN "public"."homer_plans"."written_by" IS 'Who drafted it: claude (proposed, then approved by Alex) or alex.';
+
+
+
+COMMENT ON COLUMN "public"."homer_plans"."supersedes_plan_id" IS 'The version this one replaced, or null for the first.';
+
+
+
+COMMENT ON COLUMN "public"."homer_plans"."created_at" IS 'When this version was written.';
+
+
+
+COMMENT ON COLUMN "public"."homer_plans"."ended_at" IS 'When it was superseded. Null while active.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."homer_queue_items" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "genre_id" "uuid",
+    "reader_id" "uuid" NOT NULL,
+    "kind" "text" DEFAULT 'book'::"text" NOT NULL,
+    "title" "text" NOT NULL,
+    "author" "text",
+    "asin" "text",
+    "series_id" "uuid",
+    "book_id" "uuid",
+    "why" "text",
+    "on_kindle_unlimited" boolean,
+    "ku_checked_on" "date",
+    "verified_on" "date" NOT NULL,
+    "status" "text" DEFAULT 'queued'::"text" NOT NULL,
+    "position" numeric DEFAULT 1000 NOT NULL,
+    "created_by" "text" DEFAULT 'claude'::"text" NOT NULL,
+    "archived_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "homer_queue_created_by_values" CHECK (("created_by" = ANY (ARRAY['alex'::"text", 'claude'::"text"]))),
+    CONSTRAINT "homer_queue_kind_values" CHECK (("kind" = ANY (ARRAY['book'::"text", 'series'::"text", 'pick_up_again'::"text"]))),
+    CONSTRAINT "homer_queue_ku_needs_date" CHECK ((("on_kindle_unlimited" IS NULL) OR ("ku_checked_on" IS NOT NULL))),
+    CONSTRAINT "homer_queue_status_values" CHECK (("status" = ANY (ARRAY['queued'::"text", 'maybe_later'::"text", 'reading'::"text", 'read'::"text", 'never'::"text"]))),
+    CONSTRAINT "homer_queue_title_not_blank" CHECK (("btrim"("title") <> ''::"text"))
+);
+
+
+ALTER TABLE "public"."homer_queue_items" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."homer_queue_items" IS 'HOMER. Read-next queues, one loose queue per genre. Each item: a suggested book, series or "pick it up again?", why, whether it is on Kindle Unlimited, and a status (queued, maybe_later, reading, read, never; separate from verdicts). verified_on is required: Claude checks the title exists (web search) before writing it. Kindle links are built from asin, never stored. Move = new position; drop = archived_at. Written by create_homer_queue_items (tier 1) and update_homer_queue_item (tier 2).';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."genre_id" IS 'The genre queue it sits in; null = not sorted yet.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."reader_id" IS 'Who it is for (slice 1: alex).';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."kind" IS 'book | series | pick_up_again (a tired series coming back).';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."title" IS 'Title of the book or series.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."author" IS 'Author.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."asin" IS 'ASIN when known; the Kindle links are built from it.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."series_id" IS 'The series, when it is one Homer knows.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."book_id" IS 'The book, when it is one Homer knows.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."why" IS 'Why it was suggested, in a sentence or two.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."on_kindle_unlimited" IS 'True/false when checked; null when not checked.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."ku_checked_on" IS 'When Kindle Unlimited was checked. Required with on_kindle_unlimited.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."verified_on" IS 'When Claude confirmed (web search) that the title exists.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."status" IS 'queued | maybe_later | reading | read | never.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."position" IS 'Order within the queue, ascending; fractional so a move touches one row.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."created_by" IS 'alex or claude.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."archived_at" IS 'When dropped; null while in the queue.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."created_at" IS 'When added.';
+
+
+
+COMMENT ON COLUMN "public"."homer_queue_items"."updated_at" IS 'Last change.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."homer_readers" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "key" "text" NOT NULL,
+    "name" "text" NOT NULL,
+    "notes" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "homer_readers_key_slug" CHECK (("key" ~ '^[a-z][a-z0-9_]*$'::"text"))
+);
+
+
+ALTER TABLE "public"."homer_readers" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."homer_readers" IS 'HOMER. The people whose reading is tracked on the shared Amazon account: alex, elise, vasti. Written by the import and by chat.';
+
+
+
+COMMENT ON COLUMN "public"."homer_readers"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."homer_readers"."user_id" IS 'Owner (Alex''s account). Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."homer_readers"."key" IS 'Stable slug: alex, elise, vasti. Not a credential.';
+
+
+
+COMMENT ON COLUMN "public"."homer_readers"."name" IS 'Display name.';
+
+
+
+COMMENT ON COLUMN "public"."homer_readers"."notes" IS 'Free notes about this reader.';
+
+
+
+COMMENT ON COLUMN "public"."homer_readers"."created_at" IS 'When added.';
+
+
+
+COMMENT ON COLUMN "public"."homer_readers"."updated_at" IS 'Last change.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."homer_reads" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "book_id" "uuid" NOT NULL,
+    "device_id" "uuid",
+    "reader_id" "uuid",
+    "started_on" "date",
+    "finished_on" "date",
+    "hours" numeric(7,1),
+    "completion" "text",
+    "source" "text" NOT NULL,
+    "import_key" "text",
+    "note" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "homer_reads_completion_needs_finish" CHECK ((("completion" IS NULL) OR ("finished_on" IS NOT NULL))),
+    CONSTRAINT "homer_reads_completion_values" CHECK ((("completion" IS NULL) OR ("completion" = ANY (ARRAY['automatic'::"text", 'manual'::"text"])))),
+    CONSTRAINT "homer_reads_dates_order" CHECK ((("started_on" IS NULL) OR ("finished_on" IS NULL) OR ("finished_on" >= "started_on"))),
+    CONSTRAINT "homer_reads_hours_positive" CHECK ((("hours" IS NULL) OR ("hours" >= (0)::numeric))),
+    CONSTRAINT "homer_reads_reader_or_device" CHECK ((("reader_id" IS NOT NULL) OR ("device_id" IS NOT NULL))),
+    CONSTRAINT "homer_reads_source_values" CHECK (("source" = ANY (ARRAY['export'::"text", 'clip'::"text", 'chat'::"text"])))
+);
+
+
+ALTER TABLE "public"."homer_reads" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."homer_reads" IS 'HOMER. A reader''s reading of a book: dates and hours. From the export, one per book per device (homer_reads_one_per_book_device); from the weekly clip or chat, with a reader and usually no device. reader_id is null while the device has no owner, and is filled from the device (homer_reads_fill_reader, homer_devices_carry_reader). Written by the import, create_homer_read (tier 1) and update_homer_read (tier 2).';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."book_id" IS 'The book.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."device_id" IS 'The device it was read on (export reads), or null.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."reader_id" IS 'Who read it. Null until the device has a confirmed owner.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."started_on" IS 'First session on this device, or the date Alex gives.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."finished_on" IS 'Date finished; null = started but not finished.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."hours" IS 'Reading hours on this device (60 s floor, 4 h cap per session), or null.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."completion" IS 'automatic | manual, from UserUniqueTitlesCompleted; null if not from there.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."source" IS 'export | clip | chat.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."import_key" IS 'Idempotency key, e.g. export:<asin>:<device_id> or clip:<date>:<asin>. Not a credential.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."note" IS 'Free note.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."created_at" IS 'When recorded.';
+
+
+
+COMMENT ON COLUMN "public"."homer_reads"."updated_at" IS 'Last change.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."homer_series" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "name" "text" NOT NULL,
+    "series_asin" "text",
+    "author" "text",
+    "notes" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "homer_series_name_not_blank" CHECK (("btrim"("name") <> ''::"text"))
+);
+
+
+ALTER TABLE "public"."homer_series" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."homer_series" IS 'HOMER. A book series. Names and series ASINs come from UnifiedLibraryIndex CustomerRelationshipIndex. Unique by series_asin; a series without one is unique by name. Written by the import and by chat.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."name" IS 'Series name, e.g. He Who Fights with Monsters.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."series_asin" IS 'Amazon''s series id (the ASIN at the end of "Series Title"), or null.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."author" IS 'Main author.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."notes" IS 'Free notes.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."created_at" IS 'When added.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."updated_at" IS 'Last change.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."homer_taste_profiles" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "reader_id" "uuid" NOT NULL,
+    "series_id" "uuid" NOT NULL,
+    "description" "text",
+    "scores" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "plan_id" "uuid",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "homer_taste_profiles_scores_object" CHECK (("jsonb_typeof"("scores") = 'object'::"text"))
+);
+
+
+ALTER TABLE "public"."homer_taste_profiles" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."homer_taste_profiles" IS 'HOMER. What a reader thinks a series is like: a free-text description and scores on the active plan''s scales. scores is jsonb keyed by scale key, checked against the active plan by homer_taste_scores_check (no check constraint, so scales change with a plan version, not a migration). Written by update_homer_taste_profile (tier 2).';
+
+
+
+COMMENT ON COLUMN "public"."homer_taste_profiles"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."homer_taste_profiles"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."homer_taste_profiles"."reader_id" IS 'Whose profile.';
+
+
+
+COMMENT ON COLUMN "public"."homer_taste_profiles"."series_id" IS 'The series described.';
+
+
+
+COMMENT ON COLUMN "public"."homer_taste_profiles"."description" IS 'Free text in the reader''s words.';
+
+
+
+COMMENT ON COLUMN "public"."homer_taste_profiles"."scores" IS 'JSON object {scale_key: value}: a number for range scales, a choice for choice scales, a list for multi scales.';
+
+
+
+COMMENT ON COLUMN "public"."homer_taste_profiles"."plan_id" IS 'The plan version the scores were last checked against.';
+
+
+
+COMMENT ON COLUMN "public"."homer_taste_profiles"."created_at" IS 'When first written.';
+
+
+
+COMMENT ON COLUMN "public"."homer_taste_profiles"."updated_at" IS 'Last change.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."homer_verdicts" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "reader_id" "uuid" NOT NULL,
+    "subject_kind" "text" NOT NULL,
+    "series_id" "uuid",
+    "book_id" "uuid",
+    "author" "text",
+    "verdict" "text" NOT NULL,
+    "note" "text",
+    "set_by" "text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "homer_verdicts_kind_values" CHECK (("subject_kind" = ANY (ARRAY['series'::"text", 'book'::"text", 'author'::"text"]))),
+    CONSTRAINT "homer_verdicts_never_by_alex" CHECK ((("verdict" <> 'never'::"text") OR ("set_by" = 'alex'::"text"))),
+    CONSTRAINT "homer_verdicts_one_subject" CHECK (((("subject_kind" = 'series'::"text") AND ("series_id" IS NOT NULL) AND ("book_id" IS NULL) AND ("author" IS NULL)) OR (("subject_kind" = 'book'::"text") AND ("book_id" IS NOT NULL) AND ("series_id" IS NULL) AND ("author" IS NULL)) OR (("subject_kind" = 'author'::"text") AND (COALESCE("btrim"("author"), ''::"text") <> ''::"text") AND ("series_id" IS NULL) AND ("book_id" IS NULL)))),
+    CONSTRAINT "homer_verdicts_set_by_values" CHECK (("set_by" = ANY (ARRAY['alex'::"text", 'claude'::"text"]))),
+    CONSTRAINT "homer_verdicts_verdict_values" CHECK (("verdict" = ANY (ARRAY['loved'::"text", 'liked'::"text", 'tired'::"text", 'didnt_click'::"text", 'never'::"text"])))
+);
+
+
+ALTER TABLE "public"."homer_verdicts" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."homer_verdicts" IS 'HOMER. A reader''s stored verdict on a series, book or author: loved, liked, tired, didnt_click or never, plus a note. Separate from queue status. One per reader and subject. A missing verdict on a series falls back to the plan''s default rule when read (homer_series_verdicts); defaults are never stored. "never" needs set_by = alex (homer_verdicts_never_by_alex), is written only by the tier-3 create_homer_never tool, and only Alex can lift it (homer_verdicts_guard). Others are written by update_homer_verdict (tier 2).';
+
+
+
+COMMENT ON COLUMN "public"."homer_verdicts"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."homer_verdicts"."user_id" IS 'Owner. Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."homer_verdicts"."reader_id" IS 'Whose verdict.';
+
+
+
+COMMENT ON COLUMN "public"."homer_verdicts"."subject_kind" IS 'series | book | author.';
+
+
+
+COMMENT ON COLUMN "public"."homer_verdicts"."series_id" IS 'The series, when subject_kind = series.';
+
+
+
+COMMENT ON COLUMN "public"."homer_verdicts"."book_id" IS 'The book, when subject_kind = book.';
+
+
+
+COMMENT ON COLUMN "public"."homer_verdicts"."author" IS 'The author''s name, when subject_kind = author.';
+
+
+
+COMMENT ON COLUMN "public"."homer_verdicts"."verdict" IS 'loved | liked | tired (liked and burned out: counts as liked for similar books; the series comes back after the plan''s tired_gap_days) | didnt_click | never (never suggested).';
+
+
+
+COMMENT ON COLUMN "public"."homer_verdicts"."note" IS 'Why, in Alex''s words.';
+
+
+
+COMMENT ON COLUMN "public"."homer_verdicts"."set_by" IS 'alex (he said it) or claude (Claude''s reading of what he said). never needs alex.';
+
+
+
+COMMENT ON COLUMN "public"."homer_verdicts"."created_at" IS 'When first set.';
+
+
+
+COMMENT ON COLUMN "public"."homer_verdicts"."updated_at" IS 'Last change.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."inbox" (
     "id" "text" NOT NULL,
     "archived" boolean DEFAULT false,
@@ -19631,6 +20680,91 @@ ALTER TABLE ONLY "public"."group_types"
 
 
 
+ALTER TABLE ONLY "public"."homer_books"
+    ADD CONSTRAINT "homer_books_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_books"
+    ADD CONSTRAINT "homer_books_user_asin" UNIQUE ("user_id", "asin");
+
+
+
+ALTER TABLE ONLY "public"."homer_devices"
+    ADD CONSTRAINT "homer_devices_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_devices"
+    ADD CONSTRAINT "homer_devices_user_device" UNIQUE ("user_id", "device_id");
+
+
+
+ALTER TABLE ONLY "public"."homer_genre_series"
+    ADD CONSTRAINT "homer_genre_series_one" UNIQUE ("genre_id", "series_id");
+
+
+
+ALTER TABLE ONLY "public"."homer_genre_series"
+    ADD CONSTRAINT "homer_genre_series_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_genres"
+    ADD CONSTRAINT "homer_genres_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_plans"
+    ADD CONSTRAINT "homer_plans_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_plans"
+    ADD CONSTRAINT "homer_plans_user_version" UNIQUE ("user_id", "version");
+
+
+
+ALTER TABLE ONLY "public"."homer_queue_items"
+    ADD CONSTRAINT "homer_queue_items_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_readers"
+    ADD CONSTRAINT "homer_readers_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_readers"
+    ADD CONSTRAINT "homer_readers_user_key" UNIQUE ("user_id", "key");
+
+
+
+ALTER TABLE ONLY "public"."homer_reads"
+    ADD CONSTRAINT "homer_reads_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_series"
+    ADD CONSTRAINT "homer_series_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_taste_profiles"
+    ADD CONSTRAINT "homer_taste_profiles_one" UNIQUE ("reader_id", "series_id");
+
+
+
+ALTER TABLE ONLY "public"."homer_taste_profiles"
+    ADD CONSTRAINT "homer_taste_profiles_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_verdicts"
+    ADD CONSTRAINT "homer_verdicts_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."inbox"
     ADD CONSTRAINT "inbox_pkey" PRIMARY KEY ("id");
 
@@ -20388,6 +21522,66 @@ CREATE INDEX "finish_summaries_unreviewed_idx" ON "public"."finish_summaries" US
 
 
 
+CREATE INDEX "homer_books_series" ON "public"."homer_books" USING "btree" ("series_id");
+
+
+
+CREATE INDEX "homer_genre_series_series" ON "public"."homer_genre_series" USING "btree" ("series_id");
+
+
+
+CREATE UNIQUE INDEX "homer_genres_user_name" ON "public"."homer_genres" USING "btree" ("user_id", "lower"("name")) WHERE ("archived_at" IS NULL);
+
+
+
+CREATE UNIQUE INDEX "homer_plans_one_active" ON "public"."homer_plans" USING "btree" ("user_id") WHERE ("status" = 'active'::"text");
+
+
+
+CREATE INDEX "homer_queue_genre_order" ON "public"."homer_queue_items" USING "btree" ("genre_id", "position") WHERE ("archived_at" IS NULL);
+
+
+
+CREATE UNIQUE INDEX "homer_queue_one_live_asin" ON "public"."homer_queue_items" USING "btree" ("reader_id", "asin") WHERE (("asin" IS NOT NULL) AND ("archived_at" IS NULL));
+
+
+
+CREATE INDEX "homer_reads_book" ON "public"."homer_reads" USING "btree" ("book_id");
+
+
+
+CREATE UNIQUE INDEX "homer_reads_import_key" ON "public"."homer_reads" USING "btree" ("user_id", "import_key") WHERE ("import_key" IS NOT NULL);
+
+
+
+CREATE UNIQUE INDEX "homer_reads_one_per_book_device" ON "public"."homer_reads" USING "btree" ("user_id", "book_id", "device_id") WHERE ("device_id" IS NOT NULL);
+
+
+
+CREATE INDEX "homer_reads_reader_finished" ON "public"."homer_reads" USING "btree" ("reader_id", "finished_on");
+
+
+
+CREATE UNIQUE INDEX "homer_series_user_asin" ON "public"."homer_series" USING "btree" ("user_id", "series_asin") WHERE ("series_asin" IS NOT NULL);
+
+
+
+CREATE UNIQUE INDEX "homer_series_user_name_no_asin" ON "public"."homer_series" USING "btree" ("user_id", "lower"("name")) WHERE ("series_asin" IS NULL);
+
+
+
+CREATE UNIQUE INDEX "homer_verdicts_one_author" ON "public"."homer_verdicts" USING "btree" ("reader_id", "lower"("author")) WHERE ("subject_kind" = 'author'::"text");
+
+
+
+CREATE UNIQUE INDEX "homer_verdicts_one_book" ON "public"."homer_verdicts" USING "btree" ("reader_id", "book_id") WHERE ("subject_kind" = 'book'::"text");
+
+
+
+CREATE UNIQUE INDEX "homer_verdicts_one_series" ON "public"."homer_verdicts" USING "btree" ("reader_id", "series_id") WHERE ("subject_kind" = 'series'::"text");
+
+
+
 CREATE INDEX "idx_contexts_user" ON "public"."contexts" USING "btree" ("user_id");
 
 
@@ -21088,6 +22282,50 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."homer_books" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."homer_devices" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."homer_genre_series" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."homer_genres" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."homer_plans" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."homer_queue_items" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."homer_readers" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."homer_reads" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."homer_series" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."homer_taste_profiles" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."homer_verdicts" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."inbox" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -21372,6 +22610,26 @@ CREATE OR REPLACE TRIGGER "executions_status_activate" AFTER INSERT ON "public".
 
 
 
+CREATE OR REPLACE TRIGGER "homer_devices_carry_reader" AFTER UPDATE OF "reader_id" ON "public"."homer_devices" FOR EACH ROW WHEN (("old"."reader_id" IS DISTINCT FROM "new"."reader_id")) EXECUTE FUNCTION "public"."homer_devices_carry_reader"();
+
+
+
+CREATE OR REPLACE TRIGGER "homer_plans_guard" BEFORE UPDATE ON "public"."homer_plans" FOR EACH ROW EXECUTE FUNCTION "public"."homer_plans_guard"();
+
+
+
+CREATE OR REPLACE TRIGGER "homer_reads_fill_reader" BEFORE INSERT OR UPDATE OF "device_id", "reader_id" ON "public"."homer_reads" FOR EACH ROW EXECUTE FUNCTION "public"."homer_reads_fill_reader"();
+
+
+
+CREATE OR REPLACE TRIGGER "homer_taste_scores_check" BEFORE INSERT OR UPDATE ON "public"."homer_taste_profiles" FOR EACH ROW EXECUTE FUNCTION "public"."homer_taste_scores_check"();
+
+
+
+CREATE OR REPLACE TRIGGER "homer_verdicts_guard" BEFORE UPDATE ON "public"."homer_verdicts" FOR EACH ROW EXECUTE FUNCTION "public"."homer_verdicts_guard"();
+
+
+
 CREATE OR REPLACE TRIGGER "inbox_check_suggested_group" BEFORE INSERT OR UPDATE OF "suggested_group_id" ON "public"."inbox" FOR EACH ROW EXECUTE FUNCTION "public"."inbox_check_suggested_group"();
 
 
@@ -21549,6 +22807,42 @@ CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."executions
 
 
 CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."group_types" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."homer_books" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."homer_devices" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."homer_genres" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."homer_queue_items" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."homer_readers" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."homer_reads" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."homer_series" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."homer_taste_profiles" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "set_updated_at" BEFORE UPDATE ON "public"."homer_verdicts" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at"();
 
 
 
@@ -22001,6 +23295,156 @@ ALTER TABLE ONLY "public"."finish_summaries"
 
 ALTER TABLE ONLY "public"."group_types"
     ADD CONSTRAINT "group_types_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."homer_books"
+    ADD CONSTRAINT "homer_books_series_id_fkey" FOREIGN KEY ("series_id") REFERENCES "public"."homer_series"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."homer_books"
+    ADD CONSTRAINT "homer_books_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_devices"
+    ADD CONSTRAINT "homer_devices_proposed_reader_id_fkey" FOREIGN KEY ("proposed_reader_id") REFERENCES "public"."homer_readers"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."homer_devices"
+    ADD CONSTRAINT "homer_devices_reader_id_fkey" FOREIGN KEY ("reader_id") REFERENCES "public"."homer_readers"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."homer_devices"
+    ADD CONSTRAINT "homer_devices_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_genre_series"
+    ADD CONSTRAINT "homer_genre_series_genre_id_fkey" FOREIGN KEY ("genre_id") REFERENCES "public"."homer_genres"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."homer_genre_series"
+    ADD CONSTRAINT "homer_genre_series_series_id_fkey" FOREIGN KEY ("series_id") REFERENCES "public"."homer_series"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."homer_genre_series"
+    ADD CONSTRAINT "homer_genre_series_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_genres"
+    ADD CONSTRAINT "homer_genres_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_plans"
+    ADD CONSTRAINT "homer_plans_supersedes_plan_id_fkey" FOREIGN KEY ("supersedes_plan_id") REFERENCES "public"."homer_plans"("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_plans"
+    ADD CONSTRAINT "homer_plans_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_queue_items"
+    ADD CONSTRAINT "homer_queue_items_book_id_fkey" FOREIGN KEY ("book_id") REFERENCES "public"."homer_books"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."homer_queue_items"
+    ADD CONSTRAINT "homer_queue_items_genre_id_fkey" FOREIGN KEY ("genre_id") REFERENCES "public"."homer_genres"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."homer_queue_items"
+    ADD CONSTRAINT "homer_queue_items_reader_id_fkey" FOREIGN KEY ("reader_id") REFERENCES "public"."homer_readers"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."homer_queue_items"
+    ADD CONSTRAINT "homer_queue_items_series_id_fkey" FOREIGN KEY ("series_id") REFERENCES "public"."homer_series"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."homer_queue_items"
+    ADD CONSTRAINT "homer_queue_items_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_readers"
+    ADD CONSTRAINT "homer_readers_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_reads"
+    ADD CONSTRAINT "homer_reads_book_id_fkey" FOREIGN KEY ("book_id") REFERENCES "public"."homer_books"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."homer_reads"
+    ADD CONSTRAINT "homer_reads_device_id_fkey" FOREIGN KEY ("device_id") REFERENCES "public"."homer_devices"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."homer_reads"
+    ADD CONSTRAINT "homer_reads_reader_id_fkey" FOREIGN KEY ("reader_id") REFERENCES "public"."homer_readers"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."homer_reads"
+    ADD CONSTRAINT "homer_reads_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_series"
+    ADD CONSTRAINT "homer_series_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_taste_profiles"
+    ADD CONSTRAINT "homer_taste_profiles_plan_id_fkey" FOREIGN KEY ("plan_id") REFERENCES "public"."homer_plans"("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_taste_profiles"
+    ADD CONSTRAINT "homer_taste_profiles_reader_id_fkey" FOREIGN KEY ("reader_id") REFERENCES "public"."homer_readers"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."homer_taste_profiles"
+    ADD CONSTRAINT "homer_taste_profiles_series_id_fkey" FOREIGN KEY ("series_id") REFERENCES "public"."homer_series"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."homer_taste_profiles"
+    ADD CONSTRAINT "homer_taste_profiles_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."homer_verdicts"
+    ADD CONSTRAINT "homer_verdicts_book_id_fkey" FOREIGN KEY ("book_id") REFERENCES "public"."homer_books"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."homer_verdicts"
+    ADD CONSTRAINT "homer_verdicts_reader_id_fkey" FOREIGN KEY ("reader_id") REFERENCES "public"."homer_readers"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."homer_verdicts"
+    ADD CONSTRAINT "homer_verdicts_series_id_fkey" FOREIGN KEY ("series_id") REFERENCES "public"."homer_series"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."homer_verdicts"
+    ADD CONSTRAINT "homer_verdicts_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
 
 
@@ -23159,6 +24603,50 @@ CREATE POLICY "claude_reader_read" ON "public"."group_types" FOR SELECT TO "clau
 
 
 
+CREATE POLICY "claude_reader_read" ON "public"."homer_books" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."homer_devices" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."homer_genre_series" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."homer_genres" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."homer_plans" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."homer_queue_items" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."homer_readers" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."homer_reads" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."homer_series" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."homer_taste_profiles" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
+CREATE POLICY "claude_reader_read" ON "public"."homer_verdicts" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
 CREATE POLICY "claude_reader_read" ON "public"."inbox" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
 
 
@@ -23611,6 +25099,83 @@ CREATE POLICY "group_types_read" ON "public"."group_types" FOR SELECT TO "authen
 
 
 CREATE POLICY "group_types_update" ON "public"."group_types" FOR UPDATE TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."homer_books" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "homer_books_owner_access" ON "public"."homer_books" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."homer_devices" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "homer_devices_owner_access" ON "public"."homer_devices" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."homer_genre_series" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "homer_genre_series_owner_access" ON "public"."homer_genre_series" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."homer_genres" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "homer_genres_owner_access" ON "public"."homer_genres" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."homer_plans" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "homer_plans_owner_access" ON "public"."homer_plans" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."homer_queue_items" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "homer_queue_items_owner_access" ON "public"."homer_queue_items" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."homer_readers" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "homer_readers_owner_access" ON "public"."homer_readers" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."homer_reads" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "homer_reads_owner_access" ON "public"."homer_reads" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."homer_series" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "homer_series_owner_access" ON "public"."homer_series" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."homer_taste_profiles" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "homer_taste_profiles_owner_access" ON "public"."homer_taste_profiles" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."homer_verdicts" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "homer_verdicts_owner_access" ON "public"."homer_verdicts" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
 
 
 
@@ -24368,6 +25933,12 @@ GRANT ALL ON FUNCTION "public"."claude_notifications_guard_update"() TO "service
 
 
 
+REVOKE ALL ON FUNCTION "public"."create_homer_plan"("p_instructions" "text", "p_settings" "jsonb", "p_change_summary" "text", "p_written_by" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."create_homer_plan"("p_instructions" "text", "p_settings" "jsonb", "p_change_summary" "text", "p_written_by" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."create_homer_plan"("p_instructions" "text", "p_settings" "jsonb", "p_change_summary" "text", "p_written_by" "text") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."create_overwatch_plan"("p_instructions" "text", "p_settings" "jsonb", "p_reason" "text", "p_written_by" "text", "p_checks" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."create_overwatch_plan"("p_instructions" "text", "p_settings" "jsonb", "p_reason" "text", "p_written_by" "text", "p_checks" "jsonb") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."create_overwatch_plan"("p_instructions" "text", "p_settings" "jsonb", "p_reason" "text", "p_written_by" "text", "p_checks" "jsonb") TO "service_role";
@@ -24604,6 +26175,48 @@ GRANT ALL ON FUNCTION "public"."get_platform_contract"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."get_schema_info"("target_table" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_schema_info"("target_table" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_schema_info"("target_table" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."homer_devices_carry_reader"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."homer_devices_carry_reader"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."homer_devices_carry_reader"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."homer_plan_settings_problem"("p" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."homer_plan_settings_problem"("p" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."homer_plan_settings_problem"("p" "jsonb") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."homer_plans_guard"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."homer_plans_guard"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."homer_plans_guard"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."homer_reads_fill_reader"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."homer_reads_fill_reader"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."homer_reads_fill_reader"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."homer_scores_problem"("p_scores" "jsonb", "p_settings" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."homer_scores_problem"("p_scores" "jsonb", "p_settings" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."homer_scores_problem"("p_scores" "jsonb", "p_settings" "jsonb") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."homer_taste_scores_check"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."homer_taste_scores_check"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."homer_taste_scores_check"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."homer_verdicts_guard"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."homer_verdicts_guard"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."homer_verdicts_guard"() TO "service_role";
 
 
 
@@ -26918,6 +28531,549 @@ GRANT SELECT("updated_at") ON TABLE "public"."group_types" TO "claude_reader";
 
 
 GRANT SELECT("kind") ON TABLE "public"."group_types" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."homer_books" TO "authenticated";
+GRANT ALL ON TABLE "public"."homer_books" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."homer_books" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."homer_books" TO "claude_reader";
+
+
+
+GRANT SELECT("asin") ON TABLE "public"."homer_books" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."homer_books" TO "claude_reader";
+
+
+
+GRANT SELECT("author") ON TABLE "public"."homer_books" TO "claude_reader";
+
+
+
+GRANT SELECT("series_id") ON TABLE "public"."homer_books" TO "claude_reader";
+
+
+
+GRANT SELECT("series_position") ON TABLE "public"."homer_books" TO "claude_reader";
+
+
+
+GRANT SELECT("acquired") ON TABLE "public"."homer_books" TO "claude_reader";
+
+
+
+GRANT SELECT("content_type") ON TABLE "public"."homer_books" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."homer_books" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."homer_books" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."homer_devices" TO "authenticated";
+GRANT ALL ON TABLE "public"."homer_devices" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("device_id") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("family") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("friendly_name") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("reader_id") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("proposed_reader_id") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("owner_reason") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("owner_status") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("first_session") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("last_session") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("sessions") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("hours") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."homer_devices" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."homer_genre_series" TO "authenticated";
+GRANT ALL ON TABLE "public"."homer_genre_series" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."homer_genre_series" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."homer_genre_series" TO "claude_reader";
+
+
+
+GRANT SELECT("genre_id") ON TABLE "public"."homer_genre_series" TO "claude_reader";
+
+
+
+GRANT SELECT("series_id") ON TABLE "public"."homer_genre_series" TO "claude_reader";
+
+
+
+GRANT SELECT("is_example") ON TABLE "public"."homer_genre_series" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."homer_genre_series" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."homer_genres" TO "authenticated";
+GRANT ALL ON TABLE "public"."homer_genres" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."homer_genres" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."homer_genres" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."homer_genres" TO "claude_reader";
+
+
+
+GRANT SELECT("description") ON TABLE "public"."homer_genres" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."homer_genres" TO "claude_reader";
+
+
+
+GRANT SELECT("sort_order") ON TABLE "public"."homer_genres" TO "claude_reader";
+
+
+
+GRANT SELECT("archived_at") ON TABLE "public"."homer_genres" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."homer_genres" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."homer_genres" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."homer_plans" TO "authenticated";
+GRANT ALL ON TABLE "public"."homer_plans" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."homer_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."homer_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("version") ON TABLE "public"."homer_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."homer_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("instructions") ON TABLE "public"."homer_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("settings") ON TABLE "public"."homer_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("change_summary") ON TABLE "public"."homer_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("written_by") ON TABLE "public"."homer_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("supersedes_plan_id") ON TABLE "public"."homer_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."homer_plans" TO "claude_reader";
+
+
+
+GRANT SELECT("ended_at") ON TABLE "public"."homer_plans" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."homer_queue_items" TO "authenticated";
+GRANT ALL ON TABLE "public"."homer_queue_items" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("genre_id") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("reader_id") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("kind") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("title") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("author") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("asin") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("series_id") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("book_id") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("why") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("on_kindle_unlimited") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("ku_checked_on") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("verified_on") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("status") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("position") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("created_by") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("archived_at") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."homer_queue_items" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."homer_readers" TO "authenticated";
+GRANT ALL ON TABLE "public"."homer_readers" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."homer_readers" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."homer_readers" TO "claude_reader";
+
+
+
+GRANT SELECT("key") ON TABLE "public"."homer_readers" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."homer_readers" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."homer_readers" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."homer_readers" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."homer_readers" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."homer_reads" TO "authenticated";
+GRANT ALL ON TABLE "public"."homer_reads" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("book_id") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("device_id") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("reader_id") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("started_on") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("finished_on") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("hours") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("completion") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("import_key") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("note") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."homer_reads" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."homer_series" TO "authenticated";
+GRANT ALL ON TABLE "public"."homer_series" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."homer_series" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."homer_series" TO "claude_reader";
+
+
+
+GRANT SELECT("name") ON TABLE "public"."homer_series" TO "claude_reader";
+
+
+
+GRANT SELECT("series_asin") ON TABLE "public"."homer_series" TO "claude_reader";
+
+
+
+GRANT SELECT("author") ON TABLE "public"."homer_series" TO "claude_reader";
+
+
+
+GRANT SELECT("notes") ON TABLE "public"."homer_series" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."homer_series" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."homer_series" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."homer_taste_profiles" TO "authenticated";
+GRANT ALL ON TABLE "public"."homer_taste_profiles" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."homer_taste_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."homer_taste_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("reader_id") ON TABLE "public"."homer_taste_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("series_id") ON TABLE "public"."homer_taste_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("description") ON TABLE "public"."homer_taste_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("scores") ON TABLE "public"."homer_taste_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("plan_id") ON TABLE "public"."homer_taste_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."homer_taste_profiles" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."homer_taste_profiles" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."homer_verdicts" TO "authenticated";
+GRANT ALL ON TABLE "public"."homer_verdicts" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."homer_verdicts" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."homer_verdicts" TO "claude_reader";
+
+
+
+GRANT SELECT("reader_id") ON TABLE "public"."homer_verdicts" TO "claude_reader";
+
+
+
+GRANT SELECT("subject_kind") ON TABLE "public"."homer_verdicts" TO "claude_reader";
+
+
+
+GRANT SELECT("series_id") ON TABLE "public"."homer_verdicts" TO "claude_reader";
+
+
+
+GRANT SELECT("book_id") ON TABLE "public"."homer_verdicts" TO "claude_reader";
+
+
+
+GRANT SELECT("author") ON TABLE "public"."homer_verdicts" TO "claude_reader";
+
+
+
+GRANT SELECT("verdict") ON TABLE "public"."homer_verdicts" TO "claude_reader";
+
+
+
+GRANT SELECT("note") ON TABLE "public"."homer_verdicts" TO "claude_reader";
+
+
+
+GRANT SELECT("set_by") ON TABLE "public"."homer_verdicts" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."homer_verdicts" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."homer_verdicts" TO "claude_reader";
 
 
 
