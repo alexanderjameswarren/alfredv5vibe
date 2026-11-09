@@ -3001,13 +3001,13 @@ export function createMcpServer(token: string) {
       description:
         "Schedule one push notification to Alex's phone at a fixed time. Alex is in America/Los_Angeles: resolve 'at 9 tomorrow' in Pacific time and send due_at with the matching offset (-07:00 in daylight time, -08:00 in standard time). " +
         "Every reminder is backed by something visible in Alfred, because Android notifications are easily missed: link it to an existing intention (intent_id, from get_intents) or inbox item (inbox_id, from get_inbox), or pass neither and an inbox item with the same text is created for it. At most one of the two. " +
-        "Tapping the notification opens the linked intention, else the inbox item. Rejects a due_at with no offset or in the past. Returns the reminder, including its inbox_id or intent_id. Tier 1.",
+        "Tapping the notification opens the linked intention, else the inbox item. Rejects a due_at with no offset or in the past. started_by is required, and a scheduled task (task:*) is refused: it raises a signal and the dispatcher decides. Returns the reminder, including its inbox_id or intent_id. Tier 1.",
       inputSchema: {
         text: z.string().describe("The notification body Alex will see, short and self-explanatory, e.g. 'Call the dentist about Thursday'."),
         due_at: z.string().describe("When to fire: ISO 8601 WITH a UTC offset, e.g. 2026-10-01T09:00:00-07:00. A time with no offset is rejected. Must be in the future."),
         inbox_id: z.string().optional().describe("Link to this existing inbox item (get_inbox, field id). Omit when linking an intention."),
         intent_id: z.string().optional().describe("Link to this existing intention (get_intents, field id). Omit when linking an inbox item."),
-        started_by: z.string().optional().describe("Who started it: \"alex\" when Alex asked for it, \"chat\" (the default), or \"task:<job>\" for a scheduled task."),
+        started_by: z.string().describe("Required. Who started it: \"alex\" when Alex asked for it, else \"chat\". A scheduled task (\"task:<job>\") is refused: tasks raise a signal instead."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(createReminderTool, args, token),
@@ -3236,7 +3236,7 @@ export function createMcpServer(token: string) {
       description:
         "Send one Alfred push notification to every device Alex has subscribed, and log it in the shared notification log (claude_notifications) in the same call. Any app may use it. " +
         "dedupe_key makes it at-most-once: a key already used is REFUSED and nothing is sent — build it from what the notification is about, e.g. arnold:2026-10-29:microworkout:behind_pace:14:00, so the same reason never notifies twice. The row is logged before sending, then marked sent, failed or no_subscription. sent means the push service accepted it, not that the phone showed it (Android can hold a push). Dead device subscriptions (404/410) are reported in dead_subscription_ids, not deleted. " +
-        "Check the daily limits first with get_claude_notifications (its `today` counts). Returns notification_id, delivery_status, devices, sent_to, dead_subscription_ids and per-device results. Tier 1.",
+        "Check the daily limits first with get_claude_notifications (its `today` counts). started_by is required. Returns notification_id, delivery_status, devices, sent_to, dead_subscription_ids and per-device results. Tier 1.",
       inputSchema: {
         app: z.string().describe("App id from get_apps, e.g. arnold."),
         job: z.string().describe("What is sending it, e.g. arnold_hourly."),
@@ -3245,7 +3245,7 @@ export function createMcpServer(token: string) {
         body: z.string().optional().describe("Notification text."),
         link: z.string().optional().describe("Alfred path opened on tap, always \"/\" followed by the record's id: /<id>. Default: Alfred's home."),
         dedupe_key: z.string().describe("Unique per notification; a repeat is refused."),
-        started_by: z.string().optional().describe("Who started it: \"alex\", \"chat\", or \"task:<job>\" for a scheduled task, e.g. task:claude_hourly_notifications."),
+        started_by: z.string().describe("Required. Who started it: \"alex\", \"chat\", or \"task:<job>\" for a scheduled task, e.g. task:claude-hourly-notifications."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(sendAlfredPushTool, args, token),
@@ -3257,7 +3257,7 @@ export function createMcpServer(token: string) {
       title: "Log Claude Notification",
       description:
         "Log a notification Claude sends Alex outside Alfred push — a Claude push notification (channel claude_push) or an Alfred inbox item raised for him (channel inbox_item) — in the shared log. Any app may use it. Alfred pushes are logged by send_alfred_push, so channel alfred_push is refused here. " +
-        "LOG IMMEDIATELY BEFORE SENDING: returns { created: true, id } for a new row, or { created: false, duplicate_of } when dedupe_key was already used — then it has already gone out, so do not send it. delivery_status defaults to sent. Tier 1.",
+        "LOG IMMEDIATELY BEFORE SENDING: returns { created: true, id } for a new row, or { created: false, duplicate_of } when dedupe_key was already used — then it has already gone out, so do not send it. delivery_status defaults to sent. started_by is required. Tier 1.",
       inputSchema: {
         app: z.string().describe("App id from get_apps, e.g. arnold."),
         job: z.string().describe("What is sending it, e.g. arnold_morning_review."),
@@ -3270,7 +3270,7 @@ export function createMcpServer(token: string) {
         local_date: z.string().optional().describe("Pacific date YYYY-MM-DD. Default: today."),
         delivery_status: z.enum(["pending", "sent", "failed", "no_subscription"]).optional().describe("Default sent."),
         delivery_detail: z.record(z.string(), z.unknown()).optional().describe("e.g. {\"inbox_id\": \"...\"}."),
-        started_by: z.string().optional().describe("Who started it: \"alex\", \"chat\", or \"task:<job>\" for a scheduled task, e.g. task:arnold_morning_review."),
+        started_by: z.string().describe("Required. Who started it: \"alex\", \"chat\", or \"task:<job>\" for a scheduled task, e.g. task:arnold-morning-review."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(logClaudeNotificationTool, args, token),

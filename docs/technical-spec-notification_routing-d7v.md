@@ -480,6 +480,28 @@ by each sender and `started_by`. The nightly prompt:
 - **Decided 2026-11-06:** allowed tools are not recorded in the inventory for now; the weekly check
   reads each task's live text.
 
+## 11b. Cutover: started_by required (step 13b)
+
+- **Tools.**
+  - `send_alfred_push` and `log_claude_notification` require `started_by` (`requireStartedBy`); the
+    `optionalStartedBy` helper is gone.
+  - `create_reminder` requires it too, and refuses `task:*`, because a scheduled task raises a signal
+    instead. `chat` is left to the insert trigger; `alex` is set on the new row.
+- **MCP schemas:** `started_by` is no longer `.optional()` on create_reminder, send_alfred_push and
+  log_claude_notification, and each description says it is required. index.test.mjs checks this from the
+  source, because zod is stubbed in the test.
+- **Database** (`221_claude_notifications_started_by_required.sql`, test 9):
+  - `claude_notifications.started_by` is not null. The migration first stops if any row is null; there
+    were 0 of 79 on 2026-11-09.
+  - `log_claude_notification()` keeps its signature but refuses a missing or blank `p_started_by`.
+  - `reminders.started_by` has been not null since 204.
+- **Other writers already pass it:** signals.ts (`deliver_signals`, `update_signal`), notify-dispatch
+  (reminders and step timers), wb-sync, and push-send through signals.ts.
+- **Order:** deploy mcp first, then the migration, then test 9.
+- **The enrichment task** (`alfred` / `inbox_enrich_hourly`) now has a repo copy,
+  `docs/inbox-enrich-hourly-task-prompt.md`, at 2026-11-09a, on the task-prompts rules. Its only own
+  write is `update_inbox_item` on existing captures.
+
 ## 12. Platform rules (mcp-platform skill)
 
 - Every new table: `platform.register_table()`, which grants authenticated and service_role and

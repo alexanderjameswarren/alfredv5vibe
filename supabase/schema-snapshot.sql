@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-08 12:13, through migration 220 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-09 07:03, through migration 221 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -4731,13 +4731,17 @@ begin
   if not exists (select 1 from apps where id = p_app) then
     raise exception 'log_claude_notification: unknown app "%". Use an id from get_apps.', p_app using errcode = '22023';
   end if;
+  if nullif(btrim(p_started_by), '') is null then
+    raise exception 'log_claude_notification: started_by is required: "alex", "chat" or "task:<job>".'
+      using errcode = '22023';
+  end if;
 
   insert into claude_notifications (app, job, kind, channel, title, body, link, local_date, dedupe_key,
                                     delivery_status, delivery_detail, started_by, signal_id)
   values (p_app, btrim(p_job), p_kind, p_channel, btrim(p_title), nullif(btrim(p_body), ''), nullif(btrim(p_link), ''),
           coalesce(p_local_date, (now() at time zone 'America/Los_Angeles')::date), btrim(p_dedupe_key),
           coalesce(p_delivery_status, 'pending'), coalesce(p_delivery_detail, '{}'::jsonb),
-          nullif(btrim(p_started_by), ''), p_signal_id)
+          btrim(p_started_by), p_signal_id)
   on conflict (user_id, dedupe_key) do nothing
   returning id into v_id;
 
@@ -4756,7 +4760,7 @@ $$;
 ALTER FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb", "p_started_by" "text", "p_signal_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb", "p_started_by" "text", "p_signal_id" "uuid") IS 'Shared: log one notification in claude_notifications. Returns {created: true, id} for a new row, or {created: false, id, duplicate_of} when the caller already has a row with this dedupe_key, in which case nothing is written and the notification must not be sent. local_date defaults to today in Pacific time. started_by is alex, chat or task:<job>; signal_id the signal it delivers. Called by the log_claude_notification and send_alfred_push tools.';
+COMMENT ON FUNCTION "public"."log_claude_notification"("p_app" "text", "p_job" "text", "p_kind" "text", "p_channel" "text", "p_title" "text", "p_dedupe_key" "text", "p_body" "text", "p_link" "text", "p_local_date" "date", "p_delivery_status" "text", "p_delivery_detail" "jsonb", "p_started_by" "text", "p_signal_id" "uuid") IS 'Shared: log one notification in claude_notifications. Returns {created: true, id} for a new row, or {created: false, id, duplicate_of} when the caller already has a row with this dedupe_key, in which case nothing is written and the notification must not be sent. local_date defaults to today in Pacific time. started_by (required) is alex, chat or task:<job>; signal_id the signal it delivers. Called by the log_claude_notification and send_alfred_push tools, the dispatcher and wb-sync.';
 
 
 
@@ -13059,7 +13063,7 @@ CREATE TABLE IF NOT EXISTS "public"."claude_notifications" (
     "delivery_detail" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "started_by" "text",
+    "started_by" "text" NOT NULL,
     "signal_id" "uuid",
     CONSTRAINT "claude_notifications_channel_values" CHECK (("channel" = ANY (ARRAY['alfred_push'::"text", 'claude_push'::"text", 'inbox_item'::"text"]))),
     CONSTRAINT "claude_notifications_dedupe_key_present" CHECK ((("length"("btrim"("dedupe_key")) >= 1) AND ("length"("btrim"("dedupe_key")) <= 300))),
@@ -13139,7 +13143,7 @@ COMMENT ON COLUMN "public"."claude_notifications"."updated_at" IS 'Last delivery
 
 
 
-COMMENT ON COLUMN "public"."claude_notifications"."started_by" IS 'Who started it: alex, chat, or task:<job>. Null only on rows from senders not yet passing it.';
+COMMENT ON COLUMN "public"."claude_notifications"."started_by" IS 'Who started the notification: alex, chat, or task:<job>. Required since notification routing step 13b.';
 
 
 

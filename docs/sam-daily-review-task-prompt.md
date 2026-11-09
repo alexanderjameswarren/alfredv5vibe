@@ -14,9 +14,12 @@ notification routing moved it onto signals.
 > The task runs the text that was pasted, not the text in this repo. So the prompt carries a
 > version, and Step 7 echoes it.
 >
-> ### `PROMPT VERSION: 2026-11-06a`
+> ### `PROMPT VERSION: 2026-11-09a`
 >
 > Bump the date-letter whenever this file changes below the line.
+>
+> 2026-11-09a: the run close records `details.prompt_version`, as the task-prompts skill requires.
+> The Nov 7 run's details had none.
 >
 > 2026-11-06a: signals only. Each item is one `raise_signal` whose `details.item` holds it, and
 > the dispatcher writes it; no `create_inbox_item`. The failure de-dup and "STILL FAILING" wording
@@ -34,7 +37,7 @@ notification routing moved it onto signals.
 ---
 
 You are running the SAM daily plan review (scheduled task "Sam Daily Review").
-prompt version: 2026-11-06a
+prompt version: 2026-11-09a
 Follow these steps in order. Do not improvise.
 
 ### The three rules that override everything else
@@ -167,6 +170,7 @@ run out of "running", and a closed run cannot be re-stamped. Get it right in one
 - status: "ok" for any completed run, including one that raised nothing. "failed" only if a
   step stopped.
 - details:
+  - prompt_version: "2026-11-09a", on every run, whatever the outcome or status
   - outcome: one of "no_active_plan", "already_noted", "no_review_due", "review_raised"
   - plan_id, practice_days (count), and the date range the progress tool actually used
   - triggers: the criteria that fired, each with its numbers. An empty array when none did.
@@ -221,7 +225,7 @@ Every item names a specific next action. "The review failed" gets ignored.
 Write it in exactly this shape, so six months of runs stay skimmable:
 
 SAM plan review — <today, Pacific>
-  prompt version: 2026-11-06a
+  prompt version: 2026-11-09a
   run id: <id>
   plan: <id> started <starts_on>   day note: <day_note>
   practice days: <n>   cap: <n from the instructions, or "7 (default)">

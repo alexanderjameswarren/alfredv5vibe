@@ -36,7 +36,7 @@ function fakeDb({ rows = [], rpcs = {}, tables = {} } = {}) {
 }
 
 const LOG_ARGS = { app: "arnold", job: "arnold_morning_review", kind: "flag", channel: "inbox_item",
-  title: "Yoga missed Tuesday", dedupe_key: "arnold:2026-10-29:yoga:missed" };
+  title: "Yoga missed Tuesday", dedupe_key: "arnold:2026-10-29:yoga:missed", started_by: "chat" };
 
 test("both tools are tier 1", () => {
   assert.equal(m.logClaudeNotificationTool.tier, 1);
@@ -56,7 +56,7 @@ test("log: passes every field to log_claude_notification, status sent by default
   assert.equal(p.p_link, null);
 });
 
-test("log: started_by is passed when given, null when absent, and checked", async () => {
+test("log: started_by is passed, and required and checked", async () => {
   const rpcs = { log_claude_notification: { data: { created: true, id: "n1" }, error: null } };
   const db = fakeDb({ rpcs });
   await m.logClaudeNotificationTool.handler({ ...LOG_ARGS, started_by: "task:arnold_morning_review" }, { db });
@@ -64,14 +64,12 @@ test("log: started_by is passed when given, null when absent, and checked", asyn
   assert.equal(p.p_started_by, "task:arnold_morning_review");
   assert.equal(p.p_signal_id, null);
 
-  const db2 = fakeDb({ rpcs });
-  await m.logClaudeNotificationTool.handler(LOG_ARGS, { db: db2 });
-  assert.equal(db2.calls.find(([t, n]) => t === "rpc" && n === "log_claude_notification")[2].p_started_by, null);
-
-  const db3 = fakeDb();
-  await assert.rejects(m.logClaudeNotificationTool.handler({ ...LOG_ARGS, started_by: "Task:x" }, { db: db3 }),
-    /`started_by` must be "alex", "chat" or "task:<job>"/);
-  assert.equal(db3.calls.length, 0);
+  for (const started_by of [undefined, null, "Task:x"]) {
+    const db2 = fakeDb();
+    await assert.rejects(m.logClaudeNotificationTool.handler({ ...LOG_ARGS, started_by }, { db: db2 }),
+      /`started_by` must be "alex", "chat" or "task:<job>"/);
+    assert.equal(db2.calls.length, 0);
+  }
 });
 
 test("log: a used dedupe_key comes back as created false, not an error", async () => {
