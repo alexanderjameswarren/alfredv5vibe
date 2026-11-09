@@ -11,7 +11,8 @@ import CopyButton from '../shared/CopyButton';
 // way (approved, or a test, which runs on open), so the panel can say so.
 // A git action (preview.kind 'git', spec §11.3) has no dry run: the page says what will run, Approve hands it to the
 // desktop helper, and the action id is the run mark, since the helper opens its run only when it picks the action up.
-// An sb setup (kind 'sb_setup', §11.5) is shown the same way, with its answers and the files the click writes.
+// An sb setup (kind 'sb_setup', §11.5) is shown the same way, with its answers and the files the click writes,
+// and so is a sandbox check (kind 'sf_check', §11.4, s86pa), whose lines are "sf <id>".
 
 // As on OAuthConsent (primary) and ItemAddToCollection (secondary).
 const BUTTON = 'w-full sm:w-auto px-4 py-3 min-h-[44px] bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50';
@@ -82,6 +83,16 @@ export function sbLines(payload) {
   }
   lines.push('Client data may reach Claude: no. That flag is set only in the terminal.');
   return lines;
+}
+
+/** A sandbox check in plain words, one line each (spec §11.4, by link since s86pa). */
+export function sfLines(payload) {
+  const p = payload ?? {};
+  return [
+    `Runs sf ${p.check ?? '(no check)'}${p.metadata_type ? ` ${p.metadata_type}` : ''} on sandbox ${p.alias ?? '(no alias)'}, read only.`,
+    'The helper first proves it is a sandbox listed in orgs.json; production is refused.',
+    'Nothing is written.',
+  ];
 }
 
 /** The config files the click writes. */
@@ -227,7 +238,8 @@ export default function ApprovePage() {
   // Git has no dry run: the page shows what will run and offers Approve straight away. The runner's kind decides;
   // the address's kind is for display only.
   const isSb = preview?.kind === 'sb_setup';
-  const isGit = preview?.kind === 'git' || isSb;
+  const isSf = preview?.kind === 'sf_check';
+  const isGit = preview?.kind === 'git' || isSb || isSf;
 
   useEffect(() => {
     if (!preview || dryStarted.current || isGit) return;
@@ -295,15 +307,15 @@ export default function ApprovePage() {
   if (isGit) {
     // The action id is the chat's handle: the helper's run row only exists once it picks the action up.
     const id = preview.action_id;
-    const word = isSb ? 'sb' : 'git';
+    const word = isSb ? 'sb' : isSf ? 'sf' : 'git';
     return (
       <Shell>
         {approving && <span hidden data-switchboard-running={preview.kind} />}
         <p className="font-bold text-dark mb-2 break-words">{preview.headline}</p>
         <p className="text-sm text-dark">Project</p>
         <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code} data-switchboard-kind={preview.kind}>{preview.project_code}</p>
-        <ul data-testid={isSb ? 'approve-sb' : 'approve-git'} className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">
-          {(isSb ? sbLines(preview.payload) : gitLines(preview.payload, preview.project_code)).map((l) => <li key={l}>{l}</li>)}
+        <ul data-testid={`approve-${word}`} className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">
+          {(isSb ? sbLines(preview.payload) : isSf ? sfLines(preview.payload) : gitLines(preview.payload, preview.project_code)).map((l) => <li key={l}>{l}</li>)}
         </ul>
         {isSb && !real && !cancelled && (
           <div data-testid="approve-sb-writes" className="mb-4 text-sm text-dark break-words">
@@ -339,7 +351,7 @@ export default function ApprovePage() {
           </>
         ) : (
           <>
-            <p className="mb-4 text-sm text-dark">{isSb ? 'An sb setup' : 'Git'} has no dry run. Approve runs this once, on your computer.</p>
+            <p className="mb-4 text-sm text-dark">{isSb ? 'An sb setup' : isSf ? 'An sf check' : 'Git'} has no dry run. Approve runs this once, on your computer.</p>
             <div className="mb-4">
               <label htmlFor="dont-run-reason" className="block text-sm text-dark mb-1">Reason for not running (optional)</label>
               <input id="dont-run-reason" type="text" maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)}

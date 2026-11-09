@@ -19,9 +19,8 @@ import {
 //                  unless it's a test action, whose one run this is.
 //   POST /approve  Alex's JWT. { token, fingerprint } -> { run_id, summary, conformance, counts }. Needs a clean latest dry run.
 //   POST /cancel   Alex's JWT. { token, reason? } -> { run_id, cancelled, reason }. Spends the link; runs nothing.
-//   A git or sb_setup link (spec 11.3, 11.5): /preview adds kind and payload; /approve only spends the link, so the
-//   action is consumed for the helper, and runs nothing here; /cancel needs no dry run; /dry-run is refused.
-//   An sf_check has no link (spec 11.4): all four refuse it.
+//   A git, sf_check (s86pa) or sb_setup link (spec 11.3-11.5): /preview adds kind and payload; /approve only spends
+//   the link, so the action is consumed for the helper, and runs nothing here; /cancel needs no dry run; /dry-run is refused.
 //   POST /pickup   x-switchboard-pickup-key. { kinds? } -> { action (with kind) | null, timed_out }. The desktop helper.
 //                  No kinds: git only, by switchboard_pickup_git. All of git, sf_check, sb_setup: switchboard_pickup_helper.
 //   POST /result   x-switchboard-pickup-key. { action_id, run_id, ok, summary, exit_code?, output? } -> { status }. Any helper kind.
