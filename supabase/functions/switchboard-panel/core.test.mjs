@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildPanel, handle } from "./core.ts";
+import { buildPanel, handle, projectOfTag } from "./core.ts";
 
 const KEY = "k".repeat(40);
 const read = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
@@ -99,6 +99,18 @@ test("per project: report unread, waiting on Alex, lane and order", async () => 
       "nolink-n1n": { report_unread: false, waiting_on_alex: false, lane: null, lane_order: null },
     },
   });
+});
+
+test("run tags: any step segment s<digit><letters or digits>", () => {
+  assert.equal(projectOfTag("switchboard2-h8r-s86kd-f2mx"), "switchboard2-h8r");
+  assert.equal(projectOfTag("switchboard2-h8r-s86l-a1b2"), "switchboard2-h8r");
+  assert.equal(projectOfTag("switchboard2-h8r-s86-a1b2"), "switchboard2-h8r");
+  assert.equal(projectOfTag("parallel_threads-p2q-s1-zz99"), "parallel_threads-p2q");
+  for (const bad of ["not a tag", "switchboard2-h8r-x86-a1b2", "switchboard2-h8r-s-a1b2", "switchboard2-h8r-s86kd", null]) {
+    assert.equal(projectOfTag(bad), null, String(bad));
+  }
+  const out = buildPanel({ ...DATA, clips: [{ run_tag: "dd-d4d-s86ke-p9dk", inbox_id: "in-a3" }] });
+  assert.equal(out.projects["dd-d4d"].report_unread, true);
 });
 
 test("only the latest report counts, and a stray field never comes through", async () => {
