@@ -17,7 +17,9 @@ them is fine.
 **Alex can run them by link.** A claude.ai chat queues the command and he clicks
 to approve; the desktop helper then runs it. For you nothing changes. When a step
 needs one, stop and name the command, the mode and the exact paths, so the chat
-can queue it. A prompt that says "run gitsync first" still means: check whether
+can queue it. For a gitnewtree, also name the repo's absolute path (for example
+`C:\Users\Alex\projects\alfred-v5`): a worktree that doesn't exist yet can't say
+which repo it belongs to. A prompt that says "run gitsync first" still means: check whether
 it's needed, and if it is, stop and ask. After a git step, start by checking its
 effect read-only, for example that main is merged with `git merge-base
 --is-ancestor main HEAD`.
@@ -130,11 +132,16 @@ see the SQL section below for why.
    time.** A `db:` claim is not carried over from an earlier step — if a previous
    step released them, as it should have, re-claim here. Claiming `db:deploy`
    raises Alex's permission prompt; the rest are silent.
-5. **Number the migration now**, not earlier: list `supabase/migrations/`, take
-   the next free number, write the numbered file, delete the `_pending_` one.
-   The sync in step 2 is what makes that number trustworthy.
+5. **Number the migration now**, not earlier: run
+   `claims.cmd number-migration supabase/migrations/_pending_<owner>_<purpose>.sql`
+   on its own. It prints the number and claims it (`db:migration:NNN`). Write
+   the numbered file, delete the `_pending_` one, queue it. Never pick a number
+   by hand.
 6. Deploy. Migrations you queue with `scripts/sql-queue.mjs` for him to approve
-   by a link (see the SQL section); function deploys you run yourself. Run `check_platform_conformance` where the platform
+   by a link (see the SQL section); function deploys you run yourself. A
+   function deploy is refused from a worktree missing main's commits; when it
+   is, stop and ask Alex for a gitsync, as in step 2, rather than deploying
+   from elsewhere. Run `check_platform_conformance` where the platform
    contract requires it.
 7. Verify.
 8. Stop and ask Alex to run `gitpush` in **Checkpoint** mode for this worktree,
@@ -417,9 +424,12 @@ for example `supabase/migrations/_pending_inbox-ui_add_filter_column.sql`. Claim
 that path like any other file and work in it.
 
 **Give it its real number only when you are about to queue it, and only
-after `gitsync`.** At that point, and not before, list `supabase/migrations/`, take
-the next free number, write the numbered file, and delete the `_pending_` one. The
-guard allows that delete because you hold the claim on it.
+after `gitsync`.** At that point, and not before, run
+`claims.cmd number-migration <the _pending_ file>` on its own: it gives the next
+number past every checkout, every number already issued and every number claimed,
+and claims it for you. Write the numbered file and delete the `_pending_` one. The
+guard allows that delete because you hold the claim on it. Never take a number from
+a folder listing: 197 to 220 were numbered that way, and two threads both took 219.
 
 **Why.** Claims cannot catch this one. Two threads each decide the next migration
 is `084`, and because the two files have *different names* — `084_add_filter.sql`
