@@ -192,15 +192,18 @@ test("switchboard s86k: gitnewtree advertises repo", () => {
   assert.match(q.cfg.description, /C:\\Users\\Alex\\projects\\alfred-v5/);
 });
 
-test("switchboard s86: sf_check has no link and asks for the queued line; sb_setup asks first and states D2", () => {
+test("switchboard s86pa: sf_check issues its link; sb_setup asks first and states D2", () => {
   const get = registered.find((r) => r.name === "get_switchboard_run");
   assert.match(get.cfg.description, /For kind sf_check, the same/);
+  assert.match(get.cfg.description, /or its link expired unclicked/);
   assert.match(get.cfg.description, /For kind sb_setup, the same/);
   const sf = registered.find((r) => r.name === "queue_switchboard_sf_check");
   assert.deepEqual(Object.keys(sf.cfg.inputSchema).sort(), ["alias", "chat_url", "check", "metadata_type", "project_code"]);
-  assert.match(sf.cfg.description, /NO LINK is ever issued/);
-  assert.match(sf.cfg.description, /"sf <action id> queued" on a line of its own/);
-  assert.match(sf.cfg.description, /expires unrun after 10 minutes/);
+  assert.match(sf.cfg.description, /issue its single-use approval link in the same call/);
+  assert.match(sf.cfg.description, /Nothing runs until Alex clicks Approve/);
+  assert.match(sf.cfg.description, /Returns \{ action_id, url, expires_at, headline, payload, next \}/);
+  assert.match(sf.cfg.description, /sf <action id> done or failed/);
+  assert.doesNotMatch(sf.cfg.description, /NO LINK|queued_line|sf <action id> queued/);
   const sb = registered.find((r) => r.name === "queue_switchboard_sb_setup");
   assert.match(sb.cfg.description, /FIRST ASK ALEX THE QUESTIONS IN THE CHAT/);
   assert.match(sb.cfg.description, /never production/);

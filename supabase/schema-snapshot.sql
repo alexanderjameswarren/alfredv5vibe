@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-09 07:53, through migration 222 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-09 12:05, through migration 223 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -8327,8 +8327,8 @@ CREATE OR REPLACE FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "
     AS $$
   select case
     when p_kind = 'git' and p_payload->>'command' in ('gitpush', 'gitnewtree') then true  -- touches main: always
-    when p_kind = 'git' then true       -- gitcom, gitsync: a click for the first two weeks
-    when p_kind = 'sf_check' then false -- read-only, on a sandbox the helper proves first (spec 11.4)
+    when p_kind = 'git' then true       -- gitcom, gitsync: a click until the no-click project
+    when p_kind = 'sf_check' then true  -- a link for now (s86pa); read-only, on a sandbox the helper proves first
     when p_kind = 'sb_setup' then true  -- writes Switchboard's config: always
     else true                           -- sql, docs and the rest of Salesforce: a click until their own steps say otherwise
   end;
@@ -8338,7 +8338,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_payload" "jsonb", "p_created_by" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_payload" "jsonb", "p_created_by" "text") IS 'Switchboard: whether an action waits for Alex''s click, from its kind, payload and who queued it (spec 11.1, 11.4). git always does for now; sf_check never does; sb_setup always does; everything else does. Called by the guard trigger, so a caller never sets needs_click.';
+COMMENT ON FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_payload" "jsonb", "p_created_by" "text") IS 'Switchboard: whether an action waits for Alex''s click, from its kind, payload and who queued it (spec 11.1, 11.4). Every kind does for now: git, sf_check (by link since s86pa), sb_setup and the rest. Called by the guard trigger, so a caller never sets needs_click.';
 
 
 

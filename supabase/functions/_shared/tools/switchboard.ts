@@ -7,7 +7,7 @@
 //   issue_switchboard_link  tier 2  issue the approval link for the SQL Claude reviewed
 //   get_sql_read            tier 1  one read-only query, as claude_reader (§8.2)
 //   queue_switchboard_git   tier 2  queue a git action and issue its link (§11)
-//   queue_switchboard_sf_check  tier 2  queue a read-only sandbox check; no link (§11.4)
+//   queue_switchboard_sf_check  tier 2  queue a read-only sandbox check and issue its link (§11.4)
 //   queue_switchboard_sb_setup  tier 2  queue sb client start or org add answers and issue its link (§11.5)
 //
 // Database access ONLY through ctx.db, except get_sql_read's query itself: see readerSeam.
@@ -374,14 +374,17 @@ export const queueSwitchboardSfCheckTool = defineTool({
     const chatUrl = chatOf(args);
     const checked = sfCheckPayload(args);
     if ("refused" in checked) throw fail(tool, `refused: ${checked.refused}`);
-    // No link, ever: an sf_check needs no click (D3), and the runner refuses one on every link route.
+    // s86pa: a click by link, as sb_setup (needs_click is true for sf_check since that migration).
     const actionId = await queueHelper(tool, ctx, "sf_check", code, checked.payload, sfCheckHeadline(code, checked.payload), chatUrl);
+    const { data, error } = await ctx.db.rpc("switchboard_issue_link", { p_action_id: actionId });
+    if (error) {
+      if (REFUSALS.has(error.code ?? "")) throw fail(tool, `queued as ${actionId}, but no link: ${error.message}`);
+      throw dbError(tool, `issuing the link for ${actionId}`, error);
+    }
     return {
-      action_id: actionId, payload: checked.payload, queued_line: `sf ${actionId} queued`,
-      next: `End your message with this line, on a line of its own: sf ${actionId} queued — the extension wakes the ` +
-        `desktop helper on it. The result arrives in this chat by itself as sf ${actionId} done or failed when the check ` +
-        "finishes; read it with get_switchboard_run. If this chat isn't open on the desktop, nothing wakes the helper " +
-        "and the check expires unrun after 10 minutes: then ask Alex to open the chat on the desktop and queue it again.",
+      ...(data as Record<string, unknown>), action_id: actionId, payload: checked.payload,
+      next: "Give Alex the url whole; it lasts 30 minutes. Nothing runs until he clicks Approve; then the desktop helper " +
+        `runs the check. The result line (sf ${actionId} done or failed) arrives in this chat by itself; read it with get_switchboard_run.`,
     };
   },
 });

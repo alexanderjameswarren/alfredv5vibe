@@ -466,6 +466,41 @@ test('sb setup: from_sandbox shows the whole folder it writes and that it must b
   expect(screen.getByText(new RegExp(`from sandbox acme-dev into ${folder.replace(/\\/g, '\\\\')}, which must be empty`))).toBeInTheDocument();
 });
 
+// --- sf check by link (spec §11.4, s86pa) ---
+
+const SF = { ok: true, kind: 'sf_check', action_id: 'f1', headline: 'SF CHECK: METADATA ApexClass ON SANDBOX acme-dev, READ ONLY',
+  fingerprint: 'fpf', project_code: 'sf-acme-dev', payload: { check: 'metadata', alias: 'acme-dev', metadata_type: 'ApexClass' } };
+
+test('sf check: what it runs, no dry run; Approve sends it, marked sf_check', async () => {
+  runner({ preview: reply(SF), approve: reply({ ok: true, action_id: 'f1', sent: true }) });
+  const { container } = open();
+  const lines = await screen.findByTestId('approve-sf');
+  expect(lines).toHaveTextContent('Runs sf metadata ApexClass on sandbox acme-dev, read only.');
+  expect(lines).toHaveTextContent('The helper first proves it is a sandbox listed in orgs.json; production is refused.');
+  expect(lines).toHaveTextContent('Nothing is written.');
+  expect(screen.getByText(/An sf check has no dry run/)).toBeInTheDocument();
+  expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'sf_check');
+  expect(screen.queryByTestId('approve-sb-writes')).toBeNull();
+  expect(called('dry-run')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: /^approve and run$/i }));
+  expect(await screen.findByText('Sent to the desktop helper')).toBeInTheDocument();
+  expect(JSON.parse(called('approve')[0][1].body)).toEqual({ token: 'tok1', fingerprint: 'fpf' });
+  expect(container.querySelector('[data-switchboard-run-id]')).toHaveAttribute('data-switchboard-run-id', 'f1');
+  expect(screen.getByText('sf f1')).toBeInTheDocument();
+});
+
+test('sf check: Don\'t run gives the sf cancelled line', async () => {
+  runner({ preview: reply(SF), cancel: reply({ ok: true, cancelled: true, reason: '' }) });
+  open();
+  fireEvent.click(await screen.findByRole('button', { name: /don't run/i }));
+  expect(await screen.findByText('sf f1 cancelled')).toBeInTheDocument();
+});
+
+test('sf check: lines without a metadata type', () => {
+  const { sfLines } = jest.requireActual('./ApprovePage');
+  expect(sfLines({ check: 'limits', alias: 'acme-dev' })[0]).toBe('Runs sf limits on sandbox acme-dev, read only.');
+});
+
 test('sb setup: no folder line without from_sandbox', async () => {
   runner({ preview: reply(SB) });
   open();

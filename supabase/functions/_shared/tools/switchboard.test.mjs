@@ -616,20 +616,20 @@ test("sf_check and sb_setup: tier 2", () => {
   assert.equal(m.queueSwitchboardSbSetupTool.tier, 2);
 });
 
-test("sf_check: queued with kind sf_check, no link ever, and the reply asks for the queued line", async () => {
+test("sf_check: queued with kind sf_check, then its link is issued (s86pa)", async () => {
   const db = helperDb();
   const out = await queueSf({ project_code: "p-a1", check: "metadata", alias: "acme-dev", metadata_type: "ApexClass" }, db);
-  assert.equal(db.calls.length, 1);
-  const [name, params] = db.calls[0];
-  assert.equal(name, "switchboard_queue_helper");
+  assert.deepEqual(db.calls.map((c) => c[0]), ["switchboard_queue_helper", "switchboard_issue_link"]);
+  const [, params] = db.calls[0];
   assert.equal(params.p_kind, "sf_check");
   assert.deepEqual(params.p_payload, { check: "metadata", alias: "acme-dev", metadata_type: "ApexClass" });
   assert.equal(params.p_headline, "SF CHECK p-a1: METADATA ApexClass ON SANDBOX acme-dev, READ ONLY");
-  assert.equal(out.url, undefined);
-  assert.equal(out.queued_line, `sf ${ACTION_ID} queued`);
-  assert.match(out.next, new RegExp(`line of its own: sf ${ACTION_ID} queued`));
+  assert.deepEqual(db.calls[1][1], { p_action_id: ACTION_ID });
+  assert.deepEqual(Object.keys(out).sort(), ["action_id", "expires_at", "headline", "next", "payload", "url"]);
+  assert.equal(out.url, LINK.url);
+  assert.match(out.next, /Give Alex the url whole; it lasts 30 minutes/);
   assert.match(out.next, new RegExp(`sf ${ACTION_ID} done or failed`));
-  assert.match(out.next, /expires unrun after 10 minutes/);
+  assert.doesNotMatch(out.next, /queued/);
 });
 
 test("sf_check: each of the six checks is accepted", async () => {
@@ -745,6 +745,8 @@ test("sf_check and sb_setup: a database refusal is passed on; a link refusal say
     /refused: payload check/);
   await assert.rejects(queueSb(ORG_ADD, helperDb({ link: { data: null, error: { code: "55000", message: "another link is live" } } })),
     (e) => e.message.includes(`queued as ${ACTION_ID}`));
+  await assert.rejects(queueSf({ check: "limits", alias: "a" }, helperDb({ link: { data: null, error: { code: "55000", message: "another link is live" } } })),
+    (e) => e.message.includes(`queued as ${ACTION_ID}`) && e.message.includes("another link is live"));
 });
 
 test("git: a queue or link refusal is passed on, and says when the action was queued", async () => {

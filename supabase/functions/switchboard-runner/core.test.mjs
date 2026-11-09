@@ -792,17 +792,45 @@ test("sb_setup dry run: refused, nothing spent", async () => {
   assert.equal(calls.consumed.length, 0);
 });
 
-test("sf_check: every link route refuses it, even on a live link, and nothing is spent or run", async () => {
-  for (const route of ["preview", "dry-run", "approve", "cancel"]) {
-    const { deps, calls, action } = gitFakes();
-    Object.assign(action, { kind: "sf_check", payload: { check: "limits", alias: "acme-dev" } });
-    const res = await handle(post(route, { token: TOKEN, fingerprint: "fp-1" }, jwt()), deps);
-    assert.equal(res.status, 409, route);
-    assert.match((await res.json()).error, /sf_check runs with no click/);
-    assert.equal(calls.consumed.length, 0);
-    assert.deepEqual(calls.status, []);
-    nothingRan(calls);
-  }
+const SF_PAYLOAD = { check: "limits", alias: "acme-dev" };
+const sfFakes = (over = {}) => {
+  const f = gitFakes(over);
+  Object.assign(f.action, { kind: "sf_check", payload: SF_PAYLOAD });
+  return f;
+};
+
+test("sf_check preview: kind and payload, nothing spent (s86pa)", async () => {
+  const { deps, calls } = sfFakes();
+  const out = await (await handle(post("preview", { token: TOKEN }, jwt()), deps)).json();
+  assert.equal(out.kind, "sf_check");
+  assert.deepEqual(out.payload, SF_PAYLOAD);
+  assert.equal(out.sql, undefined);
+  assert.equal(out.fingerprint, "fp-1");
+  assert.equal(calls.consumed.length, 0);
+  nothingRan(calls);
+});
+
+test("sf_check approve: spends the link with the fingerprint for pickup; cancel marks it cancelled", async () => {
+  const a = sfFakes();
+  assert.equal((await handle(post("approve", { token: TOKEN }, jwt()), a.deps)).status, 400);
+  const res = await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), a.deps);
+  assert.deepEqual(await res.json(), { ok: true, action_id: "act-1", sent: true });
+  assert.deepEqual(a.calls.consumed, [{ jwt: "good", token: TOKEN, fp: "fp-1" }]);
+  assert.deepEqual(a.calls.status, []);
+  const b = sfFakes();
+  const out = await (await handle(post("cancel", { token: TOKEN, reason: "not now" }, jwt()), b.deps)).json();
+  assert.deepEqual([out.cancelled, out.reason], [true, "not now"]);
+  assert.deepEqual(b.calls.status, [{ id: "act-1", status: "cancelled" }]);
+  for (const x of [a, b]) nothingRan(x.calls);
+});
+
+test("sf_check dry run: refused, nothing spent", async () => {
+  const { deps, calls } = sfFakes();
+  const res = await handle(post("dry-run", { token: TOKEN }, jwt()), deps);
+  assert.equal(res.status, 409);
+  assert.match((await res.json()).error, /sf_check action has no dry run/);
+  assert.equal(calls.consumed.length, 0);
+  nothingRan(calls);
 });
 
 test("other kinds with a link are refused, not read as SQL", async () => {

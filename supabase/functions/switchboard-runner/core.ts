@@ -390,14 +390,11 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
   const hash = createHash("sha256").update(token).digest("hex");
   const action = await deps.findByLinkHash(hash, user);
   if (!action) return reply({ ok: false, error: "no such link." }, 404);
-  if (action.kind === "sf_check") {
-    return reply({ ok: false, error: "an sf_check runs with no click, so it has no link to preview, approve or cancel." }, 409);
-  }
   if (action.link_used_at) return reply({ ok: false, error: "this link has already been used." }, 410);
   if (!action.link_expires_at || Date.parse(action.link_expires_at) <= Date.now()) {
     return reply({ ok: false, error: "this link has expired." }, 410);
   }
-  if (action.kind === "git" || action.kind === "sb_setup") return handleHelperRun(route, body, action, jwt, token, deps, reply);
+  if (isHelperKind(action.kind)) return handleHelperRun(route, body, action, jwt, token, deps, reply);
   if (action.kind && action.kind !== "sql") return reply({ ok: false, error: `a ${action.kind} action has no link here yet.` }, 409);
 
   const sql = action.payload?.sql ?? "";
@@ -472,7 +469,7 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
 }
 
 /**
- * A git or sb_setup link (spec 11.3, 11.5). Nothing runs here: Approve spends the link, which marks the action
+ * A git, sf_check (s86pa) or sb_setup link (spec 11.3-11.5). Nothing runs here: Approve spends the link, which marks the action
  * consumed, and the pickup hands it to the desktop helper. No dry run exists, so none is asked for.
  */
 async function handleHelperRun(
