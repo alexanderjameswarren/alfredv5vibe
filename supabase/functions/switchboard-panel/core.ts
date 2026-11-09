@@ -5,7 +5,13 @@ import { timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
 
 const MIN_KEY = 32;
-const PROJECT_OF_TAG = /^([a-z0-9_]+-[a-z0-9]+)-s\d+[a-z]?-[a-z0-9]{4}$/;
+// The step segment is s, a digit, then any letters or digits (s1, s86, s86k, s86kd), as claims reads it (switchboard s86l).
+const PROJECT_OF_TAG = /^([a-z0-9_]+-[a-z0-9]+)-s\d[a-z0-9]*-[a-z0-9]{4}$/;
+
+/** A run tag's project code, or null when it isn't a run tag. */
+export function projectOfTag(tag: string | null | undefined): string | null {
+  return PROJECT_OF_TAG.exec(tag ?? "")?.[1] ?? null;
+}
 
 type Clip = { run_tag: string | null; inbox_id: string | null };
 type InboxRow = { id: string; archived: boolean | null };
@@ -44,7 +50,7 @@ export type PanelData = {
 function latestReports(clips: Clip[]): Map<string, string | null> {
   const out = new Map<string, string | null>();
   for (const c of clips) {
-    const project = PROJECT_OF_TAG.exec(c.run_tag ?? "")?.[1];
+    const project = projectOfTag(c.run_tag);
     if (project && !out.has(project)) out.set(project, c.inbox_id);
   }
   return out;
