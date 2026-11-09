@@ -89,11 +89,6 @@ export function requireStartedBy(tool: string, v: unknown): string {
   return v.trim();
 }
 
-/** Optional until cutover (step 13), when every sender passes it. */
-export function optionalStartedBy(tool: string, v: unknown): string | null {
-  return v === undefined || v === null ? null : requireStartedBy(tool, v);
-}
-
 const PT_DATE = new Intl.DateTimeFormat("en-CA", {
   timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit",
 });
@@ -143,6 +138,7 @@ export const logClaudeNotificationTool = defineTool({
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "log_claude_notification";
+    const startedBy = requireStartedBy(tool, args.started_by);
     const channel = requireEnum(tool, "channel", args.channel, ["claude_push", "inbox_item"]);
     const detail = args.delivery_detail;
     if (detail !== undefined && detail !== null && (typeof detail !== "object" || Array.isArray(detail))) {
@@ -163,7 +159,7 @@ export const logClaudeNotificationTool = defineTool({
         ? "sent"
         : requireEnum(tool, "delivery_status", args.delivery_status, DELIVERY_STATUSES),
       delivery_detail: (detail as Row | null | undefined) ?? null,
-      started_by: optionalStartedBy(tool, args.started_by),
+      started_by: startedBy,
     });
   },
 });

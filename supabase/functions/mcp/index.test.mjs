@@ -483,6 +483,20 @@ test("Notification routing: signal tools and started_by schemas match their hand
   }
 });
 
+test("Notification routing 13b: started_by is required on the three sender tools", () => {
+  // zod is stubbed, so read the registration source.
+  const src = readFileSync(join(HERE, "index.ts"), "utf-8");
+  for (const name of ["create_reminder", "send_alfred_push", "log_claude_notification"]) {
+    const block = src.split(`server.registerTool(\n    "${name}",`)[1].split("server.registerTool(")[0];
+    const line = block.split("\n").find((l) => l.trim().startsWith("started_by:"));
+    assert.ok(line, name);
+    assert.ok(!line.includes(".optional()"), name);
+    assert.match(block, /started_by is required/, name);
+    assert.ok("started_by" in registered.find((r) => r.name === name).cfg.inputSchema, name);
+  }
+  assert.match(registered.find((r) => r.name === "create_reminder").cfg.description, /task:\*\) is refused/);
+});
+
 const SHARED_READ_OPTIONS = ["limit", "offset", "ids", "include", "archived", "no_context"];
 
 /** A readTable tool reads the shared options through platform-read.ts (which validates them), not args.<key>. */

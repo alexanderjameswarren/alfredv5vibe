@@ -85,10 +85,11 @@ export const createReminderTool = defineTool({
       throw new Error(`${T}: give inbox_id OR intent_id, not both. Nothing was created.`);
     }
 
-    // Optional until cutover (step 13); left out, the insert trigger records "chat".
-    const startedBy = args.started_by === undefined || args.started_by === null
-      ? null
-      : requireStartedBy(T, args.started_by);
+    const startedBy = requireStartedBy(T, args.started_by);
+    if (startedBy.startsWith("task:")) {
+      throw new Error(`${T}: a scheduled task (started_by ${startedBy}) never creates a reminder; ` +
+        `raise a signal instead and the dispatcher decides. Nothing was created.`);
+    }
 
     const { data, error } = await ctx.db.rpc("create_reminder", {
       p_text: text,
@@ -99,7 +100,8 @@ export const createReminderTool = defineTool({
     });
     if (error) throw new Error(describeDbError(T, error));
     const id = (data as { id?: string } | null)?.id;
-    if (!startedBy || startedBy === "chat" || !id) return data;
+    // The insert trigger records "chat" for a Claude-created row; only "alex" needs setting.
+    if (startedBy === "chat" || !id) return data;
 
     const { data: updated, error: upError } = await ctx.db.from("reminders")
       .update({ started_by: startedBy }).eq("id", id).select(COLUMNS).maybeSingle();

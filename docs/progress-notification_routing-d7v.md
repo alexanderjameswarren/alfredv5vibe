@@ -765,6 +765,115 @@ Main at 718dbcf with all of step 11 live. Alex kept cards with no item linking t
   characters, md5 cc0914a7… checked against the file.
 - **Next:** Alex runs 217 and test 8, updates the weekly task from the item, and checkpoints step 12. Then step 13.
 
+#### 12c/12d. Yield five files to overwatch_settings-t3k — DONE 2026-11-08 (`s12c-y5t7`, `s12d-p2k8`)
+- 12c: every yield refused, because no block had been recorded yet. 12d: the blocks were recorded, and all five
+  were yielded: overwatch-nightly.ts and its test, the nightly and weekly prompts, and the overwatch skill.
+  overwatch_settings-t3k now owns them; the Overwatch prompts are at 2026-11-08a.
+
+#### 13. Cutover review, and the SAM prompt_version fix — DONE 2026-11-09 (`s13-r6m4`)
+- Alex's review of the weekend: every delivery went through the dispatcher, weekly direct_writes read 9 prompts
+  and found 0, and the nightly checks were clean. Decision: make started_by required before closing.
+- docs/sam-daily-review-task-prompt.md moved to **2026-11-09a**: Step 5's close records `details.prompt_version`.
+  SAM's runs on Nov 7, 8 and 9 had none. Handed over as inbox item `c02795ee-e15f-4e45-b49f-19e4e9539e3f`,
+  11,527 characters, md5 d5ecdde6… (checked against the stored row).
+- **Enrichment task** (`alfred` / `inbox_enrich_hourly`, "silently enriches typed captures"): it has no prompt
+  file in the repo. Its runs record no prompt_version either: the last three have details
+  `{enriched, routed_jobs}` only. 13b snapshots its live text into docs/inbox-enrich-hourly-task-prompt.md and
+  brings it to the task-prompts rules.
+- **started_by today:**
+  - claude_notifications has 79 rows, all with started_by, so no backfill is needed.
+  - signals.ts, notify-dispatch and wb-sync always pass started_by.
+  - Only three MCP tools treat it as optional: `optionalStartedBy` in alfred-push.ts and
+    claude-notifications.ts, and the null fallback in reminders.ts (the insert trigger records chat).
+  - log_claude_notification's `p_started_by` defaults to null.
+  - The mcp/index.ts zod schemas mark it `.optional()` for create_reminder (line 3009), send_alfred_push (3190)
+    and log_claude_notification (3215).
+  - mcp/index.ts and index.test.mjs are held by switchboard2-h8r.
+- **Next (13b):** the enrichment prompt, and started_by made required.
+
+#### 13b. Enrichment prompt; started_by required — WRITTEN 2026-11-09 (`s13b-h9w2`)
+- The claim on mcp/index.ts and index.test.mjs was refused (switchboard2-h8r holds them), and the block was recorded.
+- docs/inbox-enrich-hourly-task-prompt.md at 2026-11-09a, from inbox item e1f04c5d. What it does is unchanged.
+  Added:
+  - the THE PROMPT line;
+  - the run closed on every path, with prompt_version;
+  - a failure raise_signal: high, `alfred:inbox_enrich_hourly:failure:<failure_kind>`, started_by
+    `task:hourly-inbox-enrichment`;
+  - the never-call rule. Its only own write is update_inbox_item.
+  - Not handed over yet.
+- started_by is required on send_alfred_push and log_claude_notification. create_reminder requires it too, and
+  refuses task:*.
+- Tests updated in reminders, alfred-push and claude-notifications: 40/40 passing, and all 972 function tests pass.
+- `_pending_…_started_by_required.sql`:
+  - stops if any row has a null started_by;
+  - sets the column not null;
+  - log_claude_notification refuses a missing p_started_by.
+- Test 9 has 12 checks.
+- **mcp/index.ts still to change**, when it is released:
+  - line 3009 (create_reminder), line 3190 (send_alfred_push) and line 3215 (log_claude_notification): drop
+    `.optional()` from started_by;
+  - reword the three descriptions: required, and create_reminder refuses task:*.
+  - index.test.mjs (test at line 429): assert started_by is not optional on all three.
+- **Next (13c):** gitsync, then mcp/index.ts released; number, deploy mcp, queue the migration and test 9,
+  hand over the enrichment prompt, checkpoint.
+
+#### 13c. mcp schemas, deploy, 221 and test 9 queued, enrichment prompt handed over — QUEUED 2026-11-09 (`s13c-m8z3`)
+- After gitsync (aea9512, no drift), mcp/index.ts and index.test.mjs were claimed.
+  - started_by is required in the create_reminder, send_alfred_push and log_claude_notification schemas and
+    descriptions; create_reminder says task:* is refused.
+  - A new index test checks this from the source.
+  - All 988 function tests pass.
+- Skills and prompts: none tells Claude to call the three tools in a way that breaks. Every mention is a "never"
+  rule, apart from cli-workflow's test step "Use create_reminder to remind me…". That one is a chat, and it passes
+  started_by now the schema requires it.
+- db:deploy claimed. mcp deployed; conformance: "CONFORMANT — all 103 non-exempt public tables satisfy platform
+  contract v1, and anon reaches nothing undecided." db:deploy released.
+- 221 was free (main ends at 220). The pending file was numbered as
+  221_claude_notifications_started_by_required.sql and deleted; test 9 points at 221.
+- db:table:claude_notifications and db:fn:log_claude_notification are claimed. Queued:
+  - 221: `d717e327-9a3e-4d02-9a40-e23c96e6cc8f`;
+  - then test 9 (--test): `60822adf-1bcf-414a-b77f-3a1303a57d2a`.
+- The enrichment prompt 2026-11-09a was handed over: inbox item `1df3efce-4ba2-4b15-8216-99c4b7a0a4fd`, 4,063
+  characters, md5 5a2f774d…, checked against the stored row.
+- **Next:**
+  1. Alex runs 221, then test 9.
+  2. He pastes the enrichment prompt into "Hourly inbox enrichment".
+  3. He checkpoints steps 13 to 13c.
+  4. Then closeout: gitpush Finish.
+
+#### Closeout scope (planned): gitpush Finish
+- create: nothing; update: docs/progress-notification_routing-d7v.md; delete: nothing; deploy: nothing; SQL: none.
+- Before it: the checkpoint has landed, the SAM and enrichment tasks run 2026-11-09a, and their next runs show
+  prompt_version.
+- Alex runs `gitpush notification_routing-d7v finish`, which releases every file claim and removes the worktree.
+
+#### Step 13c scope (as planned): number, deploy, queue, hand over, checkpoint
+- create: supabase/migrations/<next>_claude_notifications_started_by_required.sql
+- update: supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, supabase/tests/notification_routing-d7v/9_started_by_required_verify.sql, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
+- delete: supabase/migrations/_pending_notification_routing-d7v_started_by_required.sql
+- deploy: mcp
+- SQL: claude_notifications
+- DB: db:table:claude_notifications, db:fn:log_claude_notification, db:deploy.
+- Order:
+  1. claim mcp/index.ts and its test;
+  2. edit and test them;
+  3. deploy mcp and check conformance;
+  4. queue the migration, then test 9;
+  5. hand over the enrichment prompt (md5 checked);
+  6. the checkpoint command.
+
+#### Step 13b scope (as planned): the enrichment prompt to the task-prompts rules; started_by required
+- create: docs/inbox-enrich-hourly-task-prompt.md, supabase/migrations/_pending_notification_routing-d7v_started_by_required.sql, supabase/tests/notification_routing-d7v/9_started_by_required_verify.sql
+- update: supabase/functions/_shared/tools/reminders.ts, supabase/functions/_shared/tools/reminders.test.mjs, supabase/functions/_shared/tools/alfred-push.ts, supabase/functions/_shared/tools/alfred-push.test.mjs, supabase/functions/_shared/tools/claude-notifications.ts, supabase/functions/_shared/tools/claude-notifications.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, docs/technical-spec-notification_routing-d7v.md, docs/progress-notification_routing-d7v.md
+- delete: nothing
+- deploy: mcp
+- SQL: claude_notifications (started_by not null; log_claude_notification refuses a null p_started_by)
+- DB: db:table:claude_notifications, db:fn:log_claude_notification, db:deploy at the deploy step.
+- Notes:
+  - mcp/index.ts and its test are held by switchboard2-h8r. They need a yield or a handover first, then gitsync.
+  - The enrichment prompt's live text comes from the claude.ai task, pasted by Alex or read by the chat.
+  - Order: deploy mcp first (no caller omits started_by), then run the migration and its test.
+
 #### Step 13 scope (planned): the cutover review, then closeout
 - Part 1, read only: check every scheduled task runs its 2026-11-06 prompt with its Claude app push off; a week of
   signals, deliveries and the nightly and weekly checks; anything still calling the four tools directly; claims and
@@ -905,4 +1014,10 @@ Files: this file. DB: none.
 | 11g | 15m | 5m 39s | five screen fixes from Alex's test |
 | 11h | 12m | 3m 50s | five more screen fixes; /<signal id> opens the generic record page |
 | 12 | 20m | 5m 28s | task-prompts skill, weekly Step 8b, reader grant written; waiting on gitsync |
+| 12b | 5m | 2m 50s | 217 numbered and queued, test 8 queued, weekly prompt handed over |
+| 12c | 1m | 53s | five yields refused: no block recorded yet |
+| 12d | 1m | 36s | five files yielded to overwatch_settings-t3k |
+| 13 | 6m | 4m 33s | SAM prompt 2026-11-09a handed over; started_by and enrichment survey |
+| 13b | 20m | 5m 23s | enrichment prompt, started_by required in three tools, pending migration and test 9 |
+| 13c | 15m | see report | mcp schemas, deploy, conformant; 221 and test 9 queued; enrichment prompt handed over |
 | 12b | 5m | see report | 217 and test 8 queued; weekly prompt handed over |

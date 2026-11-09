@@ -19,7 +19,7 @@ import { defineTool } from "../platform.ts";
 import { loadVapid, sendToAll } from "../web-push-send.ts";
 import type { EndpointResult, PushSubscriptionRow } from "../web-push-send.ts";
 import {
-  dbError, fail, KINDS, logNotification, optionalStartedBy, optionalText, requireAlfredPath, requireEnum, requireText,
+  dbError, fail, KINDS, logNotification, optionalText, requireAlfredPath, requireEnum, requireStartedBy, requireText,
 } from "./claude-notifications.ts";
 
 export { requireAlfredPath };
@@ -54,7 +54,7 @@ export const sendAlfredPushTool = defineTool({
     const body = optionalText(tool, "body", args.body);
     const link = requireAlfredPath(tool, args.link);
     const dedupeKey = requireText(tool, "dedupe_key", args.dedupe_key, 300);
-    const startedBy = optionalStartedBy(tool, args.started_by);
+    const startedBy = requireStartedBy(tool, args.started_by);
 
     try {
       loadVapid();
