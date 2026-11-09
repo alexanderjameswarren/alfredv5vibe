@@ -279,6 +279,45 @@ export function sfCheckPayload(args: Record<string, unknown>): { payload: Record
   return { payload: p };
 }
 
+// s86aa: every answer sb asks for by link (switchboard sb/lib/client.mjs startClient, org.mjs addOrg). sb refuses the
+// first question it meets, so a missing one is refused here, all at once, before anything is queued.
+const SB_START_NEEDS: [string, string][] = [
+  ["sandboxes", "which sandboxes checks may run on: all, or a list of aliases"],
+  ["integration_ok", "whether the client allows an integration user (true or false)"],
+  ["name", "the client's display name on the panel, at most 60 characters"],
+];
+const SB_ORG_NEEDS: [string, string][] = [
+  ["alias", "the org's alias"],
+  ["type", "the sandbox type: developer, developer_pro, partial or full"],
+  ["level", "the access level: objects or metadata"],
+  ["login", "how sf logs in: integration or admin"],
+  ["cli_deploy", "whether the CLI may deploy to it (true or false)"],
+  ["shared", "whether other developers use this org (true or false)"],
+];
+
+/** Every setting sb would ask for and the payload leaves out, as "key: what it is" lines. */
+export function sbSetupMissing(p: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  if (p.client === undefined) out.push("client: the client name, lower case letters, digits, _ and -");
+  if (p.command === "client start") {
+    if (!["repo", "adopt", "from_sandbox"].some((k) => p[k] !== undefined)) {
+      out.push("repo, adopt or from_sandbox: where the code comes from (a git URL, an existing checkout, or an alias to retrieve from)");
+    }
+    if (p.from_sandbox !== undefined && p.folder === undefined) out.push("folder: the empty folder to write, inside C:\\Users\\Alex\\projects\\");
+    for (const [k, d] of SB_START_NEEDS) if (p[k] === undefined) out.push(`${k}: ${d}`);
+  }
+  if (p.orgs === undefined) out.push(`orgs: ${p.command === "org add" ? "the one org" : "1 to 10 orgs"}, each with ${SB_ORG_NEEDS.map(([k]) => k).join(", ")}`);
+  else if (Array.isArray(p.orgs)) {
+    p.orgs.forEach((o, i) => {
+      if (!o || typeof o !== "object" || Array.isArray(o)) return;
+      const org = o as Record<string, unknown>;
+      const who = typeof org.alias === "string" ? org.alias : `org ${i + 1}`;
+      for (const [k, d] of SB_ORG_NEEDS) if (org[k] === undefined) out.push(`${who} ${k}: ${d}`);
+    });
+  }
+  return out;
+}
+
 export function sbSetupPayload(args: Record<string, unknown>): { payload: Record<string, unknown> } | { refused: string } {
   const r = (refused: string) => ({ refused });
   const p = payloadOf(args);
@@ -287,6 +326,11 @@ export function sbSetupPayload(args: Record<string, unknown>): { payload: Record
   const extra = Object.keys(p).filter((k) => !SB_KEYS.includes(k));
   if (extra.length) return r(`an sb setup does not take ${extra.join(", ")}.`);
   if (!["client start", "org add"].includes(p.command as string)) return r("`command` must be client start or org add.");
+  const missing = sbSetupMissing(p);
+  if (missing.length) {
+    return r(`${missing.length} setting${missing.length === 1 ? "" : "s"} missing; sb by link asks no questions, so ask Alex for ` +
+      `${missing.length === 1 ? "it" : "all of them at once"}, then queue again. Nothing was queued.\n${missing.map((m) => `- ${m}`).join("\n")}`);
+  }
   if (typeof p.client !== "string" || !CLIENT.test(p.client)) return r("`client` must be a client name: lower case letters, digits, _ and -.");
   if (!Array.isArray(p.orgs) || p.orgs.length < 1 || p.orgs.length > 10) return r("`orgs` must list 1 to 10 orgs.");
   for (const o of p.orgs as Record<string, unknown>[]) {
