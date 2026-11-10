@@ -10,7 +10,7 @@ import ObjectIcon from "./ObjectIcon";
 // two destinations that record where you came from, so their own Back works;
 // it was previously spelled as a `key === "sam" || key === "timer"` test in
 // the drawer and as two hand-written onNavigate bodies on desktop.
-const NAV_ITEMS = [
+export const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home" },
   { key: "inbox", label: "Inbox", icon: "inbox", count: "inbox" },
   { key: "contexts", label: "Contexts", icon: "context" },
@@ -20,6 +20,7 @@ const NAV_ITEMS = [
   { key: "collections", label: "Collections", icon: "collection" },
   { key: "money", label: "Money", icon: "money" },
   { key: "overwatch", label: "Overwatch", icon: "overwatch" },
+  { key: "homer", label: "Homer", icon: "homer" },
   { key: "timer", label: "Timer", icon: "timer", remembersReturn: true },
   { key: "sam", label: "Sam", icon: "sam", remembersReturn: true },
   { key: "games", label: "Games", icon: "games" },

@@ -54,6 +54,8 @@ export const VIEW_TO_PATH = {
   games: "/games",
   money: "/money",
   overwatch: "/overwatch",
+  // homer-h4k phase F: one flat page, no sub-routes yet.
+  homer: "/homer",
 };
 
 export const DEFAULT_VIEW = "home";

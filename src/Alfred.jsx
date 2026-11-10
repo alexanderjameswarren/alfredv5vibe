@@ -43,6 +43,7 @@ import { useStatusSync } from "./alfred/useStatusSync";
 import GamesPage from "./games/GamesPage";
 import MoneyPage from "./money/MoneyPage";
 import OverwatchPage from "./overwatch/OverwatchPage";
+import HomerPage from "./homer/HomerPage";
 import { sortRows } from "./utils/sortOrders";
 import { matchesQuery } from "./utils/search";
 // `supabaseUrl` used to be imported alongside this: it built the ai-enrich
@@ -1876,6 +1877,9 @@ export default function Alfred() {
 
         {/* Overwatch View */}
         {view === "overwatch" && <OverwatchPage />}
+
+        {/* Homer View */}
+        {view === "homer" && <HomerPage />}
 
         {/* Settings View */}
         {view === "settings" && (

@@ -45,11 +45,19 @@ import { uid } from "./utils/flattenElements";
 // on — above all "never crash, fall back to home".
 
 describe("the map itself", () => {
-  it("covers all 29 view values", () => {
+  it("covers all 30 view values", () => {
     // 20 until Step 12.6 added the two add pages; 23 since Clipboard Step 17
     // made inbox triage a page; 24 with Money (warren_buffet-w7b); 28 with the
-    // group create, edit, history and detail pages (Restructure P5); 29 with Overwatch.
-    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(29);
+    // group create, edit, history and detail pages (Restructure P5); 29 with Overwatch; 30 with Homer.
+    expect(Object.keys(VIEW_TO_PATH)).toHaveLength(30);
+  });
+
+  it("serves /homer as the Homer view", () => {
+    expect(pathToView("/homer")).toBe("homer");
+    expect(pathToView("/homer/")).toBe("homer");
+    expect(viewToPath("homer")).toBe("/homer");
+    expect(isKnownPath("/homer")).toBe(true);
+    expect(isKnownPath("/homer/queue")).toBe(false);
   });
 
   it("serves /overwatch and its briefings as the Overwatch view", () => {

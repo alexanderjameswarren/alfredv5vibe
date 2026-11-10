@@ -181,6 +181,10 @@ availability columns to `homer_series`, and replaces `homer_quiet_series` with t
   - series and positions: `export\…\Kindle.UnifiedLibraryIndex.CustomerRelationshipIndex.1.1.csv`, "Series Title"
     (with the trailing series ASIN split off into `series_asin`) and "Position In Collection".
   - books: every ASIN in the reading sessions or the finished list, with title and author from UnifiedLibraryIndex.
+    **Authors (s12d):** every "Author Name" row for the ASIN in `CustomerAuthorNameRelationship`, in file order,
+    each flipped to "First Last", de-duplicated (case and spaces ignored) and joined with ", " into `author`. No
+    schema change. 112 of the 1,221 books have 2 or more (at most 3), e.g. The Hunter's Code (Yuri Vinokuroff, Oleg
+    Sapphire). The series author stays the relationship index's "Series Author" (always one name).
     `acquired` comes from `Digital.Content.Ownership` `rights[].origin.originType`, in the order
     Purchase > KindleUnlimited > Prime > Sample, then PublicLibraryLending → library, anything else → other.
   - reads: one per (book, device) from the sessions (sessions under 60 seconds left out, each session capped at 4 hours).
@@ -248,11 +252,36 @@ Lists use `readTable`. The mcp function is deployed and then checked with `check
 ### F. Homer tab (`src/homer/`)
 - `HomerPage.jsx`, `homerApi.js`, `homerModel.js` and their tests; `src/Alfred.jsx` and `src/viewPaths.js` (+ test)
   add the `homer` view at `/homer`.
-- Read-next queues grouped by genre, in `position` order. Each item shows title, author, why, a KU badge and both
-  Kindle links, with a quick status change and drop.
-- "Series gone quiet" list from `homer_quiet_series('alex')`.
+- **Read only (s12).** Reads go straight to PostgREST under owner RLS, for reader `alex`. Changes are made in a
+  Homer chat. A quick status change and drop are a later step.
+- **Read next**: live `homer_queue_items` (not archived) for alex, grouped by genre (`homer_genres`, not archived, by
+  `sort_order`), ordered by `position`. Items with no genre, or a genre since archived, go last under "Not sorted
+  yet". Genres with no items are hidden. Each item shows title, author, status, a Kindle Unlimited badge when
+  `on_kindle_unlimited`, `why`, and two links built from the ASIN: "Open in Kindle" and "Amazon page".
+- **Series gone quiet**: `homer_quiet_series('alex')`, showing liked and loved series with `is_quiet`, and tired
+  series only once `tired_gap_passed`, as "Pick it up again?". Each row shows name, verdict, the last book finished,
+  the last read date and days since. "N books behind" comes only from `books_behind`; "Caught up" from
+  `is_caught_up`; an upcoming book shows as "Book N coming <date>", never as something to read now.
+  Each quiet row also has a "Series" link (below).
+- **Reading history (s12b)**, below Series gone quiet: Alex's `homer_reads` with their books and series (paged past
+  PostgREST's 1,000-row cap), one card per series, newest first by the latest read date in the series (finished_on,
+  else started_on). Books with no series go in one "Standalone" card at the end. A card's header shows the series
+  name, "N of M finished", the latest read date and a "Series" link: `https://www.amazon.com/dp/<series_asin>`, or
+  when there is none `https://www.amazon.com/s?k=<url-encoded name>&i=digital-text`. Inside, books in series order:
+  number, title, status (finished, finished (implied), started), date, hours, and the two book links. A book read on
+  more than one device shows once, with its latest date, its most finished status (Amazon's finish > implied >
+  started) and its hours summed across devices. Cards start collapsed; 20 show, and "Show more" adds 20 at a time.
+- **Authors (s12c, s12d)**: `homer_books.author` holds every author, comma-separated (see phase C). A history card's
+  header lists the union of its books' authors: the series author first, then the others in order of first
+  appearance (series order). A book line shows its authors only when its set differs from the header's set (as sets,
+  ignoring case and spaces), and always on the Standalone card. Each quiet row shows the same header list, taken from
+  the history data, since `homer_quiet_series` doesn't return it. Read next already shows the item's author.
+- Empty states: no active plan ("Homer's plan is set up during calibration"); an empty queue; no quiet series.
+- **Nav (s12b)**: Homer is in `NAV_ITEMS` in `src/shared/AppChrome.jsx`, after Overwatch, with the `homer` icon
+  (BookOpen, the same glyph as the apps row) in `src/shared/ObjectIcon.jsx`.
 - `supabase/migrations/_pending_homer-h4k_homer_screen.sql` sets `path = '/homer'` and `button_name = 'Homer'` on the
-  existing `apps` row `homer` (created by migration 181), so Overwatch counts it and the app button appears.
+  existing `apps` row `homer` (created by migration 181), so Overwatch and the pickers treat it as an app with a
+  screen. The nav tabs don't read `apps.button_name` (they are the `NAV_ITEMS` list above).
 
 ### G. Keeping reads current (data rows only, no code)
 - Two **recurring Alfred intentions**, which Alex adds in the UI (no MCP tool creates intentions):
