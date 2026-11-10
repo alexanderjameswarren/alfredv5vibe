@@ -16,15 +16,17 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [x] s5: gitsync (up to date, no drift); 19 db items claimed; number 224 (db:migration:224)
 - [x] s5b: wrote `224_homer_core.sql` (identical to the draft plus a path line); deleted the draft; brought the spec in line with the s4 changes; queued 224, action `837b3c95-72bb-4456-946a-1b87cce918cb`. Waiting for Alex to approve it.
 - [x] 224 applied: run `d19e7153-3498-44c1-b4d9-aaf1e72723ae`, all 11 tables registered, CONFORMANT (114 tables)
-- [ ] s5c: queued `1_verify.sql` (action `0defa8c2-aab4-499f-9985-dda0a97c7c83`) and `2_guards_test.sql` (action `2d02e768-d196-49e0-bec7-bf3ea0bfe71f`) with `--test`. Both need Alex's click; results not in yet.
-- [ ] s5d: Checkpoint (gitpush) with `supabase/migrations/224_homer_core.sql` and `supabase/tests/homer-h4k/`; check the db claims are released
-- [ ] s6: write `_pending_homer-h4k_homer_queries.sql` (`homer_series_verdicts`, `homer_quiet_series`) and `3_queries_test.sql`
-- [ ] s7: db step for queries (as in s5)
+- [x] s5c: `1_verify.sql` and all 52 guard checks in `2_guards_test.sql` passed
+- [x] s5d: Checkpoint of 224 and its tests into main (merge fa3e14f); db claims released
 
-### C. Import
-- [ ] s8: write `_pending_homer-h4k_homer_import.sql` (`homer_import_batch`), `scripts/homer-import.mjs`, `scripts/lib/homer-import.mjs` and its test, and `4_import_test.sql`
-- [ ] s9: db step for `homer_import_batch`
-- [ ] s10: Alex runs the dry run, then `--confirm`, kind by kind; then verify the counts against summary.json
+### B (queries) and C (import), written together at s6
+- [x] s6: wrote `_pending_homer-h4k_homer_queries.sql` (`homer_series_verdicts`, `homer_quiet_series`), `_pending_homer-h4k_homer_import.sql` (`homer_import_batch`), `scripts/homer-import.mjs`, `scripts/lib/homer-import.mjs`, `scripts/lib/homer-import.test.mjs` (11 tests, passing) and `supabase/tests/homer-h4k/3_queries_import_test.sql` (36 checks). No SQL was run. An offline plan from the real files gives 3 readers, 38 devices, 409 series, 1,221 books and 1,582 reads, in 7 batches of at most 500.
+- [x] s7: gitsync (3 commits from main, no drift); 10 db items claimed; numbers 225 (`225_homer_queries.sql`) and 226 (`226_homer_import.sql`). The mcp files are still held by switchboard2-h8r.
+- [x] s7b: wrote `225_homer_queries.sql` and `226_homer_import.sql` (each the draft plus a path line); deleted both drafts; brought the spec in line with the s6 changes; queued 225 (action `2405daac-3287-4908-8afd-806efcab75ae`) and 226 (action `26d8c4c2-043d-453e-92a4-705948b542e8`). Waiting for Alex to approve both.
+- [x] 225 applied: run `50d66bae-cfd0-4ea9-9a43-c5f2818c9aa8`; 226 applied: run `18f6678b-311c-4158-bef0-856fad909c86`; both CONFORMANT
+- [x] s7c: queued `3_queries_import_test.sql` with `--test`, action `f74e0ba9-25c8-418f-ab0d-1515b8a87466`. Waiting for Alex to approve it.
+- [ ] s7d: Checkpoint of both migrations, `supabase/tests/homer-h4k/`, `scripts/homer-import.mjs` and `scripts/lib/homer-import*.mjs`
+- [ ] s8: Alex sets HOMER_TOKEN and runs `node scripts/homer-import.mjs` (dry run), then `--apply`; then verify the counts against the plan
 
 ### D. MCP tools
 - [ ] s11: claim `supabase/functions/mcp/index.ts` and `index.test.mjs` (stop if still held); write `_shared/tools/homer.ts` and its test; register the tools
@@ -48,20 +50,29 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [ ] Suggestion rounds; corrections become plan versions
 - [ ] Propose owners for the older devices, newest first; Alex confirms
 
-## Next step's scope (s5c)
+## Next step's scope (s7d)
 - create: nothing
 - update: docs/progress-homer-h4k.md
 - delete: nothing
 - deploy: nothing
-- SQL: homer_plans, homer_readers, homer_devices, homer_series, homer_books, homer_reads, homer_verdicts, homer_taste_profiles, homer_genres, homer_genre_series, homer_queue_items
+- SQL: none
 
-Run s5c only after Alex has approved 224. The db claims stay held until the s5d Checkpoint.
+s7d runs once the test passes. Alex runs `gitpush` Checkpoint for homer-h4k with these paths: `supabase/migrations/225_homer_queries.sql`, `supabase/migrations/226_homer_import.sql`, `supabase/tests/homer-h4k/3_queries_import_test.sql`, `scripts/homer-import.mjs`, `scripts/lib/homer-import.mjs`, `scripts/lib/homer-import.test.mjs`, `docs/homer-spec-homer-h4k.md` and `docs/progress-homer-h4k.md`. The Checkpoint releases the db claims. Then the thread checks `claims.cmd status`, and Alex sets HOMER_TOKEN and runs `node scripts/homer-import.mjs` (a dry run, no `--apply`), pasting back the counts and any refused rows. The dry run writes nothing. Its counts are checked against the plan: 3 readers, 38 devices, 409 series, 1,221 books, 1,582 reads, 7 batches.
 
 ## Notes
 - The import data stays in `C:\Users\Alex\Downloads\homer-analysis\` and never goes into git.
 - The `apps` row `homer` already exists (migration 181, path null). Phase F only sets path and button_name.
 - Dungeon Crawler Carl: "didn't click" is Alex's verdict. The export shows 7 books finished on Elise's devices. Verdicts are per reader.
 - db items: claimed at their db step, never before.
+- s6 changed the design from the spec. These changes were folded into the spec at s7b.
+  1. `homer_import_batch(p_batch jsonb, p_dry_run boolean default true)` takes one object of arrays `{readers, devices, series, books, reads}`, as the s6 prompt asked. It replaces the spec's `(p_kind, p_rows, p_dry_run)`. It is granted to authenticated only (no service_role), because only Alex's token calls it.
+  2. Batches are **self-contained**: each carries the readers, devices, series and books its reads need, so every batch dry-runs on its own before anything is applied. Shared rows repeat, and come back "unchanged" once applied. A dry run counts them as new in each batch.
+  3. With `--apply`, each batch is dry-run first and applied only if nothing was refused (`--allow-refused` overrides). The flag is `--apply`, not the spec's `--confirm`.
+  4. An export read is kept for a (book, device) pair with **30 minutes or more** of reading (the s1 "started" threshold), or for the pair that holds the finish. Shorter pairs are left out as noise.
+  5. A book finished twice on one device keeps the later date: 593 finish rows become 589 finished reads.
+  6. A device owner in a batch is set (and may replace a different one); a batch without an owner never clears one.
+  7. `homer_quiet_series` returns every liked, loved and tired series with an `is_quiet` flag, not only the quiet ones, plus `tired_gap_passed` and the next book the library holds.
+  8. With no active plan, default verdicts are null, so the quiet list is empty until plan v1 exists (phase H).
 - s4 changed the design from the spec. These changes were folded into the spec at s5b.
   1. Taste scores are checked by a **trigger** (`homer_taste_scores_check`), not only by an RPC, so every write path is checked. A shared validator, `homer_scores_problem`, lets the tools' tier-2 checks and the trigger agree. It is still not a check constraint.
   2. A new validator, `homer_plan_settings_problem`, is used by `create_homer_plan` and by a check constraint on `homer_plans.settings`, so a direct insert can't store bad settings either.
@@ -83,3 +94,7 @@ Run s5c only after Alex has approved 224. The db claims stay held until the s5d 
 | s5 | Claim db items, number | 14:51:19 | 14:51:38 | 0m19s |
 | s5b | Numbered file, spec, queue 224 | 14:57:58 | 15:01:19 | 3m21s |
 | s5c | Queue 2 tests | 15:07:07 | 15:07:41 | 0m34s |
+| s6 | Queries + import RPC + script + tests | 15:14:45 | 15:21:03 | 6m18s |
+| s7 | Claim db items, number 225 and 226 | 09:51:41 | 09:52:12 | 0m31s |
+| s7b | Numbered files, spec, queue 225 and 226 | 09:57:25 | 10:00:00 | 2m35s |
+| s7c | Queue 3_queries_import_test | 10:06:25 | 10:06:42 | 0m17s |

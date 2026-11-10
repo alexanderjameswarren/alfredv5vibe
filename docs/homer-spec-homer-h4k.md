@@ -133,11 +133,11 @@ every column, and `platform.register_table(..., p_audited => true)`, which also 
 | `homer_reads_fill_reader()` | B | Trigger. A read with a device and no reader takes the device's confirmed owner. |
 | `homer_devices_carry_reader()` | B | Trigger. When a device's owner changes, its reads with no reader or the old owner move to the new one. |
 | `homer_verdicts_guard()` | B | Trigger. A `never` can be changed only with `set_by = 'alex'`. |
-| `homer_series_verdicts(p_reader_key)` | B (queries file) | Each series the reader has read: books finished, last read, highest position finished, the stored verdict if any, otherwise the plan's default, and whether the verdict is the default. |
-| `homer_quiet_series(p_reader_key, p_limit)` | B (queries file) | Series the reader liked, loved or tired of, with no read for the plan's `quiet_after_days`. Leaves out `never` and `didnt_click`. A `tired` series appears only after `tired_gap_days`. Returns the last book read and its position, the last read date, days since, and the next position the library holds. Example: He Who Fights with Monsters, book 12 last read on 2025-09-09. |
-| `homer_import_batch(p_kind, p_rows, p_dry_run)` | C | See phase C. |
+| `homer_series_verdicts(p_reader_key default 'alex')` | B (225) | Each series the reader has read or has a stored verdict on: books finished and started, highest position finished, last finished and last read dates, the stored verdict, the effective verdict (stored, else the plan's default) and `is_default`. With no active plan, a default verdict is null. |
+| `homer_quiet_series(p_reader_key default 'alex')` | B (225) | Every series the reader liked, loved or tired of (stored or default), not only the quiet ones. Each row has an `is_quiet` flag (days since the last read ≥ the plan's `quiet_after_days`) and, for tired series only, `tired_gap_passed` (≥ `tired_gap_days`). Leaves out `never` and `didnt_click`. Returns the last finished book and its position, the last read date, days since, and the next book the library holds (position, title, ASIN). Longest quiet first. With no active plan the list is empty, since default verdicts are null. Example: He Who Fights with Monsters, book 12 last read on 2025-09-09. |
+| `homer_import_batch(p_batch, p_dry_run default true)` | C (226) | See phase C. |
 
-Every function is `security invoker` (RLS applies) and `revoke all … from public, anon` / `grant execute … to authenticated, service_role`.
+Every function is `security invoker` (RLS applies) and `revoke all … from public, anon`. The two queries are granted to `authenticated, service_role`; `homer_import_batch` to `authenticated` only, because only Alex's token calls it.
 
 ## Phases
 
@@ -146,24 +146,31 @@ This file and the progress file, plus the claims.
 
 ### B. Schema
 `supabase/migrations/224_homer_core.sql`: all the tables, `create_homer_plan`, the two validators and the five triggers.
-`supabase/migrations/_pending_homer-h4k_homer_queries.sql`: `homer_series_verdicts` and `homer_quiet_series`.
+`supabase/migrations/225_homer_queries.sql`: `homer_series_verdicts` and `homer_quiet_series`.
 Tests in `supabase/tests/homer-h4k/`: `1_verify.sql` (tables, RLS, grants, registered), `2_guards_test.sql` (plan
 immutability, one active plan, never only from alex, a score outside a scale refused, a new scale accepted after a new
-plan) and `3_queries_test.sql` (default verdicts, quiet series and the tired gap, on fixture rows inside a
-self-undoing block). Queued with `--test`. Both migrations go through the db steps: gitsync, drift check,
+plan) and `3_queries_import_test.sql` (default verdicts, quiet series and the tired gap, and the import RPC: limits,
+dry run, idempotence, owners; on fixture rows inside a self-undoing block). Queued with `--test`. Both migrations go through the db steps: gitsync, drift check,
 `number-migration`, queue, verify, `check_platform_conformance`, Checkpoint.
 
 ### C. Import (Alex chose the script route)
-- `supabase/migrations/_pending_homer-h4k_homer_import.sql`: `homer_import_batch(p_kind text, p_rows jsonb, p_dry_run boolean)`.
-  `p_kind` is one of readers, devices, series, books, reads. At most 500 rows per call. It upserts on natural keys
-  (reader key, device_id, series_asin, asin, import_key) and returns `{ inserted, updated, unchanged, rejected: [{row, reason}] }`.
+- `supabase/migrations/226_homer_import.sql`: `homer_import_batch(p_batch jsonb, p_dry_run boolean default true)`.
+  `p_batch` is one object of arrays `{readers, devices, series, books, reads}`, at most 500 rows in all, processed in
+  that order. It upserts on natural keys (reader key, device_id, series_asin or name, asin, import_key), updating a row
+  only when a field differs, so a second run changes nothing. A bad row is refused with its reason and the rest go on.
+  It returns `{ dry_run, rows, counts: {kind: {inserted, updated, unchanged, refused}}, refused: [{kind, key, reason}] }`.
   A dry run does the same work inside a block that rolls itself back, so its counts are the real ones.
+  A device owner in a batch is set (and may replace a different one); a batch without an owner never clears one.
+  A read's reader comes from its device (`homer_reads_fill_reader`) and is never overwritten by the import.
   It is the single implementation: nothing else writes import rows.
 - `scripts/homer-import.mjs` (CLI) and `scripts/lib/homer-import.mjs` (pure mapping, tested by `scripts/lib/homer-import.test.mjs`
   under `node --test`). The script reads `C:\Users\Alex\Downloads\homer-analysis\` and posts to
-  `/rest/v1/rpc/homer_import_batch` with Alex's access token, as the DJ Takeout import does. It runs in order:
-  readers → devices → series → books → reads. Each kind is a full dry run first; it prints the counts, and only
-  `--confirm` writes. The token is read from an environment variable and never printed.
+  `/rest/v1/rpc/homer_import_batch` with Alex's access token, as the DJ Takeout import does. Batches are
+  **self-contained**: each carries the readers, devices, series and books its reads need, so every batch dry-runs on
+  its own before anything is applied. Shared rows repeat, and come back "unchanged" once applied; a dry run counts
+  them as new in each batch. The real export makes 7 batches. With no flag it only dry-runs and prints the counts.
+  With `--apply`, each batch is dry-run first and applied only if nothing was refused (`--allow-refused` overrides).
+  The token is read from `HOMER_TOKEN` and never printed.
 - **No reading history goes into git, and the data never passes through a model.**
 - Mapping:
   - readers: the three above.
@@ -174,8 +181,11 @@ self-undoing block). Queued with `--test`. Both migrations go through the db ste
     `acquired` comes from `Digital.Content.Ownership` `rights[].origin.originType`, in the order
     Purchase > KindleUnlimited > Prime > Sample, then PublicLibraryLending → library, anything else → other.
   - reads: one per (book, device) from the sessions (sessions under 60 seconds left out, each session capped at 4 hours).
-    `started_on` is the first session and `hours` the total. The finished record (date and AUTOMATIC/MANUAL) goes on
-    the device with the most time on that ASIN. Started-but-not-finished reads have `finished_on` null.
+    `started_on` is the first session (never after the finish) and `hours` the total. The finished record (date and
+    AUTOMATIC/MANUAL) goes on its `main_device_id`, or else the device with the most time on that ASIN. A book finished
+    twice on one device keeps the later date (593 finish rows become 589 finished reads). A (book, device) pair is
+    kept only with 30 minutes or more of reading, or when it holds the finish; shorter pairs are noise.
+    Started-but-not-finished reads have `finished_on` null.
     `import_key = 'export:<asin>:<device_id>'`. `reader_id` comes from the device's owner, or null.
   - When a device owner is confirmed later, `homer_devices_carry_reader` sets `reader_id` on that device's reads.
 
