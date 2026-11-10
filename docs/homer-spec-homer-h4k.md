@@ -181,10 +181,13 @@ dry run, idempotence, owners; on fixture rows inside a self-undoing block). Queu
     `acquired` comes from `Digital.Content.Ownership` `rights[].origin.originType`, in the order
     Purchase > KindleUnlimited > Prime > Sample, then PublicLibraryLending → library, anything else → other.
   - reads: one per (book, device) from the sessions (sessions under 60 seconds left out, each session capped at 4 hours).
-    `started_on` is the first session (never after the finish) and `hours` the total. The finished record (date and
-    AUTOMATIC/MANUAL) goes on its `main_device_id`, or else the device with the most time on that ASIN. A book finished
-    twice on one device keeps the later date (593 finish rows become 589 finished reads). A (book, device) pair is
-    kept only with 30 minutes or more of reading, or when it holds the finish; shorter pairs are noise.
+    `started_on` is the first session (never after the finish) and `hours` the total. A book on the completed list
+    (the latest row when it appears twice; 593 rows are 589 books) is finished on **every** device whose hours on it are
+    at least `FINISH_SHARE` (35%: Alex reads about twice as fast as Elise, so 60% missed most of his finishes) of its most-read device's and at least `FINISH_MIN_MS` (1 hour), so a book Alex and
+    Elise both read counts for both. Each such read's `finished_on` is that device's own last read day, with the
+    AUTOMATIC/MANUAL flag copied. If no device passes both, the old rule places one finish: on `main_device_id`, or
+    else the device with the most time, dated the completion date. A (book, device) pair is kept only with 30 minutes
+    or more of reading, or when it holds a finish; shorter pairs are noise. (s9 changed this from one finish per book.)
     Started-but-not-finished reads have `finished_on` null.
     `import_key = 'export:<asin>:<device_id>'`. `reader_id` comes from the device's owner, or null.
   - When a device owner is confirmed later, `homer_devices_carry_reader` sets `reader_id` on that device's reads.

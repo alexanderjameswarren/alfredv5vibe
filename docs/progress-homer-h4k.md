@@ -26,8 +26,12 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [x] 225 applied: run `50d66bae-cfd0-4ea9-9a43-c5f2818c9aa8`; 226 applied: run `18f6678b-311c-4158-bef0-856fad909c86`; both CONFORMANT
 - [x] s7c: queued `3_queries_import_test.sql` with `--test`, action `f74e0ba9-25c8-418f-ab0d-1515b8a87466`. Waiting for Alex to approve it.
 - [ ] s7d: Checkpoint of both migrations, `supabase/tests/homer-h4k/`, `scripts/homer-import.mjs` and `scripts/lib/homer-import*.mjs`
-- [ ] s8: Alex sets HOMER_TOKEN and runs `node scripts/homer-import.mjs` (dry run), then `--apply`; then verify the counts against the plan
-
+- [x] s7c result: `3_queries_import_test.sql` passed 37/37. s7d: Checkpoint into main (merge 107cb01, commit 28666da); db claims released.
+- [x] s8 (2026-11-10): HOMER_TOKEN was not set in the CLI's environment or the user registry, so the dry run did not run. The token mechanism was explained to Alex; he runs the dry run in his own terminal next.
+- [x] s8b: Alex ran the import with `--apply`: 3 readers, 38 devices, 409 series, 1,221 books, 1,582 reads, 589 finished, 0 refused. Each finish was on one device only (all 11 He Who Fights with Monsters finishes went to Elise, none to Alex).
+- [x] s9: finish rule changed in `scripts/lib/homer-import.mjs`: every device with ≥ 60% of the most-read device's hours and ≥ 1 h gets the finish, dated its own last read day; if none qualifies, the old one-finish rule applies. 15/15 Homer tests, 69/69 scripts tests. Offline plan: 717 finished reads (alex 220, elise 193, vasti 0, no reader 304), 589 books, 115 finished on 2+ devices. He Who Fights with Monsters: Elise 11, Alex 3 (books 2, 5, 6). The 60% share misses most of Alex's, since his hours run 40–60% of Elise's; 35% would credit him with books 1–3 and 5–10. Not re-imported yet.
+- [x] s9b: Alex chose 35%. `FINISH_SHARE = 0.35`; the "just under" test moved to 34%. 15/15 Homer tests, 69/69 scripts tests. Offline plan: 776 finished reads (alex 254, elise 193, vasti 0, no reader 329), 589 books, 164 finished on 2+ devices, 0 unplaced, 7 batches. He Who Fights with Monsters: Alex books 1–3 and 5–10, Elise 1–3 and 5–12.
+- [ ] s9c: Alex runs `node scripts/homer-import.mjs --apply` (updates the reads by import_key) and the s8 verification query
 ### D. MCP tools
 - [ ] s11: claim `supabase/functions/mcp/index.ts` and `index.test.mjs` (stop if still held); write `_shared/tools/homer.ts` and its test; register the tools
 - [ ] s12: deploy mcp, `check_platform_conformance`, call each read tool once
@@ -50,18 +54,19 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [ ] Suggestion rounds; corrections become plan versions
 - [ ] Propose owners for the older devices, newest first; Alex confirms
 
-## Next step's scope (s7d)
-- create: nothing
+## Next step's scope (s13, phase E: the Homer skill)
+- create: .claude/skills/homer/SKILL.md
 - update: docs/progress-homer-h4k.md
 - delete: nothing
 - deploy: nothing
 - SQL: none
 
-s7d runs once the test passes. Alex runs `gitpush` Checkpoint for homer-h4k with these paths: `supabase/migrations/225_homer_queries.sql`, `supabase/migrations/226_homer_import.sql`, `supabase/tests/homer-h4k/3_queries_import_test.sql`, `scripts/homer-import.mjs`, `scripts/lib/homer-import.mjs`, `scripts/lib/homer-import.test.mjs`, `docs/homer-spec-homer-h4k.md` and `docs/progress-homer-h4k.md`. The Checkpoint releases the db claims. Then the thread checks `claims.cmd status`, and Alex sets HOMER_TOKEN and runs `node scripts/homer-import.mjs` (a dry run, no `--apply`), pasting back the counts and any refused rows. The dry run writes nothing. Its counts are checked against the plan: 3 readers, 38 devices, 409 series, 1,221 books, 1,582 reads, 7 batches.
+Before s13, Alex runs `gitpush` Checkpoint for homer-h4k with `scripts/lib/homer-import.mjs`, `scripts/lib/homer-import.test.mjs`, `docs/homer-spec-homer-h4k.md` and `docs/progress-homer-h4k.md`. s13 writes the Homer skill from the spec. It names the phase D tools as they're planned, since they aren't written yet: phase D is still blocked by switchboard2-h8r's claim on `supabase/functions/mcp/index.ts` and `index.test.mjs`.
 
 ## Notes
 - The import data stays in `C:\Users\Alex\Downloads\homer-analysis\` and never goes into git.
 - The `apps` row `homer` already exists (migration 181, path null). Phase F only sets path and button_name.
+- He Who Fights with Monsters (for phase H calibration): Alex says he got tired of it. He finished books 1–3 and 5–10; Elise went further, to book 12. Verdicts are per reader, so it is likely `tired` for Alex and not for Elise.
 - Dungeon Crawler Carl: "didn't click" is Alex's verdict. The export shows 7 books finished on Elise's devices. Verdicts are per reader.
 - db items: claimed at their db step, never before.
 - s6 changed the design from the spec. These changes were folded into the spec at s7b.
@@ -98,3 +103,6 @@ s7d runs once the test passes. Alex runs `gitpush` Checkpoint for homer-h4k with
 | s7 | Claim db items, number 225 and 226 | 09:51:41 | 09:52:12 | 0m31s |
 | s7b | Numbered files, spec, queue 225 and 226 | 09:57:25 | 10:00:00 | 2m35s |
 | s7c | Queue 3_queries_import_test | 10:06:25 | 10:06:42 | 0m17s |
+| s8 | Token check (not set; no dry run) | 10:11:57 | 10:12:30 | 0m33s |
+| s9 | Finish rule, tests, offline plan, spec | 10:35:33 | 10:37:55 | 2m22s |
+| s9b | Share 35%, tests, offline plan | 10:42:09 | 10:42:35 | 0m26s |
