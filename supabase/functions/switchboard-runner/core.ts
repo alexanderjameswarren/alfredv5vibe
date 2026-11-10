@@ -68,7 +68,19 @@ export type Deps = {
   recordRun(run: Record<string, unknown>): Promise<string>;
   setStatus(id: string, status: string): Promise<void>;
   conformance(): Promise<string>;
+  /** switchboard_stakes (s86ac): change or none; null when the function is missing or fails. */
+  stakes(kind: string, payload: Record<string, unknown>): Promise<"change" | "none" | null>;
 };
+
+/** The preview's stakes field, or nothing. A runner deployed before the migration never fails a preview on it. */
+async function stakesOf(action: Action, deps: Deps): Promise<{ stakes?: "change" | "none" }> {
+  try {
+    const stakes = await deps.stakes(action.kind ?? "sql", action.payload ?? {});
+    return stakes === "change" || stakes === "none" ? { stakes } : {};
+  } catch {
+    return {};
+  }
+}
 
 // ---------------------------------------------------------------------------
 // statements
@@ -403,7 +415,7 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
   if (route === "preview") {
     return reply({
       ok: true, action_id: action.id, headline: action.headline, description: action.payload?.description ?? null, sql, fingerprint: action.fingerprint,
-      project_code: action.project_code, expires_at: action.link_expires_at, test,
+      project_code: action.project_code, expires_at: action.link_expires_at, test, ...(await stakesOf(action, deps)),
     });
   }
 
@@ -480,6 +492,7 @@ async function handleHelperRun(
     return reply({
       ok: true, kind: action.kind, action_id: action.id, headline: action.headline, payload: action.payload,
       fingerprint: action.fingerprint, project_code: action.project_code, expires_at: action.link_expires_at,
+      ...(await stakesOf(action, deps)),
     });
   }
   if (route === "dry-run") return reply({ ok: false, error: `a ${action.kind} action has no dry run.` }, 409);

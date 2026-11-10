@@ -833,6 +833,29 @@ test("sf_check dry run: refused, nothing spent", async () => {
   nothingRan(calls);
 });
 
+// s86ac: stakes from switchboard_stakes; none in the preview while that function is missing.
+const previewOf = async (deps) => (await handle(post("preview", { token: TOKEN }, jwt()), deps)).json();
+
+test("preview stakes: asked with the action's kind and payload, for sql and helper kinds", async () => {
+  const seen = [];
+  const stakes = async (kind, payload) => (seen.push([kind, payload]), kind === "sf_check" ? "none" : "change");
+  assert.equal((await previewOf(fakes({ stakes }).deps)).stakes, "change");
+  assert.equal((await previewOf(sfFakes({ stakes }).deps)).stakes, "none");
+  assert.deepEqual(seen, [["sql", { sql: "delete from wb_rules where id = 1;" }], ["sf_check", SF_PAYLOAD]]);
+});
+
+test("preview stakes: left out when the function is missing, fails or says something else", async () => {
+  for (const stakes of [async () => null, async () => { throw new Error("function does not exist"); }, async () => "green", undefined]) {
+    for (const f of [fakes({ stakes }), sfFakes({ stakes })]) {
+      const res = await handle(post("preview", { token: TOKEN }, jwt()), f.deps);
+      assert.equal(res.status, 200);
+      const out = await res.json();
+      assert.equal(out.ok, true);
+      assert.ok(!("stakes" in out));
+    }
+  }
+});
+
 test("other kinds with a link are refused, not read as SQL", async () => {
   const { deps, calls, action } = fakes();
   action.kind = "sf_deploy";

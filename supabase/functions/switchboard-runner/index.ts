@@ -14,7 +14,8 @@ import {
 // 🛑 A SERVER-TO-SERVER EXCEPTION, LIKE clip-capture. Not an MCP tool: no defineTool, no ctx.db.
 //
 //   POST /queue    x-switchboard-queue-secret. { project_code, sql, description, expected?, test? } -> { ok, action_id, headline }
-//   POST /preview  Alex's JWT. { token } -> { headline, description, sql, fingerprint, test, ... }. Runs nothing.
+//   POST /preview  Alex's JWT. { token } -> { headline, description, sql, fingerprint, test, stakes?, ... }. Runs nothing.
+//                  stakes is change or none, from switchboard_stakes (s86ac); left out while that function is missing.
 //   POST /dry-run  Alex's JWT. { token } -> { run_id, summary, counts, mismatch }. Rolled back; the link is not spent,
 //                  unless it's a test action, whose one run this is.
 //   POST /approve  Alex's JWT. { token, fingerprint } -> { run_id, summary, conformance, counts }. Needs a clean latest dry run.
@@ -141,6 +142,11 @@ function deps(): Deps {
       must(await db.from("switchboard_actions").update({ status }).eq("id", id));
     },
     conformance,
+    // s86ac: null until the stakes migration lands (or on any error), so the preview simply has no stakes.
+    stakes: async (kind, payload) => {
+      const { data, error } = await db.rpc("switchboard_stakes", { p_kind: kind, p_payload: payload });
+      return !error && (data === "change" || data === "none") ? data : null;
+    },
   };
 }
 
