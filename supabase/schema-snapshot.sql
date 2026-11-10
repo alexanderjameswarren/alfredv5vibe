@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-10 10:10, through migration 226 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-10 11:14, through migration 227 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -8926,10 +8926,12 @@ begin
          status = 'link_issued'
    where id = v_action.id;
 
-  -- For display only: the chat's tile reads these. The token alone proves anything.
+  -- For display only: the chat's tile reads these. The token alone proves anything. Stakes from the real kind.
   v_kind := case when v_action.kind in ('sf_deploy', 'sf_test') then 'deploy' else v_action.kind end;
   return jsonb_build_object('action_id', v_action.id,
-                            'url', v_base || '/approve/' || v_token || '?kind=' || v_kind || '&exp=' || extract(epoch from v_expires)::bigint,
+                            'url', v_base || '/approve/' || v_token || '?kind=' || v_kind
+                                   || '&stakes=' || public.switchboard_stakes(v_action.kind, v_action.payload)
+                                   || '&exp=' || extract(epoch from v_expires)::bigint,
                             'expires_at', v_expires, 'headline', v_action.headline);
 end;
 $$;
@@ -8938,7 +8940,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_issue_link"("p_action_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_issue_link"("p_action_id" "uuid") IS 'Switchboard: issue the approval link for one of the caller''s actions. Returns {action_id, url, expires_at, headline}. The url ends ?kind=<kind>&exp=<unix seconds>, for the chat''s tile. The token appears only in this result; the row keeps its hash. Refused while a link of the caller''s is live for the same project code, for an action already consumed, and for one that needs no click. An expired link can be replaced. Called by the issue_switchboard_link tool.';
+COMMENT ON FUNCTION "public"."switchboard_issue_link"("p_action_id" "uuid") IS 'Switchboard: issue the approval link for one of the caller''s actions. Returns {action_id, url, expires_at, headline}. The url ends ?kind=<kind>&stakes=<change|none>&exp=<unix seconds>, for the chat''s tile (stakes since s86ac, from switchboard_stakes). The token appears only in this result; the row keeps its hash. Refused while a link of the caller''s is live for the same project code, for an action already consumed, and for one that needs no click. An expired link can be replaced. Called by the issue_switchboard_link tool.';
 
 
 
@@ -9177,6 +9179,26 @@ ALTER FUNCTION "public"."switchboard_settings_guard"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."switchboard_settings_guard"() IS 'Switchboard: before update on switchboard_settings. Keeps id, user_id and created_at fixed and stamps updated_at.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+  select case
+    when p_kind = 'sql' then case when coalesce(p_payload->'test' = 'true'::jsonb, false) then 'none' else 'change' end
+    when p_kind = 'sf_check' then 'none'                                                     -- read only, on a sandbox
+    when p_kind = 'git' and p_payload->>'command' in ('gitsync', 'gitcom') then 'none'       -- inside the worktree
+    else 'change'                         -- gitpush, gitnewtree, sb_setup, sf_deploy, sf_test and any unknown kind
+  end;
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") IS 'Switchboard: what an action puts at stake, change or none (s86ac). none: a sql test (payload.test true), sf_check, git gitsync and gitcom. change: everything else, including an unknown kind. Shown on the link''s tile and the approve page; it decides nothing.';
 
 
 
@@ -27042,6 +27064,7 @@ GRANT ALL ON FUNCTION "public"."switchboard_fingerprint"("p_payload" "jsonb") TO
 
 REVOKE ALL ON FUNCTION "public"."switchboard_issue_link"("p_action_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."switchboard_issue_link"("p_action_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."switchboard_issue_link"("p_action_id" "uuid") TO "service_role";
 
 
 
@@ -27080,6 +27103,12 @@ GRANT ALL ON FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_pr
 REVOKE ALL ON FUNCTION "public"."switchboard_settings_guard"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."switchboard_settings_guard"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."switchboard_settings_guard"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") TO "service_role";
 
 
 
