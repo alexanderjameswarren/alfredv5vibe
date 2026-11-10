@@ -39,13 +39,13 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [x] s10b2 (run tag s10c): wrote `228_homer_implied_availability.sql` (the draft plus a path line, checked with diff), deleted the draft, queued 228, action `7a0f11c8-ba0c-49cc-8b3e-5b525efe13a8`. Waiting for Alex to approve it.
 - [x] 228 applied: run `4182adbb-e379-40e8-8006-d0a674077ca5`, CONFORMANT
 - [x] s10d: queued `4_implied_availability_test.sql` with `--test`, action `590673ac-d494-4721-a35d-158abb8e78fc`. Waiting for Alex to approve it.
-- [ ] s10e: after the test passes, Alex re-runs `node scripts/homer-import.mjs --apply`, then the Checkpoint
+- [x] s10e: the test passed; Alex re-ran `--apply` (1,320 finished reads, 544 implied; Alex 395 of 440); Checkpoint 5db5800; db claims released
 ### D. MCP tools
 - [ ] s11: claim `supabase/functions/mcp/index.ts` and `index.test.mjs` (stop if still held); write `_shared/tools/homer.ts` and its test; register the tools
 - [ ] s12: deploy mcp, `check_platform_conformance`, call each read tool once
 
 ### E. Skill
-- [ ] s13: `.claude/skills/homer/SKILL.md`
+- [x] s11 (was s13): wrote `.claude/skills/homer/SKILL.md` (Skill version 2026-11-10). Two gaps for phase D, not yet in the spec: (1) no tool writes series availability, so the skill names `update_homer_series` (tier 2: notes plus the 5 availability fields); (2) `create_homer_read` must accept a book Homer doesn't have yet (a new clip title), or there must be a way to add one.
 
 ### F. Homer tab
 - [ ] s14: `src/homer/` page, api, model and tests; `src/Alfred.jsx`, `src/viewPaths.js` and its test; `_pending_homer-h4k_homer_screen.sql`
@@ -62,14 +62,14 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [ ] Suggestion rounds; corrections become plan versions
 - [ ] Propose owners for the older devices, newest first; Alex confirms
 
-## Next step's scope (s10e, after the test passes and Alex's --apply)
+## Next step's scope (s12, the phase D check)
 - create: nothing
 - update: docs/progress-homer-h4k.md
 - delete: nothing
 - deploy: nothing
 - SQL: none
 
-Alex runs `node scripts/homer-import.mjs --apply` (the plan line should show 1,320 finished and 544 implied, with 0 refused). Then he runs `gitpush` Checkpoint for homer-h4k with `supabase/migrations/228_homer_implied_availability.sql`, `supabase/tests/homer-h4k/4_implied_availability_test.sql`, `scripts/homer-import.mjs`, `scripts/lib/homer-import.mjs`, `scripts/lib/homer-import.test.mjs`, `docs/homer-spec-homer-h4k.md` and `docs/progress-homer-h4k.md`. The Checkpoint releases the db claims (homer_reads, homer_series, homer_quiet_series, migration 228). The thread records the import result and checks `claims.cmd status`. Phase E (s13, the skill) follows. Phase D is still blocked by switchboard2-h8r's claim on `supabase/functions/mcp/index.ts`.
+Before s12, Alex runs `gitpush` Checkpoint for homer-h4k with `.claude/skills/homer/SKILL.md` and `docs/progress-homer-h4k.md`. s12 is read-only: `claims.cmd check supabase/functions/mcp/index.ts supabase/functions/mcp/index.test.mjs`. If they are free, it plans phase D (files, claims and tools, adding `update_homer_series` and a way for `create_homer_read` to add a new book) and stops. If they are still held by switchboard2-h8r, it reports that and stops. On 2026-11-10 at 12:10 both were still held.
 
 ## Notes
 - The import data stays in `C:\Users\Alex\Downloads\homer-analysis\` and never goes into git.
@@ -118,3 +118,4 @@ Alex runs `node scripts/homer-import.mjs --apply` (the plan line should show 1,3
 | s10b | Claim db items, number 228 | 11:26:31 | 11:26:56 | 0m25s |
 | s10c | Write 228, delete draft, queue 228 | 12:00:14 | 12:00:39 | 0m25s |
 | s10d | Queue 4_implied_availability_test | 12:03:01 | 12:03:21 | 0m20s |
+| s11 | Homer skill | 12:09:07 | 12:10:49 | 1m42s |
