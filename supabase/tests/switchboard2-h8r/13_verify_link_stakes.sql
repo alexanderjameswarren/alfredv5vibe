@@ -1,5 +1,6 @@
--- Switchboard 2.0 s86ac: verify switchboard_stakes, every row of the rule, and that a link's url carries its stakes
--- after kind. Run after the link-stakes migration, through the queue with --test. Throwaway rows, undone. Result: one
+-- Switchboard 2.0 s86ac, s86ag: verify switchboard_stakes, every row of the rule (none only for a sql --test, whose
+-- page runs by itself; change for every link that waits for Approve), and that a link's url carries its stakes after
+-- kind. Run after the stakes-click migration, through the queue with --test. Throwaway rows, undone. Result: one
 -- row, with all_passed, failed and checks.
 -- supabase/tests/switchboard2-h8r/13_verify_link_stakes.sql
 
@@ -24,13 +25,14 @@ begin
       || jsonb_build_object('gitpush_checkpoint_is_change', public.switchboard_stakes('git', '{"command":"gitpush","mode":"checkpoint"}') = 'change')
       || jsonb_build_object('gitpush_finish_is_change', public.switchboard_stakes('git', '{"command":"gitpush","mode":"finish"}') = 'change')
       || jsonb_build_object('gitnewtree_is_change', public.switchboard_stakes('git', '{"command":"gitnewtree"}') = 'change')
-      || jsonb_build_object('gitsync_is_none', public.switchboard_stakes('git', '{"command":"gitsync"}') = 'none')
-      || jsonb_build_object('gitcom_is_none', public.switchboard_stakes('git', '{"command":"gitcom"}') = 'none')
+      || jsonb_build_object('gitsync_is_change', public.switchboard_stakes('git', '{"command":"gitsync"}') = 'change')
+      || jsonb_build_object('gitcom_is_change', public.switchboard_stakes('git', '{"command":"gitcom"}') = 'change')
+      || jsonb_build_object('git_test_true_is_change', public.switchboard_stakes('git', '{"command":"gitsync","test":true}') = 'change')
       || jsonb_build_object('git_unknown_command_is_change', public.switchboard_stakes('git', '{"command":"gitwhat"}') = 'change')
       || jsonb_build_object('sb_setup_is_change', public.switchboard_stakes('sb_setup', '{}') = 'change')
       || jsonb_build_object('sf_deploy_is_change', public.switchboard_stakes('sf_deploy', '{}') = 'change')
       || jsonb_build_object('sf_test_is_change', public.switchboard_stakes('sf_test', '{}') = 'change')
-      || jsonb_build_object('sf_check_is_none', public.switchboard_stakes('sf_check', '{"check":"limits","alias":"a"}') = 'none')
+      || jsonb_build_object('sf_check_is_change', public.switchboard_stakes('sf_check', '{"check":"limits","alias":"a"}') = 'change')
       || jsonb_build_object('unknown_kind_is_change', public.switchboard_stakes('docs', '{}') = 'change')
       || jsonb_build_object('null_kind_is_change', public.switchboard_stakes(null, null) = 'change')
       || jsonb_build_object('fn_anon_cannot_execute', not has_function_privilege('anon', f, 'execute'))
@@ -50,13 +52,13 @@ begin
     v_checks := v_checks || jsonb_build_object('link_sql_test_none', public.switchboard_issue_link(v_id)->>'url' like '%?kind=sql&stakes=none&exp=%');
 
     v_id := (public.switchboard_queue_git('verify-stk-gs', '{"command":"gitsync"}', 'TEST')->>'action_id')::uuid;
-    v_checks := v_checks || jsonb_build_object('link_gitsync_none', public.switchboard_issue_link(v_id)->>'url' like '%?kind=git&stakes=none&exp=%');
+    v_checks := v_checks || jsonb_build_object('link_gitsync_change', public.switchboard_issue_link(v_id)->>'url' like '%?kind=git&stakes=change&exp=%');
 
     v_id := (public.switchboard_queue_git('verify-stk-gp', '{"command":"gitpush","mode":"push"}', 'TEST')->>'action_id')::uuid;
     v_checks := v_checks || jsonb_build_object('link_gitpush_change', public.switchboard_issue_link(v_id)->>'url' like '%?kind=git&stakes=change&exp=%');
 
     v_id := (public.switchboard_queue_helper('sf_check', null, '{"check":"limits","alias":"verify-stk-dev1"}', 'TEST')->>'action_id')::uuid;
-    v_checks := v_checks || jsonb_build_object('link_sf_check_none', public.switchboard_issue_link(v_id)->>'url' like '%?kind=sf_check&stakes=none&exp=%');
+    v_checks := v_checks || jsonb_build_object('link_sf_check_change', public.switchboard_issue_link(v_id)->>'url' like '%?kind=sf_check&stakes=change&exp=%');
 
     v_id := (public.switchboard_queue_helper('sb_setup', null,
       '{"command":"org add","client":"verify-stk","orgs":[{"alias":"verify-stk-dev2","type":"developer","level":"objects"}]}', 'TEST')->>'action_id')::uuid;
