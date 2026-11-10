@@ -72,6 +72,22 @@ export function flipAuthor(raw) {
   return m ? `${m[2]} ${m[1]}` : a;
 }
 
+const authorKey = (a) => a.toLowerCase().replace(/\s+/g, "");
+
+// Every "Author Name" row for an ASIN, in file order, flipped, de-duplicated (case and spaces ignored), joined ", ".
+export function authorsByAsin(authorRows) {
+  const lists = new Map();
+  for (const row of authorRows) {
+    const asin = clean(row.ASIN);
+    const name = flipAuthor(row["Author Name"]);
+    if (!asin || !name) continue;
+    const list = lists.get(asin) ?? [];
+    if (!list.some((n) => authorKey(n) === authorKey(name))) list.push(name);
+    lists.set(asin, list);
+  }
+  return new Map([...lists].map(([asin, list]) => [asin, list.join(", ")]));
+}
+
 const ORIGIN_ORDER = [
   ["Purchase", "purchase"], ["KindleUnlimited", "kindle_unlimited"], ["Prime", "prime_reading"],
   ["Sample", "sample"], ["PublicLibraryLending", "library"],
@@ -244,8 +260,7 @@ export function buildPlan(inputs) {
   for (const r of inputs.relIndexRows) put(r.ASIN, r["Product Name"]);
   for (const o of inputs.ownershipItems) put(o?.resource?.ASIN, o?.resource?.["Product Name"]);
 
-  const authors = new Map();
-  for (const a of inputs.authorRows) if (clean(a.ASIN) && !authors.has(a.ASIN)) authors.set(a.ASIN, flipAuthor(a["Author Name"]));
+  const authors = authorsByAsin(inputs.authorRows);
 
   const seriesOf = new Map();
   for (const r of inputs.relIndexRows) {

@@ -65,6 +65,8 @@ export const OBJECT_ICONS = {
   games: Gamepad2,
   money: Wallet,
   overwatch: TowerControl,
+  // The same glyph as the apps row 'homer' (icon BookOpen, migration 181).
+  homer: BookOpen,
 };
 
 /**

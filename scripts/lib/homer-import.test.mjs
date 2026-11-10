@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  parseCsv, normalizeDeviceId, ownerFor, splitSeriesTitle, flipAuthor, acquisitionFor, originsByAsin,
+  parseCsv, normalizeDeviceId, authorsByAsin, ownerFor, splitSeriesTitle, flipAuthor, acquisitionFor, originsByAsin,
   aggregateSessions, buildReads, buildDevices, buildPlan, packBatches, batchRows, MAX_BATCH_ROWS,
 } from "./homer-import.mjs";
 
@@ -34,6 +34,17 @@ test("authors flipped", () => {
   assert.equal(flipAuthor("Wong, Tao B07VXJFRFV"), "Tao Wong");
   assert.equal(flipAuthor("SeanS3r3s"), "SeanS3r3s");
   assert.equal(flipAuthor("Not Available"), null);
+});
+
+test("every author per book, in file order, de-duplicated, joined", () => {
+  const m = authorsByAsin([
+    { ASIN: "B1", "Author Name": "Molotov, Victor" }, { ASIN: "B1", "Author Name": "Almazov, Igor" },
+    { ASIN: "B1", "Author Name": "molotov,  victor" }, { ASIN: "B2", "Author Name": "Lin, Sarah" },
+    { ASIN: "B3", "Author Name": "Not Available" },
+  ]);
+  assert.equal(m.get("B1"), "Victor Molotov, Igor Almazov");
+  assert.equal(m.get("B2"), "Sarah Lin");
+  assert.equal(m.has("B3"), false);
 });
 
 test("acquisition priority", () => {
