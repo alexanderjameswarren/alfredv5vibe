@@ -507,3 +507,52 @@ test('sb setup: no folder line without from_sandbox', async () => {
   await screen.findByTestId('approve-sb-writes');
   expect(screen.queryByTestId('approve-sb-folder')).toBeNull();
 });
+
+// --- stakes (s86ac, Alex 2026-11-10): red "Approval required" or nothing, never green ---
+
+const noGreen = (c) => expect(c.innerHTML).not.toMatch(/green/i);
+
+test('stakes change: red Approval required header at the very top', async () => {
+  for (const p of [{ ...PREVIEW, stakes: 'change' }, { ...SF, stakes: 'change' }]) {
+    runner({ preview: reply(p), 'dry-run': CLEAN });
+    const { container, unmount } = open();
+    const head = await screen.findByTestId('approve-stakes-change');
+    expect(head).toHaveTextContent('Approval required');
+    expect(head).toHaveClass('bg-red-700', 'w-full');
+    expect(container.firstChild.firstChild).toBe(head);
+    noGreen(container);
+    unmount();
+  }
+});
+
+test('stakes none: no header, nothing green', async () => {
+  for (const p of [{ ...PREVIEW, stakes: 'none', test: true }, { ...SF, stakes: 'none' }]) {
+    runner({ preview: reply(p), 'dry-run': CLEAN });
+    const { container, unmount } = open();
+    await screen.findByText(p.headline);
+    expect(screen.queryByTestId('approve-stakes-change')).toBeNull();
+    expect(screen.queryByText(/approval required/i)).toBeNull();
+    noGreen(container);
+    unmount();
+  }
+});
+
+test('stakes missing (older link or runner): red header', async () => {
+  for (const p of [PREVIEW, SF]) {
+    runner({ preview: reply(p), 'dry-run': CLEAN });
+    const { unmount } = open();
+    expect(await screen.findByTestId('approve-stakes-change')).toHaveTextContent('Approval required');
+    unmount();
+  }
+});
+
+test('stakes comes from the preview, never the url', async () => {
+  runner({ preview: reply({ ...SF, stakes: 'change' }) });
+  const a = openAt('/approve/tok1?kind=sf_check&stakes=none&exp=1');
+  expect(await screen.findByTestId('approve-stakes-change')).toBeInTheDocument();
+  a.unmount();
+  runner({ preview: reply({ ...SF, stakes: 'none' }) });
+  openAt('/approve/tok1?kind=sf_check&stakes=change&exp=1');
+  await screen.findByText(SF.headline);
+  expect(screen.queryByTestId('approve-stakes-change')).toBeNull();
+});

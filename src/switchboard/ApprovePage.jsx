@@ -111,13 +111,29 @@ async function callRunner(route, body) {
   return { status: res.status, body: await res.json() };
 }
 
-function Shell({ children }) {
+/**
+ * s86ac (Alex, 2026-11-10): red or nothing, never green. A loaded preview gets the red header unless its stakes is
+ * exactly none, so an older link or runner with no stakes is still marked. Stakes comes from the preview, never the url.
+ */
+export function needsApprovalHeader(preview) {
+  return !!preview && preview.stakes !== 'none';
+}
+
+function Shell({ children, preview }) {
   return (
-    <div className="flex justify-center min-h-screen bg-primary-bg p-4">
+    <div className="min-h-screen bg-primary-bg">
+      {needsApprovalHeader(preview) && (
+        <div data-testid="approve-stakes-change" role="alert"
+          className="w-full bg-red-700 text-white text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-6 px-4">
+          Approval required
+        </div>
+      )}
+      <div className="flex justify-center p-4">
       <div className="w-full max-w-3xl self-start p-4 sm:p-8 bg-white rounded-lg shadow-md">
         <h1 className="text-2xl font-bold text-dark mb-2 text-center">Alfred</h1>
         <p className="text-sm text-dark text-center mb-6">Approve</p>
         {children}
+      </div>
       </div>
     </div>
   );
@@ -309,7 +325,7 @@ export default function ApprovePage() {
     const id = preview.action_id;
     const word = isSb ? 'sb' : isSf ? 'sf' : 'git';
     return (
-      <Shell>
+      <Shell preview={preview}>
         {approving && <span hidden data-switchboard-running={preview.kind} />}
         <p className="font-bold text-dark mb-2 break-words">{preview.headline}</p>
         <p className="text-sm text-dark">Project</p>
@@ -376,7 +392,7 @@ export default function ApprovePage() {
   const running = approving || (preview.test && busy && !dry);
 
   return (
-    <Shell>
+    <Shell preview={preview}>
       {running && <span hidden data-switchboard-running={kind} />}
       <p className="font-bold text-dark mb-2 break-words">{preview.headline}</p>
       <p className="text-sm text-dark">Project</p>
