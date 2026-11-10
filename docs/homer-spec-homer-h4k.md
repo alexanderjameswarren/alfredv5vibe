@@ -112,9 +112,9 @@ every column, and `platform.register_table(..., p_audited => true)`, which also 
 | `homer_plans` | The plan. `status` active/superseded, `version`, `instructions`, `settings` jsonb, `change_summary` (required when it supersedes), `supersedes_plan_id`, `written_by` alex/claude, `ended_at`. Unique active per user. Guard trigger `homer_plans_guard`. |
 | `homer_readers` | `key` (alex, elise, vasti), `name`, `notes`. Unique (user_id, key). |
 | `homer_devices` | `device_id` (the export's id), `family`, `friendly_name`, `reader_id` (confirmed owner), `proposed_reader_id`, `owner_status` (generated: confirmed/proposed/unknown), `owner_reason`, `first_session`, `last_session`, `sessions`, `hours`. Unique (user_id, device_id). Trigger `homer_devices_carry_reader`. |
-| `homer_series` | `name`, `series_asin` (from UnifiedLibraryIndex), `author`, `notes`. Unique (user_id, series_asin) where there is one; **a name is unique only for series with no series ASIN**, so two real series that share a name don't collide. |
+| `homer_series` | `name`, `series_asin` (from UnifiedLibraryIndex), `author`, `notes`. Availability (s10), filled in from chat with web search, never by code: `available_position` (highest book already published), `upcoming_position` and `upcoming_release_date` (the next announced book, e.g. a pre-order; a date needs a position, and upcoming > available), `availability_checked_on`, `availability_source` (where Claude checked, a few words). Positions are positive. Unique (user_id, series_asin) where there is one; **a name is unique only for series with no series ASIN**, so two real series that share a name don't collide. |
 | `homer_books` | `asin`, `title`, `author`, `series_id`, `series_position` numeric, `acquired` purchase/kindle_unlimited/prime_reading/sample/library/other, `content_type`. Unique (user_id, asin). |
-| `homer_reads` | `book_id`, `device_id` (fk, nullable), `reader_id` (nullable until the device has an owner), `started_on`, `finished_on` (null = not finished), `hours`, `completion` automatic/manual/null, `source` export/clip/chat, `import_key` (unique per user, so imports are idempotent). One per book per device (partial unique index); clip and chat reads have no device. A read needs a reader or a device. Trigger `homer_reads_fill_reader`. |
+| `homer_reads` | `book_id`, `device_id` (fk, nullable), `reader_id` (nullable until the device has an owner), `started_on`, `finished_on` (null = not finished), `hours`, `completion` automatic/manual (Amazon's completed list), implied (s10: the reader went on in the series), or null; it needs `finished_on`, `source` export/clip/chat, `import_key` (unique per user, so imports are idempotent). One per book per device (partial unique index); clip and chat reads have no device. A read needs a reader or a device. Trigger `homer_reads_fill_reader`. |
 | `homer_verdicts` | `reader_id`, `subject_kind` series/book/author, then exactly one of `series_id`, `book_id`, `author`; `verdict` loved/liked/tired/didnt_click/never, `note`, `set_by` alex/claude. Check: `verdict = 'never'` requires `set_by = 'alex'`. Unique per reader and subject. Trigger `homer_verdicts_guard`: only Alex lifts a never. |
 | `homer_taste_profiles` | `reader_id`, `series_id`, `description`, `scores` jsonb, `plan_id` (the version the scores were checked against). Unique (reader_id, series_id). Scores trigger `homer_taste_scores_check`. |
 | `homer_genres` | `name`, `description`, `status` proposed/accepted, `sort_order`, `archived_at`. |
@@ -134,7 +134,7 @@ every column, and `platform.register_table(..., p_audited => true)`, which also 
 | `homer_devices_carry_reader()` | B | Trigger. When a device's owner changes, its reads with no reader or the old owner move to the new one. |
 | `homer_verdicts_guard()` | B | Trigger. A `never` can be changed only with `set_by = 'alex'`. |
 | `homer_series_verdicts(p_reader_key default 'alex')` | B (225) | Each series the reader has read or has a stored verdict on: books finished and started, highest position finished, last finished and last read dates, the stored verdict, the effective verdict (stored, else the plan's default) and `is_default`. With no active plan, a default verdict is null. |
-| `homer_quiet_series(p_reader_key default 'alex')` | B (225) | Every series the reader liked, loved or tired of (stored or default), not only the quiet ones. Each row has an `is_quiet` flag (days since the last read ≥ the plan's `quiet_after_days`) and, for tired series only, `tired_gap_passed` (≥ `tired_gap_days`). Leaves out `never` and `didnt_click`. Returns the last finished book and its position, the last read date, days since, and the next book the library holds (position, title, ASIN). Longest quiet first. With no active plan the list is empty, since default verdicts are null. Example: He Who Fights with Monsters, book 12 last read on 2025-09-09. |
+| `homer_quiet_series(p_reader_key default 'alex')` | B (225) | Every series the reader liked, loved or tired of (stored or default), not only the quiet ones. Each row has an `is_quiet` flag (days since the last read ≥ the plan's `quiet_after_days`) and, for tired series only, `tired_gap_passed` (≥ `tired_gap_days`). Leaves out `never` and `didnt_click`. Returns the last finished book and its position, the last read date, days since, and the next book the library holds (position, title, ASIN), from published positions only once `available_position` is known. Since s10 it also returns `available_position`, `books_behind` (available minus the last position finished; null when either is unknown), `is_caught_up`, `upcoming_position`, `upcoming_release_date` and `availability_checked_on`. An upcoming book never counts as more to read. Longest quiet first. With no active plan the list is empty, since default verdicts are null. Example: He Who Fights with Monsters, book 12 last read on 2025-09-09. |
 | `homer_import_batch(p_batch, p_dry_run default true)` | C (226) | See phase C. |
 
 Every function is `security invoker` (RLS applies) and `revoke all … from public, anon`. The two queries are granted to `authenticated, service_role`; `homer_import_batch` to `authenticated` only, because only Alex's token calls it.
@@ -150,7 +150,10 @@ This file and the progress file, plus the claims.
 Tests in `supabase/tests/homer-h4k/`: `1_verify.sql` (tables, RLS, grants, registered), `2_guards_test.sql` (plan
 immutability, one active plan, never only from alex, a score outside a scale refused, a new scale accepted after a new
 plan) and `3_queries_import_test.sql` (default verdicts, quiet series and the tired gap, and the import RPC: limits,
-dry run, idempotence, owners; on fixture rows inside a self-undoing block). Queued with `--test`. Both migrations go through the db steps: gitsync, drift check,
+dry run, idempotence, owners; on fixture rows inside a self-undoing block). The s10 migration
+(`_pending_homer-h4k_homer_implied_availability.sql` until it is numbered) allows completion `implied`, adds the five
+availability columns to `homer_series`, and replaces `homer_quiet_series` with the availability fields; its test is
+`4_implied_availability_test.sql`. Queued with `--test`. Both migrations go through the db steps: gitsync, drift check,
 `number-migration`, queue, verify, `check_platform_conformance`, Checkpoint.
 
 ### C. Import (Alex chose the script route)
@@ -189,6 +192,15 @@ dry run, idempotence, owners; on fixture rows inside a self-undoing block). Queu
     else the device with the most time, dated the completion date. A (book, device) pair is kept only with 30 minutes
     or more of reading, or when it holds a finish; shorter pairs are noise. (s9 changed this from one finish per book.)
     Started-but-not-finished reads have `finished_on` null.
+  - **Implied finishes (s10).** Amazon's completed list misses many books. Per reader (or per device, for a device
+    with no owner), in any series where they have reads on 2 or more different books, every unfinished read becomes
+    finished on that device's last read day, with `completion = 'implied'`. A book 1 never followed by book 2 keeps
+    Amazon's status (Alex confirmed those are real "didn't click" signals); books with no series keep Amazon's status;
+    automatic and manual finishes are never changed. Offline: 1,320 finished reads, 544 implied (alex 395 finished,
+    141 implied). Alex's 45 still unfinished are 41 lone book 1s and 4 with no series.
+  - **Owners.** Before planning, the script reads the current owners from `homer_devices` with Alex's token. An owner
+    there wins and is not re-sent, so the RPC keeps it and its reason. The built-in labels are the fallback for a
+    device with no owner in the table (all of them on a first run).
     `import_key = 'export:<asin>:<device_id>'`. `reader_id` comes from the device's owner, or null.
   - When a device owner is confirmed later, `homer_devices_carry_reader` sets `reader_id` on that device's reads.
 
@@ -222,7 +234,10 @@ Lists use `readTable`. The mcp function is deployed and then checked with `check
 - Practice conversations ask the plan's scales **in the same order and with the same wording every time**, one
   series at a time, so ratings stay consistent. Free text first, then the scales.
 - Suggestions: web-search each one to confirm it exists and whether it's on Kindle Unlimited, then write it to a queue.
-  Never write an unverified title. Honour verdicts: never suggest a `never`, and offer `tired` only as "pick it up again?"
+  Never write an unverified title. Never suggest an unreleased book: check what is published and record it on the
+  series (`available_position`, `upcoming_position`, `upcoming_release_date`, `availability_checked_on`,
+  `availability_source`). Example: Solo book 8 is a pre-order out 2026-12-30, and Alex has read through book 7, so he
+  is caught up. Honour verdicts: never suggest a `never`, and offer `tired` only as "pick it up again?"
   after the gap.
 - The weekly clip: Alex clips his Kindle library page sorted by most recent. Claude matches titles to books, creates
   reads with `source = 'clip'`, and asks about anything it can't match. "Finished X" in chat becomes a read with

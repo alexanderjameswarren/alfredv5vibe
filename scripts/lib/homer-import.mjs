@@ -153,6 +153,7 @@ export function buildReads(pairs, finishedRows) {
     finish.set(`${asin}|${normalizeDeviceId(device)}`, { date: f.completed_date, completion });
   }
   const reads = [];
+  const lastOn = new Map();
   const seen = new Set();
   for (const p of pairs.values()) {
     const key = `${p.asin}|${p.device}`;
@@ -161,8 +162,10 @@ export function buildReads(pairs, finishedRows) {
     seen.add(key);
     let started = p.first;
     if (fin && (!started || started > fin.date)) started = fin.date;
+    const import_key = `export:${p.asin}:${p.device}`;
+    lastOn.set(import_key, p.last);
     reads.push({
-      import_key: `export:${p.asin}:${p.device}`,
+      import_key,
       asin: p.asin,
       device_id: p.device,
       started_on: started,
@@ -172,13 +175,44 @@ export function buildReads(pairs, finishedRows) {
     });
   }
   for (const key of finish.keys()) if (!seen.has(key)) unplaced.push(key.split("|")[0]);
-  return { reads, unplaced };
+  return { reads, unplaced, lastOn };
 }
 
-export function buildDevices(deviceRows, owners = DEVICE_OWNERS) {
+// Implied finishes (s10): per reader (or per device when it has no owner), in any series where they have reads on
+// 2+ different books, every unfinished read becomes finished on that device's last read day, completion 'implied'.
+// A lone book 1, books with no series, and existing finishes are left as they are. Returns the count implied.
+export function applyImpliedFinishes(reads, bookBy, ownerOf, lastOn) {
+  const groups = new Map();
+  for (const r of reads) {
+    const b = bookBy.get(r.asin);
+    const sk = b && (b.series_asin ?? (b.series_name ? `name:${b.series_name.toLowerCase()}` : null));
+    if (!sk) continue;
+    const who = ownerOf.get(r.device_id) ?? `device:${r.device_id}`;
+    const k = `${who}|${sk}`;
+    groups.set(k, [...(groups.get(k) ?? []), r]);
+  }
+  let implied = 0;
+  for (const rs of groups.values()) {
+    if (new Set(rs.map((r) => r.asin)).size < 2) continue;
+    for (const r of rs) {
+      const last = lastOn.get(r.import_key);
+      if (r.finished_on || !last) continue;
+      r.finished_on = last;
+      if (!r.started_on || r.started_on > last) r.started_on = last;
+      r.completion = "implied";
+      implied++;
+    }
+  }
+  return implied;
+}
+
+// dbOwners: Map(device_id -> reader key) read from homer_devices. A database owner wins and is not re-sent (the RPC
+// keeps it, with its reason); otherwise the built-in label is sent. ownerOf holds the owner either way, for grouping.
+export function buildDevices(deviceRows, owners = DEVICE_OWNERS, dbOwners = new Map()) {
   return deviceRows.map((d) => {
     const id = normalizeDeviceId(d.device_id);
-    const owner = ownerFor(id, owners);
+    const fromDb = dbOwners.get(id) ?? null;
+    const owner = fromDb ? null : ownerFor(id, owners);
     return {
       device_id: id,
       family: clean(d.device_family),
@@ -193,11 +227,13 @@ export function buildDevices(deviceRows, owners = DEVICE_OWNERS) {
   });
 }
 
-// inputs: { deviceRows, finishedRows, sessionRows, relIndexRows, authorRows, ownershipItems }
+// inputs: { deviceRows, finishedRows, sessionRows, relIndexRows, authorRows, ownershipItems, dbOwners? }
 export function buildPlan(inputs) {
+  const dbOwners = inputs.dbOwners ?? new Map();
   const pairs = aggregateSessions(inputs.sessionRows);
-  const { reads, unplaced } = buildReads(pairs, inputs.finishedRows);
-  const devices = buildDevices(inputs.deviceRows);
+  const { reads, unplaced, lastOn } = buildReads(pairs, inputs.finishedRows);
+  const devices = buildDevices(inputs.deviceRows, DEVICE_OWNERS, dbOwners);
+  const ownerOf = new Map(devices.map((d) => [d.device_id, dbOwners.get(d.device_id) ?? d.owner]).filter(([, o]) => o));
   const deviceIds = new Set(devices.map((d) => d.device_id));
   const keptReads = reads.filter((r) => deviceIds.has(r.device_id));
 
@@ -242,13 +278,16 @@ export function buildPlan(inputs) {
       content_type: contentType.get(asin) ?? null,
     });
   }
+  const implied = applyImpliedFinishes(keptReads, new Map(books.map((b) => [b.asin, b])), ownerOf, lastOn);
   return {
     readers: READERS,
     devices,
     series: [...series.values()],
     books,
     reads: keptReads,
+    ownerOf,
     notes: {
+      implied_finishes: implied,
       unplaced_finishes: unplaced,
       reads_on_unknown_devices: reads.length - keptReads.length,
       untitled_books: books.filter((b) => b.title.startsWith("Unknown title")).length,
