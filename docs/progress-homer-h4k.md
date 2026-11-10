@@ -41,8 +41,9 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [x] s10d: queued `4_implied_availability_test.sql` with `--test`, action `590673ac-d494-4721-a35d-158abb8e78fc`. Waiting for Alex to approve it.
 - [x] s10e: the test passed; Alex re-ran `--apply` (1,320 finished reads, 544 implied; Alex 395 of 440); Checkpoint 5db5800; db claims released
 ### D. MCP tools
-- [ ] s11: claim `supabase/functions/mcp/index.ts` and `index.test.mjs` (stop if still held); write `_shared/tools/homer.ts` and its test; register the tools
-- [ ] s12: deploy mcp, `check_platform_conformance`, call each read tool once
+- [x] mcp files claimed at s13 (2026-11-10 13:26)
+- [ ] (planned) a phase D plan step, then: write `_shared/tools/homer.ts` and its test; register the tools
+- [ ] deploy mcp, `check_platform_conformance`, call each read tool once
 
 ### E. Skill
 - [x] s11 (was s13): wrote `.claude/skills/homer/SKILL.md` (Skill version 2026-11-10). Two gaps for phase D, not yet in the spec: (1) no tool writes series availability, so the skill names `update_homer_series` (tier 2: notes plus the 5 availability fields); (2) `create_homer_read` must accept a book Homer doesn't have yet (a new clip title), or there must be a way to add one.
@@ -52,7 +53,9 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [x] s12b: Alex checked the three empty states locally. Claimed `src/shared/AppChrome.jsx` and `src/shared/ObjectIcon.jsx`. Added Homer to `NAV_ITEMS` after Overwatch (now exported, for a test), with a `homer` icon (BookOpen). Added "Reading history" (series cards, Standalone last, collapsed, 20 then Show more) and a "Series" link on each quiet row. Homer, viewPaths and shared tests 420/420; build compiled. The nav test was blocked by the plan guard (new file `src/homer/homerNav.test.jsx`, not declared), so it is not written yet. Offline, Alex has 135 series cards plus Standalone (5 books). At the top: Street Cultivation, Level Up, The Coming of God of Death. The Primal Hunter is 40th, Mob Sorcery 51st and He Who Fights with Monsters 80th, all behind "Show more".
 - [x] s12c: Alex checked s12b in Chrome (nav, history, links all work). Authors now show on history card headers, on a book line only when it differs from the series author (always on Standalone), and on quiet rows. Wrote `src/homer/homerNav.test.jsx`. Homer, nav, viewPaths and UnderlineTabs tests: 116/116; build compiled. Co-author check (read-only): 445 of 4,245 export ASINs have 2+ authors, 112 of them in Homer; the import keeps the first. Not changed.
 - [x] s12d: Alex chose to keep every author, comma-separated in `homer_books.author` (no schema change). `authorsByAsin` in the import lib (file order, flipped, de-duplicated, joined ", "). History headers show the author union (series author first); a book line shows its authors only when its set differs; quiet rows use the header list. Import 21/21, scripts 75/75, Homer 21/21; build compiled. Offline: 112 books with 2+ authors (at most 3). Not re-imported: Alex runs `--apply`.
-- [ ] s13: db step for the screen migration; Alex checks the tab
+- [x] s12e: Checkpoint of the tab, nav, import authors, spec and progress into main (5b507d2): the Homer tab and nav button are live. Alex re-ran `--apply` with every author: 112 books now have 2 or more authors.
+- [x] s13: gitsync fast-forwarded to 5b507d2 (no drift on `public.apps`). Claimed db:table:apps. Number **230** (`230_homer_screen.sql`, db:migration:230). Tried the mcp files again: **both were free and are now claimed by homer-h4k** (`supabase/functions/mcp/index.ts`, `index.test.mjs`), so phase D is unblocked.
+- [x] s13b: wrote `230_homer_screen.sql` (the draft plus a path line, checked with diff), deleted the draft, queued 230 with `--expect 1`, action `1abf218f-ef54-4aca-a1b5-551b2e78fbe3`. Waiting for Alex to approve it; then the Checkpoint of 230 releases db:table:apps and db:migration:230.
 
 ### G. Keeping reads current (data only)
 - [ ] Alex adds the two recurring intentions in the Alfred UI (weekly clip; Amazon export every 6 months)
@@ -65,14 +68,18 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [ ] Suggestion rounds; corrections become plan versions
 - [ ] Propose owners for the older devices, newest first; Alex confirms
 
-## Next step's scope (s13, the db step for the screen migration)
+## Next step's scope (s14, the phase D plan, read-only)
 - create: nothing
 - update: docs/progress-homer-h4k.md
 - delete: nothing
 - deploy: nothing
 - SQL: none
 
-Before s13, Alex runs `gitpush` Checkpoint for homer-h4k with `src/homer/`, `src/Alfred.jsx`, `src/shared/AppChrome.jsx`, `src/shared/ObjectIcon.jsx`, `src/viewPaths.js`, `src/viewPaths.test.js`, `scripts/lib/homer-import.mjs`, `scripts/lib/homer-import.test.mjs`, `docs/homer-spec-homer-h4k.md` and `docs/progress-homer-h4k.md`. Not `_pending_homer-h4k_homer_screen.sql`: a `_pending_` file stays out of history until it is numbered. The Checkpoint reaches main, so the Homer tab and nav button go live (read only; they don't need the screen migration). Then gitsync. s13 runs after that, with a drift check on `public.apps`. It checks and claims db:table:apps, then runs `number-migration` on `supabase/migrations/_pending_homer-h4k_homer_screen.sql`. The step after it writes the numbered file, deletes the draft and queues it with `--expect 1` (one apps row updated). Phase D: on 2026-11-10 at 12:17 the mcp files were still held by switchboard2-h8r, and the block is recorded.
+Before s14: Alex approves 230, then runs `gitpush` Checkpoint with `supabase/migrations/230_homer_screen.sql` and `docs/progress-homer-h4k.md` (it releases db:table:apps and db:migration:230). s14 reads the mcp-platform skill, `supabase/functions/mcp/index.ts` (how tools register), `supabase/functions/_shared/tools/arnold.ts` and `overwatch-plan.ts` (the tier-3 plan pattern), `_shared/platform.ts` (`defineTool`, `readTable`) and the 224–228 schema. It then reports, changing nothing:
+- every file: `supabase/functions/_shared/tools/homer.ts` and `homer.test.mjs` (new), `supabase/functions/mcp/index.ts` and `index.test.mjs` (claimed), any inventory or doc file the platform needs, a `_pending_homer-h4k_homer_tools.sql` if a tool needs an RPC (for example adding a new book from a read, or the never path), and its test in `supabase/tests/homer-h4k/`; the skill, spec and progress files
+- every db item with its step: `db:fn:*` for any new RPC, `db:table:*` for the tables a migration touches, and `db:deploy` at the mcp deploy step
+- the tools by name and tier, from the spec plus `update_homer_series` (tier 2: notes and the 5 availability fields) and a way to add a new book from a read (in `create_homer_read`, or as `create_homer_book`)
+- `claims.cmd check` on all of it, any conflicts, and an estimate per step
 
 ## Notes
 - The import data stays in `C:\Users\Alex\Downloads\homer-analysis\` and never goes into git.
@@ -126,3 +133,5 @@ Before s13, Alex runs `gitpush` Checkpoint for homer-h4k with `src/homer/`, `src
 | s12b | Nav, reading history, series links | 12:35:09 | 12:38:22 | 3m13s |
 | s12c | Authors, nav test, co-author check | 12:52:00 | 12:53:47 | 1m47s |
 | s12d | Every author per book, author union on the tab | 13:12:47 | 13:14:48 | 2m01s |
+| s13 | Claim apps, number 230, mcp claim | 13:26:01 | 13:26:35 | 0m34s |
+| s13b | Write 230, delete draft, queue 230 | 13:29:35 | 13:30:24 | 0m49s |
