@@ -5,7 +5,8 @@
 //
 // Dry run by default: every batch is sent with p_dry_run = true and nothing is saved. With --apply each batch is
 // dry-run first and applied only if nothing was refused (--allow-refused applies anyway). The data goes straight from
-// disk to the database and never passes through a model.
+// disk to the database and never passes through a model. Device owners already in homer_devices are read first and
+// win over the built-in labels. Implied finishes (completion 'implied') need the s10 migration to be applied.
 //
 // Token: set HOMER_TOKEN to your Supabase access token, copied in the browser console on the Alfred tab:
 //   for (let i=0;i<localStorage.length;i++){const k=localStorage.key(i);
@@ -47,6 +48,20 @@ const need = (name) => {
   return p;
 };
 
+async function get(path) {
+  const res = await fetch(`${url}/rest/v1/${path}`, { headers: { apikey: anonKey, Authorization: `Bearer ${token}` } });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status} on ${path.split("?")[0]}: ${text.slice(0, 300)}`);
+  return JSON.parse(text);
+}
+
+// Owners confirmed in Homer since the first import (device_id -> reader key). Empty on a first run.
+async function dbOwners() {
+  const readers = new Map((await get("homer_readers?select=id,key")).map((r) => [r.id, r.key]));
+  const devices = await get("homer_devices?select=device_id,reader_id&reader_id=not.is.null");
+  return new Map(devices.filter((d) => readers.has(d.reader_id)).map((d) => [d.device_id, readers.get(d.reader_id)]));
+}
+
 async function call(batch, dryRun) {
   const res = await fetch(`${url}/rest/v1/rpc/homer_import_batch`, {
     method: "POST",
@@ -67,7 +82,10 @@ async function main() {
   const ownershipDir = join(exportDir, "Digital.Content.Ownership");
   const ownershipItems = readdirSync(ownershipDir).filter((f) => f.endsWith(".json"))
     .flatMap((f) => JSON.parse(readFileSync(join(ownershipDir, f), "utf8")));
+  const owners = await dbOwners();
+  console.log(`Owners from Homer: ${owners.size} devices${owners.size ? "" : " (none yet, so the built-in labels are used)"}.`);
   const plan = buildPlan({
+    dbOwners: owners,
     deviceRows: csvFile(join(dir, "devices.csv")),
     finishedRows: csvFile(join(dir, "finished_books.csv")),
     sessionRows: csvFile(need("Kindle.Devices.ReadingSession.csv")),
@@ -77,7 +95,8 @@ async function main() {
   });
   const batches = packBatches(plan);
   console.log(`Plan: ${plan.readers.length} readers, ${plan.devices.length} devices, ${plan.series.length} series, ` +
-    `${plan.books.length} books, ${plan.reads.length} reads in ${batches.length} batches. ` +
+    `${plan.books.length} books, ${plan.reads.length} reads (${plan.reads.filter((r) => r.finished_on).length} finished, ` +
+    `${plan.notes.implied_finishes} implied) in ${batches.length} batches. ` +
     `Notes: ${JSON.stringify(plan.notes.unplaced_finishes.length)} finishes with no device, ` +
     `${plan.notes.untitled_books} untitled books.`);
   console.log(apply ? "Mode: APPLY (each batch dry-run first)" : "Mode: dry run (nothing is saved; add --apply to write)");

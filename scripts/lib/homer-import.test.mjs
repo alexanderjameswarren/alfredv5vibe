@@ -128,6 +128,81 @@ test("finish: a single-device book behaves as before", () => {
   assert.equal(by.D1.completion, "manual");
 });
 
+// books: [asin, series title or null, position]; reads: [asin, device, day]; each read is one hour.
+function miniPlan({ books, reads, finished = [], devices, dbOwners }) {
+  return buildPlan({
+    deviceRows: devices.map((device_id) => ({ device_id })),
+    finishedRows: finished,
+    sessionRows: reads.map(([asin, dev, d]) => s(asin, dev, `${d}T00:00:00Z`, H)),
+    relIndexRows: books.map(([asin, st, pos]) => ({ ASIN: asin, "Product Name": asin, "Series Title": st ?? "", "Position In Collection": String(pos ?? "") })),
+    authorRows: [], ownershipItems: [], dbOwners,
+  });
+}
+const readOf = (plan, asin, dev) => plan.reads.find((r) => r.asin === asin && r.device_id === dev);
+const A = "77750d31aa"; // labelled alex
+const S = "Saga S000000001";
+
+test("implied: 2+ books in a series, all finished on their own last day", () => {
+  const plan = miniPlan({
+    books: [["B1", S, 1], ["B2", S, 2], ["B3", S, 3]],
+    reads: [["B1", A, "2026-01-01"], ["B2", A, "2026-02-01"], ["B2", A, "2026-02-03"], ["B3", A, "2026-03-01"]],
+    devices: [A],
+  });
+  assert.equal(readOf(plan, "B2", A).finished_on, "2026-02-03");
+  assert.equal(readOf(plan, "B2", A).completion, "implied");
+  assert.equal(readOf(plan, "B3", A).completion, "implied");
+  assert.equal(plan.notes.implied_finishes, 3);
+});
+
+test("implied: existing finishes are not downgraded", () => {
+  const plan = miniPlan({
+    books: [["B1", S, 1], ["B2", S, 2]],
+    reads: [["B1", A, "2026-01-01"], ["B2", A, "2026-02-01"]],
+    finished: [{ asin: "B1", completed_date: "2026-01-02", flag: "MANUAL", main_device_id: A }],
+    devices: [A],
+  });
+  assert.equal(readOf(plan, "B1", A).completion, "manual");
+  assert.equal(readOf(plan, "B1", A).finished_on, "2026-01-01");
+  assert.equal(readOf(plan, "B2", A).completion, "implied");
+});
+
+test("implied: a lone book 1 and books with no series keep Amazon's status", () => {
+  const plan = miniPlan({
+    books: [["B1", S, 1], ["N1", null, null], ["N2", null, null]],
+    reads: [["B1", A, "2026-01-01"], ["N1", A, "2026-01-02"], ["N2", A, "2026-01-03"]],
+    devices: [A],
+  });
+  for (const asin of ["B1", "N1", "N2"]) assert.equal(readOf(plan, asin, A).finished_on, null);
+  assert.equal(plan.notes.implied_finishes, 0);
+});
+
+test("implied: unowned devices are grouped per device", () => {
+  const plan = miniPlan({
+    books: [["B1", S, 1], ["B2", S, 2]],
+    reads: [["B1", "X1", "2026-01-01"], ["B2", "Y1", "2026-01-02"], ["B1", "Z1", "2026-01-03"], ["B2", "Z1", "2026-01-04"]],
+    devices: ["X1", "Y1", "Z1"],
+  });
+  assert.equal(readOf(plan, "B1", "X1").finished_on, null);
+  assert.equal(readOf(plan, "B2", "Y1").finished_on, null);
+  assert.equal(readOf(plan, "B1", "Z1").completion, "implied");
+  assert.equal(readOf(plan, "B2", "Z1").completion, "implied");
+});
+
+test("owners from the database override the built-in labels", () => {
+  const plan = miniPlan({
+    books: [["B1", S, 1], ["B2", S, 2]],
+    reads: [["B1", "X1", "2026-01-01"], ["B2", A, "2026-01-02"]],
+    devices: ["X1", A],
+    dbOwners: new Map([["X1", "elise"], [A, "elise"]]),
+  });
+  assert.equal(plan.ownerOf.get(A), "elise");
+  assert.equal(plan.devices.find((d) => d.device_id === A).owner, null); // not re-sent; the RPC keeps the stored owner
+  assert.equal(readOf(plan, "B1", "X1").completion, "implied"); // both are elise's now, so one group of 2 books
+  const fallback = miniPlan({ books: [["B1", S, 1]], reads: [["B1", A, "2026-01-01"]], devices: [A] });
+  assert.equal(fallback.ownerOf.get(A), "alex");
+  assert.equal(fallback.devices[0].owner, "alex");
+});
+
 test("devices carry owner and reason only when labelled", () => {
   const [a, b] = buildDevices([
     { device_id: "93aac836abc", device_family: "Kindle app", friendly_name: "", first_session: "2026-02-10",

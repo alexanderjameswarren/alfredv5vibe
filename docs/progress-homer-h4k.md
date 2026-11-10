@@ -31,7 +31,15 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [x] s8b: Alex ran the import with `--apply`: 3 readers, 38 devices, 409 series, 1,221 books, 1,582 reads, 589 finished, 0 refused. Each finish was on one device only (all 11 He Who Fights with Monsters finishes went to Elise, none to Alex).
 - [x] s9: finish rule changed in `scripts/lib/homer-import.mjs`: every device with ≥ 60% of the most-read device's hours and ≥ 1 h gets the finish, dated its own last read day; if none qualifies, the old one-finish rule applies. 15/15 Homer tests, 69/69 scripts tests. Offline plan: 717 finished reads (alex 220, elise 193, vasti 0, no reader 304), 589 books, 115 finished on 2+ devices. He Who Fights with Monsters: Elise 11, Alex 3 (books 2, 5, 6). The 60% share misses most of Alex's, since his hours run 40–60% of Elise's; 35% would credit him with books 1–3 and 5–10. Not re-imported yet.
 - [x] s9b: Alex chose 35%. `FINISH_SHARE = 0.35`; the "just under" test moved to 34%. 15/15 Homer tests, 69/69 scripts tests. Offline plan: 776 finished reads (alex 254, elise 193, vasti 0, no reader 329), 589 books, 164 finished on 2+ devices, 0 unplaced, 7 batches. He Who Fights with Monsters: Alex books 1–3 and 5–10, Elise 1–3 and 5–12.
-- [ ] s9c: Alex runs `node scripts/homer-import.mjs --apply` (updates the reads by import_key) and the s8 verification query
+- [x] s9c: Alex re-ran `--apply` with the 35% rule: 1,582 reads, 776 finished (alex 254, elise 193, no reader 329). Checkpointed (c7e4d11).
+
+### Implied finishes and series availability (s10)
+- [x] s10: wrote `_pending_homer-h4k_homer_implied_availability.sql`, which allows completion `implied`, adds 5 availability columns and their checks to `homer_series`, and replaces `homer_quiet_series` with `available_position`, `books_behind`, `is_caught_up`, `upcoming_*` and `availability_checked_on`. Wrote `4_implied_availability_test.sql` (20 checks). Implied finishes and owners-from-the-database are in the import script and lib. 20/20 Homer tests, 74/74 scripts tests. Offline: 1,320 finished reads (automatic 726, manual 50, implied 544); alex 395, elise 259, no reader 666; Alex's 45 still unfinished are 41 lone book 1s and 4 with no series. No SQL was run.
+- [x] s10b: gitsync (341630c, switchboard2-h8r's 227 and runner; no drift). Claimed db:table:homer_reads, db:table:homer_series and db:fn:homer_quiet_series. Number **228** (`228_homer_implied_availability.sql`, db:migration:228). Alex chose **no exception for the book he's reading now**: an in-progress book in a series he's read 2+ books of stays marked finished (implied), as specified.
+- [x] s10b2 (run tag s10c): wrote `228_homer_implied_availability.sql` (the draft plus a path line, checked with diff), deleted the draft, queued 228, action `7a0f11c8-ba0c-49cc-8b3e-5b525efe13a8`. Waiting for Alex to approve it.
+- [x] 228 applied: run `4182adbb-e379-40e8-8006-d0a674077ca5`, CONFORMANT
+- [x] s10d: queued `4_implied_availability_test.sql` with `--test`, action `590673ac-d494-4721-a35d-158abb8e78fc`. Waiting for Alex to approve it.
+- [ ] s10e: after the test passes, Alex re-runs `node scripts/homer-import.mjs --apply`, then the Checkpoint
 ### D. MCP tools
 - [ ] s11: claim `supabase/functions/mcp/index.ts` and `index.test.mjs` (stop if still held); write `_shared/tools/homer.ts` and its test; register the tools
 - [ ] s12: deploy mcp, `check_platform_conformance`, call each read tool once
@@ -54,14 +62,14 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [ ] Suggestion rounds; corrections become plan versions
 - [ ] Propose owners for the older devices, newest first; Alex confirms
 
-## Next step's scope (s13, phase E: the Homer skill)
-- create: .claude/skills/homer/SKILL.md
+## Next step's scope (s10e, after the test passes and Alex's --apply)
+- create: nothing
 - update: docs/progress-homer-h4k.md
 - delete: nothing
 - deploy: nothing
 - SQL: none
 
-Before s13, Alex runs `gitpush` Checkpoint for homer-h4k with `scripts/lib/homer-import.mjs`, `scripts/lib/homer-import.test.mjs`, `docs/homer-spec-homer-h4k.md` and `docs/progress-homer-h4k.md`. s13 writes the Homer skill from the spec. It names the phase D tools as they're planned, since they aren't written yet: phase D is still blocked by switchboard2-h8r's claim on `supabase/functions/mcp/index.ts` and `index.test.mjs`.
+Alex runs `node scripts/homer-import.mjs --apply` (the plan line should show 1,320 finished and 544 implied, with 0 refused). Then he runs `gitpush` Checkpoint for homer-h4k with `supabase/migrations/228_homer_implied_availability.sql`, `supabase/tests/homer-h4k/4_implied_availability_test.sql`, `scripts/homer-import.mjs`, `scripts/lib/homer-import.mjs`, `scripts/lib/homer-import.test.mjs`, `docs/homer-spec-homer-h4k.md` and `docs/progress-homer-h4k.md`. The Checkpoint releases the db claims (homer_reads, homer_series, homer_quiet_series, migration 228). The thread records the import result and checks `claims.cmd status`. Phase E (s13, the skill) follows. Phase D is still blocked by switchboard2-h8r's claim on `supabase/functions/mcp/index.ts`.
 
 ## Notes
 - The import data stays in `C:\Users\Alex\Downloads\homer-analysis\` and never goes into git.
@@ -106,3 +114,7 @@ Before s13, Alex runs `gitpush` Checkpoint for homer-h4k with `scripts/lib/homer
 | s8 | Token check (not set; no dry run) | 10:11:57 | 10:12:30 | 0m33s |
 | s9 | Finish rule, tests, offline plan, spec | 10:35:33 | 10:37:55 | 2m22s |
 | s9b | Share 35%, tests, offline plan | 10:42:09 | 10:42:35 | 0m26s |
+| s10 | Implied finishes, availability migration, 2 tests | 11:17:32 | 11:22:18 | 4m46s |
+| s10b | Claim db items, number 228 | 11:26:31 | 11:26:56 | 0m25s |
+| s10c | Write 228, delete draft, queue 228 | 12:00:14 | 12:00:39 | 0m25s |
+| s10d | Queue 4_implied_availability_test | 12:03:01 | 12:03:21 | 0m20s |
