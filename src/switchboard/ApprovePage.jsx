@@ -112,11 +112,15 @@ async function callRunner(route, body) {
 }
 
 /**
- * s86ac (Alex, 2026-11-10): red or nothing, never green. A loaded preview gets the red header unless its stakes is
- * exactly none, so an older link or runner with no stakes is still marked. Stakes comes from the preview, never the url.
+ * s86ag (Alex, 2026-11-10): the red bar means "this page waits for your Approve click"; no bar means it runs by itself
+ * and closes. Decided from the page's own behaviour, not stakes: only a sql test (preview.test) runs on open, and
+ * every other loaded preview waits for Approve. Never green, and never from the url.
  */
+export function runsByItself(preview) {
+  return !!preview && (!preview.kind || preview.kind === 'sql') && preview.test === true;
+}
 export function needsApprovalHeader(preview) {
-  return !!preview && preview.stakes !== 'none';
+  return !!preview && !runsByItself(preview);
 }
 
 function Shell({ children, preview }) {

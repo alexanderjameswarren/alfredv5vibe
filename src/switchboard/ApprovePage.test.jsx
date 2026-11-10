@@ -508,12 +508,13 @@ test('sb setup: no folder line without from_sandbox', async () => {
   expect(screen.queryByTestId('approve-sb-folder')).toBeNull();
 });
 
-// --- stakes (s86ac, Alex 2026-11-10): red "Approval required" or nothing, never green ---
+// --- the red bar (s86ag, Alex 2026-11-10): "this page waits for your Approve click"; none when it runs by itself ---
 
 const noGreen = (c) => expect(c.innerHTML).not.toMatch(/green/i);
+const SYNC = { ok: true, kind: 'git', action_id: 'g1', headline: 'GITSYNC', fingerprint: 'fpg', project_code: 'p-a1', payload: { command: 'gitsync' } };
 
-test('stakes change: red Approval required header at the very top', async () => {
-  for (const p of [{ ...PREVIEW, stakes: 'change' }, { ...SF, stakes: 'change' }]) {
+test('waits for Approve: red Approval required bar at the very top (sql, sf_check, git)', async () => {
+  for (const p of [PREVIEW, { ...SF, stakes: 'none' }, { ...SYNC, stakes: 'none' }, { ...PREVIEW, stakes: 'change' }]) {
     runner({ preview: reply(p), 'dry-run': CLEAN });
     const { container, unmount } = open();
     const head = await screen.findByTestId('approve-stakes-change');
@@ -525,9 +526,9 @@ test('stakes change: red Approval required header at the very top', async () => 
   }
 });
 
-test('stakes none: no header, nothing green', async () => {
-  for (const p of [{ ...PREVIEW, stakes: 'none', test: true }, { ...SF, stakes: 'none' }]) {
-    runner({ preview: reply(p), 'dry-run': CLEAN });
+test('runs by itself (a sql test): no bar, nothing green', async () => {
+  for (const p of [{ ...PREVIEW, test: true }, { ...PREVIEW, test: true, stakes: 'change' }]) {
+    runner({ preview: reply(p), 'dry-run': () => reply({ ok: true, test: true, run_id: 'dry1', summary: 'undone' }) });
     const { container, unmount } = open();
     await screen.findByText(p.headline);
     expect(screen.queryByTestId('approve-stakes-change')).toBeNull();
@@ -537,22 +538,22 @@ test('stakes none: no header, nothing green', async () => {
   }
 });
 
-test('stakes missing (older link or runner): red header', async () => {
-  for (const p of [PREVIEW, SF]) {
-    runner({ preview: reply(p), 'dry-run': CLEAN });
-    const { unmount } = open();
-    expect(await screen.findByTestId('approve-stakes-change')).toHaveTextContent('Approval required');
-    unmount();
-  }
-});
-
-test('stakes comes from the preview, never the url', async () => {
-  runner({ preview: reply({ ...SF, stakes: 'change' }) });
-  const a = openAt('/approve/tok1?kind=sf_check&stakes=none&exp=1');
+test('the bar ignores the url', async () => {
+  runner({ preview: reply(SF) });
+  const a = openAt('/approve/tok1?kind=sql&stakes=none&exp=1');
   expect(await screen.findByTestId('approve-stakes-change')).toBeInTheDocument();
   a.unmount();
-  runner({ preview: reply({ ...SF, stakes: 'none' }) });
-  openAt('/approve/tok1?kind=sf_check&stakes=change&exp=1');
-  await screen.findByText(SF.headline);
+  runner({ preview: reply({ ...PREVIEW, test: true }), 'dry-run': CLEAN });
+  openAt('/approve/tok1?kind=sql&stakes=change&exp=1');
+  await screen.findByText(PREVIEW.headline);
   expect(screen.queryByTestId('approve-stakes-change')).toBeNull();
+});
+
+test('runsByItself: only a sql test', () => {
+  const { runsByItself } = jest.requireActual('./ApprovePage');
+  expect(runsByItself({ test: true })).toBe(true);
+  expect(runsByItself({ kind: 'sql', test: true })).toBe(true);
+  for (const p of [null, {}, { kind: 'sql' }, { test: 'true' }, { kind: 'sf_check', test: true }, { kind: 'git', test: true }, { kind: 'sb_setup' }]) {
+    expect(runsByItself(p)).toBe(false);
+  }
 });

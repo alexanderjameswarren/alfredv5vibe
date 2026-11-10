@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-10 11:14, through migration 227 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-10 12:03, through migration 229 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -4701,7 +4701,7 @@ COMMENT ON FUNCTION "public"."homer_plans_guard"() IS 'Homer: on homer_plans onl
 
 
 
-CREATE OR REPLACE FUNCTION "public"."homer_quiet_series"("p_reader_key" "text" DEFAULT 'alex'::"text") RETURNS TABLE("series_id" "uuid", "series_name" "text", "verdict" "text", "is_default" boolean, "books_finished" integer, "last_finished_title" "text", "last_finished_position" numeric, "last_read_on" "date", "days_since" integer, "quiet_after_days" integer, "is_quiet" boolean, "tired_gap_passed" boolean, "next_position" numeric, "next_title" "text", "next_asin" "text")
+CREATE OR REPLACE FUNCTION "public"."homer_quiet_series"("p_reader_key" "text" DEFAULT 'alex'::"text") RETURNS TABLE("series_id" "uuid", "series_name" "text", "verdict" "text", "is_default" boolean, "books_finished" integer, "last_finished_title" "text", "last_finished_position" numeric, "last_read_on" "date", "days_since" integer, "quiet_after_days" integer, "is_quiet" boolean, "tired_gap_passed" boolean, "next_position" numeric, "next_title" "text", "next_asin" "text", "available_position" numeric, "books_behind" numeric, "is_caught_up" boolean, "upcoming_position" numeric, "upcoming_release_date" "date", "availability_checked_on" "date")
     LANGUAGE "sql" STABLE
     SET "search_path" TO 'public', 'pg_temp'
     AS $$
@@ -4724,11 +4724,14 @@ CREATE OR REPLACE FUNCTION "public"."homer_quiet_series"("p_reader_key" "text" D
      where r.reader_id = (select id from reader) and r.finished_on is not null and b.series_id in (select series_id from v)
      order by b.series_id, b.series_position desc nulls last, r.finished_on desc
   ),
+  -- The next book the library holds, from published positions only (when availability is known).
   next_book as (
     select distinct on (b.series_id) b.series_id, b.series_position, b.title, b.asin
       from public.homer_books b
       join last_book lb on lb.series_id = b.series_id
+      join public.homer_series s on s.id = b.series_id
      where b.series_position > lb.series_position
+       and (s.available_position is null or b.series_position <= s.available_position)
      order by b.series_id, b.series_position
   )
   select v.series_id,
@@ -4745,8 +4748,18 @@ CREATE OR REPLACE FUNCTION "public"."homer_quiet_series"("p_reader_key" "text" D
          case when v.verdict = 'tired' then coalesce(current_date - v.last_read_on >= (select tired_gap from plan), false) end,
          nb.series_position,
          nb.title,
-         nb.asin
+         nb.asin,
+         s.available_position,
+         -- greatest() ignores nulls, so the subtraction is guarded: unknown stays null.
+         case when s.available_position is not null and lb.series_position is not null
+              then greatest(s.available_position - lb.series_position, 0) end,
+         case when s.available_position is not null and lb.series_position is not null
+              then s.available_position <= lb.series_position end,
+         s.upcoming_position,
+         s.upcoming_release_date,
+         s.availability_checked_on
     from v
+    join public.homer_series s on s.id = v.series_id
     left join last_book lb on lb.series_id = v.series_id
     left join next_book nb on nb.series_id = v.series_id
    order by (current_date - v.last_read_on) desc nulls last, v.series_name;
@@ -4756,7 +4769,7 @@ $$;
 ALTER FUNCTION "public"."homer_quiet_series"("p_reader_key" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."homer_quiet_series"("p_reader_key" "text") IS 'Homer: the reader''s liked, loved and tired series (stored or default verdict) with the highest-position book finished, the last read date, days since, and is_quiet when that is at least the plan''s quiet_after_days. tired_gap_passed (tired only) says the plan''s tired_gap_days has passed. next_* is the next position the library holds after the last finished book, if any. Longest quiet first. Read by get_homer_quiet_series and the Homer tab.';
+COMMENT ON FUNCTION "public"."homer_quiet_series"("p_reader_key" "text") IS 'Homer: the reader''s liked, loved and tired series (stored or default verdict) with the highest-position book finished, the last read date, days since, and is_quiet when that is at least the plan''s quiet_after_days. tired_gap_passed (tired only) says the plan''s tired_gap_days has passed. next_* is the next position the library holds after the last finished book, from published positions only. books_behind is available_position minus the last finished position (null when either is unknown); is_caught_up is books_behind = 0. upcoming_* is the next announced book, never counted as available. Longest quiet first. Read by get_homer_quiet_series and the Homer tab.';
 
 
 
@@ -9187,10 +9200,8 @@ CREATE OR REPLACE FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_pay
     SET "search_path" TO 'public', 'pg_temp'
     AS $$
   select case
-    when p_kind = 'sql' then case when coalesce(p_payload->'test' = 'true'::jsonb, false) then 'none' else 'change' end
-    when p_kind = 'sf_check' then 'none'                                                     -- read only, on a sandbox
-    when p_kind = 'git' and p_payload->>'command' in ('gitsync', 'gitcom') then 'none'       -- inside the worktree
-    else 'change'                         -- gitpush, gitnewtree, sb_setup, sf_deploy, sf_test and any unknown kind
+    when p_kind = 'sql' and coalesce(p_payload->'test' = 'true'::jsonb, false) then 'none'  -- runs on open, no click
+    else 'change'                                                                           -- waits for Approve
   end;
 $$;
 
@@ -9198,7 +9209,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") IS 'Switchboard: what an action puts at stake, change or none (s86ac). none: a sql test (payload.test true), sf_check, git gitsync and gitcom. change: everything else, including an unknown kind. Shown on the link''s tile and the approve page; it decides nothing.';
+COMMENT ON FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") IS 'Switchboard: whether a link''s page waits for Alex''s Approve click (s86ag). change: it waits, and the approve page shows the red Approval required bar; every kind but one, including sf_check, gitsync, gitcom and an unknown kind. none: the page runs by itself and closes, which is only a sql --test (payload.test true). Not about whether anything real changes. Carried in the link url as &stakes=; it decides nothing.';
 
 
 
@@ -15335,7 +15346,7 @@ CREATE TABLE IF NOT EXISTS "public"."homer_reads" (
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     CONSTRAINT "homer_reads_completion_needs_finish" CHECK ((("completion" IS NULL) OR ("finished_on" IS NOT NULL))),
-    CONSTRAINT "homer_reads_completion_values" CHECK ((("completion" IS NULL) OR ("completion" = ANY (ARRAY['automatic'::"text", 'manual'::"text"])))),
+    CONSTRAINT "homer_reads_completion_values" CHECK ((("completion" IS NULL) OR ("completion" = ANY (ARRAY['automatic'::"text", 'manual'::"text", 'implied'::"text"])))),
     CONSTRAINT "homer_reads_dates_order" CHECK ((("started_on" IS NULL) OR ("finished_on" IS NULL) OR ("finished_on" >= "started_on"))),
     CONSTRAINT "homer_reads_hours_positive" CHECK ((("hours" IS NULL) OR ("hours" >= (0)::numeric))),
     CONSTRAINT "homer_reads_reader_or_device" CHECK ((("reader_id" IS NOT NULL) OR ("device_id" IS NOT NULL))),
@@ -15382,7 +15393,7 @@ COMMENT ON COLUMN "public"."homer_reads"."hours" IS 'Reading hours on this devic
 
 
 
-COMMENT ON COLUMN "public"."homer_reads"."completion" IS 'automatic | manual, from UserUniqueTitlesCompleted; null if not from there.';
+COMMENT ON COLUMN "public"."homer_reads"."completion" IS 'automatic | manual, from UserUniqueTitlesCompleted; implied, when the reader read 2+ books of the series (the import marks every book they read in it finished); null if none of these.';
 
 
 
@@ -15415,7 +15426,17 @@ CREATE TABLE IF NOT EXISTS "public"."homer_series" (
     "notes" "text",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    CONSTRAINT "homer_series_name_not_blank" CHECK (("btrim"("name") <> ''::"text"))
+    "available_position" numeric(6,2),
+    "upcoming_position" numeric(6,2),
+    "upcoming_release_date" "date",
+    "availability_checked_on" "date",
+    "availability_source" "text",
+    CONSTRAINT "homer_series_available_position_positive" CHECK ((("available_position" IS NULL) OR ("available_position" > (0)::numeric))),
+    CONSTRAINT "homer_series_name_not_blank" CHECK (("btrim"("name") <> ''::"text")),
+    CONSTRAINT "homer_series_release_needs_upcoming" CHECK ((("upcoming_release_date" IS NULL) OR ("upcoming_position" IS NOT NULL))),
+    CONSTRAINT "homer_series_source_not_blank" CHECK ((("availability_source" IS NULL) OR ("btrim"("availability_source") <> ''::"text"))),
+    CONSTRAINT "homer_series_upcoming_after_available" CHECK ((("upcoming_position" IS NULL) OR ("available_position" IS NULL) OR ("upcoming_position" > "available_position"))),
+    CONSTRAINT "homer_series_upcoming_position_positive" CHECK ((("upcoming_position" IS NULL) OR ("upcoming_position" > (0)::numeric)))
 );
 
 
@@ -15455,6 +15476,26 @@ COMMENT ON COLUMN "public"."homer_series"."created_at" IS 'When added.';
 
 
 COMMENT ON COLUMN "public"."homer_series"."updated_at" IS 'Last change.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."available_position" IS 'Highest book position already published, from Claude''s web check. Null = not checked.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."upcoming_position" IS 'Next announced book''s position (e.g. a pre-order), if any. Never counted as available.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."upcoming_release_date" IS 'Release date of upcoming_position, if announced. Needs upcoming_position.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."availability_checked_on" IS 'When Claude last checked availability.';
+
+
+
+COMMENT ON COLUMN "public"."homer_series"."availability_source" IS 'Where Claude checked, in a few words (e.g. "Amazon series page", "author site").';
 
 
 
