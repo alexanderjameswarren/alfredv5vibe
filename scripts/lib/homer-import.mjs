@@ -5,6 +5,9 @@ export const MAX_BATCH_ROWS = 500;
 export const MIN_SESSION_MS = 60_000;
 export const SESSION_CAP_MS = 4 * 3600_000;
 export const MIN_READ_MS = 30 * 60_000; // a (book, device) pair below this is noise unless it holds the finish
+// A completed book is finished on every device with at least this share of the most-read device's hours, and this many.
+export const FINISH_SHARE = 0.35;
+export const FINISH_MIN_MS = 3600_000;
 const NA = new Set(["", "Not Available", "Not Applicable"]);
 
 export const READERS = [
@@ -118,27 +121,36 @@ export function aggregateSessions(sessionRows) {
   return pairs;
 }
 
-// finishedRows: finished_books.csv. The finish goes on its main device, or else the device with the most raw time.
+// finishedRows: finished_books.csv. A completed book is finished on every device with hours >= FINISH_SHARE of its
+// most-read device and >= FINISH_MIN_MS, dated that device's last read day. If no device qualifies, the old rule
+// applies: the main device, or else the device with the most raw time, dated the completion date.
 export function buildReads(pairs, finishedRows) {
   const byAsin = new Map();
   for (const p of pairs.values()) byAsin.set(p.asin, [...(byAsin.get(p.asin) ?? []), p]);
-  const finish = new Map();
-  const unplaced = [];
+  // One completion per book: the latest row (a book finished twice keeps the later date and its flag).
+  const done = new Map();
   for (const f of finishedRows) {
     const asin = clean(f.asin);
     if (!asin) continue;
+    const prev = done.get(asin);
+    if (!prev || f.completed_date > prev.completed_date) done.set(asin, f);
+  }
+  const finish = new Map();
+  const unplaced = [];
+  for (const [asin, f] of done) {
+    const completion = String(f.flag || "").toLowerCase() || null;
+    const devs = byAsin.get(asin) ?? [];
+    const top = Math.max(0, ...devs.map((p) => p.ms));
+    const qualified = devs.filter((p) => p.ms >= FINISH_MIN_MS && p.ms >= FINISH_SHARE * top);
+    for (const p of qualified) finish.set(`${asin}|${p.device}`, { date: p.last, completion });
+    if (qualified.length) continue;
     let device = clean(f.main_device_id);
     if (!device) {
-      const cands = (byAsin.get(asin) ?? []).filter((p) => p.rawMs > 0).sort((a, b) => b.rawMs - a.rawMs);
+      const cands = devs.filter((p) => p.rawMs > 0).sort((a, b) => b.rawMs - a.rawMs);
       device = cands[0]?.device ?? null;
     }
     if (!device) { unplaced.push(asin); continue; }
-    const key = `${asin}|${normalizeDeviceId(device)}`;
-    const prev = finish.get(key);
-    // A book finished twice on one device keeps the later date.
-    if (!prev || f.completed_date > prev.date) {
-      finish.set(key, { date: f.completed_date, completion: String(f.flag || "").toLowerCase() || null });
-    }
+    finish.set(`${asin}|${normalizeDeviceId(device)}`, { date: f.completed_date, completion });
   }
   const reads = [];
   const seen = new Set();

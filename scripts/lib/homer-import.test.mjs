@@ -78,11 +78,54 @@ test("reads: key, finish placement, 30 min floor, start never after finish", () 
   ]);
   const by = Object.fromEntries(reads.map((r) => [r.import_key, r]));
   assert.deepEqual(Object.keys(by).sort(), ["export:B1:D1", "export:B2:D2"]);
-  assert.equal(by["export:B1:D1"].started_on, "2026-01-05");
+  assert.equal(by["export:B1:D1"].finished_on, "2026-01-10");
   assert.equal(by["export:B1:D1"].completion, "automatic");
   assert.equal(by["export:B2:D2"].finished_on, "2026-02-02");
   assert.equal(by["export:B2:D2"].hours, 0);
   assert.deepEqual(unplaced, ["B9"]);
+});
+
+const H = 3600_000;
+const finishes = (sessions, finished) => {
+  const { reads } = buildReads(aggregateSessions(sessions), finished);
+  return Object.fromEntries(reads.map((r) => [r.device_id, r]));
+};
+
+test("finish: two devices past the threshold both finish, each on its own last day", () => {
+  const by = finishes([
+    s("B1", "D1", "2026-01-01T00:00:00Z", 3 * H), s("B1", "D1", "2026-01-04T00:00:00Z", 2 * H),
+    s("B1", "D2", "2026-03-01T00:00:00Z", 3 * H), s("B1", "D2", "2026-03-09T00:00:00Z", 1 * H),
+  ], [{ asin: "B1", completed_date: "2026-01-05", flag: "MANUAL", main_device_id: "D1" }]);
+  assert.equal(by.D1.finished_on, "2026-01-04");
+  assert.equal(by.D2.finished_on, "2026-03-09");
+  assert.equal(by.D2.completion, "manual");
+});
+
+test("finish: a device at 34% stays unfinished", () => {
+  const by = finishes([
+    s("B1", "D1", "2026-01-01T00:00:00Z", 200 * 60_000),
+    s("B1", "D2", "2026-01-02T00:00:00Z", 68 * 60_000),
+  ], [{ asin: "B1", completed_date: "2026-01-05", flag: "AUTOMATIC", main_device_id: "" }]);
+  assert.equal(by.D1.finished_on, "2026-01-01");
+  assert.equal(by.D2.finished_on, null);
+});
+
+test("finish: under 1 hour never qualifies, even at 100%", () => {
+  const by = finishes([
+    s("B1", "D1", "2026-01-01T00:00:00Z", 50 * 60_000),
+    s("B1", "D2", "2026-01-02T00:00:00Z", 50 * 60_000),
+  ], [{ asin: "B1", completed_date: "2026-01-05", flag: "AUTOMATIC", main_device_id: "D1" }]);
+  // No device qualifies, so the old rule places one finish on the main device, dated the completion.
+  assert.equal(by.D1.finished_on, "2026-01-05");
+  assert.equal(by.D2.finished_on, null);
+});
+
+test("finish: a single-device book behaves as before", () => {
+  const by = finishes([s("B1", "D1", "2026-01-01T00:00:00Z", 20 * 60_000)],
+    [{ asin: "B1", completed_date: "2026-01-05", flag: "MANUAL", main_device_id: "" }]);
+  assert.equal(by.D1.finished_on, "2026-01-05");
+  assert.equal(by.D1.started_on, "2026-01-01");
+  assert.equal(by.D1.completion, "manual");
 });
 
 test("devices carry owner and reason only when labelled", () => {
