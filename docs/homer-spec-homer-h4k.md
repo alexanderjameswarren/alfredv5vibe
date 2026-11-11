@@ -209,32 +209,60 @@ availability columns to `homer_series`, and replaces `homer_quiet_series` with t
   - When a device owner is confirmed later, `homer_devices_carry_reader` sets `reader_id` on that device's reads.
 
 ### D. MCP tools (`supabase/functions/_shared/tools/homer.ts`, registered in `supabase/functions/mcp/index.ts`)
-`supabase/functions/mcp/index.ts` and `supabase/functions/mcp/index.test.mjs` are held by switchboard2-h8r. Phase D
-claims them when it starts, and stops if they are still held. Every tool goes through `defineTool` and declares `tables`.
-Lists use `readTable`. The mcp function is deployed and then checked with `check_platform_conformance`.
+Built at s15 (reads) and s15b (writes); claimed at s13 once switchboard2-h8r let go of the mcp files. 23 tools, all
+through `defineTool` with literal `tables` and `ctx.db`; lists through `readTable`, or `finishRead` for an RPC's rows.
+Tests: `supabase/functions/_shared/tools/homer.test.mjs` (`node --experimental-strip-types --test`), plus
+`mcp/index.test.mjs` (`EXPECTED_ADDED_HOMER_15` and `_15B`, 223 tools) and `mcp/tables.test.mjs`. **No migration and no
+new RPC**: the validators, `create_homer_plan`, `homer_series_verdicts`, `homer_quiet_series` and `homer_import_batch`
+were already granted to authenticated. A per-reader tool takes `reader` (a key), default `alex`. The mcp function is
+deployed at s16 and then checked with `check_platform_conformance`.
 
-| Tool | Tier | |
+| Tool | Tier | As built |
 |---|---|---|
-| `get_homer_plan` | 1 | Active plan; `history: true` for earlier versions |
-| `create_homer_plan` | 3 | With `propose`: a readable diff against the active plan; refuses early if settings are invalid |
-| `get_homer_readers`, `get_homer_devices` | 1 | Devices with reader, hours and dates |
-| `update_homer_device` | 2 | Set or propose an owner; the database carries the reader onto that device's reads |
-| `get_homer_books`, `search_homer_books` | 1 | By ASIN, series, title text |
-| `get_homer_series` | 1 | With effective verdict, from `homer_series_verdicts` |
-| `get_homer_reads` | 1 | By reader, book, series, date range, source |
-| `create_homer_read` | 1 | "Finished X" in chat, or a weekly clip row; `source` chat/clip |
-| `update_homer_read` | 2 | Fix dates, hours, reader |
-| `update_homer_verdict` | 2 | loved/liked/tired/didnt_click and the note; refuses `never` |
-| `create_homer_never` | 3 | The only path to `never`; `set_by = 'alex'` |
-| `get_homer_taste_profiles`, `update_homer_taste_profile` | 1 / 2 | Scores checked against the plan |
-| `get_homer_genres`, `update_homer_genre` | 1 / 2 | Create or edit a genre and its series (upsert) |
-| `get_homer_queue` | 1 | By genre and status |
-| `create_homer_queue_items` | 1 | Append; refused without `verified_on` |
-| `update_homer_queue_item` | 2 | Status, genre, position (move), `archived_at` (drop) |
-| `get_homer_quiet_series` | 1 | From `homer_quiet_series` |
+| `get_homer_plan` | 1 | Active plan, or `{ plan: null }`; `plan_id`; `history: true` (no instructions or settings) |
+| `get_homer_readers` | 1 | The readers |
+| `get_homer_devices` | 1 | Newest first; `owner_status`, `reader`; reader and proposed_reader keys added |
+| `get_homer_books` | 1 | By `asin`, `series_id`, `ids`; series_name added |
+| `search_homer_books` | 1 | Title and/or `author` words, matched literally (ilike with wildcards escaped) |
+| `get_homer_series` | 1 | `homer_series_verdicts` rows plus author and notes; `verdict`, `is_default`, `name`; `ids` are series ids; `include` books, taste_profile, genres, availability |
+| `get_homer_reads` | 1 | `reader` key, `any` or `none`; `book_id`, `series_id`, `source`, `finished`, `date_from`/`date_to` (finished_on, else started_on); book and series fields added |
+| `get_homer_taste_profiles` | 1 | The reader's, description and scores whole; series_name added |
+| `get_homer_genres` | 1 | Live genres by sort_order (`include_archived`), with series and is_example |
+| `get_homer_queue` | 1 | The reader's live items by genre and position; `genre_id`, `unsorted`, `status`, `include_archived`; genre_name added |
+| `get_homer_quiet_series` | 1 | `homer_quiet_series` rows; `only_quiet` = what the tab shows |
+| `create_homer_book` | 1 | A new book, and its series if new, through `homer_import_batch` (series and books only); an existing ASIN is returned unchanged; an existing series is referenced, never re-sent |
+| `create_homer_read` | 1 | A chat or clip read, no device, `import_key` `<source>:<date>:<asin>`; refuses an unknown ASIN (points to `create_homer_book`) and a second open chat or clip read (points to `update_homer_read`) |
+| `create_homer_queue_items` | 1 | Up to 20, one insert; refuses no `verified_on`, KU without `ku_checked_on`, a live duplicate ASIN; appended per genre |
+| `update_homer_device` | 2 | `propose_owner` or `confirm_owner` (clears the proposal); a confirmed device isn't re-proposed |
+| `update_homer_series` | 2 | Notes and the 5 availability fields; `availability_checked_on` defaults to today when an availability field changes |
+| `update_homer_read` | 2 | Dates, hours, reader, completion manual; on an export read, a note that the next import resets them |
+| `update_homer_verdict` | 2 | loved, liked, tired, didnt_click with a note, `set_by` claude; refuses never and changing a never |
+| `update_homer_taste_profile` | 2 | Description and scores; scores checked first with `homer_scores_problem` against the active plan (refused with no plan) |
+| `update_homer_genre` | 2 | Create (proposed) or edit by id or name; adds series and changes `is_example`; a part-way failure says the genre was saved and gives its id |
+| `update_homer_queue_item` | 2 | Status, genre, move by `after_id`/`before_id` (midpoint), drop or restore (`archived_at`) |
+| `create_homer_plan` | 3 | `propose`: a before-and-after (scales added, removed, changed, order; other settings; instructions) and early refusal via `homer_plan_settings_problem`; change_summary required when replacing; the write is the `create_homer_plan` RPC |
+| `create_homer_never` | 3 | Sets a never on a series, book or author, or with `lift: true` and the replacing verdict lifts one; both `set_by` alex, only on his approval; `propose` says what is blocked or unblocked |
+
+**Differences from the s14 plan.** s15 added: `get_homer_series` always returns author and notes and takes `name`;
+`get_homer_reads` takes `reader: "any"` or `"none"`; `get_homer_quiet_series` takes `only_quiet`; the genre and queue
+reads take `include_archived` (Homer tables use `archived_at`, so the shared `archived` option doesn't apply);
+`search_homer_books` searches title and/or author. s15b: (1) a series can't be removed from a genre (link rows have no
+`archived_at`, and tier 2 never hard-deletes); (2) the second-open-read check covers chat and clip reads only, since
+the next import would overwrite a finish written onto an export read; (3) a stored verdict can't be cleared back to
+the default (no delete); (4) small extras: the availability check date defaults to today, `create_homer_book` never
+renames an existing series, and editing an export read returns a note. (1) and (3) need a schema change if Alex wants
+them.
 
 ### E. Skill (`.claude/skills/homer/SKILL.md`)
-- Read `get_homer_plan` every time. The skill holds no thresholds, scales or rules.
+Written at s11; version 2026-11-10b at s15c, matching the 23 tools as built.
+- Read `get_homer_plan` every time. The skill holds no thresholds, scales or rules, with one exception, as in
+  Arnold's skill: the plan v1 starting values and the seed examples, as a checklist for the first calibration chat
+  (which can't read this spec). Once v1 exists, the plan is the only source.
+- Recording a read is always three steps: `search_homer_books`, then `create_homer_book` if the book is new, then
+  `create_homer_read`. A finish Amazon missed is a new chat read, not an edit of the export read (the import resets it).
+- Never is set and lifted only in Alex's words, both through tier-3 `create_homer_never` (`lift: true` and the new verdict).
+- Known limits the skill tells Alex about: a series can't be removed from a genre, and a stored verdict can't be
+  cleared to the default; it offers the nearest thing and to note the schema change.
 - Practice conversations ask the plan's scales **in the same order and with the same wording every time**, one
   series at a time, so ratings stay consistent. Free text first, then the scales.
 - Suggestions: web-search each one to confirm it exists and whether it's on Kindle Unlimited, then write it to a queue.

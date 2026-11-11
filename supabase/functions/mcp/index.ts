@@ -77,6 +77,31 @@ import {
 } from "../_shared/tools/reminders.ts";
 import { createArnoldPlanTool, getArnoldPlanTool, getArnoldProgressTool } from "../_shared/tools/arnold.ts";
 import {
+  createHomerBookTool,
+  createHomerNeverTool,
+  createHomerPlanTool,
+  createHomerQueueItemsTool,
+  createHomerReadTool,
+  updateHomerDeviceTool,
+  updateHomerGenreTool,
+  updateHomerQueueItemTool,
+  updateHomerReadTool,
+  updateHomerSeriesTool,
+  updateHomerTasteProfileTool,
+  updateHomerVerdictTool,
+  getHomerBooksTool,
+  getHomerDevicesTool,
+  getHomerGenresTool,
+  getHomerPlanTool,
+  getHomerQueueTool,
+  getHomerQuietSeriesTool,
+  getHomerReadersTool,
+  getHomerReadsTool,
+  getHomerSeriesTool,
+  getHomerTasteProfilesTool,
+  searchHomerBooksTool,
+} from "../_shared/tools/homer.ts";
+import {
   getSqlReadTool, getSwitchboardRunTool, issueSwitchboardLinkTool, queueSwitchboardGitTool,
   queueSwitchboardSbSetupTool, queueSwitchboardSfCheckTool,
 } from "../_shared/tools/switchboard.ts";
@@ -3097,6 +3122,424 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(getArnoldProgressTool, args, token),
+  );
+
+  // --- Homer (docs/homer-spec-homer-h4k.md phase D; method in .claude/skills/homer/SKILL.md) ---
+  const homerReader = z.string().optional().describe("Reader key: alex (default), elise or vasti.");
+
+  server.registerTool(
+    "get_homer_plan",
+    {
+      title: "Get Homer Plan",
+      description:
+        "Homer's plan: the rules Alex tunes for his reading. Read it FIRST in every Homer conversation. Default: the ACTIVE plan as { plan }, with instructions (his taste rules, in his words) and settings: scales [{key, label, kind range|choice|multi, min, max, choices}] (ask them in this order and wording), default_verdict {liked_min_finished, otherwise}, tired_gap_days, quiet_after_days, suggestions. With no plan yet it returns { plan: null }: plan v1 is written in calibration. With plan_id, that version; with history: true, the version list newest first (no instructions or settings). Plans are never edited; a change is a new version via create_homer_plan. Tier 1.",
+      inputSchema: {
+        plan_id: z.string().optional().describe("UUID of a plan version. Omit for the active plan."),
+        history: z.boolean().optional().describe("true for the version list instead of one plan."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getHomerPlanTool, args, token),
+  );
+
+  server.registerTool(
+    "get_homer_readers",
+    {
+      title: "Get Homer Readers",
+      description:
+        "Homer's readers (alex, elise, vasti): id, key, name, notes. Alex and Elise share one Amazon account but not devices; Vasti uses the shared library. Suggestions are for Alex only in slice 1. Tier 1.",
+      inputSchema: { ...readOptions() },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getHomerReadersTool, args, token),
+  );
+
+  server.registerTool(
+    "get_homer_devices",
+    {
+      title: "Get Homer Devices",
+      description:
+        "Kindle devices and apps from the Amazon export, newest last_session first: device_id, family, friendly_name, owner_status (confirmed | proposed | unknown), reader (confirmed owner's key) and proposed_reader, owner_reason, first_session, last_session, sessions, hours. Use it to propose owners for unknown devices by series continuity, newest first. Tier 1.",
+      inputSchema: {
+        owner_status: z.union([z.enum(["confirmed", "proposed", "unknown"]), z.array(z.enum(["confirmed", "proposed", "unknown"]))])
+          .optional().describe("Only devices with this owner status."),
+        reader: z.string().optional().describe("Only devices this reader confirmed owns (a key)."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getHomerDevicesTool, args, token),
+  );
+
+  server.registerTool(
+    "get_homer_books",
+    {
+      title: "Get Homer Books",
+      description:
+        "Books in Homer's library, by series and position: asin, title, author (every author, comma-separated), series_id, series_name, series_position, acquired, content_type. Filter by asin or series_id, or fetch by ids. For words in a title use search_homer_books. Kindle links are built from the ASIN, never stored: https://read.amazon.com/?asin=<ASIN> and https://www.amazon.com/dp/<ASIN>. Tier 1.",
+      inputSchema: {
+        asin: z.string().optional().describe("One book by its ASIN."),
+        series_id: z.string().optional().describe("The books of one series."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getHomerBooksTool, args, token),
+  );
+
+  server.registerTool(
+    "search_homer_books",
+    {
+      title: "Search Homer Books",
+      description:
+        "Find books in Homer's library by words in the title and/or the author (case-insensitive, matched literally). Use it to match a title from Alex's weekly Kindle clip or from chat to a book before recording a read. Same fields as get_homer_books. Tier 1.",
+      inputSchema: {
+        text: z.string().optional().describe("Words in the title."),
+        author: z.string().optional().describe("Words in the author."),
+        series_id: z.string().optional().describe("Only books of this series."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(searchHomerBooksTool, args, token),
+  );
+
+  server.registerTool(
+    "get_homer_series",
+    {
+      title: "Get Homer Series",
+      description:
+        "Every series a reader has read or judged, newest read first, from homer_series_verdicts: series_id, series_name, series_asin, author, notes, books_finished, books_started, highest_position_finished, last_finished_on, last_read_on, stored_verdict, verdict (the stored one, else the active plan's default), is_default, note. With no plan, default verdicts are null. " +
+        "include adds: books (the library's books in the series, by position), taste_profile (the reader's description and scores, or null), genres (with is_example), availability (available_position, upcoming_position, upcoming_release_date, availability_checked_on, availability_source). Use books + taste_profile + genres for calibration. ids are series ids. Tier 1.",
+      inputSchema: {
+        reader: homerReader,
+        verdict: z.union([z.enum(["loved", "liked", "tired", "didnt_click", "never"]),
+          z.array(z.enum(["loved", "liked", "tired", "didnt_click", "never"]))]).optional().describe("Only these effective verdicts."),
+        is_default: z.boolean().optional().describe("true: only default verdicts; false: only stored ones."),
+        name: z.string().optional().describe("Words in the series name."),
+        ...readOptions({ include: ["books", "taste_profile", "genres", "availability"] }),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getHomerSeriesTool, args, token),
+  );
+
+  server.registerTool(
+    "get_homer_reads",
+    {
+      title: "Get Homer Reads",
+      description:
+        "Reads (one per book per device from the export; clip and chat reads have no device), latest first: book_id, device_id, reader, started_on, finished_on (null = not finished), hours, completion (automatic | manual from Amazon, implied = the reader went on in the series), source (export | clip | chat), plus asin, title, author, series_id, series_name, series_position. " +
+        "reader defaults to alex; \"any\" for every reader, \"none\" for reads on devices with no owner (use these to propose device owners). date_from/date_to match finished_on, or started_on for unfinished reads. Tier 1.",
+      inputSchema: {
+        reader: z.string().optional().describe("Reader key (default alex), \"any\" or \"none\"."),
+        book_id: z.string().optional().describe("Only reads of this book."),
+        series_id: z.string().optional().describe("Only reads of this series's books."),
+        source: z.union([z.enum(["export", "clip", "chat"]), z.array(z.enum(["export", "clip", "chat"]))]).optional()
+          .describe("Only reads from this source."),
+        finished: z.boolean().optional().describe("true: only finished reads; false: only unfinished."),
+        date_from: z.string().optional().describe("YYYY-MM-DD."),
+        date_to: z.string().optional().describe("YYYY-MM-DD."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getHomerReadsTool, args, token),
+  );
+
+  server.registerTool(
+    "get_homer_taste_profiles",
+    {
+      title: "Get Homer Taste Profiles",
+      description:
+        "The reader's taste profiles, one per series, latest first: series_id, series_name, description (in the reader's words, whole), scores (keyed by the plan's scale keys), plan_id (the version the scores were checked against), updated_at. Compare a new answer with these before saving one, and point out a clash on the same scale. Tier 1.",
+      inputSchema: {
+        reader: homerReader,
+        series_id: z.string().optional().describe("Only this series's profile."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getHomerTasteProfilesTool, args, token),
+  );
+
+  server.registerTool(
+    "get_homer_genres",
+    {
+      title: "Get Homer Genres",
+      description:
+        "Homer's genres, in sort order: name, description, status (proposed | accepted), sort_order, and series [{series_id, name, is_example}]. Each genre has its own read-next queue. Archived genres are left out unless include_archived. Tier 1.",
+      inputSchema: {
+        status: z.union([z.enum(["proposed", "accepted"]), z.array(z.enum(["proposed", "accepted"]))]).optional()
+          .describe("Only genres with this status."),
+        include_archived: z.boolean().optional().describe("true to include archived genres."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getHomerGenresTool, args, token),
+  );
+
+  server.registerTool(
+    "get_homer_queue",
+    {
+      title: "Get Homer Queue",
+      description:
+        "The reader's read-next queue items, grouped by genre in position order: genre_id, genre_name, kind (book | series | pick_up_again), title, author, asin, why, on_kindle_unlimited, ku_checked_on, verified_on, status (queued | maybe_later | reading | read | never), position. Queue status is not a verdict. Read it before suggesting, so nothing already queued is repeated. Dropped (archived) items are left out unless include_archived. Tier 1.",
+      inputSchema: {
+        reader: homerReader,
+        genre_id: z.string().optional().describe("Only this genre's queue."),
+        unsorted: z.boolean().optional().describe("true: only items not sorted into a genre yet."),
+        status: z.union([z.enum(["queued", "maybe_later", "reading", "read", "never"]),
+          z.array(z.enum(["queued", "maybe_later", "reading", "read", "never"]))]).optional().describe("Only these statuses."),
+        include_archived: z.boolean().optional().describe("true to include dropped items."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getHomerQueueTool, args, token),
+  );
+
+  server.registerTool(
+    "get_homer_quiet_series",
+    {
+      title: "Get Homer Quiet Series",
+      description:
+        "The reader's liked, loved and tired series (stored or default verdict), longest quiet first, from homer_quiet_series: series_id, series_name, verdict, is_default, books_finished, last_finished_title, last_finished_position, last_read_on, days_since, quiet_after_days, is_quiet, tired_gap_passed (tired only), next_position/next_title/next_asin (the next published book the library holds), available_position, books_behind (null until availability is checked: say \"not checked yet\", not 0), is_caught_up, upcoming_position, upcoming_release_date (never offer an upcoming book as available), availability_checked_on. " +
+        "Use it for \"what's gone quiet\", \"where am I behind\" and \"pick it up again?\". only_quiet: true keeps what the Homer tab shows (quiet liked or loved series; tired ones only once past the gap). Empty until a plan exists. Tier 1.",
+      inputSchema: {
+        reader: homerReader,
+        only_quiet: z.boolean().optional().describe("true: only series that have gone quiet (tired ones once past their gap)."),
+        ...readOptions(),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getHomerQuietSeriesTool, args, token),
+  );
+
+  // Homer writes (s15b).
+  const homerVerdict = z.enum(["loved", "liked", "tired", "didnt_click"]);
+  const homerSubject = {
+    series_id: z.string().optional().describe("The series (pass exactly one of series_id, book_id, author)."),
+    book_id: z.string().optional().describe("The book."),
+    author: z.string().optional().describe("The author's name."),
+  };
+
+  server.registerTool(
+    "create_homer_plan",
+    {
+      title: "Create Homer Plan",
+      description:
+        "Save a new version of Homer's plan; it SUPERSEDES the active one at once, which stays readable in history. Plans are never edited. Draft the WHOLE plan: instructions (his taste rules, in his words) and every settings key (scales, default_verdict, tired_gap_days, quiet_after_days, suggestions); keep scale keys stable across versions. change_summary (what changed and why) is required when replacing a plan. " +
+        "Tier 3: the first call (without confirmed) writes nothing and returns a readable `proposal`: a before-and-after against the active plan (scales added, removed or changed, and whether their order changed; other settings with old and new values; instructions old and new when changed). Settings the database would refuse are refused at the proposal (homer_plan_settings_problem). Show it to Alex and call again with confirmed: true only after his explicit OK. Returns { plan }.",
+      inputSchema: {
+        instructions: z.string().describe("The taste rules and what Alex wants in suggestions, in his words."),
+        settings: z.record(z.string(), z.unknown()).describe("scales, default_verdict, tired_gap_days, quiet_after_days, suggestions."),
+        change_summary: z.string().optional().describe("What changed and why. Required when replacing a plan."),
+        written_by: z.enum(["claude", "alex"]).optional().describe("Who drafted it (default claude)."),
+        confirmed: z.boolean().optional().describe("true only after Alex has approved the proposal."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createHomerPlanTool, args, token),
+  );
+
+  server.registerTool(
+    "create_homer_never",
+    {
+      title: "Create Homer Never",
+      description:
+        "The ONLY way to set or lift a \"never\" (never suggest this series, book or author again). Use it only when Alex says it, in words like \"never again\"; never infer it from a quit book. It writes set_by = alex. " +
+        "With lift: true and the replacing verdict (loved, liked, tired or didnt_click), it lifts an existing never instead, also as Alex. Refused: setting a never that exists, lifting where there is none, lifting without a verdict. " +
+        "Tier 3: the first call (without confirmed) writes nothing and returns a readable `proposal` (what is blocked or unblocked, and the current verdict). Show it and call again with confirmed: true after his OK. Returns the verdict row.",
+      inputSchema: {
+        reader: homerReader,
+        ...homerSubject,
+        lift: z.boolean().optional().describe("true to lift an existing never."),
+        verdict: homerVerdict.optional().describe("With lift: the verdict it becomes."),
+        note: z.string().optional().describe("Why, in Alex's words."),
+        confirmed: z.boolean().optional().describe("true only after Alex has approved the proposal."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createHomerNeverTool, args, token),
+  );
+
+  server.registerTool(
+    "update_homer_verdict",
+    {
+      title: "Update Homer Verdict",
+      description:
+        "Store the reader's verdict on a series, book or author: loved, liked, tired (liked and burned out: counts as liked for similar books; the series comes back as \"pick it up again?\" after the plan's tired_gap_days) or didnt_click, with a note. A stored verdict beats the plan's default. Refuses never, and refuses changing a never: both go through create_homer_never. Written as set_by claude. Tier 2.",
+      inputSchema: {
+        reader: homerReader,
+        ...homerSubject,
+        verdict: homerVerdict.describe("loved, liked, tired or didnt_click."),
+        note: z.string().optional().describe("Why, in Alex's words."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateHomerVerdictTool, args, token),
+  );
+
+  server.registerTool(
+    "create_homer_book",
+    {
+      title: "Create Homer Book",
+      description:
+        "Add a book Homer doesn't know yet (a new title from the weekly clip or from chat), and its series if that is new too, through homer_import_batch, the same path as the Amazon import. An ASIN Homer already has is returned unchanged ({ created: false }). An existing series is only referenced, never renamed. A new series needs series_name. Then record the read with create_homer_read. Tier 1.",
+      inputSchema: {
+        asin: z.string().describe("The book's ASIN."),
+        title: z.string().describe("The title."),
+        author: z.string().optional().describe("Every author, comma-separated, \"First Last\"."),
+        series_asin: z.string().optional().describe("The series's ASIN, when known."),
+        series_name: z.string().optional().describe("The series name (required for a new series)."),
+        series_position: z.number().optional().describe("Its number in the series."),
+        acquired: z.enum(["purchase", "kindle_unlimited", "prime_reading", "sample", "library", "other"]).optional()
+          .describe("How it was acquired."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createHomerBookTool, args, token),
+  );
+
+  server.registerTool(
+    "create_homer_read",
+    {
+      title: "Create Homer Read",
+      description:
+        "Record a read from chat (\"finished X\") or the weekly Kindle clip: source chat (default) or clip, with started_on and/or finished_on, optional hours. No device; reader defaults to alex. Refuses an ASIN Homer doesn't have (add it with create_homer_book first) and a second open chat or clip read of the same book by the same reader (finish or fix it with update_homer_read). An open export read is left alone: the next import would overwrite a finish written onto it. Tier 1.",
+      inputSchema: {
+        reader: homerReader,
+        asin: z.string().describe("The book's ASIN (find it with search_homer_books)."),
+        source: z.enum(["chat", "clip"]).optional().describe("chat (default) or clip."),
+        started_on: z.string().optional().describe("YYYY-MM-DD."),
+        finished_on: z.string().optional().describe("YYYY-MM-DD."),
+        hours: z.number().optional().describe("Reading hours, if known."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createHomerReadTool, args, token),
+  );
+
+  server.registerTool(
+    "update_homer_read",
+    {
+      title: "Update Homer Read",
+      description:
+        "Fix or finish a read: started_on, finished_on (null to un-finish), hours, reader (a key), completion (manual, or null). The finish can't be before the start. On an export read, dates, hours and completion are reset by the next import re-run (the result says so); its reader is kept. Tier 2.",
+      inputSchema: {
+        read_id: z.string().describe("The read's id."),
+        started_on: z.string().nullable().optional().describe("YYYY-MM-DD, or null."),
+        finished_on: z.string().nullable().optional().describe("YYYY-MM-DD, or null to un-finish."),
+        hours: z.number().nullable().optional().describe("Reading hours, or null."),
+        reader: z.string().optional().describe("The reader's key."),
+        completion: z.enum(["manual"]).nullable().optional().describe("manual, or null."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateHomerReadTool, args, token),
+  );
+
+  server.registerTool(
+    "update_homer_device",
+    {
+      title: "Update Homer Device",
+      description:
+        "Propose or confirm a device's owner. propose_owner stores a proposal (shown to Alex in a short list, newest device first, with the series-continuity evidence); confirm_owner sets the owner after Alex confirms, clears the proposal, and the database moves the device's reads to that reader. A confirmed device can't be re-proposed; use confirm_owner to change it. Tier 2.",
+      inputSchema: {
+        device_id: z.string().describe("The export's device id (from get_homer_devices)."),
+        propose_owner: z.string().optional().describe("Reader key to propose."),
+        confirm_owner: z.string().optional().describe("Reader key Alex confirmed."),
+        owner_reason: z.string().optional().describe("The evidence, e.g. \"read Solo 1-3; Alex's Kindle went on with 4-7\"."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateHomerDeviceTool, args, token),
+  );
+
+  server.registerTool(
+    "update_homer_series",
+    {
+      title: "Update Homer Series",
+      description:
+        "Notes and availability on a series, from Claude's web check: available_position (highest book already published), upcoming_position and upcoming_release_date (the next announced book, e.g. a pre-order; a date needs a position, and upcoming must be after available), availability_checked_on (default today when an availability field changes) and availability_source (where you checked, in a few words). null clears a field. An upcoming book is never offered as available. Tier 2.",
+      inputSchema: {
+        series_id: z.string().describe("The series's id."),
+        notes: z.string().nullable().optional().describe("Free notes, or null."),
+        available_position: z.number().nullable().optional().describe("Highest published position, or null."),
+        upcoming_position: z.number().nullable().optional().describe("Next announced position, or null."),
+        upcoming_release_date: z.string().nullable().optional().describe("YYYY-MM-DD, or null."),
+        availability_checked_on: z.string().nullable().optional().describe("YYYY-MM-DD (default today)."),
+        availability_source: z.string().nullable().optional().describe("Where you checked."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateHomerSeriesTool, args, token),
+  );
+
+  server.registerTool(
+    "update_homer_taste_profile",
+    {
+      title: "Update Homer Taste Profile",
+      description:
+        "Save the reader's taste profile for a series: description (free text first, in their words) and/or scores, keyed by the active plan's scale keys. Scores are checked first against the active plan (homer_scores_problem), so an unknown key or a value outside a scale is refused with the reason; with no plan, scores are refused. Compare with the stored profiles first (get_homer_taste_profiles) and point out clashes. Tier 2.",
+      inputSchema: {
+        reader: homerReader,
+        series_id: z.string().describe("The series's id."),
+        description: z.string().nullable().optional().describe("In the reader's words."),
+        scores: z.record(z.string(), z.unknown()).optional().describe("{ scale_key: value } from the plan's scales."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateHomerTasteProfileTool, args, token),
+  );
+
+  server.registerTool(
+    "update_homer_genre",
+    {
+      title: "Update Homer Genre",
+      description:
+        "Create or edit a genre and add its series. genre_id edits one (name renames it); name alone finds a live genre by name or creates it as proposed. description, status (proposed | accepted), sort_order, archived (true or false). series [{series_id, is_example}] adds series or changes is_example; removing a series isn't offered (link rows can't be soft-deleted). The genre is written first: if its series then fail, the error says the genre was saved and gives its id. Tier 2.",
+      inputSchema: {
+        genre_id: z.string().optional().describe("Edit this genre."),
+        name: z.string().optional().describe("Name (create, find, or rename with genre_id)."),
+        description: z.string().nullable().optional().describe("What belongs in it."),
+        status: z.enum(["proposed", "accepted"]).optional().describe("proposed or accepted."),
+        sort_order: z.number().optional().describe("Display order."),
+        archived: z.boolean().optional().describe("true to archive, false to restore."),
+        series: z.array(z.object({ series_id: z.string(), is_example: z.boolean().optional() })).optional()
+          .describe("Series to add, or to change is_example on."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateHomerGenreTool, args, token),
+  );
+
+  server.registerTool(
+    "create_homer_queue_items",
+    {
+      title: "Create Homer Queue Items",
+      description:
+        "Append verified suggestions to the reader's read-next queues (at most 20 per call; all or nothing), each at the end of its genre's queue (no genre_id = not sorted yet). Every item needs verified_on (the day you confirmed it exists and is published, by web search); on_kindle_unlimited needs ku_checked_on. why says what it shares with the example series, by name. Refused: an unverified item, KU without its date, an ASIN already live in the queue. Never queue a never or an unreleased book. Tier 1.",
+      inputSchema: {
+        reader: homerReader,
+        items: z.array(z.object({
+          title: z.string(),
+          author: z.string().optional(),
+          asin: z.string().optional(),
+          kind: z.enum(["book", "series", "pick_up_again"]).optional(),
+          genre_id: z.string().optional(),
+          series_id: z.string().optional(),
+          book_id: z.string().optional(),
+          why: z.string().optional(),
+          verified_on: z.string(),
+          on_kindle_unlimited: z.boolean().optional(),
+          ku_checked_on: z.string().optional(),
+          status: z.enum(["queued", "maybe_later", "reading", "read", "never"]).optional(),
+        })).describe("The suggestions."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(createHomerQueueItemsTool, args, token),
+  );
+
+  server.registerTool(
+    "update_homer_queue_item",
+    {
+      title: "Update Homer Queue Item",
+      description:
+        "Change a queue item as Alex talks, without asking: status (queued, maybe_later, reading, read, never; a queue status, not a verdict), genre_id (null = not sorted yet), move with after_id or before_id (a live item in the same genre; the item lands between neighbours), drop (archives it) or restore. Tier 2.",
+      inputSchema: {
+        item_id: z.string().describe("The queue item's id."),
+        status: z.enum(["queued", "maybe_later", "reading", "read", "never"]).optional(),
+        genre_id: z.string().nullable().optional().describe("Move to this genre, or null."),
+        after_id: z.string().optional().describe("Place it right after this item."),
+        before_id: z.string().optional().describe("Place it right before this item."),
+        drop: z.boolean().optional().describe("true to drop it (archived, not deleted)."),
+        restore: z.boolean().optional().describe("true to bring a dropped item back."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(updateHomerQueueItemTool, args, token),
   );
 
   // --- Switchboard: the SQL approval queue (docs/technical-spec-switchboard2-h8r.md §8.1) ---
