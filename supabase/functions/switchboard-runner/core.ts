@@ -37,10 +37,12 @@ export type PickedAction = {
   action_id: string; run_id: string; kind?: string; project_code: string; payload: Record<string, unknown>;
   fingerprint: string; headline: string; chat_url: string | null;
 };
-/** The kinds the desktop helper runs (spec 11.3-11.6). */
-export const HELPER_KINDS = ["git", "sf_check", "sb_setup"] as const;
+/** The kinds the desktop helper runs (spec 10, 11.3-11.6). sf_read since s89e. */
+export const HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read"] as const;
+/** What a helper from before s89c asks for; still served, so an older install keeps picking up. */
+const OLDER_HELPER_KINDS = ["git", "sf_check", "sb_setup"];
 export type Picked = {
-  action: { id: string; user_id: string; kind: string; status: string; picked_up_at: string | null };
+  action: { id: string; user_id: string; kind: string; status: string; picked_up_at: string | null; payload?: Record<string, unknown> | null };
   run: { id: string; action_id: string; mode: string; finished_at: string | null } | null;
 };
 export type Deps = {
@@ -70,6 +72,12 @@ export type Deps = {
   conformance(): Promise<string>;
   /** switchboard_stakes (s86ac): change or none; null when the function is missing or fails. */
   stakes(kind: string, payload: Record<string, unknown>): Promise<"change" | "none" | null>;
+  /** switchboard_settings.sf_reads_enabled for the user; false when there is no row (s89e). */
+  sfReadsEnabled(userId: string): Promise<boolean>;
+  /** One switchboard_sf_results row; conflict true when the action already has one. */
+  insertSfResult(row: Record<string, unknown>): Promise<{ conflict: boolean }>;
+  /** One switchboard_sf_read_log row. Never rows. */
+  logSfRead(row: Record<string, unknown>): Promise<void>;
 };
 
 /** The preview's stakes field, or nothing. A runner deployed before the migration never fails a preview on it. */
@@ -551,6 +559,8 @@ function pickupKinds(body: Record<string, unknown> | null): { pick?: "git" | "he
   const set = new Set(kinds);
   if (set.size === 1 && set.has("git")) return { pick: "git" };
   if (HELPER_KINDS.every((k) => set.has(k))) return { pick: "helper" };
+  // A helper from before s89c: it refuses an sf_read it is handed, and that refusal closes the run.
+  if (set.size === OLDER_HELPER_KINDS.length && OLDER_HELPER_KINDS.every((k) => set.has(k))) return { pick: "helper" };
   return { error: `kinds must be ["git"] or all of ${HELPER_KINDS.join(", ")}; the pickup cannot serve a part of them.` };
 }
 
@@ -588,7 +598,7 @@ async function handleResult(req: Request, deps: Deps, now: number): Promise<Resp
   }
   const exitCode = body?.exit_code;
   if (exitCode !== undefined && !Number.isInteger(exitCode)) return json({ ok: false, error: "exit_code must be an integer." }, 400);
-  const output = typeof body?.output === "string" ? body.output.slice(-MAX_OUTPUT) : undefined;
+  let output = typeof body?.output === "string" ? body.output.slice(-MAX_OUTPUT) : undefined;
 
   const picked = await deps.findPicked(actionId, runId);
   const a = picked?.action;
@@ -599,6 +609,8 @@ async function handleResult(req: Request, deps: Deps, now: number): Promise<Resp
   if (a.status !== "consumed" || !a.picked_up_at || r.mode !== "real" || r.finished_at) {
     return json({ ok: false, error: `this action is ${a.status} and no longer waiting for a result.` }, 409);
   }
+  // s89e: a read's rows went to /sf-result; its run keeps the summary only, never the window's output.
+  if (a.kind === "sf_read") output = undefined;
   await deps.finishRun(r.id, {
     summary, result: { ok: body.ok, ...(exitCode === undefined ? {} : { exit_code: exitCode }), ...(output === undefined ? {} : { output }) },
     finished_at: new Date(now).toISOString(),
@@ -607,7 +619,94 @@ async function handleResult(req: Request, deps: Deps, now: number): Promise<Resp
   return json({ ok: true, action_id: a.id, run_id: r.id, status: body.ok ? "succeeded" : "failed" });
 }
 
-const HELPER_ROUTES = new Set(["pickup", "result"]);
+// ---------------------------------------------------------------------------
+// s89e: a Salesforce read's rows (spec 10)
+// ---------------------------------------------------------------------------
+
+export const MAX_SF_ROWS = 1000;
+const MAX_QUERY = 20000;
+const MAX_SF_ERROR = 500;
+const LEVELS = ["objects", "metadata", "ids", "data"];
+/** Emails and Salesforce record or org ids out of a reason, as the helper's blankSf does. */
+export const blankIds = (s: string): string => s
+  .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]")
+  .replace(/\b(?=[A-Za-z]*\d)[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?\b/g, "[id]");
+const isRow = (v: unknown) => !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * The read window's rows, before the helper's /result. Stores them in switchboard_sf_results for at most 10 minutes
+ * and logs the step; never touches the run, which /result closes, so the chat line still goes. A failed read stores
+ * nothing and logs why.
+ */
+async function handleSfResult(req: Request, deps: Deps): Promise<Response> {
+  if (!pickupAuthorised(req, deps)) return json({ ok: false, error: "unauthorized" }, 401);
+  const body = await readBody(req);
+  const actionId = body?.action_id;
+  const runId = body?.run_id;
+  if (typeof actionId !== "string" || !actionId || typeof runId !== "string" || !runId) {
+    return json({ ok: false, error: "action_id and run_id are required." }, 400);
+  }
+  if (typeof body?.ok !== "boolean") return json({ ok: false, error: "ok must be true or false." }, 400);
+  const summary = typeof body?.summary === "string" ? body.summary.trim() : "";
+  if (!summary || summary.length > MAX_SUMMARY || /[\r\n]/.test(summary)) {
+    return json({ ok: false, error: `summary must be one line of at most ${MAX_SUMMARY} characters.` }, 400);
+  }
+  if (body.ok && body.rows !== undefined && !(Array.isArray(body.rows) && body.rows.every(isRow))) {
+    return json({ ok: false, error: "rows must be a list of objects." }, 400);
+  }
+  if (body.count !== undefined && body.count !== null && !(Number.isInteger(body.count) && (body.count as number) >= 0)) {
+    return json({ ok: false, error: "count must be a whole number." }, 400);
+  }
+
+  const picked = await deps.findPicked(actionId, runId);
+  const a = picked?.action;
+  const r = picked?.run;
+  if (!a || a.user_id !== deps.userId || a.kind !== "sf_read" || !r || r.action_id !== a.id) {
+    return json({ ok: false, error: "no such picked sf_read action and run." }, 404);
+  }
+  if (a.status !== "consumed" || !a.picked_up_at || r.mode !== "real" || r.finished_at) {
+    return json({ ok: false, error: `this action is ${a.status} and no longer waiting for a result.` }, 409);
+  }
+
+  const p = (a.payload ?? {}) as Record<string, unknown>;
+  const log = (stage: "ran" | "failed", extra: Record<string, unknown>) => deps.logSfRead({
+    user_id: a.user_id, action_id: a.id, stage,
+    org_alias: typeof p.alias === "string" && p.alias ? p.alias.slice(0, 80) : "?",
+    level: LEVELS.includes(p.level as string) ? p.level : null,
+    object: typeof p.object === "string" ? p.object : null,
+    fields: Array.isArray(p.fields) ? p.fields : null,
+    filters: Array.isArray(p.filters) ? p.filters : null,
+    // Optional for now: the helper may add the SOQL it built later.
+    query_text: typeof body.query === "string" ? body.query.slice(0, MAX_QUERY) : null,
+    ...extra,
+  });
+
+  if (!(await deps.sfReadsEnabled(a.user_id))) {
+    const error = "refused: Salesforce reads are switched off (switchboard_settings.sf_reads_enabled).";
+    await log("failed", { row_count: null, error });
+    return json({ ok: false, error }, 409);
+  }
+  if (!body.ok) {
+    const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason : summary;
+    await log("failed", { row_count: null, error: blankIds(reason.replace(/\s+/g, " ").trim()).slice(0, MAX_SF_ERROR) });
+    return json({ ok: true, action_id: a.id, stored: false });
+  }
+
+  const all = (Array.isArray(body.rows) ? body.rows : []) as Record<string, unknown>[];
+  const rows = all.slice(0, MAX_SF_ROWS);
+  const rowCount = typeof body.count === "number" ? body.count : rows.length;
+  // The stamp from the payload too, so a helper can never leave it off a production full-data read.
+  const stamped = body.production_full_data === true || (p.production === true && p.level === "data");
+  const stored = await deps.insertSfResult({
+    user_id: a.user_id, action_id: a.id, rows, row_count: rowCount, truncated: all.length > MAX_SF_ROWS,
+    production_full_data: stamped,
+  });
+  if (stored.conflict) return json({ ok: false, error: "this action already has a stored result." }, 409);
+  await log("ran", { row_count: rowCount, error: null });
+  return json({ ok: true, action_id: a.id, stored: true, row_count: rowCount, truncated: all.length > MAX_SF_ROWS });
+}
+
+const HELPER_ROUTES = new Set(["pickup", "result", "sf-result"]);
 
 export async function handle(req: Request, deps: Deps, now = Date.now()): Promise<Response> {
   const route = new URL(req.url).pathname.replace(/\/+$/, "").split("/").pop() ?? "";
@@ -617,5 +716,6 @@ export async function handle(req: Request, deps: Deps, now = Date.now()): Promis
   if (req.method !== "POST") return json({ ok: false, error: "method not allowed; use POST." }, 405, browser);
   if (route === "pickup") return handlePickup(req, deps, now);
   if (route === "result") return handleResult(req, deps, now);
+  if (route === "sf-result") return handleSfResult(req, deps);
   return browser ? handleRun(route, req, deps) : handleQueue(req, deps);
 }

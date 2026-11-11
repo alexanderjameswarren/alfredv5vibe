@@ -10,6 +10,8 @@
 //   queue_switchboard_git   tier 2  queue a git action and issue its link (§11)
 //   queue_switchboard_sf_check  tier 2  queue a read-only sandbox check and issue its link (§11.4)
 //   queue_switchboard_sb_setup  tier 2  queue sb client start or org add answers and issue its link (§11.5)
+//   queue_switchboard_sf_read   tier 2  queue one Salesforce read and issue its link (§10)
+//   get_switchboard_sf_result   tier 1  take a Salesforce read's rows, once (§10)
 //
 // Database access ONLY through ctx.db, except get_sql_read's query itself: see readerSeam.
 // ============================================================================
@@ -499,6 +501,193 @@ export const queueSwitchboardSbSetupTool = defineTool({
       next: "Give Alex the url. The page lists every answer and the files it writes; his click is the yes. Once the " +
         `helper finishes, the result line (sb ${actionId} done or failed) arrives in this chat by itself; read it with get_switchboard_run.`,
     };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// queue_switchboard_sf_read and get_switchboard_sf_result (§10, s89e). The payload as 233's check holds it, checked
+// here first so a refusal says why; the helper checks it again against orgs.json and Salesforce.
+// ---------------------------------------------------------------------------
+
+export const SF_LEVELS = ["objects", "metadata", "ids", "data"];
+const SF_NAME = /^[A-Za-z][A-Za-z0-9_]{0,79}$/;
+const SF_OPS = ["=", "!=", "<", "<=", ">", ">="];
+const IDS_FIELDS = ["Id", "CreatedDate", "LastModifiedDate"];
+const SF_READ_KEYS = ["alias", "production", "level", "object", "count", "fields", "limit", "filters"];
+const isScalar = (v: unknown) => v === null || ["string", "number", "boolean"].includes(typeof v);
+
+export function sfReadPayload(args: Record<string, unknown>): { payload: Record<string, unknown> } | { refused: string } {
+  const r = (refused: string) => ({ refused });
+  const p = payloadOf(args);
+  const extra = Object.keys(p).filter((k) => !SF_READ_KEYS.includes(k));
+  if (extra.length) {
+    return r(`an sf_read does not take ${extra.join(", ")}.${extra.some((k) => /soql|query/i.test(k)) ? " Never SOQL text: name the object, fields and filters." : ""}`);
+  }
+  if (typeof p.alias !== "string" || !SF_ALIAS.test(p.alias)) return r("`alias` must be an org alias (letters, digits, _ . -).");
+  if (!isBool(p.production)) return r("`production` must be true or false: whether the org is production. The helper refuses a wrong answer.");
+  if (!SF_LEVELS.includes(p.level as string)) return r(`\`level\` must be one of ${SF_LEVELS.join(", ")}.`);
+  const level = p.level as string;
+  const has = (k: string) => p[k] !== undefined;
+  if (level === "objects") {
+    const not = ["object", "count", "fields", "limit", "filters"].filter(has);
+    return not.length ? r(`objects lists the org's objects and takes no ${not.join(", ")}.`) : { payload: p };
+  }
+  if (typeof p.object !== "string" || !SF_NAME.test(p.object)) return r("`object` must be one API name, e.g. Contact or Donation__c (no dots).");
+  if (level === "metadata") {
+    const not = ["count", "fields", "limit", "filters"].filter(has);
+    return not.length ? r(`metadata describes one object and takes no ${not.join(", ")}.`) : { payload: p };
+  }
+  if (has("count")) {
+    if (p.count !== true) return r("`count` must be true, or left out.");
+    if (has("fields") || has("limit")) return r("a count takes no fields or limit.");
+  } else {
+    if (!Array.isArray(p.fields) || p.fields.length < 1 || p.fields.length > 50 || !p.fields.every((f) => typeof f === "string" && SF_NAME.test(f))) {
+      return r("`fields` must list 1 to 50 API names (no dots), or pass count: true.");
+    }
+    if (!Number.isInteger(p.limit) || (p.limit as number) < 1 || (p.limit as number) > 1000) return r("`limit` must be a whole number from 1 to 1000.");
+  }
+  if (has("filters")) {
+    if (!Array.isArray(p.filters) || p.filters.length < 1 || p.filters.length > 10) return r("`filters` must list 1 to 10 filters, or be left out.");
+    for (const f of p.filters as unknown[]) {
+      const o = f as Record<string, unknown>;
+      if (!o || typeof o !== "object" || Array.isArray(o)) return r("each filter must be {field, op, value}.");
+      const bad = Object.keys(o).filter((k) => !["field", "op", "value"].includes(k));
+      if (bad.length) return r(`a filter does not take ${bad.join(", ")}.`);
+      if (typeof o.field !== "string" || !SF_NAME.test(o.field)) return r("a filter's `field` must be one API name (no dots).");
+      if (!("value" in o)) return r(`the filter on ${o.field} needs a value.`);
+      if (o.op === "in") {
+        if (!Array.isArray(o.value) || o.value.length < 1 || o.value.length > 100 || !o.value.every(isScalar)) {
+          return r(`in on ${o.field} needs a list of 1 to 100 plain values.`);
+        }
+      } else if (!SF_OPS.includes(o.op as string)) {
+        return r(`a filter's \`op\` must be one of ${[...SF_OPS, "in"].join(" ")}.`);
+      } else if (!isScalar(o.value)) {
+        return r(`the filter on ${o.field} needs one plain value: text, a number, true, false or null.`);
+      }
+    }
+  }
+  if (level === "ids") {
+    const names = [...((p.fields as string[] | undefined) ?? []), ...((p.filters as { field: string }[] | undefined) ?? []).map((f) => f.field)];
+    const other = names.filter((n) => !IDS_FIELDS.includes(n));
+    if (other.length) return r(`ids reads only ${IDS_FIELDS.join(", ")}, in fields and filters; ${[...new Set(other)].join(", ")} needs level data.`);
+  }
+  if (JSON.stringify(p).length > 8000) return r("the read is too long; trim the filters.");
+  return { payload: p };
+}
+
+export function sfReadHeadline(p: Record<string, unknown>): string {
+  const full = p.production === true && p.level === "data";
+  const where = `${p.production === true ? "PRODUCTION" : "SANDBOX"} ${p.alias}`;
+  const what = p.level === "objects" ? "THE OBJECT LIST"
+    : p.level === "metadata" ? `THE DESCRIBE OF ${p.object}`
+    : p.count === true ? `A COUNT OF ${p.object}`
+    : `${(p.fields as string[]).length} FIELD${(p.fields as string[]).length === 1 ? "" : "S"} OF ${p.object}, UP TO ${p.limit} ROWS`;
+  return `${full ? "PRODUCTION FULL DATA: " : ""}SF READ ${String(p.level).toUpperCase()} ON ${where}: ${what}, READ ONLY`;
+}
+
+// The same numbers as get_sql_read's BUDGETS (below), counted from the Salesforce log.
+const SF_READ_BUDGETS = [
+  { limit: 20, seconds: 600, words: "10 minutes" },
+  { limit: 200, seconds: 86400, words: "day" },
+];
+
+export const queueSwitchboardSfReadTool = defineTool({
+  name: "queue_switchboard_sf_read",
+  tier: 2,
+  tables: { reads: ["switchboard_actions", "switchboard_settings", "switchboard_sf_read_log"], writes: ["switchboard_actions", "switchboard_sf_read_log"] },
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "queue_switchboard_sf_read";
+    const p = payloadOf(args);
+    // The log row for this attempt, from what was asked, kept within the log's own checks. Never rows.
+    const logRow = (stage: "queued" | "refused", extra: Record<string, unknown>) => ({
+      stage, org_alias: typeof p.alias === "string" && p.alias.trim() ? p.alias.trim().slice(0, 80) : "?",
+      level: SF_LEVELS.includes(p.level as string) ? p.level : null,
+      object: typeof p.object === "string" ? p.object.slice(0, 80) : null,
+      fields: Array.isArray(p.fields) ? p.fields : null,
+      filters: Array.isArray(p.filters) ? p.filters : null,
+      ...extra,
+    });
+    const log = async (stage: "queued" | "refused", extra: Record<string, unknown>) => {
+      const { error } = await ctx.db.from("switchboard_sf_read_log").insert(logRow(stage, extra));
+      return error ? error.message ?? "the log write failed" : null;
+    };
+    const refuse = async (error: Error) => {
+      await log("refused", { error: error.message.slice(0, 500) });
+      return error;
+    };
+
+    const checked = sfReadPayload(args);
+    if ("refused" in checked) throw await refuse(fail(tool, `refused: ${checked.refused}`));
+
+    // Both fail closed, as get_sql_read's.
+    const { data: settings, error: settingsError } = await ctx.db.from("switchboard_settings").select("sf_reads_enabled").maybeSingle();
+    if (settingsError) throw await refuse(dbError(tool, "reading the kill switch", settingsError));
+    if (!settings) throw await refuse(fail(tool, "refused: no settings row, so the kill switch can't be read."));
+    if (!(settings as { sf_reads_enabled: boolean }).sf_reads_enabled) {
+      throw await refuse(fail(tool, "refused: Salesforce reads are switched off (switchboard_settings.sf_reads_enabled)."));
+    }
+    // Counted from the log's queue attempts, refusals included; a read's ran or failed row isn't a second call.
+    for (const b of SF_READ_BUDGETS) {
+      const since = new Date(Date.now() - b.seconds * 1000).toISOString();
+      const { count, error } = await ctx.db.from("switchboard_sf_read_log").select("id", { count: "exact", head: true })
+        .in("stage", ["queued", "refused"]).gte("created_at", since);
+      if (error) throw await refuse(dbError(tool, "reading the read budget", error));
+      if ((count ?? 0) >= b.limit) {
+        throw await refuse(fail(tool, `READ BUDGET EXCEEDED: ${count} Salesforce reads in the last ${b.words} (limit ${b.limit}). Do NOT retry. Stop and report to the user.`));
+      }
+    }
+
+    const headline = sfReadHeadline(checked.payload);
+    const actionId = await queueHelper(tool, ctx, "sf_read", null, checked.payload, headline, chatOf(args));
+    const logError = await log("queued", { action_id: actionId });
+    const { data, error } = await ctx.db.rpc("switchboard_issue_link", { p_action_id: actionId });
+    if (error) {
+      if (REFUSALS.has(error.code ?? "")) throw fail(tool, `queued as ${actionId}, but no link: ${error.message}`);
+      throw dbError(tool, `issuing the link for ${actionId}`, error);
+    }
+    return {
+      ...(data as Record<string, unknown>), action_id: actionId, headline, payload: checked.payload,
+      ...(logError ? { log_error: logError } : {}),
+      next: "Give Alex the url whole; it lasts 30 minutes. Nothing runs until he clicks Approve; then the desktop helper checks the org " +
+        `against orgs.json and Salesforce and reads. The result line (sf ${actionId} done or failed) arrives in this chat by itself; ` +
+        `then call get_switchboard_sf_result with this action_id, once: the rows come back once and are deleted, and are gone 10 minutes after the read.`,
+    };
+  },
+});
+
+export const getSwitchboardSfResultTool = defineTool({
+  name: "get_switchboard_sf_result",
+  tier: 1,
+  tables: { reads: ["switchboard_sf_results", "switchboard_actions", "switchboard_runs"], writes: ["switchboard_sf_results"] },
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "get_switchboard_sf_result";
+    const actionId = requireUuid(tool, "action_id", args.action_id);
+    const { data, error } = await ctx.db.rpc("switchboard_take_sf_result", { p_action_id: actionId });
+    if (error) throw dbError(tool, "taking the result", error);
+    const got = data as Record<string, unknown> | null;
+    if (got) {
+      return {
+        ...(got.production_full_data === true ? { stamp: "PRODUCTION FULL DATA" } : {}),
+        action_id: actionId, row_count: got.row_count, truncated: got.truncated === true, rows: got.rows,
+        note: "These rows are now deleted from Alfred and won't come back. Summarise them; don't repeat raw rows, and never put them in a CLI prompt.",
+      };
+    }
+    // Nothing to take: say which.
+    const { data: action, error: aError } = await ctx.db.from("switchboard_actions").select("id, kind, status").eq("id", actionId).maybeSingle();
+    if (aError) throw dbError(tool, "reading the action", aError);
+    if (!action) throw fail(tool, `no such action: ${actionId}.`);
+    const a = action as { kind: string; status: string };
+    if (a.kind !== "sf_read") throw fail(tool, `${actionId} is a ${a.kind} action, not a Salesforce read.`);
+    const { data: run, error: rError } = await ctx.db.from("switchboard_runs").select("summary, finished_at").eq("action_id", actionId)
+      .eq("mode", "real").order("started_at", { ascending: false }).limit(1).maybeSingle();
+    if (rError) throw dbError(tool, "reading the run", rError);
+    const r = run as { summary: string | null; finished_at: string | null } | null;
+    if (a.status === "failed") return { action_id: actionId, rows: null, state: "failed", summary: r?.summary ?? null };
+    if (a.status === "cancelled") return { action_id: actionId, rows: null, state: "cancelled", summary: "Alex chose Don't run." };
+    if (a.status !== "succeeded" || !r?.finished_at) {
+      return { action_id: actionId, rows: null, state: "not finished", summary: `The read is ${a.status}; wait for the sf ${actionId} line, then call again.` };
+    }
+    return { action_id: actionId, rows: null, state: "gone", summary: "Already taken, or past its 10 minutes. Queue the read again if it is still needed." };
   },
 });
 

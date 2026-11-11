@@ -23,8 +23,13 @@ import {
 //   A git, sf_check (s86pa) or sb_setup link (spec 11.3-11.5): /preview adds kind and payload; /approve only spends
 //   the link, so the action is consumed for the helper, and runs nothing here; /cancel needs no dry run; /dry-run is refused.
 //   POST /pickup   x-switchboard-pickup-key. { kinds? } -> { action (with kind) | null, timed_out }. The desktop helper.
-//                  No kinds: git only, by switchboard_pickup_git. All of git, sf_check, sb_setup: switchboard_pickup_helper.
+//                  No kinds: git only, by switchboard_pickup_git. All of git, sf_check, sb_setup, sf_read (or the older
+//                  three, from a helper before s89c): switchboard_pickup_helper.
 //   POST /result   x-switchboard-pickup-key. { action_id, run_id, ok, summary, exit_code?, output? } -> { status }. Any helper kind.
+//                  An sf_read's run keeps no output: its rows went to /sf-result.
+//   POST /sf-result x-switchboard-pickup-key. { action_id, run_id, ok, summary, level, object, production_full_data, count,
+//                  rows, query? } or { ..., ok: false, reason } -> { stored }. An sf_read's rows, before its /result (s89e):
+//                  into switchboard_sf_results for at most 10 minutes, plus a switchboard_sf_read_log row. The run is untouched.
 //
 // The pickup key is SWITCHBOARD_PICKUP_KEY: never logged, never in an error, separate from the queue key.
 // ⚠️ verify_jwt must be false in config.toml: /queue has no user token, so the run routes check the JWT themselves.
@@ -111,7 +116,7 @@ function deps(): Deps {
       return actions.map((a) => ({ action_id: a.id, run_id: runs.find((r) => r.action_id === a.id)?.id ?? null }));
     },
     findPicked: async (actionId, runId) => {
-      const action = must(await db.from("switchboard_actions").select("id, user_id, kind, status, picked_up_at")
+      const action = must(await db.from("switchboard_actions").select("id, user_id, kind, status, picked_up_at, payload")
         .eq("id", actionId).maybeSingle()) as Picked["action"] | null;
       if (!action) return null;
       const run = must(await db.from("switchboard_runs").select("id, action_id, mode, finished_at")
@@ -146,6 +151,21 @@ function deps(): Deps {
     stakes: async (kind, payload) => {
       const { data, error } = await db.rpc("switchboard_stakes", { p_kind: kind, p_payload: payload });
       return !error && (data === "change" || data === "none") ? data : null;
+    },
+    // s89e: Salesforce reads. The service role bypasses RLS, so user_id is always the action's own.
+    sfReadsEnabled: async (userId) => {
+      const row = must(await db.from("switchboard_settings").select("sf_reads_enabled").eq("user_id", userId).maybeSingle()) as
+        { sf_reads_enabled: boolean } | null;
+      return row?.sf_reads_enabled === true;
+    },
+    insertSfResult: async (row) => {
+      const { error } = await db.from("switchboard_sf_results").insert(row);
+      if (error && (error as { code?: string }).code === "23505") return { conflict: true };
+      if (error) throw new Error(error.message);
+      return { conflict: false };
+    },
+    logSfRead: async (row) => {
+      must(await db.from("switchboard_sf_read_log").insert(row));
     },
   };
 }
