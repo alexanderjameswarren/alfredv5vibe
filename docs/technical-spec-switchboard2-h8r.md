@@ -634,6 +634,47 @@ Alex narrowed s87 on 2026-11-10 from a tile snapshot to claim state only.
 - **By whom:** the claims code queues the event through Overwatch's outbox, and its sender posts it to `overwatch-ingest`. That function is the table's only writer, using the service role, and it upserts the row. The `get_claim_state` tool (tier 1) reads it through `ctx.db` under owner RLS: what each project holds, and what each has asked for and been refused. `claim_blocks` and `get_claim_blocks` keep the history of block episodes, unchanged.
 - **check records too (s87g):** `claims.cmd check` on an item another thread holds records a waiting request, db: items included, so the holder is told just as it is after a refused claim.
 - The table is not audited, because every change is a full-state upsert, so an audit would copy the whole state on each claim.
+- **The write (s87d):** `overwatch-ingest` takes `{ kind: "claim_state", repo, claims, blocks, posted_at, source_host? }` under the same `x-overwatch-secret` as its other kinds. It checks the shape: repo is an absolute Windows path, at most 2000 claims and 500 blocks, and every entry is checked. It sets user_id from CLIPBOARD_USER_ID and upserts on (user_id, repo). A post older than the stored one is kept out: ok, with stale true.
+
+### 11.9 Decisions, 2026-11-10 (Alex)
+
+- **No-click actions are dropped.** Two things replace them:
+  - gitpush Checkpoint leaves the worktree current, by fast-forwarding it after the merge;
+  - chained links, for example gitsync and then send this prompt, or checkpoint and then sync.
+
+  Sandbox checks stay as links.
+- **One user-level rules file** for every Switchboard repo, applying only in repos listed in repos.json. It holds:
+  - the claims routine;
+  - the clip.cmd report handoff;
+  - never commit or push;
+  - the scope block and Scope vs changes.
+
+  alfred-v5's CLAUDE.md keeps only the Alfred-specific rules. Client repos also get overwatch posting on, so their blocks and claim state reach Supabase.
+- **Salesforce tests:**
+  - `sb test` prints coverage per changed class, and pass or fail per method.
+  - **The test-only loop:** after the main change passes review, the CLI may loop through edit test class, deploy and test without the gate, as long as it is making progress. It stops when the same error repeats twice, or coverage doesn't move for 2 rounds. The ceiling is 15 rounds. Coverage must reach 75% and never drop. All three numbers are settings.
+  - **Smart-test rules:** read the org's required fields, validation rules, record types and automations before writing test data. Every round names its change in one line. Fix causes; never catch or skip to pass. No SeeAllData.
+- **Data fixes:**
+  - Logic reprocessing is done by a batch class that is deployed, run once by Alex, then deleted by a destructive deploy.
+  - Field corrections are done by a reviewed CSV, with a backup export first.
+  - Every operation gets `data-ops/<date>-<slug>/` in the client repo, holding:
+    - a README;
+    - `apex/`, outside force-app;
+    - `run.apex`;
+    - counts before and after;
+    - `destructive/`;
+    - the affected Ids, with no personal data.
+
+    A template now, and an `sb dataop` command later.
+- **Diagnosis, a new sf-diagnose skill:**
+  1. Intake.
+  2. Compare the repo with a read-only retrieve of production metadata.
+  3. Trace the code into hypotheses, each naming its query.
+  4. Run the queries, lowest level first.
+  5. Write the findings in `diagnoses/<date>-<slug>/README.md`.
+  6. Hand off to a fix or a data-op.
+
+  Production full data is allowed, with an approval link per query. Claude trims every query to the fewest fields first. Results are deleted from Alfred quickly, and raw rows never go to the CLI, only Claude's summary.
 
 ## 12. Phase 6 — spec files and archiving
 

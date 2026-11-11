@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isRefusal, parseBody, parseEvent, plan, MAX_EVENTS, MAX_PARTS } from "./ingest.ts";
+import { isRefusal, parseBody, parseEvent, plan, planClaimState, MAX_CLAIMS, MAX_EVENTS, MAX_PARTS } from "./ingest.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const T0 = "2026-10-24T10:00:00.000Z";
@@ -151,6 +151,64 @@ test("index.ts scopes the inventory and the summary to the fixed user", () => {
   const src = readFileSync(join(HERE, "index.ts"), "utf-8");
   assert.match(src, /p_user_id: userId/);
   assert.match(src, /\.upsert\(\{ \.\.\.parsed\.row, user_id: userId \}, \{ onConflict: "user_id,merge_commit" \}\)/);
+});
+
+// --- claim_state (Switchboard s87d) ---
+
+const REPO = "C:\\Users\\Alex\\projects\\alfred-v5";
+const cs = (o = {}) => ({
+  kind: "claim_state", repo: REPO, posted_at: T1, source_host: "DESKTOP-1",
+  claims: [{ item: "src/a.js", owner: "switchboard2-h8r", kind: "file", claimed_at: T0 }, { item: "db:deploy", owner: "homer-h4k", kind: "db", claimed_at: T0 }],
+  blocks: [{ waiter: "homer-h4k", holder: "switchboard2-h8r", item: "src/a.js", since: T0 }],
+  ...o,
+});
+
+test("claim_state: a valid post parses whole, timestamps normalised", () => {
+  const r = parseBody(cs({ posted_at: "2026-10-24T10:05:00Z" }));
+  assert.equal(r.ok, true);
+  assert.equal(r.kind, "claim_state");
+  assert.equal(r.row.repo, REPO);
+  assert.equal(r.row.posted_at, T1);
+  assert.equal(r.row.claims.length, 2);
+  assert.deepEqual(r.row.blocks[0], { waiter: "homer-h4k", holder: "switchboard2-h8r", item: "src/a.js", since: T0 });
+  assert.equal(parseBody(cs({ source_host: undefined, claims: [], blocks: [] })).row.source_host, null);
+});
+
+test("claim_state: upsert when new or newer, stale when older; equal replaces", () => {
+  const row = parseBody(cs()).row;
+  assert.equal(planClaimState(null, row), "upsert");
+  assert.equal(planClaimState(T0, row), "upsert");
+  assert.equal(planClaimState("2026-10-24T10:05:00+00:00", row), "upsert");
+  assert.equal(planClaimState(T2, row), "stale");
+});
+
+test("claim_state: a bad shape is refused whole", () => {
+  for (const [o, why] of [
+    [{ repo: "alfred-v5" }, /repo must be/], [{ repo: "/c/Users/Alex/projects/x" }, /repo must be/], [{ repo: "C:\\a\"b" }, /repo must be/],
+    [{ claims: {} }, /claims must be an array/], [{ blocks: null }, /blocks must be an array/],
+    [{ claims: Array(MAX_CLAIMS + 1).fill({ item: "a", owner: "p", kind: "file", claimed_at: T0 }) }, /at most/],
+    [{ claims: [{ item: "a", owner: "Bad Code", kind: "file", claimed_at: T0 }] }, /claims\[0\]/],
+    [{ claims: [{ item: "a", owner: "p", kind: "branch", claimed_at: T0 }] }, /claims\[0\]/],
+    [{ claims: [{ item: "", owner: "p", kind: "file", claimed_at: T0 }] }, /claims\[0\]/],
+    [{ claims: [{ item: "a", owner: "p", kind: "file", claimed_at: "soon" }] }, /claims\[0\]/],
+    [{ blocks: [{ waiter: "p", holder: "q", item: "a" }] }, /blocks\[0\]/],
+    [{ posted_at: "nope" }, /posted_at/], [{ source_host: "x".repeat(101) }, /source_host/],
+  ]) {
+    const r = parseBody(cs(o));
+    assert.equal(r.ok, false, JSON.stringify(o));
+    assert.match(r.error, why);
+  }
+});
+
+test("claim_state: index.ts reads and upserts only after the secret, scoped to the fixed user", () => {
+  const src = readFileSync(join(HERE, "index.ts"), "utf-8");
+  const branch = src.indexOf('parsed.kind === "claim_state"');
+  assert.ok(branch > src.indexOf('secretMatches(req.headers.get("x-overwatch-secret")'));
+  const part = src.slice(branch, src.indexOf("let inserted"));
+  assert.match(part, /\.eq\("user_id", userId\)/);
+  assert.match(part, /upsert\(\{ \.\.\.parsed\.row, user_id: userId/);
+  assert.match(part, /onConflict: "user_id,repo"/);
+  assert.match(part, /stale: true/);
 });
 
 test("config.toml declares verify_jwt = false for it", () => {
