@@ -143,6 +143,83 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 4 | s89c, s89d | Helper reads; extension, host and panel (switchboard repo) | none | done in the switchboard repo thread (b1ef4e3, 526a068): the read window posts rows to /sf-result, then the helper's /result closes the run | 2026-11-11 |
 | 4 | s89e | Runner, tools and page for Salesforce reads | `db:deploy` | done (s89e-c8qa). 233 live; main current (1299725). Runner: HELPER_KINDS takes sf_read (the older three still served); POST /sf-result (pickup key; a waiting sf_read with its own run; kill switch) stores rows (capped at 1000, truncated, the PRODUCTION FULL DATA stamp also forced from the payload) and logs ran or failed (reason blanked, optional query), and leaves the run to /result so the sf line still goes; /result keeps no output for sf_read. Tools: queue_switchboard_sf_read (tier 2: payload as 233, kill switch, budget 20/10m and 200/day counted from queued and refused log rows, link in the same call, headline leads PRODUCTION FULL DATA) and get_switchboard_sf_result (tier 1: takes once; says not finished, failed, cancelled or gone). Page: sf_read lines, red bar, PRODUCTION FULL DATA banner. Tests: runner 81, tools 81, mcp 50 (226 tools), tables 1, page 47, app 3337 passed / 7 skipped, scripts 77. Deployed: switchboard-runner v13 (keyless /queue and /sf-result 401 with its own body), mcp v219 (live list 226, both tools). db:deploy held until the checkpoint | 2026-11-11 |
 | 4 | s89f | Live: actblue count, then commondefense-ab-prod count and ids | none | todo | |
+| 5 git | s90 | Plan: the chained link (D), and H, I, J | none | done (s90-x4pm). Widened by Alex on 2026-11-11: then: {send: <run tag>} on gitsync and gitpush checkpoint or push (not gitcom, gitnewtree or finish). One link runs the command, then sends that prompt into the same project's window at Alex's tap, only if the command succeeded. A successful chain's tile reads "Send git + prompt". Lines: `git <id> done; prompt sent`, `git <id> done; send not run: <reason>`, `git <id> failed; send not run`. The prompt is sent before the line is posted, so Claude isn't writing. Blocks below | 2026-11-11 |
+| 5 git | s90a | Chain payload rule and verify 16 | `db:table:switchboard_actions` | built (s90a-q7bz). No drift (main a03c0e6; newest migration still 233). Pending `_pending_switchboard2-h8r_chain_send.sql`: 207's rule kept, plus then only on gitsync or gitpush checkpoint or push, exactly {send: string}, run tag shape, at most 40 characters, starting with the row's own project_code and "-s"; coalesced to false; payload comment updated. Verify 16: 9 good and 18 bad payloads. Queued together as --test ea45f717-f66a-4b8d-bad5-c75f697fdbf8, not yet run | 2026-11-11 |
+| 5 git | s90ab | The s90a test failed before any statement ran | same as s90a | fixed (s90ab-h6kw). ea45f717 (run 81ea8949): "operator is not unique: unknown - unknown". Cause: `payload->'then' - 'send'` in the migration's check; - binds tighter than ->, so it read as payload -> ('then' - 'send'). Now `(payload->'then') - 'send'::text`. Verify 16's two-literal `~` is cast to text too. Queued again as --test a18018f7-61e7-4521-8ee2-842f9b73e4e5 | 2026-11-11 |
+| 5 git | s90b | Number and queue the chain migration | `db:table:switchboard_actions`, `db:migration:234` | queued (s90b-q3tn). Test a18018f7 passed 8/8 (run 77848407), CONFORMANT. Main current (a03c0e6). number-migration gave 234: `234_chain_send.sql`, byte-identical to the pending file (cmp), which is deleted. Queued for real as e56e9802-1e5e-4bb2-9fbf-7941f15b1ad7, not yet applied. The db claim is held until the checkpoint | 2026-11-11 |
+| 5 git | s90c to s90h | Number; helper, host, extension; tool and page; live; H; I; J | see the blocks below | todo | |
+
+**s90b, number and queue** (alfred-v5; database step; estimated run: 5m). After test 16 passes and a gitsync.
+- create: supabase/migrations/NNN_chain_send.sql (the number from claims.cmd number-migration)
+- update: nothing
+- delete: supabase/migrations/_pending_switchboard2-h8r_chain_send.sql
+- deploy: nothing
+- SQL: switchboard_actions (db:table:switchboard_actions)
+
+**s90c, the chain on the desktop** (switchboard repo; estimated run: 30m).
+- What it does:
+  - the helper accepts then on gitsync, checkpoint and push, and its outcome carries then_send;
+  - host.mjs forwards thenSend;
+  - the extension stores it, sends the prompt first at the tap (`send-chain`, by tag, with the Send path's refusals), then posts the line;
+  - POST_LINE and OWN_RESULT_LINE take the three chain lines;
+  - the tile reads "Send git + prompt".
+- create: nothing
+- update: helper/lib/core.mjs, helper/lib/core.test.mjs, panel/bridge/host.mjs, panel/bridge/host.test.mjs, extension/lib/bridge-core.js, extension/lib/bridge-core.test.mjs, extension/claude-watch.js, extension/bridge.js, extension/lib/boundaries.test.mjs, extension/manifest.json, panel/lib/status.ahk, panel/test-status.ahk, README.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**s90d, tool and page** (alfred-v5; estimated run: 15m).
+- What it does:
+  - queue_switchboard_git takes then on the three commands, the tag checked against the project code;
+  - the headline names both steps;
+  - the description says the chain link replaces the git and Send links, and the reply still ends with the prompt block;
+  - the approve page shows both steps in order;
+  - deploy mcp.
+- create: nothing
+- update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx, docs/technical-spec-switchboard2-h8r.md
+- delete: nothing
+- deploy: mcp (db:deploy)
+- SQL: none
+
+**s90e, live** (both repos; estimated run: 10m). Four runs:
+1. a gitsync chain;
+2. a checkpoint chain;
+3. a chain with the CLI busy (send not run);
+4. a failing command (failed; send not run).
+- create: nothing
+- update: fixes only, in files named in s90c and s90d
+- delete: nothing
+- deploy: as needed
+- SQL: none
+
+**s90f, guard gaps (H)** (switchboard repo; estimated run: 15m). Catch:
+- sed --in-place and combined flags;
+- awk -i inplace;
+- curl -o and wget -O;
+- tar -x and unzip;
+- prettier --write and eslint --fix;
+- add git checkout or restore of a file to the git rule.
+Scope:
+- create: nothing
+- update: claims/lib/shell-parse.mjs, claims/lib/shell-parse.test.mjs, rules/SWITCHBOARD-RULES.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**s90g, a terminal button on each tile (I)** (switchboard repo; estimated run: 10m).
+- create: nothing
+- update: panel/claude-sessions.ahk, panel/ui/switchboard.html, panel/test-status.ahk
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**s90h, open tests and stale lines (J)** (alfred-v5; estimated run: 8m). Drop "Rules the shared file doesn't carry yet" from .claude/CLAUDE.md: all 8 are in SWITCHBOARD-RULES.md now. Fix the stale "a check records no block" lines; list the open tests.
+- create: nothing
+- update: .claude/CLAUDE.md, docs/progress-switchboard2-h8r.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
 
 **Remaining order (2026-11-11):**
 1. s88c.
