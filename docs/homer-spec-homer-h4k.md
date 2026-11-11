@@ -274,7 +274,8 @@ Written at s11; version 2026-11-10b at s15c, matching the 23 tools as built.
 - The weekly clip: Alex clips his Kindle library page sorted by most recent. Claude matches titles to books, creates
   reads with `source = 'clip'`, and asks about anything it can't match. "Finished X" in chat becomes a read with
   `source = 'chat'`.
-- Device owners: propose by series continuity, newest device first, in a short list; Alex confirms.
+- Device owners: propose by series continuity, newest device first, in a short list; Alex confirms. After phase H
+  the remaining unowned devices stay unowned (Alex's decision); the skill proposes owners only for a new device.
 - Every correction Alex makes to the rules becomes a proposed plan version, never a silent change.
 
 ### F. Homer tab (`src/homer/`)
@@ -314,7 +315,11 @@ Written at s11; version 2026-11-10b at s15c, matching the 23 tools as built.
 ### G. Keeping reads current (data rows only, no code)
 - Two **recurring Alfred intentions**, which Alex adds in the UI (no MCP tool creates intentions):
   - weekly: "Clip my Kindle library page, sorted by most recent"
-  - every 6 months: "Re-request the Amazon data export"
+  - every 4 months: "Re-request the Amazon data export"
+- **As built (2026-11-11):** Alex created both in his Media context, outside the Homer project: a weekly Kindle
+  Content page clip (Wednesdays) and an Amazon export request every 4 months. Each holds a prompt that starts the work
+  in a claude.ai chat. The homer `app_profiles` row is set: `rhythm_days` 7, and an activity recipe counting clip and
+  chat reads.
 - The **homer `app_profiles` row**, written through `update_app_profile` (tier 2): `rhythm_days = 7`, and an
   `activity_recipe` saying "count homer_reads with source = 'clip' created in the window, from get_homer_reads".
   Overwatch's quiet section then flags a week with no clip. A watch item doesn't fit, because `overwatch_watch` rows
@@ -328,6 +333,14 @@ Written at s11; version 2026-11-10b at s15c, matching the 23 tools as built.
 3. Taste profiles for the seed series, through the scales.
 4. A few rounds of suggestions, each verified, written to the queues, and reacted to.
 5. Every correction becomes a proposed plan version.
+
+**As built (2026-11-11):** Homer plan v3 is active, with clusters and anchor series, 9 scales, `tired_gap_days` 180
+and `quiet_after_days` 120. Taste profiles and verdicts are recorded. Device owners were worked through; 12 devices
+remain unowned, and Alex decided to leave them (too little data).
+
+**The first live weekly clip (2026-11-11):** Street Cultivation 1 to 3 recorded. It exposed the `create_homer_book`
+series bug (fixed and deployed at s17e) and a stray series, repaired by migration 232. The import now closes open
+clip reads. Books without a known ASIN go in as "Needs ASIN" queue items; Elise's Titan of Baleros is the first.
 
 #### Seed examples, in Alex's words
 - **Mob Sorcery**: magic and magical progression, harem, urban. The hero starts poor and an underdog and grows in

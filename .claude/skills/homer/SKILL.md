@@ -5,7 +5,7 @@ description: Homer, Alex's reading tracker and "what to read next" guide in Alfr
 
 # Homer
 
-Skill version: 2026-11-11a
+Skill version: 2026-11-11b
 
 ## What this is for
 
@@ -176,7 +176,9 @@ So Homer never offers a book that isn't out, and can say who is behind on what.
 
 ## Device owners
 
-32 of the 38 devices have no owner yet, which leaves 855 reads with no reader.
+The devices still unowned are old or barely used, and Alex has decided to leave them unowned (too little data to
+tell). **Don't propose owners for them unless he asks.** The method below is for a new device that turns up in a
+future Amazon export (he re-requests it every 4 months).
 
 - **Propose owners by series continuity**: a device that read part of a series an owned device went on with (or
   the reverse) probably belongs to that reader. Use `get_homer_devices` and `get_homer_reads`.
