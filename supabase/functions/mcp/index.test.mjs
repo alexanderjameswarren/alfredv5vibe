@@ -223,6 +223,15 @@ test("switchboard s86aa: sb_setup says which settings each command requires", ()
   for (const k of ["name", "sandboxes", "integration_ok"]) assert.match(src, new RegExp(`\\n\\s+${k}: z\\..*describe\\("client start: required`), k);
 });
 
+test("switchboard s87e: get_claim_state says it is posted on change, not a heartbeat", () => {
+  const t = registered.find((r) => r.name === "get_claim_state");
+  assert.deepEqual(Object.keys(t.cfg.inputSchema).sort(), ["project_code", "repo"]);
+  assert.match(t.cfg.description, /LAST CLAIM CHANGE/);
+  assert.match(t.cfg.description, /never on a timer, so an old posted_at means nothing has changed since, not that it is stale/);
+  assert.match(t.cfg.description, /get_claim_blocks is different: the history of block episodes/);
+  assert.match(t.cfg.description, /overwatch posting off \(the client Salesforce repos, for now\) don't appear/);
+});
+
 test("switchboard s86h: no project code at setup or for a check; from_sandbox asks for the folder", () => {
   const sf = registered.find((r) => r.name === "queue_switchboard_sf_check");
   assert.ok(sf.cfg.inputSchema.project_code.isOptional());
@@ -411,6 +420,8 @@ test("the tool count is 72 after the job-search tools", () => {
   // Notification routing steps 3 and 4, +5; step 7, +1; step 10j, +2 (delivery overrides).
   const EXPECTED_ADDED_NOTIFICATION_ROUTING = ["raise_signal", "get_signals", "get_dispatch_plan", "deliver_signals",
     "get_delivery_rules", "resolve_signal", "add_delivery_override", "end_delivery_override", "update_signal"];
+  // Switchboard s87e, +1.
+  const EXPECTED_ADDED_SWITCHBOARD_87 = ["get_claim_state"];
   // Homer s15, +11 (the read tools).
   const EXPECTED_ADDED_HOMER_15 = ["get_homer_plan", "get_homer_readers", "get_homer_devices", "get_homer_books",
     "search_homer_books", "get_homer_series", "get_homer_reads", "get_homer_taste_profiles", "get_homer_genres",
@@ -427,7 +438,7 @@ test("the tool count is 72 after the job-search tools", () => {
                       ...EXPECTED_ADDED_OVERWATCH_22, ...EXPECTED_ADDED_OVERWATCH_46, ...EXPECTED_ADDED_OVERWATCH_54,
                       ...EXPECTED_ADDED_ARNOLD_5, ...EXPECTED_ADDED_ARNOLD_8, ...EXPECTED_ADDED_SWITCHBOARD_25,
                       ...EXPECTED_ADDED_SWITCHBOARD_84, ...EXPECTED_ADDED_SWITCHBOARD_86, ...EXPECTED_ADDED_NOTIFICATION_ROUTING,
-                      ...EXPECTED_ADDED_HOMER_15, ...EXPECTED_ADDED_HOMER_15B]) {
+                      ...EXPECTED_ADDED_HOMER_15, ...EXPECTED_ADDED_HOMER_15B, ...EXPECTED_ADDED_SWITCHBOARD_87]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
   const orderItems = registered.find((r) => r.name === "get_wb_order_items");
@@ -442,9 +453,10 @@ test("the tool count is 72 after the job-search tools", () => {
   // +5 for notification routing (signals, dispatcher, delivery rules). 2026-11-04, +1: resolve_signal.
   // 2026-11-05, +1: queue_switchboard_git. +2: add_delivery_override, end_delivery_override. 2026-11-06, +1: update_signal.
   // 2026-11-08, +2: queue_switchboard_sf_check, queue_switchboard_sb_setup. 2026-11-10, +11: Homer's read tools; +12: its writes.
+  // 2026-11-11, +1: get_claim_state.
   assert.ok(registered.some((r) => r.name === "record_wb_subscription_review"), "record_wb_subscription_review is not registered");
-  assert.equal(registered.length, 223,
-    `expected 223 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 224,
+    `expected 224 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 

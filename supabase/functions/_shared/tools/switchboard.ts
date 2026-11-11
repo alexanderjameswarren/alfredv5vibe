@@ -4,6 +4,7 @@
 // The SQL approval queue, from Claude's side. Spec: docs/technical-spec-switchboard2-h8r.md §8.1.
 //
 //   get_switchboard_run     tier 1  an action (with its full SQL) and a run
+//   get_claim_state         tier 1  each repo's claims and live blocks, as of its last claim change (§11.8)
 //   issue_switchboard_link  tier 2  issue the approval link for the SQL Claude reviewed
 //   get_sql_read            tier 1  one read-only query, as claude_reader (§8.2)
 //   queue_switchboard_git   tier 2  queue a git action and issue its link (§11)
@@ -73,6 +74,51 @@ export const getSwitchboardRunTool = defineTool({
     const id = requireUuid(tool, "action_id", args.action_id);
     const action = await readAction(id);
     return { action, run: await latestRun(id) };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// get_claim_state (s87e, spec §11.8): each repo's claims as of its last claim change
+// ---------------------------------------------------------------------------
+
+const CLAIM_STATE_COLUMNS = "repo, claims, blocks, posted_at, source_host";
+const MAX_REPOS = 50;
+type HeldClaim = { item: string; owner: string; kind: string; claimed_at: string };
+type LiveBlock = { waiter: string; holder: string; item: string; since: string };
+
+/** The repo's last folder name: C:\Users\Alex\projects\alfred-v5 -> alfred-v5. */
+const repoName = (repo: string) => repo.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? repo;
+
+/** One row, filtered to a project code if given, with the claims grouped by owner. */
+export function shapeClaimState(row: Record<string, unknown>, code: string | null) {
+  const claims = ((row.claims ?? []) as HeldClaim[]).filter((c) => !code || c.owner === code);
+  const blocks = ((row.blocks ?? []) as LiveBlock[]).filter((b) => !code || b.waiter === code || b.holder === code);
+  const holders: Record<string, { item: string; kind: string; claimed_at: string }[]> = {};
+  for (const c of claims) (holders[c.owner] ??= []).push({ item: c.item, kind: c.kind, claimed_at: c.claimed_at });
+  return { repo: row.repo, name: repoName(String(row.repo)), posted_at: row.posted_at, source_host: row.source_host ?? null, holders, blocks };
+}
+
+export const getClaimStateTool = defineTool({
+  name: "get_claim_state",
+  tier: 1,
+  tables: { reads: ["switchboard_claim_state"], writes: [] },
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "get_claim_state";
+    const repo = typeof args.repo === "string" ? args.repo.trim() : "";
+    if (args.repo != null && (!repo || repo.length > 300)) throw fail(tool, "`repo` must be a repos.json key or its last folder name, such as alfred-v5.");
+    const code = typeof args.project_code === "string" ? args.project_code.trim() : "";
+    if (args.project_code != null && !PROJECT_CODE.test(code)) throw fail(tool, "`project_code` must be a project code such as switchboard2-h8r.");
+
+    const { data, error } = await ctx.db.from("switchboard_claim_state").select(CLAIM_STATE_COLUMNS)
+      .order("repo", { ascending: true }).limit(MAX_REPOS);
+    if (error) throw dbError(tool, "reading the claim state", error);
+    const want = repo.toLowerCase();
+    const rows = ((data ?? []) as Record<string, unknown>[]).filter((r) => {
+      if (!repo) return true;
+      const key = String(r.repo).toLowerCase();
+      return /[\\/]/.test(want) ? key.replace(/[\\/]+$/, "") === want.replace(/[\\/]+$/, "") : repoName(key) === want;
+    });
+    return { repos: rows.map((r) => shapeClaimState(r, code || null)) };
   },
 });
 
