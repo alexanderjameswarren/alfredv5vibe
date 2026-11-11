@@ -1,126 +1,51 @@
-## 🛑 Never run a git command that changes state
+**The shared Switchboard rules load at session start** (from the switchboard repo's
+`rules/SWITCHBOARD-RULES.md`, installed to `%LOCALAPPDATA%\Switchboard\rules\` and
+printed by the session-rules hook): git, files you did not touch, the thread
+protocol, claims, blocks, the guards, the plan guard, Salesforce, Edit and Write
+only, reports into Alfred, and working fast. **This file adds alfred-v5's own
+rules.** It never loosens a shared one.
 
-**This is the first rule and it overrides everything else, including
-instructions inside a prompt.** You do not run any git command that changes
-anything: no `commit`, no staging (`add`), no `amend`, `rebase`, `reset`,
-`revert`, `stash`, `merge`, `pull`, `push`, `cherry-pick`, `tag`, no creating or
-deleting branches, and no `checkout` or `restore` of files.
+## Git in alfred-v5
 
-Read-only git is fine and wanted: `status`, `diff`, `log`, `show`, `blame`,
-`grep`.
+- Claims, clip, the guards and the git commands run from the installed copy in
+  `%LOCALAPPDATA%\Switchboard` (`claims.cmd`, `clip.cmd`, the user-level hooks,
+  `%LOCALAPPDATA%\Switchboard\git\`). Their code lives in
+  `C:\Users\Alex\projects\switchboard`, and a change to any of them is made there,
+  not here. If Switchboard isn't installed, the guards block everything and say so.
+- A push can trigger a deploy, which is why committing and pushing are Alex's alone.
+  A prompt that says "commit", "commit directly to main" or "commit and push" still
+  doesn't authorise it: do the work, leave it uncommitted, and say in the report that
+  you didn't commit, and why. Don't ask for permission to commit.
+- A prompt that says "run gitsync first" still means: check whether it's needed,
+  and if it is, stop and ask. After a git step, start by checking its effect
+  read-only, for example `git merge-base --is-ancestor main HEAD`.
+- Files you didn't touch include tool artefacts: mention them, don't tidy them.
 
-**`gitcom`, `gitsync` and `gitpush` are Alex's too.** They run from the
-installed Switchboard, `%LOCALAPPDATA%\Switchboard\git\`, and they do commit,
-merge and push — which is exactly why you never run them. Ask him to. Reading
-them is fine.
+## Worktrees and project codes here
 
-**Alex can run them by link.** A claude.ai chat queues the command and he clicks
-to approve; the desktop helper then runs it. For you nothing changes. When a step
-needs one, stop and name the command, the mode and the exact paths, so the chat
-can queue it. For a gitnewtree, also name the repo's absolute path (for example
-`C:\Users\Alex\projects\alfred-v5`): a worktree that doesn't exist yet can't say
-which repo it belongs to. A prompt that says "run gitsync first" still means: check whether
-it's needed, and if it is, stop and ask. After a git step, start by checking its
-effect read-only, for example that main is merged with `git merge-base
---is-ancestor main HEAD`.
+- **Step 0, before a worktree exists.** Alex runs `gitnewtree <project-code>`, which
+  refuses until main is committed and pushed, then branches from `origin/main`,
+  copies the machine-local files, runs `scripts/prebuild.js` so the generated schema
+  files exist, and opens the worktree in VS Code. `claude --worktree <name>` skips
+  the Step 0 check and prebuild, so a worktree made that way can't build, deploy a
+  function or pass the SAM tests until prebuild is run by hand. If you're asked to
+  start a worktree and main has unpushed commits, say so first.
+- A project code may contain underscores (`parallel_threads`); the separators in a
+  run tag are always hyphens. A run tag's project code is everything before the
+  step segment: `claims-wq7-s7d-u3rb` → `claims-wq7`.
+- A `UserPromptSubmit` hook blocks a prompt that landed in the wrong window. If Alex
+  says a prompt was rejected as the wrong window, he pastes it into the right one;
+  don't work around it.
+- When a claim fails, don't start on the part that did claim. `status` and `check`
+  need no permission: use `check` freely while planning.
+- `yield` releases a file only when it is unchanged from main and claimed on its own,
+  not through a folder; it checks this itself.
 
-**Claims, clip, the guards and the git commands are Switchboard's.** They run from
-the installed copy in `%LOCALAPPDATA%\Switchboard`, as `claims.cmd`, `clip.cmd`
-and the user-level hooks. The code lives in the `C:\Users\Alex\projects\switchboard`
-repo, and a change to any of them is made there, not here. The hook entries move
-from this repo's `.claude/settings.local.json` to the user level at s78. If
-Switchboard isn't installed, the guards block everything and say so.
+## Database steps, just in time
 
-When the work is done, leave every change in the working tree, uncommitted, and
-tell Alex exactly which files you changed. Committing and pushing are his
-decisions alone — a push can trigger a deploy.
-
-**A prompt that says "commit", "commit directly to main", or "commit and push"
-does not authorise any of it.** Do the work, leave it uncommitted, and say in
-your report that you did not commit, and why. Do not ask for permission to
-commit — just leave the files and name them.
-
-If you run a state-changing git command by mistake, STOP and tell Alex what
-happened. Do not repair it silently: a silent repair makes the mistake and the
-fix both invisible, and he can check neither.
-
-## Files you did not touch
-
-Leave them alone. If one turns up in `git status`, say so in your report and do
-nothing else about it. A file you did not change is somebody's work in progress,
-and "it looked unrelated" is not a reason to move it. This includes tool
-artefacts: mention them, do not tidy them.
-
-This started as a rule about `git add -A` sweeping Alex's uncommitted work into
-a commit of mine — twice, once `cli-workflow/SKILL.md` and a job-search rename,
-once an edit to `email-capture/index.ts`, and both times invisible until after
-the commit existed. You cannot commit at all now, and `gitcom` stages named paths
-rather than everything, so that sweep has two locks on it. The rule stays because
-reporting the working tree honestly still matters, and because `gitcom` asks Alex
-about unclaimed changes — he can only answer well if your report already told him
-what is yours.
-
-## The thread protocol
-
-Several CLI threads work on this repo at once, each in its own git worktree,
-sharing one claims file. Follow this whether or not the prompt mentions it.
-
-**Owner.** Your name is the worktree folder name, or `main` in the main checkout.
-`claims.cmd status` says which you are.
-
-**Step 0, before a worktree exists.** Alex runs `gitnewtree <project-code>`, which
-refuses until main is committed and pushed, then branches from `origin/main`,
-copies the machine-local files, runs `scripts/prebuild.js` so the generated
-schema files exist, and opens the worktree in VS Code.
-(`claude --worktree <name>` still works and does most of the same, but it does not
-check Step 0 and does not run prebuild, so a worktree made that way cannot build,
-deploy a function, or pass the SAM tests until you run it by hand.) If you are
-asked to start a worktree and main has unpushed commits, say so first.
-
-A project code may contain underscores — `parallel_threads` — and the separators
-in a run tag are always hyphens.
-
-**Project codes and which window you are in.** A worktree's project code is its
-folder name, and that is also its claims owner. The main checkout's code is
-recorded from the first prompt that carries a run tag, and cleared by `gitpush`
-Finish on main. Alex can also set or clear it directly with `claims.cmd bind
-<code>` and `claims.cmd unbind`, which touch no claim and refuse inside a
-worktree. A run tag's project code is everything before the step segment:
-`claims-wq7-s7d-u3rb` → `claims-wq7`.
-
-A `UserPromptSubmit` hook checks the two against each other and blocks a prompt
-that has landed in the wrong window before you ever see it. You will not normally
-notice this — but if Alex says a prompt was rejected as the wrong window, that is
-what happened, and the answer is for him to paste it into the right one rather
-than for you to work around it.
-
-**Step 1, plan. Read-only.** Before touching anything, list:
-
-- every file and folder the work will touch, and
-- every database item it will need — `db:table:<name>`, `db:fn:<name>`,
-  `db:deploy` — **each with the step that needs it.**
-
-Run `claims.cmd check` on all of it. Report every conflict and
-every warning. **Change nothing, claim nothing, and stop.** A plan that has
-already edited a file is not a plan.
-
-**Step 2, claim.** After Alex confirms, claim **all the files and folders in one
-command** — one `claims.cmd claim a b c`, not one per file. It re-checks inside
-the lock, so a file another thread took since you planned is caught here rather
-than halfway through. Then `reserve` each database item with its step. If the
-claim fails, stop and report; do not start on the part that did claim.
-
-Always claim the project's own spec and progress files in `docs/`.
-
-Files Alex named in his instruction are already confirmed — see the next section.
-
-**Step 3 onward, work.** Edit only through the Edit and Write tools. Never
-release a file claim. If the guard blocks a file that was not in the plan, stop
-and ask.
-
-**Database steps, just in time.** At the step that needs a database item, not
-before. New SQL is written under `_pending_<owner>_<purpose>.sql` until step 5 —
-see the SQL section below for why.
+At the step that needs a database item (`db:table:<name>`, `db:fn:<name>`,
+`db:deploy`), not before. A plan lists each with the step that needs it. New SQL is
+written under `_pending_<owner>_<purpose>.sql` until step 5.
 
 1. `claims.cmd check` the `db:table:*`, `db:fn:*` and `db:deploy` you need.
 2. Stop and ask Alex to run `gitsync` in this worktree, so it has everything
@@ -128,240 +53,31 @@ see the SQL section below for why.
 3. **Drift check.** After the sync, look at what came in. If any migration or
    function change touches the same tables or the same function, stop and
    re-plan that step — your plan was written against an older schema.
-4. Ask Alex to confirm, then claim the items. **Claim them at this step, every
-   time.** A `db:` claim is not carried over from an earlier step — if a previous
-   step released them, as it should have, re-claim here. Claiming `db:deploy`
-   raises Alex's permission prompt; the rest are silent.
+4. Ask Alex to confirm, then claim the items (or `reserve` them with their step at
+   planning). **Claim them at this step, every time**; a `db:` claim is never
+   carried over. Claiming `db:deploy` raises Alex's permission prompt; the rest are
+   silent.
 5. **Number the migration now**, not earlier: run
    `claims.cmd number-migration supabase/migrations/_pending_<owner>_<purpose>.sql`
    on its own. It prints the number and claims it (`db:migration:NNN`). Write
    the numbered file, delete the `_pending_` one, queue it. Never pick a number
    by hand.
 6. Deploy. Migrations you queue with `scripts/sql-queue.mjs` for him to approve
-   by a link (see the SQL section); function deploys you run yourself. A
-   function deploy is refused from a worktree missing main's commits; when it
-   is, stop and ask Alex for a gitsync, as in step 2, rather than deploying
-   from elsewhere. Run `check_platform_conformance` where the platform
-   contract requires it.
+   by a link; function deploys you run yourself, holding `db:deploy`. A function
+   deploy is refused from a worktree missing main's commits; when it is, stop and
+   ask Alex for a gitsync rather than deploying from elsewhere. Run
+   `check_platform_conformance` where the platform contract requires it.
 7. Verify.
 8. Stop and ask Alex to run `gitpush` in **Checkpoint** mode for this worktree,
    naming the migration and function paths. Checkpoint puts only those paths into
-   main, so half-finished front-end work is not pushed with them. **Checkpoint
-   releases the `db:` claims itself**, by default, all of them — so there is
-   normally nothing for you to do here.
+   main, so half-finished front-end work is not pushed with them, and it releases
+   the `db:` claims itself, by default all of them.
 9. Check with `claims.cmd status` that they went. If one is still held, release
-   it — `db:` claims are the one thing you do release. Never carry one into the
-   next step: one held across steps blocked another thread's deploy for thirteen
-   hours, and `status` now warns about any held for more than an hour.
+   it — `db:` claims are the one thing you do release. `status` warns about any
+   held for more than an hour; one held across steps once blocked another thread's
+   deploy for thirteen hours.
 
 `supabase/schema-snapshot.sql` is regenerated automatically by gitpush whenever a commit or merge carries a migration newer than the snapshot — main Push and Finish (same commit) and worktree Checkpoint and Finish (merge commit, regenerated in main) — and `npm run schema:snapshot` refreshes it by hand. Threads never edit it.
-
-**Finishing.** Stop and ask Alex to run `gitpush` in **Finish** mode — for the
-worktree, or for `main` if the work never used one. That is what releases your
-file claims, removes the worktree and deletes the branch. Do not release them
-yourself.
-
-## Claim a file Alex named; stop and ask for one he did not
-
-**If Alex named the file, that is your confirmation.** "Add a comment to the top
-of `src/utils/recurrence.js`" means claim it and get on with it. Do not stop to
-ask permission to claim a file he just told you to change, and do not ask again
-on the next turn for the same file. His instruction covers the files it names and
-the obvious ones the change implies — a test beside the file, the progress doc
-for the project you are working on.
-
-**If you need a file he did not name, stop and hand the turn back.** The claims
-guard blocked you, or you can see the work will spread to a file that was not in
-the plan. Say:
-
-- which file or files you need,
-- what you were about to do to them, and why,
-- who holds them now, if anyone.
-
-Then wait. Do not claim in the same turn, and do not treat the guard's block
-message as permission — it shows the command to run *after* he confirms, not
-instead of asking.
-
-**Most claims are silent now, which raises the bar on asking, it does not lower
-it.** Claiming files and folders, reserving, and tidying up after yourself all
-run without interrupting Alex. Only two things still raise Claude Code's prompt:
-
-- `claim db:deploy` — the one claim that can lead to a Supabase deploy
-- `cleanup <another thread>` — clearing a thread that is not this one
-
-They used to all prompt, and Alex got several per project and approved them
-without reading. That is worse than no prompt: it teaches him these prompts do
-not need reading, so the one that matters goes through the same way. **A silent
-claim is not his approval.** His approval is the plan he confirmed, and the
-paragraphs above are the whole of the rule — there is no longer a popup behind
-them to catch a file he never heard about.
-
-**Run the claim on its own, as a single command**, never chained onto anything
-with `&&` or `;`. The guard blocks a chained claim, and that block now carries
-the weight: chaining is the one way a `db:deploy` claim could reach the machine
-without Alex seeing it.
-
-`status` and `check` need no permission and no asking. Use `check` freely while
-planning — that is what it is for.
-
-## Never release a file claim. gitpush does that.
-
-**A file or folder claim is held for the whole life of the thread.** You do not
-release it when you finish editing the file, or at the end of a step, or at the
-end of the turn. `gitpush` releases it, after the work is merged into main and
-pushed.
-
-The claim is not a lock you take while typing. It is the record that says this
-thread, and no other, is responsible for that file until its work lands. Release
-it early and another thread can claim the same file while yours still has
-uncommitted changes to it — which is the collision the whole system exists to
-prevent, arriving by the one route nothing checks for.
-
-**Database claims are the exception, and they are short-lived.** `db:table:*`,
-`db:fn:*` and `db:deploy` are claimed at the step that deploys and released as
-soon as Alex has checkpointed that step into main — `gitpush` Checkpoint does it
-for you, all of them, by default. They are held for minutes; file claims are held
-for the whole job.
-
-**Never carry a `db:` claim into the next step.** Re-claim it there instead. One
-was held for thirteen hours across several steps and blocked another thread's
-deploy for all of them, and nothing said so — `claims.cmd status` now flags any
-`db:` claim older than an hour.
-
-So: `release` is for Alex, for cleaning up, and for a database claim Checkpoint
-somehow left behind. If you think you need to release a file claim, you have
-misread this — say so and stop. The one exception is `yield`, below.
-
-**gitpush releases them**, in Finish mode, for a worktree or for `main`. It also
-has a "push only" mode for main that pushes and deliberately keeps the claims,
-for when the project is still going. Either way it is Alex running it, not you.
-
-## Claim blocks: when another thread is waiting on your file
-
-When a thread is refused a file you hold, it is recorded, and the `block-notice`
-hook tells you at the start of your next turn. **Do not change your plan.**
-
-**The one case a thread may release a file claim.** The notice says another
-thread is waiting on that file, and `claims.cmd yield <file>`
-accepts it. Yield checks the conditions itself: the file is unchanged from main
-(nothing committed, staged, uncommitted or untracked) and claimed on its own, not
-through a folder. Alex has approved yield for exactly this case. It is the only
-way to do it: if yield refuses, or the permission system denies it, do not retry
-another way. Report it.
-
-**In the report:**
-
-- One line starting `Blocking:` for each waiting file: which project waits on which file.
-- For a yielded file, say you released it.
-- For a changed file:
-  - say whether the changes are finished now or once testing passes;
-  - give the merge impact: exactly which paths a checkpoint would carry; whether
-    main would still build and run with only those paths (imports, components,
-    helpers, database columns, functions or migrations not yet in main); and what
-    would change in the live app, since a merge to main goes to production;
-  - give the exact `gitpush` command. If the holder is the main checkout, say
-    there is no single-file merge and that a push carries everything main has
-    claimed and changed.
-- If the notice says DEADLOCK, say in the report that it is a deadlock.
-
-**Never merge, checkpoint or push to free a file.** That is Alex's decision.
-Apart from yield, file claims are released only by gitpush Finish.
-
-## When the guard blocks something, stop and ask. Never route around it.
-
-**Being blocked is the answer, not an obstacle.** Whatever the guard refused —
-an edit, a shell write, a deploy, a chained claim — you stop, you tell Alex what
-you were trying to do and what it said, and you wait.
-
-You do not try the same change another way. Not through a different tool, not
-through a different shell, not by writing it somewhere else and moving it in,
-not through a script, not through a subagent, and not by claiming the file so
-the block goes away. Every one of those is the same change with the evidence
-removed.
-
-The guard is deliberately crude and it has false positives; it has had several.
-That is still not a reason to work around one. A false positive costs a sentence
-to Alex and he unblocks it in seconds. A successful workaround costs him the one
-thing this whole system exists to give him — knowing which thread touched what.
-
-This is not theoretical. Every hole found so far was found by noticing a way
-round the guard, not a way through it: a `/tmp` file moved into place on
-2026-09-28, and the PowerShell tool slipping past the hook matcher entirely on
-2026-09-30. If you can see a route around a block, **that is a finding to report,
-not a path to take.**
-
-## The plan guard: each step does only what its prompt declared
-
-**Every tagged prompt carries a "Scope of this step" block** (create, update,
-delete, deploy, SQL) and an `Estimated run:` line. The prompt hook records it in
-`.clip/scope.json`, and Switchboard's plan guard refuses, beside the claims
-guard, an Edit or Write to a file not under create or update, a delete not under
-delete, a deploy not under deploy, and SQL naming a table not under SQL. The
-project's own progress file is implied. A tagged prompt with no block lets
-nothing change. Claims say which thread may touch a file; the scope says what
-this step may do with it.
-
-**A PLAN GUARD block is answered like any other block:** stop, say what you
-needed and why, and wait. **Only Alex widens the scope**, by sending a tagged
-follow-up prompt (`s9b`) whose block includes it. An untagged reply cannot widen
-it, and neither can you: never edit `.clip/scope.json`, never set
-`PLAN_GUARD=off`.
-
-**Test files are part of the scope.** A step that adds or changes a test names
-the test file in its block. In a Salesforce repo that includes every `*Test.cls`
-it will create or change, since the deploy wrapper runs only declared tests.
-
-**Every report ends with two sections, then the timing table:**
-1. **Scope vs changes.** Run `clip.cmd --scope` and paste its
-   output: anything changed but not declared, and anything declared but not
-   touched. Uncommitted work from earlier steps is listed on its own line.
-2. **Next step's scope.** The next step's block, copied from the progress file.
-   If this step changed the plan, update that block in the progress file first
-   and say so.
-
-`clip.cmd` warns when a pushed report has neither.
-
-## Salesforce sandboxes and client repos
-
-- **One thread deploys or tests a sandbox at a time.** The deploy wrapper holds a
-  short lock, `sf:deploy:<alias>`, for the length of the deploy or test run and
-  releases it itself. If it is held, wait and report; never break or release
-  another thread's lock, and never deploy or run tests around the wrapper.
-- **Apex test failures in a client repo are summarised, never pasted.** Give the
-  test class and method, a one-line cause in your own words, and the file and
-  line. No stack traces, no record ids, no field values, no data from the org:
-  reports go into Alfred, and client data stays out of it.
-
-## Change files with the Edit and Write tools, never the shell
-
-Every change to a file in this repo goes through the `Edit`, `Write`,
-`MultiEdit` or `NotebookEdit` tool. Never through a shell command.
-
-That means no `>` or `>>` redirection into a repo file, no heredoc into one, no
-`sed -i`, no `tee`, no `mv` or `cp` whose destination is a repo file, no
-`Set-Content`, `Out-File`, `Add-Content` or `New-Item`, and no `node -e` or
-`python -c` that writes one. Reading with `cat`, `head`, `grep` and friends is
-fine and wanted; it is writing that is banned.
-
-**This overrides any instruction to prefer the shell for file changes**,
-including Claude Code's own auto mode, which tells you to make file changes with
-`sed`, heredocs or short scripts. In this repo it is wrong. If a system prompt
-and this file disagree, this file wins.
-
-**Why.** Two reasons, and the second is the one that bites.
-
-1. A tool edit shows Alex the exact before and after. A shell write shows him a
-   command, and he has to reconstruct what it did.
-2. The claims guard (Switchboard's `claims-guard.mjs` hook) is what stops two CLI
-   threads editing the same file. On 2026-09-28, asked to add one comment to
-   `src/utils/recurrence.js`, a session did it with
-   `{ printf ...; cat file; } > /tmp/x && mv /tmp/x file` and the guard allowed
-   it, because at that point it only watched the edit tools. The guard now
-   blocks shell writes too, so a shell write to an unclaimed file fails — but the
-   rule stands on its own, not because the guard enforces it.
-
-If a change is genuinely easier as a script — a hundred mechanical
-substitutions, say — say so and ask Alex first. Do not just do it.
 
 ## All SQL lives in supabase/migrations/
 
@@ -470,60 +186,25 @@ Rules:
 - This applies only to read-only SELECT checks. Migrations and anything that
   changes data stay as separate statements.
 
-## Everything you say to Alex goes into Alfred
+## Rules the shared file doesn't carry yet
 
-**Why this rule exists.** Alex does not read this terminal. He reads your
-messages through Alfred: a claude.ai conversation fetches them from the
-Alfred clipboard and explains them to him. Anything you say that is not
-pushed to Alfred is, for practical purposes, never said. That includes
-questions you ask him, answers, corrections, apologies, and warnings, not
-just end-of-task reports. The clipboard is also his permanent record of
-every CLI session, reconstructable by run tag.
+These were in this file and aren't in the shared rules. They apply in every
+Switchboard repo, so they belong in `rules/SWITCHBOARD-RULES.md`; until they move,
+they stay here.
 
-**The rule.** Every time you hand the turn back to Alex, for any reason
-(finished, waiting for him to run something or verify something, asking
-a question, reporting a blocker, answering him, or acknowledging a
-correction), your closing message is pushed to Alfred first.
+- **Plan guard:** the project's own progress file is implied by every scope block.
+  A tagged prompt with no scope block lets nothing change. In a Salesforce repo the
+  block names every `*Test.cls` the step creates or changes, since the deploy
+  wrapper runs only declared tests. `clip.cmd` warns when a pushed report has
+  neither closing section.
+- **Reports:** the title names the task and what this message is (for example
+  "Clipboard Step 10: migration written, awaiting run"); several messages under one
+  run tag are expected, identical titles are not. Summarise what you did; never
+  paste the command-by-command working log. The "Scope vs changes" and "Next
+  step's scope" sections don't count toward the 25 lines. If you need to say more
+  after a push, write a new message, push it and print it.
 
-**How.** Compose your complete closing message, everything you are about
-to say to Alex, and write it to .clip/last-report.md. Push that file with
-clip.cmd. Then print exactly that same text as your closing message. The
-pushed text and the printed text must be identical: do not push a summary
-and then say more, and do not add anything after the push. If you realize
-you need to say more, write a new message, push it, and print it.
-
-Writing .clip/last-report.md and pushing it with clip.cmd is always allowed, even when a prompt says to write or change no files. It is how the report reaches Alex, not a change to the project.
-
-**Titles** name the task and what this particular message is, for
-example "Clipboard Step 10: migration written, awaiting run", then
-"Clipboard Step 10: deployed, awaiting fresh-thread test", or "Step 10:
-question about the sources report". Several messages under one run tag
-are expected; identical titles are not.
-
-**Run tags.** Pass the prompt's run tag with --tag, exactly as given on
-the prompt's first line. If the prompt has no run tag, push without one
-and say so in one line at the end of the message.
-
-**What goes in.** Everything you would say to Alex. What does not: your
-command-by-command working log. Summarize what you did; do not paste
-tool transcripts.
-
-**If the push fails,** say so in one line at the end of the printed
-message, naming the error, and carry on. Never hide a failed push.
-
-`clip.cmd` reads `CLIPBOARD_URL` and `CLIPBOARD_SECRET` from the environment,
-falling back to the Windows user registry when the shell predates `setx`. It
-never prints the secret, and neither should you.
-
-## Working fast
-
-**Comments.** One or two lines, and only where the code is not obvious. No
-essays in code or in tests.
-
-**Tests.** Only what the change needs. Short test names, no prose.
-
-**Search.** Use `git grep` or the Grep tool. Never a plain recursive grep over
-the repo — it scans node_modules and times out.
+## Tests and build in alfred-v5
 
 **Run tests with:**
 
@@ -536,7 +217,8 @@ The first is the app suite. The second is the scripts that stay in alfred-v5:
 inventory, schema snapshot, sql-queue and not-an-artist. It runs under `node --test`,
 needs no `npm install`, and is not picked up by the first. Run both at the end.
 Tests for claims, the hooks, clip and the git commands live in the switchboard
-repo and run there.
+repo and run there. Function tests run with
+`node --experimental-strip-types --test <file>`.
 
 Never plain `npx jest`. While working, run only the test files related to the
 change; run the full suite once, at the end.
@@ -545,16 +227,3 @@ change; run the full suite once, at the end.
 `<rootDir>`. Do not "tidy" that back to the CRA default: with `<rootDir>` in it,
 a worktree path under `.claude/` survives normalisation as an escape and the
 suite finds no tests at all. The reason is in `jestNote` beside it.
-
-**Build.** Only when asked.
-
-**Reports to Alfred.** 25 lines at most: what changed — naming every file you
-edited, since they are sitting uncommitted — what Alex must do, and what to
-test. No background and no reasoning unless something went wrong. The "Scope vs
-changes" and "Next step's scope" sections (see the plan guard) do not count
-toward the 25.
-
-**Every report ends with a timing table** — how long each phase took (reading,
-writing, tests, build, deploy), plus the total. **Measured, never estimated:**
-run `date +%H:%M:%S` when a phase starts and when it ends, and report the real
-clock times and the duration between them.
