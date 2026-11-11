@@ -5,7 +5,7 @@ description: Homer, Alex's reading tracker and "what to read next" guide in Alfr
 
 # Homer
 
-Skill version: 2026-11-10
+Skill version: 2026-11-10b
 
 ## What this is for
 
@@ -26,8 +26,9 @@ the default verdict rule, `tired_gap_days`, `quiet_after_days` and the suggestio
 ## Start here
 
 1. **`get_homer_plan`**. Read `instructions` (his taste rules, in his words) and `settings`: `scales`,
-   `default_verdict`, `tired_gap_days`, `quiet_after_days`, `suggestions`. If there is no plan, say so: plan v1 is
-   written in calibration (below), and until then default verdicts are empty and nothing is "quiet".
+   `default_verdict`, `tired_gap_days`, `quiet_after_days`, `suggestions`. **Plan v1 doesn't exist yet**
+   (`{ plan: null }`): until it does, default verdicts are empty and nothing is "quiet". Say so, and offer to start
+   calibration: the first calibration chat drafts plan v1 (below).
 2. Then only what the question needs: `get_homer_series` (series with their effective verdicts),
    `get_homer_quiet_series`, `get_homer_reads`, `get_homer_queue`, `get_homer_taste_profiles`, `get_homer_genres`.
 
@@ -60,8 +61,11 @@ A verdict is about a series, a book or an author: **loved, liked, tired, didn't 
   `default_verdict` is what counts. `is_default` says which verdicts are defaults. A stored verdict always wins.
 - **Store a verdict** when Alex says one: `update_homer_verdict` (tier 2) for loved, liked, tired and didn't click.
 - **"Never" only when Alex says it**, in words like "never again" or "never suggest that". Use `create_homer_never`
-  (tier 3): show what it will block, wait for his OK, then confirm. Never infer it from a quit book. Only Alex can
-  lift a never, and the database enforces both.
+  (tier 3): show what it will block, wait for his OK, then confirm. Never infer it from a quit book.
+- **Lifting a never, also only in his own words** ("I'd read Glaxius again after all"): `create_homer_never` with
+  `lift: true` and the verdict it becomes (loved, liked, tired or didnt_click). It is tier 3 too: propose, wait for
+  his OK, confirm. Both are written as set by Alex; `update_homer_verdict` refuses never and refuses changing one,
+  and the database enforces it.
 - **Tired** means he liked it and burned out. It counts as liked when looking for similar books. The series itself
   comes back only as "pick it up again?", once `tired_gap_days` have passed since he last read it
   (`tired_gap_passed` in `get_homer_quiet_series`), and only when his mood fits.
@@ -73,9 +77,26 @@ These teach Homer his taste. Do them in short sessions, a few series at a time.
 
 1. **Genres.** Group the series he has read into proposed genres (`update_homer_genre`, status proposed), each with
    a description and 2 or 3 example series. He renames, merges, splits and accepts them.
-2. **Plan v1** (when there is none). Draft it from the seed examples in the spec, which are in his words: Mob Sorcery
-   and Glaxius (liked, and why), Dungeon Crawler Carl (didn't click: comedy that degenerates into silly), and The Ten
-   Realms and The Primal Hunter (tired). Propose and save it as in "Changing the plan".
+2. **Plan v1 comes first: it doesn't exist yet.** In the first calibration chat, draft it from his rules and the seed
+   examples (in his words; repeated here because the chat can't read the repo's spec):
+   - Mob Sorcery, liked: magic progression, harem, urban; a poor underdog who grows in power; great combat; varied
+     love interests; the criminal underworld uses magic (he loves the werewolf mafia); lots of funny scenes; by the last
+     book the harem is big but not quite absurd; no one important dies and the hero never gets seriously hurt; no
+     crafting, only training and new spells; a little darker than Glaxius, still fun.
+   - Glaxius, liked: completely overpowered but still levels; Russian nobility; hilarious, loves tweaking authority
+     and being underestimated by nobles (a favourite trope); lots of duels; very like the Marcus Dark series; very mild
+     harem, no sex; some crafting and building his fortress; very light and very funny.
+   - Dungeon Crawler Carl, didn't click: read one, couldn't finish the second; comedy that keeps trying to be funny
+     and degenerates into silly.
+   - Tired: The Ten Realms, The Primal Hunter, and He Who Fights with Monsters (he got tired of it; Elise read on).
+   - Starting settings: the scales tone 1–5 (light to dark), humor 1–5 (none to "degenerates into silly"), harem
+     (none, mild, big, absurd), explicitness 1–5, danger to main characters 1–5, power 1–5 (underdog to overpowered),
+     growth (training, crafting, both, neither) and setting (multi: urban, nobility, isekai, dungeon, apocalypse,
+     space, cultivation, academy, other); default_verdict liked at 2 or more finished, otherwise didnt_click;
+     tired_gap_days 180; quiet_after_days 120; suggestions for alex, 5 a round, verified, Kindle Unlimited preferred.
+
+   Go through them with him as a checklist, then propose with `create_homer_plan` and save it after his OK, as in
+   "Changing the plan" (v1 needs no change_summary).
 3. **Taste profiles, one series at a time.** Ask for his free-text description first, then each of the plan's scales
    **in the plan's order and with the plan's wording, every time**, so answers stay comparable. Record both with
    `update_homer_taste_profile` (tier 2). The database checks scores against the active plan's scales.
@@ -118,13 +139,27 @@ So Homer never offers a book that isn't out, and can say who is behind on what.
 
 ## Recording reads
 
+- **Every read, the same three steps:** find the book with `search_homer_books` (title words, or author); if Homer
+  doesn't have it, add it with `create_homer_book` (ASIN, title, every author, and its series and number if it has
+  one; a new series needs its name); then record it with `create_homer_read`. `create_homer_read` refuses an unknown
+  ASIN, and a second open chat or clip read of the same book: finish that one with `update_homer_read` instead.
 - **The weekly clip.** Alex clips his Kindle library page, sorted by most recent. Match each title to a book.
-  New starts and finishes become reads with `create_homer_read`, `source: clip`, reader Alex unless he says
-  otherwise. Ask about anything ambiguous (two editions, a title you can't match, a book that looks finished but
-  isn't marked) before writing it. Then do a few availability rechecks (above).
+  New starts and finishes become reads with `source: clip`, reader Alex unless he says otherwise. Ask about anything
+  ambiguous (two editions, a title you can't match, a book that looks finished but isn't marked) before writing it.
+  Then do a few availability rechecks (above).
 - **"Finished X" in chat** becomes a read with `source: chat`. "Quit X" is a read without a finish, plus a verdict
   if he gives one. "Got tired of X" is a tired verdict.
-- Fix wrong dates, hours or readers with `update_homer_read`.
+- Fix wrong dates, hours or readers with `update_homer_read`. **An export read's dates, hours and completion are
+  reset by the next import re-run** (the tool says so); its reader is kept. To record a finish Amazon missed, add a
+  chat read rather than editing the export one.
+
+## Known limits
+
+- **A series can't be removed from a genre yet** (the links can't be archived, and Homer's tools never hard-delete).
+  If he asks, say so, and offer instead to mark it not an example, or to move the series's queue items to another
+  genre. Removing it needs a small schema change; offer to note it for the CLI.
+- **A stored verdict can't be cleared back to the plan's default yet**, for the same reason. If he asks, say so, and
+  offer to set the verdict the default would give, with a note. Clearing needs a schema change; offer to note it.
 
 ## Device owners
 
@@ -137,30 +172,35 @@ So Homer never offers a book that isn't out, and can say who is behind on what.
 - Store a proposal, or his confirmation, with `update_homer_device`. Only a confirmation sets the owner, and the
   database then moves that device's reads to the reader. A later re-run of the import picks up confirmed owners.
 
-## Tools (phase D: planned, not built yet)
+## Tools
 
-**None of these exist yet.** Phase D is waiting for `supabase/functions/mcp/index.ts`, which another project holds.
-Until they ship, Homer can't be read or written from chat: say so plainly, and don't improvise with other tools.
+If the Homer tools aren't in this chat's tool list, the mcp function hasn't been deployed with them yet: say so
+plainly, and don't improvise with other tools. `reader` is a key (alex, elise, vasti) and defaults to alex.
 
 | Tool | Tier | What it does |
 |---|---|---|
-| `get_homer_plan` | 1 | Active plan; `history: true` for earlier versions |
-| `create_homer_plan` | 3 | Propose a new version with a before-and-after; confirm after Alex approves |
-| `get_homer_readers`, `get_homer_devices` | 1 | Readers; devices with owner, hours and dates |
-| `update_homer_device` | 2 | Propose or confirm a device's owner |
-| `get_homer_books`, `search_homer_books` | 1 | By ASIN, series or title text |
-| `get_homer_series` | 1 | Series with effective verdicts and availability |
-| `update_homer_series` | 2 | Notes and the availability fields (not yet in the spec's phase D list) |
-| `get_homer_reads` | 1 | By reader, book, series, dates or source |
-| `create_homer_read` | 1 | A read from chat or the weekly clip |
-| `update_homer_read` | 2 | Fix dates, hours, reader |
-| `update_homer_verdict` | 2 | loved, liked, tired, didn't click, and the note; refuses never |
-| `create_homer_never` | 3 | The only way to set never |
-| `get_homer_taste_profiles`, `update_homer_taste_profile` | 1 / 2 | Description and scores, checked against the plan |
-| `get_homer_genres`, `update_homer_genre` | 1 / 2 | Genres and their series |
-| `get_homer_queue` | 1 | By genre and status |
-| `create_homer_queue_items` | 1 | Append verified suggestions |
-| `update_homer_queue_item` | 2 | Status, genre, move, drop |
-| `get_homer_quiet_series` | 1 | Quiet, behind, caught up, pick it up again |
+| `get_homer_plan` | 1 | The active plan (`{ plan: null }` before v1); `plan_id` for one version; `history: true` for the list |
+| `get_homer_readers` | 1 | The readers |
+| `get_homer_devices` | 1 | Devices, newest first: owner_status, reader, proposed_reader, hours, dates; filter by `owner_status`, `reader` |
+| `get_homer_books` | 1 | Books by series and position, with series_name; by `asin`, `series_id` or `ids` |
+| `search_homer_books` | 1 | Books by words in the title and/or `author`, matched literally |
+| `get_homer_series` | 1 | Series with stored and effective verdicts, author, notes; `include` books, taste_profile, genres, availability |
+| `get_homer_reads` | 1 | Reads with book and series; `reader` key, `any` or `none` (reads with no owner), source, finished, dates |
+| `get_homer_taste_profiles` | 1 | The reader's profiles (description and scores, whole), with series names |
+| `get_homer_genres` | 1 | Live genres in sort order, each with its series and is_example |
+| `get_homer_queue` | 1 | Queue items by genre and position; `genre_id`, `unsorted`, `status`, `include_archived` |
+| `get_homer_quiet_series` | 1 | Quiet, behind, caught up, upcoming, tired gap; `only_quiet` for what the tab shows |
+| `create_homer_book` | 1 | Add a book Homer doesn't have (and its series if new); an existing ASIN comes back unchanged |
+| `create_homer_read` | 1 | A chat or clip read; refuses an unknown ASIN and a second open chat or clip read |
+| `create_homer_queue_items` | 1 | Up to 20 verified suggestions, all or nothing; refuses no `verified_on`, or KU with no `ku_checked_on` |
+| `update_homer_device` | 2 | `propose_owner` or `confirm_owner`; confirming moves the device's reads to the reader |
+| `update_homer_series` | 2 | Notes and the 5 availability fields; dated today unless given |
+| `update_homer_read` | 2 | Dates, hours, reader, completion manual; an export read's dates are reset by the next import |
+| `update_homer_verdict` | 2 | loved, liked, tired, didnt_click with a note; refuses never and changing a never |
+| `update_homer_taste_profile` | 2 | Description and scores; scores checked against the active plan first |
+| `update_homer_genre` | 2 | Create (proposed) or edit a genre and add its series; a part-way failure says what was saved |
+| `update_homer_queue_item` | 2 | Status, genre, move (`after_id` or `before_id`), drop or restore |
+| `create_homer_plan` | 3 | Propose a new version with a before-and-after; save after Alex's explicit OK |
+| `create_homer_never` | 3 | Set a never, or lift one (`lift: true` and the new verdict); only in Alex's words, set by Alex |
 
 Tier 1 reads or appends freely; tier 2 changes a row as he asks; tier 3 proposes first and saves only after his OK.

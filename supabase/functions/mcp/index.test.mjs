@@ -411,6 +411,14 @@ test("the tool count is 72 after the job-search tools", () => {
   // Notification routing steps 3 and 4, +5; step 7, +1; step 10j, +2 (delivery overrides).
   const EXPECTED_ADDED_NOTIFICATION_ROUTING = ["raise_signal", "get_signals", "get_dispatch_plan", "deliver_signals",
     "get_delivery_rules", "resolve_signal", "add_delivery_override", "end_delivery_override", "update_signal"];
+  // Homer s15, +11 (the read tools).
+  const EXPECTED_ADDED_HOMER_15 = ["get_homer_plan", "get_homer_readers", "get_homer_devices", "get_homer_books",
+    "search_homer_books", "get_homer_series", "get_homer_reads", "get_homer_taste_profiles", "get_homer_genres",
+    "get_homer_queue", "get_homer_quiet_series"];
+  // Homer s15b, +12 (the write tools).
+  const EXPECTED_ADDED_HOMER_15B = ["create_homer_plan", "create_homer_never", "update_homer_verdict", "create_homer_book",
+    "create_homer_read", "update_homer_read", "update_homer_device", "update_homer_series", "update_homer_taste_profile",
+    "update_homer_genre", "create_homer_queue_items", "update_homer_queue_item"];
   for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
@@ -418,7 +426,8 @@ test("the tool count is 72 after the job-search tools", () => {
                       ...EXPECTED_ADDED_READ, ...EXPECTED_ADDED_OVERWATCH_13, ...EXPECTED_ADDED_OVERWATCH_14,
                       ...EXPECTED_ADDED_OVERWATCH_22, ...EXPECTED_ADDED_OVERWATCH_46, ...EXPECTED_ADDED_OVERWATCH_54,
                       ...EXPECTED_ADDED_ARNOLD_5, ...EXPECTED_ADDED_ARNOLD_8, ...EXPECTED_ADDED_SWITCHBOARD_25,
-                      ...EXPECTED_ADDED_SWITCHBOARD_84, ...EXPECTED_ADDED_SWITCHBOARD_86, ...EXPECTED_ADDED_NOTIFICATION_ROUTING]) {
+                      ...EXPECTED_ADDED_SWITCHBOARD_84, ...EXPECTED_ADDED_SWITCHBOARD_86, ...EXPECTED_ADDED_NOTIFICATION_ROUTING,
+                      ...EXPECTED_ADDED_HOMER_15, ...EXPECTED_ADDED_HOMER_15B]) {
     assert.ok(registered.some((r) => r.name === name), `${name} is not registered`);
   }
   const orderItems = registered.find((r) => r.name === "get_wb_order_items");
@@ -432,10 +441,10 @@ test("the tool count is 72 after the job-search tools", () => {
   // +1 for nightly counts. 2026-11-03, +1 for the Warren Buffet money chat: record_wb_subscription_review.
   // +5 for notification routing (signals, dispatcher, delivery rules). 2026-11-04, +1: resolve_signal.
   // 2026-11-05, +1: queue_switchboard_git. +2: add_delivery_override, end_delivery_override. 2026-11-06, +1: update_signal.
-  // 2026-11-08, +2: queue_switchboard_sf_check, queue_switchboard_sb_setup.
+  // 2026-11-08, +2: queue_switchboard_sf_check, queue_switchboard_sb_setup. 2026-11-10, +11: Homer's read tools; +12: its writes.
   assert.ok(registered.some((r) => r.name === "record_wb_subscription_review"), "record_wb_subscription_review is not registered");
-  assert.equal(registered.length, 200,
-    `expected 200 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 223,
+    `expected 223 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
