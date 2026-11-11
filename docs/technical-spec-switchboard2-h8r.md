@@ -447,13 +447,18 @@ The helper is the only route.
 - **`ids`**: adds Id, CreatedDate and LastModifiedDate.
 - **`data`**: adds all fields. It also requires `contractAllowsClaude`: each client's contract must allow its data to reach Claude before full data is turned on for that client.
 
-**Full-data results pass through Supabase.**
-- Each result is encrypted with its own random key. The key goes back to Claude in the tool response; the ciphertext is stored in `switchboard_runs.result`.
-- The row is hard-deleted when fetched, and a pg_cron purge deletes anything older than 10 minutes.
-- The run log keeps the query and the row count only.
+**Read results pass through Supabase** (Alex, 2026-11-11, s89a):
+- **Never in `switchboard_runs.result`**, which is kept for 30 days. The rows go only in `switchboard_sf_results`, one row per action. `expires_at` is at most 10 minutes after `created_at`.
+- **Not encrypted for now.** The key would pass through Alfred anyway, so encryption would only protect backups. It's a later item.
+- **Deleted when fetched.** `switchboard_take_sf_result` deletes the row and returns it in one statement, unexpired rows only, after sweeping expired ones.
+- **Expiry is enforced in the database.** A pg_cron job (`switchboard-prune-sf-results`) deletes expired rows every minute. Nothing runs on a timer on the desktop.
+- **Not audited, and hidden from the generic MCP readers.**
+- **The read log**, `switchboard_sf_read_log`, keeps what was asked and the row count, never the rows.
+- **The payload is structured at every level**, never SOQL text: alias, production, level, object, count or fields with a row cap of at most 1000, and filters. SOQL text with `soql-parser-js` at `data` is a later item.
+- **Kind `sf_read`** carries production as a payload flag; `sf_read_prod_data` is unused.
 - Production full data needs an approval link every time, and the helper stamps each result `PRODUCTION FULL DATA`.
 
-**Limits.** The same row cap, timeout, budget, kill switch (`sf_reads_enabled`) and logging as §8.2.
+**Limits.** The same row cap, timeout, budget, kill switch (`switchboard_settings.sf_reads_enabled`, default on) and logging as §8.2. The budget is counted from `switchboard_sf_read_log`.
 
 ## 11. Phase 5 — git commands and Salesforce actions by link
 
