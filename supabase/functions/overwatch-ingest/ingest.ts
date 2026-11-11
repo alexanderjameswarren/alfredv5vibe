@@ -74,7 +74,7 @@ export function parseEvent(raw: unknown): { ok: true; event: BlockEvent } | { ok
   };
 }
 
-export const KINDS = ["claim_block", "inventory", "finish_summary"] as const;
+export const KINDS = ["claim_block", "inventory", "finish_summary", "claim_state"] as const;
 export const MAX_PARTS = 5000;
 export const MAX_OPEN_WORK = 5000;
 
@@ -161,6 +161,64 @@ export function parseFinishSummary(b: Obj):
   };
 }
 
+// --- claim_state (Switchboard s87d, spec docs/technical-spec-switchboard2-h8r.md 11.8) ---
+
+export const MAX_CLAIMS = 2000;
+export const MAX_BLOCKS = 500;
+// A repos.json key: the main checkout's absolute Windows path, e.g. C:\Users\Alex\projects\alfred-v5.
+const REPO_RE = /^[A-Za-z]:\\(?:[^\\/:*?"<>|\x00-\x1f]+\\?)+$/;
+const CLAIM_KINDS = ["file", "folder", "db"];
+
+export type ClaimStateRow = {
+  repo: string;
+  claims: { item: string; owner: string; kind: string; claimed_at: string }[];
+  blocks: { waiter: string; holder: string; item: string; since: string }[];
+  posted_at: string;
+  source_host: string | null;
+};
+
+const itemOk = (v: unknown) => typeof v === "string" && v.trim().length > 0 && v.length <= 500;
+const codeOk = (v: unknown) => typeof v === "string" && CODE_RE.test(v);
+
+/** `{ kind: "claim_state", repo, claims, blocks, posted_at, source_host? }`: one repo's whole claim state. */
+export function parseClaimState(b: Obj): { ok: true; kind: "claim_state"; row: ClaimStateRow } | { ok: false; error: string } {
+  if (typeof b.repo !== "string" || b.repo.length > 300 || !REPO_RE.test(b.repo)) {
+    return { ok: false, error: "repo must be a repos.json key: an absolute Windows path such as C:\\Users\\Alex\\projects\\alfred-v5." };
+  }
+  if (!Array.isArray(b.claims)) return { ok: false, error: "claims must be an array." };
+  if (b.claims.length > MAX_CLAIMS) return { ok: false, error: `at most ${MAX_CLAIMS} claims; got ${b.claims.length}.` };
+  if (!Array.isArray(b.blocks)) return { ok: false, error: "blocks must be an array." };
+  if (b.blocks.length > MAX_BLOCKS) return { ok: false, error: `at most ${MAX_BLOCKS} blocks; got ${b.blocks.length}.` };
+  const claims: ClaimStateRow["claims"] = [];
+  for (const [i, c] of b.claims.entries()) {
+    const at = isObj(c) ? iso(c.claimed_at) : null;
+    if (!isObj(c) || !itemOk(c.item) || !codeOk(c.owner) || !CLAIM_KINDS.includes(c.kind as string) || !at) {
+      return { ok: false, error: `claims[${i}] needs item (1 to 500 characters), owner (a project code), kind (${CLAIM_KINDS.join(", ")}) and claimed_at (a timestamp).` };
+    }
+    claims.push({ item: (c.item as string).trim(), owner: c.owner as string, kind: c.kind as string, claimed_at: at });
+  }
+  const blocks: ClaimStateRow["blocks"] = [];
+  for (const [i, k] of b.blocks.entries()) {
+    const since = isObj(k) ? iso(k.since) : null;
+    if (!isObj(k) || !codeOk(k.waiter) || !codeOk(k.holder) || !itemOk(k.item) || !since) {
+      return { ok: false, error: `blocks[${i}] needs waiter and holder (project codes), item (1 to 500 characters) and since (a timestamp).` };
+    }
+    blocks.push({ waiter: k.waiter as string, holder: k.holder as string, item: (k.item as string).trim(), since });
+  }
+  const postedAt = iso(b.posted_at);
+  if (!postedAt) return { ok: false, error: "posted_at must be a timestamp." };
+  const host = b.source_host ?? null;
+  if (host !== null && (typeof host !== "string" || !host.trim() || host.length > 100)) {
+    return { ok: false, error: "source_host must be 1 to 100 characters, or left out." };
+  }
+  return { ok: true, kind: "claim_state", row: { repo: b.repo, claims, blocks, posted_at: postedAt, source_host: host as string | null } };
+}
+
+/** Write the post, or keep the stored row when it is newer: an older post never replaces a newer one. */
+export function planClaimState(storedPostedAt: string | null, row: ClaimStateRow): "upsert" | "stale" {
+  return storedPostedAt && Date.parse(storedPostedAt) > Date.parse(row.posted_at) ? "stale" : "upsert";
+}
+
 /** A database refusal that resending cannot fix (bad value, check, duplicate): answered 400, not 500. */
 export const isRefusal = (code: unknown) => ["22023", "22P02", "23502", "23505", "23514", "22001"].includes(String(code ?? ""));
 
@@ -172,11 +230,13 @@ export function parseBody(body: unknown):
   | { ok: true; kind: "claim_block"; events: BlockEvent[]; rejected: { index: number; error: string }[] }
   | { ok: true; kind: "inventory"; parts: Obj[]; open_work: Obj[] }
   | { ok: true; kind: "finish_summary"; row: SummaryRow }
+  | { ok: true; kind: "claim_state"; row: ClaimStateRow }
   | { ok: false; error: string } {
   if (!body || typeof body !== "object" || Array.isArray(body)) return { ok: false, error: "body must be a JSON object." };
   const b = body as Record<string, unknown>;
   if (b.kind === "inventory") return parseInventory(b);
   if (b.kind === "finish_summary") return parseFinishSummary(b);
+  if (b.kind === "claim_state") return parseClaimState(b);
   if (b.kind !== "claim_block") {
     return { ok: false, error: `unknown kind ${JSON.stringify(b.kind)}. This function accepts ${KINDS.join(", ")}.` };
   }

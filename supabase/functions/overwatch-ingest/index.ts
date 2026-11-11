@@ -4,7 +4,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts";
-import { type BlockRow, isRefusal, parseBody, plan } from "./ingest.ts";
+import { type BlockRow, isRefusal, parseBody, plan, planClaimState } from "./ingest.ts";
 
 // overwatch-ingest — the desktop's one door into Overwatch (claims script now; gitpush and Switchboard later).
 //
@@ -35,6 +35,11 @@ import { type BlockRow, isRefusal, parseBody, plan } from "./ingest.ts";
 //     -> { ok, id }   upserted on merge_commit, so a resend is harmless; reviewed_at is never touched.
 //
 // For both, a value the database refuses answers 400 (resending cannot help); anything else 500.
+//
+//   POST { kind: "claim_state", repo, claims: [...], blocks: [...], posted_at, source_host? }   (Switchboard s87d,
+//     docs/technical-spec-switchboard2-h8r.md 11.8) -> { ok, stale }
+//     One repo's whole claim state, upserted on (user_id, repo). A post older than the stored one is kept out:
+//     ok with stale true, not an error. The claims code posts under its lock, so read-then-write is enough here.
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -103,6 +108,24 @@ Deno.serve(async (req) => {
       .single();
     if (error) return fail(isRefusal(error.code) ? 400 : 500, `could not write finish_summaries: ${error.message}`);
     return json({ ok: true, id: (data as { id: string }).id });
+  }
+
+  if (parsed.kind === "claim_state") {
+    const { data: stored, error: readError } = await client
+      .from("switchboard_claim_state")
+      .select("posted_at")
+      .eq("user_id", userId)
+      .eq("repo", parsed.row.repo)
+      .maybeSingle();
+    if (readError) return fail(500, `could not read switchboard_claim_state: ${readError.message}`);
+    if (planClaimState((stored as { posted_at: string } | null)?.posted_at ?? null, parsed.row) === "stale") {
+      return json({ ok: true, stale: true });
+    }
+    const { error } = await client
+      .from("switchboard_claim_state")
+      .upsert({ ...parsed.row, user_id: userId, updated_at: new Date().toISOString() }, { onConflict: "user_id,repo" });
+    if (error) return fail(isRefusal(error.code) ? 400 : 500, `could not write switchboard_claim_state: ${error.message}`);
+    return json({ ok: true, stale: false });
   }
 
   let inserted = 0, updated = 0, unchanged = 0;

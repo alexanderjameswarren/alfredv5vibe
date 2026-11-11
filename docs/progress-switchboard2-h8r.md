@@ -129,7 +129,20 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 5 git | s87, s87a | Plan: claim state in Supabase (was the panel snapshot) | none | done (s87a-w5tc). Alex narrowed s87 to claim state only: post on change, never on a timer; a tier-1 tool; check records waiting requests. Steps s87b to s87g below | 2026-11-10 |
 | 5 git | s87b | Claim-state table: pending migration and verify 14 | `db:table:switchboard_claim_state` | done (s87b-v8kr). Test 766fe0d2 passed 15/15 (run 9bc5d2a8). Main current (d13e6ac). Pending `_pending_switchboard2-h8r_claim_state.sql` (unique user_id and repo, claims and blocks jsonb, not audited). Verify 14 (15 checks). Queued together as --test 766fe0d2-1452-42e8-a4fb-97345c056a8b, not yet run. Spec §11.8 added | 2026-11-10 |
 | 5 git | s87c | Number and queue the claim-state migration | `db:table:switchboard_claim_state` | queued (s87c-h4zp). Main current (d13e6ac), no drift. number-migration gave 231: `231_claim_state.sql`, byte-identical to the pending file, which is deleted. Queued for real as 04d54be3-310f-4733-987e-759cce19f5e3, not yet applied. Test 14 runs again after the checkpoint | 2026-11-10 |
-| 5 git | s87d-s87g | overwatch-ingest; get_claim_state; claims post on change; check records waits | see below | todo | |
+| 5 git | s87d | overwatch-ingest takes claim_state | `db:deploy` | done (s87d-r6mw). 231 live and checkpointed; main current (6252c9a). ingest.ts: parseClaimState (repo an absolute Windows path, at most 2000 claims and 500 blocks, every entry checked) and planClaimState (an older posted_at is stale). index.ts: reads posted_at, then upserts on (user_id, repo), after the secret, user_id from CLIPBOARD_USER_ID; stale answers ok with stale true. Tests: 19 pass (4 new). Deployed as v9; keyless call 401 `{"ok":false,"error":"unauthorized"}`. No real post sent (s87f). Spec §11.8 write, §11.9 Alex's 2026-11-10 decisions. db:deploy held until the checkpoint | 2026-11-11 |
+| 5 git | s87e-s87g | get_claim_state; claims post on change; check records waits | see below | todo | |
+
+**Today's list (2026-11-11), in order:**
+1. s87e to s87g.
+2. The user-level rules file, plus overwatch posting for client repos.
+3. Checkpoint leaves the worktree current, plus chained links.
+4. Coverage output, plus the test-only loop.
+5. The data-ops template and the sf-diagnose skill.
+6. The sed -i guard.
+7. A terminal button on each tile.
+8. Open tests.
+
+**Open question for the next plan step:** which parts of the Salesforce read helper are built today: query, describe, the per-client settings file, access levels, and the production full-data link.
 | 4 | s88-s92 | Salesforce reads: spec §10 | see below | todo | |
 | 5 SF | s93-s96 | Salesforce actions by link: spec §11 | see below | todo | |
 | 6-8 | | Spec §12-§14 | | todo | |
