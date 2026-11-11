@@ -186,24 +186,6 @@ Rules:
 - This applies only to read-only SELECT checks. Migrations and anything that
   changes data stay as separate statements.
 
-## Rules the shared file doesn't carry yet
-
-These were in this file and aren't in the shared rules. They apply in every
-Switchboard repo, so they belong in `rules/SWITCHBOARD-RULES.md`; until they move,
-they stay here.
-
-- **Plan guard:** the project's own progress file is implied by every scope block.
-  A tagged prompt with no scope block lets nothing change. In a Salesforce repo the
-  block names every `*Test.cls` the step creates or changes, since the deploy
-  wrapper runs only declared tests. `clip.cmd` warns when a pushed report has
-  neither closing section.
-- **Reports:** the title names the task and what this message is (for example
-  "Clipboard Step 10: migration written, awaiting run"); several messages under one
-  run tag are expected, identical titles are not. Summarise what you did; never
-  paste the command-by-command working log. The "Scope vs changes" and "Next
-  step's scope" sections don't count toward the 25 lines. If you need to say more
-  after a push, write a new message, push it and print it.
-
 ## Tests and build in alfred-v5
 
 **Run tests with:**
