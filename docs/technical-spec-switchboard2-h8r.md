@@ -622,6 +622,19 @@ The options as s86a put them:
 - **D3, sandbox checks without a click.** A, no click from day one *(recommended: read-only, sandbox-proven and field-filtered)*; B, a click for the first two weeks, as gitcom and gitsync had.
 - **D4, the live test's sandbox.** Which listed developer sandbox alias to use, and whether to try `sb org add` by link on a real second sandbox or skip that test.
 
+### 11.8 Claim state in Supabase (s87)
+
+Alex narrowed s87 on 2026-11-10 from a tile snapshot to claim state only.
+
+- **What is posted:** a repo's whole claim state, as one row of `public.switchboard_claim_state` per user and repo (the repos.json key):
+  - `claims`: each holding, as item, owner project code, kind (file, folder or db) and claimed_at;
+  - `blocks`: each waiting request, as waiter, holder, item and since;
+  - `posted_at`, and `source_host` when known.
+- **When:** only when a claim changes: claim, release, yield, cleanup, or a gitpush checkpoint or finish. The claims code queues one `claim_state` event inside its lock, after it writes the claims or blocks file. **Nothing posts on a timer**, and there is no heartbeat. The only timed Switchboard contact with Supabase is still the panel's 15-second read (§7.2). An older post never replaces a newer one.
+- **By whom:** the claims code queues the event through Overwatch's outbox, and its sender posts it to `overwatch-ingest`. That function is the table's only writer, using the service role, and it upserts the row. The `get_claim_state` tool (tier 1) reads it through `ctx.db` under owner RLS: what each project holds, and what each has asked for and been refused. `claim_blocks` and `get_claim_blocks` keep the history of block episodes, unchanged.
+- **check records too (s87g):** `claims.cmd check` on an item another thread holds records a waiting request, db: items included, so the holder is told just as it is after a refused claim.
+- The table is not audited, because every change is a full-state upsert, so an audit would copy the whole state on each claim.
+
 ## 12. Phase 6 — spec files and archiving
 
 Claude's spec and progress text is written into the project's `docsDir` by link: a `docs` action whose payload is the file contents and whose fingerprint is checked. Finish moves the project's docs to `docs/history/`.

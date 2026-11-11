@@ -125,7 +125,11 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 5 git | s86ab, s86ac, s86ad, s86ae | s86ac plan step 2: link stakes (change or none) | `db:deploy` | numbered and queued (s86ae-r9cu). Test 5a0a17f4 passed 28/28 (run e294fb36). No drift (main's aebf523/c7e4d11 are Homer docs and scripts). number-migration gave 227: `227_link_stakes.sql`, byte-identical to the pending file, which is deleted. Queued for real as 39451850-1da8-4d17-8aa7-ac9ad2967726, not yet applied. db:deploy held. Before that, s86ad-f8kt: s86ad: verify 13 written with payloads naming switchboard_actions (Alex's option 1), 28 checks; main in HEAD; switchboard-runner deployed as v12, keyless call 401; pending migration plus verify 13 queued as one --test, 5a0a17f4-d66d-45b0-bed6-9ef811fc9c51, not yet run; not numbered; db:deploy held. Before that, s86ac-v6pe: s86ab stopped: main not in HEAD; gitsync 015ba916, main in HEAD, no switchboard drift (only Homer 224-226). Pending migration written (switchboard_stakes; switchboard_issue_link from 206 plus &stakes= after kind). Runner: /preview has stakes from deps.stakes, left out when the function is missing; 71 tests pass. Verify 13 blocked by the plan guard (it read a test payload's `delete from x` as SQL on table x). Not deployed, nothing queued | 2026-11-10 |
 | 5 git | s86af | s86ac plan step 3: red "Approval required" header | none | built (s86af-m3qy). 227 applied; runner v12 returns stakes. Approve page: a full-width red (bg-red-700) "Approval required" header at the very top whenever a loaded preview's stakes isn't exactly none (so missing stakes is red); none shows no header; nothing green; stakes read from the preview, never the url. Tests: page 43 (4 new), app 3311 passed / 7 skipped, scripts 65. Not live until the checkpoint | 2026-11-10 |
 | 5 git | s86ag, s86ah | Red bar means "waits for your Approve click" | none | numbered and queued (s86ah-x5gw). Test 8e15196b passed 29/29 (run fc944762). No drift (main's new commits: Homer docs/scripts and the snapshot showing 227). number-migration gave 229: `229_stakes_click.sql`, byte-identical to the pending file, which is deleted. Queued for real as cab9acf5-a9d7-4714-a7ef-f34e441c2874, not yet applied. Before that, s86ag-t7lb: built. Alex, 2026-11-10: the bar is about the click, not about change. From the code, only a sql --test runs on open and closes (the extension never clicks Approve). Pending `_pending_switchboard2-h8r_stakes_click.sql`: switchboard_stakes is none only for sql with test true. Verify 13 now 29 checks (sf_check, gitsync, gitcom change). Page: the bar is decided by runsByItself(preview) (sql kind and test true), not stakes. Tests: page 43, app 3311 passed / 7 skipped, scripts 65. Migration plus verify 13 queued as --test 8e15196b-41fd-4c69-863a-80f489ed3f8d, not numbered | 2026-11-10 |
-| 5 git | s86f, s87 | Live test of sandbox checks and sb setup by link (see below), the panel snapshot | see below | todo | |
+| 5 git | s86f | Live test of sandbox checks and sb setup by link (see below) | none | todo | |
+| 5 git | s87, s87a | Plan: claim state in Supabase (was the panel snapshot) | none | done (s87a-w5tc). Alex narrowed s87 to claim state only: post on change, never on a timer; a tier-1 tool; check records waiting requests. Steps s87b to s87g below | 2026-11-10 |
+| 5 git | s87b | Claim-state table: pending migration and verify 14 | `db:table:switchboard_claim_state` | done (s87b-v8kr). Test 766fe0d2 passed 15/15 (run 9bc5d2a8). Main current (d13e6ac). Pending `_pending_switchboard2-h8r_claim_state.sql` (unique user_id and repo, claims and blocks jsonb, not audited). Verify 14 (15 checks). Queued together as --test 766fe0d2-1452-42e8-a4fb-97345c056a8b, not yet run. Spec §11.8 added | 2026-11-10 |
+| 5 git | s87c | Number and queue the claim-state migration | `db:table:switchboard_claim_state` | queued (s87c-h4zp). Main current (d13e6ac), no drift. number-migration gave 231: `231_claim_state.sql`, byte-identical to the pending file, which is deleted. Queued for real as 04d54be3-310f-4733-987e-759cce19f5e3, not yet applied. Test 14 runs again after the checkpoint | 2026-11-10 |
+| 5 git | s87d-s87g | overwatch-ingest; get_claim_state; claims post on change; check records waits | see below | todo | |
 | 4 | s88-s92 | Salesforce reads: spec §10 | see below | todo | |
 | 5 SF | s93-s96 | Salesforce actions by link: spec §11 | see below | todo | |
 | 6-8 | | Spec §12-§14 | | todo | |
@@ -661,10 +665,31 @@ The helper arrives here rather than with Phase 4. Every git link needs a click f
 - A check on an alias not listed for the repo is refused before sf runs.
 - If D4 says so, `sb org add` by link for a second sandbox.
 
-**s87, panel snapshot in Supabase** (database step; estimated run: 12m). After git by link: the panel writes a snapshot of its tiles to Supabase, and an Alfred tool reads it.
-- create: supabase/migrations/_pending_switchboard2-h8r_panel_snapshot.sql, supabase/tests/switchboard2-h8r/10_verify_panel_snapshot.sql
-- update: panel/, supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts
+**s87, claim state in Supabase** (re-planned at s87a on 2026-11-10, spec §11.8; replaces the panel snapshot). Each claim change posts the repo's whole claim state, and a tier-1 tool reads it. `check` records waiting requests too. Nothing posts on a timer.
+
+**s87b, claim-state table: pending migration and verify 14** (estimated run: 15m).
+- create: supabase/migrations/_pending_switchboard2-h8r_claim_state.sql, supabase/tests/switchboard2-h8r/14_verify_claim_state.sql
+- update: docs/progress-switchboard2-h8r.md, docs/technical-spec-switchboard2-h8r.md
+- SQL: switchboard_claim_state
+
+**s87c, number and apply** (estimated run: 5m).
+- create: supabase/migrations/
+- delete: supabase/migrations/_pending_switchboard2-h8r_claim_state.sql
+- SQL: switchboard_claim_state
+
+**s87d, overwatch-ingest takes claim_state** (estimated run: 15m).
+- update: supabase/functions/overwatch-ingest/index.ts, supabase/functions/overwatch-ingest/ingest.ts, supabase/functions/overwatch-ingest/ingest.test.mjs
+- deploy: overwatch-ingest
+
+**s87e, get_claim_state tool** (estimated run: 10m; needs homer-h4k's mcp files).
+- update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
 - deploy: mcp
+
+**s87f, claims post their state on change** (switchboard repo; estimated run: 20m).
+- update: C:\Users\Alex\projects\switchboard\claims\lib\claims-core.mjs, C:\Users\Alex\projects\switchboard\claims\lib\claims-core.test.mjs, C:\Users\Alex\projects\switchboard\claims\lib\claim-blocks.test.mjs, C:\Users\Alex\projects\switchboard\overwatch\overwatch-post.mjs, C:\Users\Alex\projects\switchboard\panel\INTERFACES.md
+
+**s87g, check records waiting requests** (switchboard repo; estimated run: 15m).
+- update: C:\Users\Alex\projects\switchboard\claims\claims.mjs, C:\Users\Alex\projects\switchboard\claims\lib\claims-core.mjs, C:\Users\Alex\projects\switchboard\claims\lib\claim-blocks.test.mjs, C:\Users\Alex\projects\switchboard\claims\lib\claims-core.test.mjs
 
 ### Part 4, Salesforce reads
 
@@ -713,7 +738,8 @@ Each is claimed at its step, never before, and released by Checkpoint.
 | s84 | `db:table:switchboard_actions`, `db:deploy` |
 | s86b | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:fn:switchboard_needs_click`, `db:fn:switchboard_queue_helper`, `db:fn:switchboard_queue_git`, `db:fn:switchboard_pickup_helper`, `db:deploy` |
 | s86c, s86d | `db:deploy` |
-| s87 | the snapshot table (named at s87), `db:deploy` |
+| s87b, s87c | `db:table:switchboard_claim_state` |
+| s87d, s87e | `db:deploy` |
 | s88 | `db:table:switchboard_actions`, `db:table:switchboard_runs`, `db:table:switchboard_settings` |
 | s90, s91 | `db:table:switchboard_runs`, `db:deploy` |
 | s93 | `db:table:switchboard_actions`, `db:deploy` |
@@ -1028,6 +1054,7 @@ s48 planned 35 steps and about 6h09m. Part 1 grew from 2 steps and 18m to 6 step
 - `claude_reader` token deny list: drafted at the migration step.
 - Read rules for the 11 child tables with no `user_id` (2.10): through the parent row's owner. Until then `get_sql_read` can't read them.
 - The faint "Send to CLI" subtitle on the /send fallback page.
+- Client repos use claims (own phase after s87): a user-level claim-first rule outside the clients' committed CLAUDE.md, overwatch posting on for client repos so blocks and claim state reach Supabase, and a first live run of worktrees, block notice and yield in a client repo.
 - Switchboard repo, open (s80b): `gitpush` Finish should ask whether the project is done or only a phase finished, and move the docs to `docs/history/` only when the project is done. At cb42ff8 it archived this project's docs at the end of Phase 3.
 
 ## Test checklist
