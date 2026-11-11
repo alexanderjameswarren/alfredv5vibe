@@ -157,10 +157,27 @@ export const issueSwitchboardLinkTool = defineTool({
 
 const GIT_KEYS: Record<string, string[]> = {
   gitcom: ["command", "message", "include_unclaimed"],
-  gitsync: ["command"],
+  gitsync: ["command", "then_send"],
   gitnewtree: ["command", "install", "repo"],
-  gitpush: ["command", "mode", "finish", "paths", "all", "db", "message", "include_unclaimed"],
+  gitpush: ["command", "mode", "finish", "paths", "all", "db", "message", "include_unclaimed", "then_send"],
 };
+
+/**
+ * s90d: a chain's run tag, as 234's check holds it: lowercase, at most 40 characters, the action's own project code
+ * and "-s", then digits, optional letters, "-" and 4 characters. Null when it fits, else why not.
+ */
+export function chainTagProblem(tag: unknown, code: string): string | null {
+  if (typeof tag !== "string" || !tag) return "`then_send` must be a run tag, such as switchboard2-h8r-s90e-ab12.";
+  if (tag.length > 40) return `\`then_send\` ${tag} is over 40 characters, so it can't be chained; use a Send link instead.`;
+  if (!/^[a-z0-9_-]+$/.test(tag)) return `\`then_send\` ${JSON.stringify(tag)} must be lowercase letters, digits, _ and - only.`;
+  if (!tag.startsWith(`${code}-s`)) {
+    return `\`then_send\` ${tag} is not a run tag of ${code}: a chain only sends into the window it ran in.`;
+  }
+  if (!/^[0-9]+[a-z]*-[a-z0-9]{4}$/.test(tag.slice(code.length + 2))) {
+    return `\`then_send\` ${tag} is not a run tag: after ${code}-s it needs the step's digits, any letters, then - and 4 characters.`;
+  }
+  return null;
+}
 const PROJECT_CODE = /^[a-z0-9][a-z0-9_-]{1,40}$/;
 const CHAT_URL = /^https:\/\/claude\.ai\/chat\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SEGMENT = /^[A-Za-z0-9_.-]+$/;
@@ -181,6 +198,9 @@ export function gitPayload(args: Record<string, unknown>): { payload: Record<str
   const command = p.command;
   if (typeof command !== "string" || !Object.hasOwn(GIT_KEYS, command)) {
     return r(`\`command\` must be gitcom, gitsync, gitnewtree or gitpush, not ${JSON.stringify(command ?? null)}.`);
+  }
+  if (p.then_send !== undefined && p.then_send !== null && !GIT_KEYS[command].includes("then_send")) {
+    return r(`${command} can't chain a prompt: only gitsync and gitpush checkpoint or push take \`then_send\`.`);
   }
   const extra = Object.keys(p).filter((k) => !GIT_KEYS[command].includes(k));
   if (extra.length) return r(`${command} does not take ${extra.join(", ")}.`);
@@ -227,11 +247,25 @@ export function gitPayload(args: Record<string, unknown>): { payload: Record<str
     }
     if (mode === "checkpoint" && p.include_unclaimed !== undefined) return r("`include_unclaimed` is only for main.");
   }
+  // s90d: the chained link. Stored as then: {send}, as 234 holds it.
+  if (p.then_send !== undefined) {
+    if (command === "gitpush" && p.mode === "finish") return r("a Finish can't chain a prompt: the worktree is gone afterwards.");
+    const code = typeof _c === "string" ? _c.trim() : "";
+    const problem = chainTagProblem(p.then_send, code);
+    if (problem) return r(problem);
+    p.then = { send: p.then_send };
+    delete p.then_send;
+  }
   return { payload: p };
 }
 
-/** What the click will do, in the queue's capitals. */
+/** What the click will do, in the queue's capitals; a chain adds what follows (s90d). */
 export function gitHeadline(code: string, p: Record<string, unknown>): string {
+  const send = (p.then as { send?: string } | undefined)?.send;
+  return send ? `${gitCommandHeadline(code, p)}, THEN SENDS PROMPT ${send} AT YOUR TAP` : gitCommandHeadline(code, p);
+}
+
+function gitCommandHeadline(code: string, p: Record<string, unknown>): string {
   switch (p.command) {
     case "gitcom":
       return `GITCOM ${code}: COMMITS ITS CLAIMED FILES${p.include_unclaimed === "all" ? " AND EVERY UNCLAIMED CHANGE" : ""}`;
@@ -281,10 +315,15 @@ export const queueSwitchboardGitTool = defineTool({
       if (REFUSALS.has(error.code ?? "")) throw fail(tool, `queued as ${actionId}, but no link: ${error.message}`);
       throw dbError(tool, `issuing the link for ${actionId}`, error);
     }
+    const send = (checked.payload.then as { send?: string } | undefined)?.send;
     return {
       ...(data as Record<string, unknown>), action_id: actionId, payload: checked.payload,
-      next: "Give Alex the url. Once he approves, the result line (git <action id> done or failed) arrives in this chat " +
-        "by itself when the command finishes; he can also say \"check the git run\" (get_switchboard_run).",
+      next: send
+        ? `Give Alex the url; it replaces both the git link and the Send link, and your reply still ends with the ${send} prompt block. ` +
+          `Once he approves and taps the tile, the result arrives in this chat as "git ${actionId} done; prompt sent", ` +
+          `"git ${actionId} done; send not run: <reason>" or "git ${actionId} failed; send not run".`
+        : "Give Alex the url. Once he approves, the result line (git <action id> done or failed) arrives in this chat " +
+          "by itself when the command finishes; he can also say \"check the git run\" (get_switchboard_run).",
     };
   },
 });

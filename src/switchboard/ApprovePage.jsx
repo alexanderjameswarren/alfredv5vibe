@@ -165,7 +165,8 @@ function Shell({ children, preview }) {
       <div className="flex justify-center p-4">
       <div className="w-full max-w-3xl self-start p-4 sm:p-8 bg-white rounded-lg shadow-md">
         <h1 className="text-2xl font-bold text-dark mb-2 text-center">Alfred</h1>
-        <p className="text-sm text-dark text-center mb-6">Approve</p>
+        {/* s90d: a sql test runs and closes by itself, so nothing on it is approved. */}
+        {runsByItself(preview) ? <div className="mb-6" /> : <p data-testid="approve-heading" className="text-sm text-dark text-center mb-6">Approve</p>}
         {children}
       </div>
       </div>
@@ -372,6 +373,11 @@ export default function ApprovePage() {
           </div>
         )}
         <p className="font-bold text-dark mb-2 break-words">{preview.headline}</p>
+        {preview.kind === 'git' && typeof preview.payload?.then?.send === 'string' && (
+          <p data-testid="approve-chain" className="text-dark mb-2 break-words">
+            Then sends the prompt <span className="font-mono break-all">{preview.payload.then.send}</span> when you tap the tile.
+          </p>
+        )}
         <p className="text-sm text-dark">Project</p>
         <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code} data-switchboard-kind={preview.kind}>{preview.project_code}</p>
         <ul data-testid={`approve-${isSfRead ? 'sf-read' : word}`} className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">

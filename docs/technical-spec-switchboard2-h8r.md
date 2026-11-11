@@ -647,6 +647,18 @@ Alex narrowed s87 on 2026-11-10 from a tile snapshot to claim state only.
   - gitpush Checkpoint leaves the worktree current, by fast-forwarding it after the merge;
   - chained links, for example gitsync and then send this prompt, or checkpoint and then sync.
 
+  **The chained link as built (s90a to s90d, Alex 2026-11-11).** `queue_switchboard_git` takes an optional `then_send`, the run tag of the CLI prompt in the same reply.
+  - **Where it's allowed:** only on gitsync, and gitpush checkpoint or push. It's refused on gitcom, gitnewtree and a Finish.
+  - **The tag:** lowercase, at most 40 characters, the action's own project code then `-s`, then the step's digits, any letters, `-` and 4 characters. Anything else is refused before anything is queued.
+  - **How it's stored:** as `payload.then: {send}`. 234's check holds the same rule.
+  - **The headline** adds ", THEN SENDS PROMPT <tag> AT YOUR TAP".
+  - **The approve page** shows one line under the headline: "Then sends the prompt <tag> when you tap the tile."
+  - **In the reply,** the chain link replaces both the git link and the Send link. The reply still ends with the prompt block.
+  - **Never chain the checkpoint right after a test.**
+  - **The prompt goes** only if the command succeeded, at Alex's tap. A successful chain's tile reads "Send git + prompt".
+  - **The result lines:** `git <id> done; prompt sent`, `git <id> done; send not run: <reason>`, or `git <id> failed; send not run`.
+  - **A sql test** runs and closes by itself, so its page has no "Approve" heading.
+
   Sandbox checks stay as links.
 - **One user-level rules file** for every Switchboard repo, applying only in repos listed in repos.json. It holds:
   - the claims routine;

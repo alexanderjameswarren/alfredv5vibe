@@ -559,6 +559,38 @@ test('runsByItself: only a sql test', () => {
   }
 });
 
+// --- s90d: the chained link, and no Approve heading on a test that runs by itself ---
+
+test('chain: a chained git link says it sends the prompt at the tap; a plain one does not', async () => {
+  const CHAINED = { ...SYNC, headline: 'GITSYNC p-a1: MERGES MAIN INTO THE WORKTREE, THEN SENDS PROMPT p-a1-s90e-ab12 AT YOUR TAP',
+    payload: { command: 'gitsync', then: { send: 'p-a1-s90e-ab12' } } };
+  runner({ preview: reply(CHAINED) });
+  const a = open();
+  expect(await screen.findByTestId('approve-chain')).toHaveTextContent('Then sends the prompt p-a1-s90e-ab12 when you tap the tile.');
+  expect(screen.getByTestId('approve-heading')).toHaveTextContent('Approve');
+  a.unmount();
+  runner({ preview: reply(SYNC) });
+  open();
+  await screen.findByText(SYNC.headline);
+  expect(screen.queryByTestId('approve-chain')).toBeNull();
+});
+
+test('a sql test has no Approve heading; a real sql run and a git link keep it', async () => {
+  runner({ preview: reply({ ...PREVIEW, test: true }), 'dry-run': () => reply({ ok: true, test: true, run_id: 'dry1', summary: 'undone' }) });
+  const a = open();
+  await screen.findByText(PREVIEW.headline);
+  expect(screen.queryByTestId('approve-heading')).toBeNull();
+  expect(screen.queryByText(/^approve$/i)).toBeNull();
+  a.unmount();
+  for (const p of [PREVIEW, SYNC]) {
+    runner({ preview: reply(p), 'dry-run': CLEAN });
+    const b = open();
+    await screen.findByText(p.headline);
+    expect(screen.getByTestId('approve-heading')).toHaveTextContent('Approve');
+    b.unmount();
+  }
+});
+
 // --- s89e: Salesforce reads (spec 10) ---
 
 const READ_PROD = { alias: 'cd-prod', production: true, level: 'data', object: 'Contribution__c', fields: ['Id', 'Status__c'], limit: 50,
