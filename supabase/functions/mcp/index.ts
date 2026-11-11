@@ -102,7 +102,7 @@ import {
   searchHomerBooksTool,
 } from "../_shared/tools/homer.ts";
 import {
-  getSqlReadTool, getSwitchboardRunTool, issueSwitchboardLinkTool, queueSwitchboardGitTool,
+  getClaimStateTool, getSqlReadTool, getSwitchboardRunTool, issueSwitchboardLinkTool, queueSwitchboardGitTool,
   queueSwitchboardSbSetupTool, queueSwitchboardSfCheckTool,
 } from "../_shared/tools/switchboard.ts";
 import {
@@ -3560,6 +3560,24 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(getSwitchboardRunTool, args, token),
+  );
+
+  server.registerTool(
+    "get_claim_state",
+    {
+      title: "Get Claim State",
+      description:
+        "Who holds what across the CLI threads, per repo: each project's claims (files, folders and db: items, each with kind and claimed_at) and the live blocks (a project that asked for an item another holds and was refused: waiter, holder, item, since). " +
+        "This is the state as of the LAST CLAIM CHANGE in that repo (claim, release, yield, cleanup, gitpush checkpoint or finish). It is posted only on change, never on a timer, so an old posted_at means nothing has changed since, not that it is stale. " +
+        "get_claim_blocks is different: the history of block episodes, for patterns over time; use this for now. Repos with overwatch posting off (the client Salesforce repos, for now) don't appear. " +
+        "Optional filters: repo (its repos.json key, or the last folder name, e.g. alfred-v5) and project_code (keeps only that project's claims, and the blocks where it is the waiter or the holder). " +
+        "Returns { repos: [{ repo, name, posted_at, source_host, holders: { <project code>: [{ item, kind, claimed_at }] }, blocks: [{ waiter, holder, item, since }] }] }. Tier 1.",
+      inputSchema: {
+        repo: z.string().optional().describe("A repos.json key, e.g. C:\\Users\\Alex\\projects\\alfred-v5, or its last folder name, e.g. alfred-v5."),
+        project_code: z.string().optional().describe("A project code, e.g. switchboard2-h8r: only its claims, and blocks where it waits or holds."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getClaimStateTool, args, token),
   );
 
   server.registerTool(

@@ -39,6 +39,58 @@ function fakeDb({ tables = {}, rpc = { data: null, error: null } } = {}) {
 }
 const ok = (data) => ({ data, error: null });
 
+// --- get_claim_state (s87e) ------------------------------------------------------------------------------------------
+
+const ALFRED = "C:\\Users\\Alex\\projects\\alfred-v5";
+const SWB = "C:\\Users\\Alex\\projects\\switchboard";
+const STATE_ROWS = [
+  { repo: ALFRED, posted_at: "2026-11-11T07:00:00Z", source_host: "DESK", blocks: [{ waiter: "homer-h4k", holder: "switchboard2-h8r", item: "src/a.js", since: "2026-11-11T06:00:00Z" }],
+    claims: [{ item: "src/a.js", owner: "switchboard2-h8r", kind: "file", claimed_at: "2026-11-10T00:00:00Z" },
+      { item: "db:deploy", owner: "switchboard2-h8r", kind: "db", claimed_at: "2026-11-11T07:00:00Z" },
+      { item: "src/homer/", owner: "homer-h4k", kind: "folder", claimed_at: "2026-11-09T00:00:00Z" }] },
+  { repo: SWB, posted_at: "2026-11-10T00:00:00Z", source_host: null, blocks: [], claims: [{ item: "claims/", owner: "main", kind: "folder", claimed_at: "2026-11-01T00:00:00Z" }] },
+];
+const claimState = (args, db = fakeDb({ tables: { switchboard_claim_state: ok(STATE_ROWS) } })) =>
+  m.getClaimStateTool.handler(args, { db }).then((out) => ({ out, db }));
+
+test("get_claim_state: tier 1, reads only its table, named columns, clamped", async () => {
+  assert.equal(m.getClaimStateTool.tier, 1);
+  const { out, db } = await claimState({});
+  assert.deepEqual(db.calls.map((c) => c[1]), ["select", "order", "limit"]);
+  assert.equal(db.calls[0][0], "switchboard_claim_state");
+  assert.equal(db.calls[0][2], "repo, claims, blocks, posted_at, source_host");
+  assert.equal(db.calls[2][2], 50);
+  assert.equal(out.repos.length, 2);
+});
+
+test("get_claim_state: claims grouped by owner, with live blocks", async () => {
+  const { out } = await claimState({});
+  const a = out.repos[0];
+  assert.equal(a.name, "alfred-v5");
+  assert.equal(a.posted_at, "2026-11-11T07:00:00Z");
+  assert.deepEqual(Object.keys(a.holders).sort(), ["homer-h4k", "switchboard2-h8r"]);
+  assert.deepEqual(a.holders["switchboard2-h8r"].map((c) => c.item), ["src/a.js", "db:deploy"]);
+  assert.deepEqual(a.holders["homer-h4k"][0], { item: "src/homer/", kind: "folder", claimed_at: "2026-11-09T00:00:00Z" });
+  assert.equal(a.blocks.length, 1);
+});
+
+test("get_claim_state: repo by key or folder name; project_code keeps its own claims and blocks", async () => {
+  assert.deepEqual((await claimState({ repo: "alfred-v5" })).out.repos.map((r) => r.name), ["alfred-v5"]);
+  assert.deepEqual((await claimState({ repo: "c:\\users\\alex\\projects\\switchboard\\" })).out.repos.map((r) => r.name), ["switchboard"]);
+  assert.deepEqual((await claimState({ repo: "team-impact" })).out.repos, []);
+  const { out } = await claimState({ project_code: "homer-h4k" });
+  assert.deepEqual(Object.keys(out.repos[0].holders), ["homer-h4k"]);
+  assert.equal(out.repos[0].blocks.length, 1);
+  assert.deepEqual(out.repos[1].holders, {});
+  assert.deepEqual((await claimState({ project_code: "main" })).out.repos[0].blocks, []);
+});
+
+test("get_claim_state: bad filters refused; a database error is passed on", async () => {
+  await assert.rejects(claimState({ project_code: "Bad Code" }), /project_code/);
+  await assert.rejects(claimState({ repo: "" }), /repo/);
+  await assert.rejects(claimState({}, fakeDb({ tables: { switchboard_claim_state: { data: null, error: { code: "42501", message: "denied" } } } })), /claim state/);
+});
+
 test("tiers", () => {
   assert.equal(m.getSwitchboardRunTool.tier, 1);
   assert.equal(m.issueSwitchboardLinkTool.tier, 2);
