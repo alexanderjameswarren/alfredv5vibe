@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-11 11:03, through migration 233 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-11 13:38, through migration 234 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -18633,7 +18633,7 @@ CREATE TABLE IF NOT EXISTS "public"."switchboard_actions" (
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "picked_up_at" timestamp with time zone,
-    CONSTRAINT "switchboard_actions_git_payload" CHECK ((("kind" <> 'git'::"text") OR (COALESCE(("payload" ->> 'command'::"text"), ''::"text") = ANY (ARRAY['gitcom'::"text", 'gitsync'::"text", 'gitnewtree'::"text"])) OR ((COALESCE(("payload" ->> 'command'::"text"), ''::"text") = 'gitpush'::"text") AND (COALESCE(("payload" ->> 'mode'::"text"), ''::"text") = ANY (ARRAY['push'::"text", 'checkpoint'::"text", 'finish'::"text"]))))),
+    CONSTRAINT "switchboard_actions_git_payload" CHECK ((("kind" <> 'git'::"text") OR COALESCE((((COALESCE(("payload" ->> 'command'::"text"), ''::"text") = ANY (ARRAY['gitcom'::"text", 'gitsync'::"text", 'gitnewtree'::"text"])) OR ((COALESCE(("payload" ->> 'command'::"text"), ''::"text") = 'gitpush'::"text") AND (COALESCE(("payload" ->> 'mode'::"text"), ''::"text") = ANY (ARRAY['push'::"text", 'checkpoint'::"text", 'finish'::"text"])))) AND ((NOT ("payload" ? 'then'::"text")) OR (((("payload" ->> 'command'::"text") = 'gitsync'::"text") OR ((("payload" ->> 'command'::"text") = 'gitpush'::"text") AND (("payload" ->> 'mode'::"text") = ANY (ARRAY['checkpoint'::"text", 'push'::"text"])))) AND ("jsonb_typeof"(("payload" -> 'then'::"text")) = 'object'::"text") AND ((("payload" -> 'then'::"text") - 'send'::"text") = '{}'::"jsonb") AND ("jsonb_typeof"((("payload" -> 'then'::"text") -> 'send'::"text")) = 'string'::"text") AND ("length"((("payload" -> 'then'::"text") ->> 'send'::"text")) <= 40) AND ((("payload" -> 'then'::"text") ->> 'send'::"text") ~ '^[a-z0-9_-]+$'::"text") AND ("left"((("payload" -> 'then'::"text") ->> 'send'::"text"), ("length"("project_code") + 2)) = ("project_code" || '-s'::"text")) AND ("substr"((("payload" -> 'then'::"text") ->> 'send'::"text"), ("length"("project_code") + 3)) ~ '^[0-9]+[a-z]*-[a-z0-9]{4}$'::"text")))), false))),
     CONSTRAINT "switchboard_actions_git_repo" CHECK ((("kind" <> 'git'::"text") OR (NOT COALESCE(("payload" ? 'repo'::"text"), false)) OR (COALESCE((("payload" ->> 'command'::"text") = 'gitnewtree'::"text"), false) AND COALESCE(("jsonb_typeof"(("payload" -> 'repo'::"text")) = 'string'::"text"), false) AND COALESCE(("length"(("payload" ->> 'repo'::"text")) <= 240), false) AND COALESCE((("payload" ->> 'repo'::"text") ~ '^[A-Za-z]:(\\[^\\/:*?"<>|[:cntrl:]]+)+$'::"text"), false) AND COALESCE(("strpos"(("payload" ->> 'repo'::"text"), '..'::"text") = 0), false)))),
     CONSTRAINT "switchboard_actions_kind_valid" CHECK (("kind" = ANY (ARRAY['sql'::"text", 'git'::"text", 'sf_check'::"text", 'sb_setup'::"text", 'sf_read'::"text", 'sf_deploy'::"text", 'sf_test'::"text", 'sf_read_prod_data'::"text", 'docs'::"text"]))),
     CONSTRAINT "switchboard_actions_link_complete" CHECK ((("link_hash" IS NULL) = ("link_expires_at" IS NULL))),
@@ -18698,7 +18698,7 @@ COMMENT ON COLUMN "public"."switchboard_actions"."chat_url" IS 'Address of the c
 
 
 
-COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...}, and a gitnewtree may name its "repo", an absolute path (spec 11.3). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], "folder" with from_sandbox, ...} (spec 11.5). sf_read: {"alias", "production", "level": "objects|metadata|ids|data", "object", "count" or "fields" with "limit", "filters"}, never SOQL text (spec 10). Fixed after insert.';
+COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...}, and a gitnewtree may name its "repo", an absolute path (spec 11.3); a gitsync, or a gitpush checkpoint or push, may add "then": {"send": "<run tag>"}, a prompt of the same project sent at Alex''s tap only if the command succeeds (spec 11.9, s90a). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], "folder" with from_sandbox, ...} (spec 11.5). sf_read: {"alias", "production", "level": "objects|metadata|ids|data", "object", "count" or "fields" with "limit", "filters"}, never SOQL text (spec 10). Fixed after insert.';
 
 
 
