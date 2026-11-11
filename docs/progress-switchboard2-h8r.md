@@ -132,6 +132,17 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 5 git | s87d | overwatch-ingest takes claim_state | `db:deploy` | done (s87d-r6mw). 231 live and checkpointed; main current (6252c9a). ingest.ts: parseClaimState (repo an absolute Windows path, at most 2000 claims and 500 blocks, every entry checked) and planClaimState (an older posted_at is stale). index.ts: reads posted_at, then upserts on (user_id, repo), after the secret, user_id from CLIPBOARD_USER_ID; stale answers ok with stale true. Tests: 19 pass (4 new). Deployed as v9; keyless call 401 `{"ok":false,"error":"unauthorized"}`. No real post sent (s87f). Spec §11.8 write, §11.9 Alex's 2026-11-10 decisions. db:deploy held until the checkpoint | 2026-11-11 |
 | 5 git | s87e | get_claim_state tool | `db:deploy` | done (s87e-p8kc). Main current (2b21d70, Homer's 23 tools in). get_claim_state, tier 1, in switchboard.ts: a clamped read (50 repos, named columns) of switchboard_claim_state, claims grouped by owner, live blocks; filters repo (key or folder name) and project_code. Registered after get_switchboard_run, no readOptions (not a readTable list). Tests: tools 69, mcp 49 (224 tools), tables 1. mcp deployed as v217; live list 224 tools with get_claim_state. db:deploy held until the checkpoint. s87 is complete apart from Alex's live test | 2026-11-11 |
 | 5 git | s87f, s87g | Claims post on change; check records waits (switchboard repo) | none | done in the switchboard repo thread | |
+| 5 git | s88 | Plan: the rest of Phases 3 to 5 (spec §11.9) | none | done (s88-k4wd). Items A to J, Thursday's first | 2026-11-11 |
+| 5 git | s88a, s88ab | The user-level rules file and its SessionStart hook (switchboard repo) | none | done in the switchboard repo thread: rules/SWITCHBOARD-RULES.md, installed to %LOCALAPPDATA%\Switchboard\rules\, loaded by session-rules; live-tested in common-defense (all 12 sections) | 2026-11-11 |
+| 5 git | B | Overwatch posting on for the client repos | none | done by Alex: team-impact and actblue\common-defense set to overwatch on | 2026-11-11 |
+| 5 git | s88b | alfred-v5's CLAUDE.md slimmed to Alfred-only rules | none | done (s88b-f5jn). Shared sections removed; kept: Alfred's git notes, Step 0 and project codes, the database steps, all SQL and the queue, numbering, verification queries, the schema snapshot rule, tests and the jestNote. Rules the shared file lacks kept in "Rules the shared file doesn't carry yet", to move into SWITCHBOARD-RULES.md. Fresh CLI sessions needed | 2026-11-11 |
+
+**Remaining order (2026-11-11):**
+1. s88c.
+2. s88d.
+3. G (s89a to s89e).
+4. Skill cards.
+5. Then D, H, I and J.
 
 **Today's list (2026-11-11), in order:**
 1. s87e to s87g.
