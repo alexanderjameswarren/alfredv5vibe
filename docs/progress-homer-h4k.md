@@ -57,13 +57,15 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [ ] s17c (2026-11-11): wrote `232_fix_street_cultivation_series.sql` (the draft plus its path line, checked with diff), deleted the draft, queued 232 with `--expect 2,1`, **action `21b8a505-fc27-4e81-890e-b28701249df1`**, waiting for approval. **Deploy still blocked**: switchboard2-h8r still held db:deploy at 07:29, so this step stopped after the queue. Held: db:table:homer_books, db:table:homer_series, db:migration:232 (until 232 has run).
 - [x] 232 applied: action `21b8a505-fc27-4e81-890e-b28701249df1`, run `4a6340a6-65fe-4c91-b21c-c4a28e917724` (2 books updated, 1 series deleted, CONFORMANT). s17d checked it read-only: B07W9J75R3, B086Q8ZGTD and B08NFJWWBF are all in f7ef6cb1… (Street Cultivation, B086YRRJ97) at positions 1, 2, 3, and 9c446b9a… is gone.
 - [ ] s17d (2026-11-11 07:48): **deploy still blocked**: switchboard2-h8r has held db:deploy for 29 minutes (homer-h4k has waited 28). Stopped before the deploy; the `create_homer_book` fix is still not live.
+- [x] Checkpoint of the s17 fixes (main 37675e2), which released the db: claims; gitsync brought in switchboard2-h8r's 70f471e (get_claim_state, mcp v217).
+- [x] s17e (2026-11-11 07:55): drift check clean (`supabase/functions/` equals main 37675e2, nothing uncommitted). Claimed db:deploy; homer 28/28, mcp index 49/49; `npx supabase functions deploy mcp` deployed. Live tools list: **224 tools**, all 23 Homer tools and `get_claim_state`. `check_platform_conformance`: CONFORMANT (115). db:deploy released; no db: claims held. **The `create_homer_book` series fix is live.**
 - [x] **Data fix** (was: not queued at s17): the SQL file needs a create scope, and numbering needs gitsync. Planned SQL: move B086Q8ZGTD and B08NFJWWBF to series f7ef6cb1-ed94-4d5a-86f7-51810136e73b (only where they are in 9c446b9a-84a9-4208-b5c0-1c75b0a241b3), then delete 9c446b9a… only where no book, verdict, genre link, queue item or taste profile references it (verdicts, profiles and genre links cascade on delete; books and queue items set null). Triggers on both tables are only `updated_at` and the audit trigger, so both statements are allowed. `--expect 2,1`.
 - **Clip read, then export read (s17, read-only finding).** The import keys reads by `import_key` (`export:<asin>:<device>`), and a clip read is `clip:<date>:<asin>` with no device; the one-per-book-per-device index only covers reads with a device. So **both stay**: the export read is inserted beside the clip read, nothing replaced, nothing refused. Counts don't double (`homer_series_verdicts` counts distinct books, the tab merges per book), but `get_homer_reads` shows two rows, and an **open** clip read stays open even after the export brings the finish, which then blocks a new clip read of that book. Recommendation: keep both rows (different evidence), and after each import close any open clip or chat read whose book now has a finished export read by the same reader (finished_on from the export read), in the import script or a small RPC.
 
+- [x] s18 (2026-11-11): recorded phases G and H and the first live weekly clip (below and in the spec). Skill to 2026-11-11b: the remaining unowned devices stay unowned unless Alex asks; the owner method is kept for new devices; the export repeats every 4 months.
+
 ### What's left
-1. **Phase G** (data only, below): Alex adds the two recurring intentions in the app; a chat writes the homer `app_profiles` row (rhythm_days 7, an activity recipe counting clip reads).
-2. **Phase H** (calibration in claude.ai, below): plan v1 first, then genres, taste profiles, suggestion rounds, device owners.
-3. **Closeout**: Alex runs `gitpush` Finish for homer-h4k, which releases the file claims, removes the worktree and deletes the branch.
+1. **Closeout**: Alex runs `gitpush` Finish for homer-h4k, which releases the file claims, removes the worktree and deletes the branch.
 
 ### E. Skill
 - [x] s11 (was s13): wrote `.claude/skills/homer/SKILL.md` (Skill version 2026-11-10). Two gaps for phase D, not yet in the spec: (1) no tool writes series availability, so the skill names `update_homer_series` (tier 2: notes plus the 5 availability fields); (2) `create_homer_read` must accept a book Homer doesn't have yet (a new clip title), or there must be a way to add one.
@@ -78,24 +80,22 @@ Spec: `docs/homer-spec-homer-h4k.md`. Worktree: `homer-h4k`. Steps are numbered 
 - [x] s13b: wrote `230_homer_screen.sql` (the draft plus a path line, checked with diff), deleted the draft, queued 230 with `--expect 1`, action `1abf218f-ef54-4aca-a1b5-551b2e78fbe3`. Waiting for Alex to approve it; then the Checkpoint of 230 releases db:table:apps and db:migration:230.
 
 ### G. Keeping reads current (data only)
-- [ ] Alex adds the two recurring intentions in the Alfred UI (weekly clip; Amazon export every 6 months)
-- [ ] Chat writes the homer `app_profiles` row through `update_app_profile`: `rhythm_days` 7, and an `activity_recipe` saying "count homer_reads with source = 'clip' created in the window, from get_homer_reads (reader any, source clip)", so Overwatch flags a week with no clip
+- [x] Alex added two recurring intentions in his Media context (outside the Homer project): a weekly Kindle Content page clip (Wednesdays) and an Amazon export request every 4 months. Each holds a prompt that starts the work in a claude.ai chat.
+- [x] The homer `app_profiles` row is set: `rhythm_days` 7, activity recipe counting clip and chat reads.
 
 ### H. Calibration (chat only)
-- [ ] Propose genres from the series already read; Alex corrects them
-- [ ] Plan v1 through `create_homer_plan`
-- [ ] Taste profiles for the seed series
-- [ ] Suggestion rounds; corrections become plan versions
-- [ ] Propose owners for the older devices, newest first; Alex confirms
+- [x] Genres, plan and taste: **Homer plan v3 is active** (clusters and anchor series, 9 scales, `tired_gap_days` 180, `quiet_after_days` 120). Taste profiles and verdicts recorded.
+- [x] Device owners worked through: 12 devices remain unowned; Alex decided to leave them (too little data).
+- [x] First live weekly clip (2026-11-11): Street Cultivation 1 to 3 recorded; the `create_homer_book` series fix and data repair 232; the import closes open clip reads; "Needs ASIN" queue items (Elise's Titan of Baleros is the first).
 
-## Next step's scope (s17e, deploy mcp once switchboard2-h8r releases db:deploy)
+## Next step's scope (none: closeout)
 - create: nothing
-- update: docs/progress-homer-h4k.md
+- update: nothing
 - delete: nothing
-- deploy: mcp
+- deploy: nothing
 - SQL: none
 
-s17e runs once switchboard2-h8r has released db:deploy (and, if main has moved since 2b21d70, after Alex's gitsync and a drift check under `supabase/functions/`). It claims db:deploy, reruns homer.test.mjs and index.test.mjs, deploys mcp, checks the 23 Homer tools are live and conformance is CONFORMANT, and releases db:deploy. The Checkpoint can go before or after it: Checkpoint paths `supabase/functions/_shared/tools/homer.ts`, `supabase/functions/_shared/tools/homer.test.mjs`, `scripts/homer-import.mjs`, `scripts/lib/homer-import.mjs`, `scripts/lib/homer-import.test.mjs`, `supabase/migrations/232_fix_street_cultivation_series.sql`, `.claude/skills/homer/SKILL.md`, `docs/progress-homer-h4k.md`; it releases db:table:homer_books, db:table:homer_series and db:migration:232.
+No further CLI step. Alex runs `gitpush` **Finish** for homer-h4k, which commits the three s18 files, merges into main, releases the file claims, removes the worktree and deletes the branch.
 
 ## Notes
 - **Phase D plan (s14).** One file, `supabase/functions/_shared/tools/homer.ts` (+ `homer.test.mjs`, run with `node --experimental-strip-types --test`), registered in `supabase/functions/mcp/index.ts` (+ an `EXPECTED_ADDED_HOMER` list in `index.test.mjs`). Every tool goes through `defineTool`, with literal `tables`, through `ctx.db`; lists through `readTable`. Every tool takes `reader` (key, default `alex`) where it's per reader. All 11 tables and the 228 columns are in `schema-snapshot.sql`, so `tables.test.mjs` can check them. **No migration and no new RPC**: the validators (`homer_plan_settings_problem`, `homer_scores_problem`), `create_homer_plan`, `homer_series_verdicts`, `homer_quiet_series` and `homer_import_batch` are already granted to authenticated, and the guards are triggers. db items: only `db:deploy`, at s16.
@@ -166,3 +166,5 @@ s17e runs once switchboard2-h8r has released db:deploy (and, if main has moved s
 | s17b | Data fix numbered 232, close open reads; deploy blocked | 07:19:56 | 07:21:50 | 1m54s |
 | s17c | Write and queue 232; deploy still blocked | 07:29:34 | 07:30:10 | 0m36s |
 | s17d | Verify 232; deploy still blocked | 07:48:20 | 07:49:00 | 0m40s |
+| s17e | Deploy mcp (series fix live) | 07:55:02 | 07:56:29 | 1m27s |
+| s18 | Closeout prep (G, H, skill 2026-11-11b) | 12:47:16 | 12:48:45 | 1m29s |
