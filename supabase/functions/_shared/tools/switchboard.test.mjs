@@ -853,3 +853,216 @@ test("git: a queue or link refusal is passed on, and says when the action was qu
   await assert.rejects(queueGit({ project_code: "p-a1", command: "gitsync" }, gitDb({ link: { data: null, error: { code: "55000", message: "another link is live" } } })),
     (e) => e.message.includes(`queued as ${ACTION_ID}`) && e.message.includes("another link is live"));
 });
+
+// --- s89e: queue_switchboard_sf_read and get_switchboard_sf_result (spec 10) ----------------------------------------
+
+/** A db whose chains on a table answer from that table's list in turn (the last answer repeats); inserts are kept. */
+function seqDb({ tables = {}, rpc = {} } = {}) {
+  const calls = [];
+  const inserted = [];
+  const used = {};
+  return {
+    calls, inserted,
+    from(table) {
+      const b = new Proxy({}, {
+        get: (_t, k) => {
+          if (k === "then") {
+            return (res) => {
+              const list = tables[table] ?? [{ data: null, error: null }];
+              const i = used[table] = (used[table] ?? -1) + 1;
+              res(list[Math.min(i, list.length - 1)]);
+            };
+          }
+          return (...args) => {
+            calls.push([table, k, ...args]);
+            if (k === "insert") inserted.push([table, args[0]]);
+            return b;
+          };
+        },
+      });
+      return b;
+    },
+    rpc(name, params) {
+      calls.push(["rpc", name, params]);
+      return Promise.resolve(rpc[name] ?? { data: null, error: null });
+    },
+  };
+}
+const READ_LINK = { url: "https://alfredv5vibe.vercel.app/switchboard/approve?t=x&kind=sf_read", expires_at: "2026-11-11T12:30:00Z" };
+const readQueueDb = ({ enabled = true, tenMin = 0, day = 0, settings, queue, link } = {}) => seqDb({
+  tables: {
+    switchboard_settings: [settings ?? ok({ sf_reads_enabled: enabled })],
+    // insert answers come from the same list: the budget counts come first, then the queued or refused log write.
+    switchboard_sf_read_log: [{ count: tenMin, error: null }, { count: day, error: null }, ok(null)],
+  },
+  rpc: {
+    switchboard_queue_helper: queue ?? ok({ action_id: ACTION_ID, project_code: "sf-cd-prod" }),
+    switchboard_issue_link: link ?? ok(READ_LINK),
+  },
+});
+const COUNT_READ = { alias: "ab-dev", production: false, level: "ids", object: "Contact", count: true };
+const PROD_READ = { alias: "cd-prod", production: true, level: "data", object: "Contribution__c", fields: ["Id", "Status__c"], limit: 50,
+  filters: [{ field: "Status__c", op: "=", value: "Failed" }, { field: "CreatedDate", op: ">=", value: "2026-11-01T00:00:00Z" }] };
+const queueRead = (args, db = readQueueDb()) => m.queueSwitchboardSfReadTool.handler(args, { db }).then((out) => ({ out, db }));
+const logged = (db) => db.inserted.filter(([t]) => t === "switchboard_sf_read_log").map(([, row]) => row);
+
+test("sf_read: tiers", () => {
+  assert.equal(m.queueSwitchboardSfReadTool.tier, 2);
+  assert.equal(m.getSwitchboardSfResultTool.tier, 1);
+});
+
+test("sf_read: every accepted shape", () => {
+  for (const p of [
+    { alias: "ab-dev", production: false, level: "objects" },
+    { alias: "ab-dev", production: false, level: "metadata", object: "Account" },
+    COUNT_READ,
+    { ...COUNT_READ, filters: [{ field: "CreatedDate", op: ">=", value: "2026-11-01T00:00:00Z" }] },
+    { alias: "cd-prod", production: true, level: "ids", object: "Contact", fields: ["Id", "CreatedDate", "LastModifiedDate"], limit: 200,
+      filters: [{ field: "Id", op: "in", value: ["003000000000001", "003000000000002"] }] },
+    PROD_READ,
+    { ...PROD_READ, filters: [{ field: "Refunded__c", op: "!=", value: true }, { field: "Notes__c", op: "=", value: null }] },
+  ]) {
+    assert.deepEqual(m.sfReadPayload({ ...p, chat_url: "x" }), { payload: p }, JSON.stringify(p));
+  }
+});
+
+test("sf_read: refused shapes say why, and never take SOQL text", () => {
+  const bad = [
+    [{ ...PROD_READ, soql: "SELECT Id FROM Account" }, /Never SOQL text/],
+    [{ ...COUNT_READ, query: "x" }, /does not take query/],
+    [{ ...COUNT_READ, production: undefined }, /`production` must be true or false/],
+    [{ ...COUNT_READ, alias: "-x" }, /`alias`/],
+    [{ ...COUNT_READ, level: "all" }, /`level` must be one of/],
+    [{ alias: "a", production: false, level: "objects", object: "Account" }, /takes no object/],
+    [{ alias: "a", production: false, level: "metadata", object: "Account", count: true }, /describes one object and takes no count/],
+    [{ ...COUNT_READ, object: "Account.Owner" }, /no dots/],
+    [{ ...COUNT_READ, count: false }, /`count` must be true/],
+    [{ ...COUNT_READ, fields: ["Id"] }, /a count takes no fields/],
+    [{ ...PROD_READ, fields: [] }, /`fields` must list 1 to 50/],
+    [{ ...PROD_READ, fields: ["Account.Name"] }, /`fields`/],
+    [{ ...PROD_READ, limit: 5000 }, /`limit`/],
+    [{ ...PROD_READ, limit: 1.5 }, /`limit`/],
+    [{ ...PROD_READ, filters: [] }, /1 to 10 filters/],
+    [{ ...PROD_READ, filters: [{ field: "Name", op: "like", value: "A%" }] }, /`op` must be one of/],
+    [{ ...PROD_READ, filters: [{ field: "Name", op: "=", value: "A", or: true }] }, /does not take or/],
+    [{ ...PROD_READ, filters: [{ field: "Name", op: "=" }] }, /needs a value/],
+    [{ ...PROD_READ, filters: [{ field: "Name", op: "=", value: { a: 1 } }] }, /one plain value/],
+    [{ ...PROD_READ, filters: [{ field: "Name", op: "in", value: [] }] }, /1 to 100 plain values/],
+    [{ ...PROD_READ, filters: [{ field: "Name", op: "in", value: [{ a: 1 }] }] }, /1 to 100 plain values/],
+    [{ ...COUNT_READ, filters: [{ field: "Email", op: "=", value: "x" }] }, /ids reads only Id, CreatedDate, LastModifiedDate.*Email needs level data/],
+    [{ alias: "a", production: false, level: "ids", object: "Contact", fields: ["Id", "Email"], limit: 5 }, /Email needs level data/],
+  ];
+  for (const [p, why] of bad) {
+    const r = m.sfReadPayload(p);
+    assert.ok("refused" in r, JSON.stringify(p));
+    assert.match(r.refused, why, JSON.stringify(p));
+  }
+});
+
+test("sf_read: headlines name org, level and object; production full data leads", () => {
+  assert.equal(m.sfReadHeadline(PROD_READ), "PRODUCTION FULL DATA: SF READ DATA ON PRODUCTION cd-prod: 2 FIELDS OF Contribution__c, UP TO 50 ROWS, READ ONLY");
+  assert.equal(m.sfReadHeadline(COUNT_READ), "SF READ IDS ON SANDBOX ab-dev: A COUNT OF Contact, READ ONLY");
+  assert.equal(m.sfReadHeadline({ ...COUNT_READ, production: true }), "SF READ IDS ON PRODUCTION ab-dev: A COUNT OF Contact, READ ONLY");
+  assert.equal(m.sfReadHeadline({ alias: "a", production: false, level: "objects" }), "SF READ OBJECTS ON SANDBOX a: THE OBJECT LIST, READ ONLY");
+  assert.equal(m.sfReadHeadline({ alias: "a", production: false, level: "metadata", object: "Account" }), "SF READ METADATA ON SANDBOX a: THE DESCRIBE OF Account, READ ONLY");
+});
+
+test("sf_read queue: queues through switchboard_queue_helper with no code, issues the link, logs queued", async () => {
+  const { out, db } = await queueRead({ ...PROD_READ, chat_url: "https://claude.ai/chat/26f0cc8f-6ef0-4f14-81da-a915ad086e5b" });
+  const q = db.calls.find((c) => c[0] === "rpc" && c[1] === "switchboard_queue_helper")[2];
+  assert.deepEqual(q, { p_kind: "sf_read", p_project_code: null, p_payload: PROD_READ, p_headline: m.sfReadHeadline(PROD_READ),
+    p_chat_url: "https://claude.ai/chat/26f0cc8f-6ef0-4f14-81da-a915ad086e5b" });
+  assert.deepEqual(db.calls.find((c) => c[1] === "switchboard_issue_link")[2], { p_action_id: ACTION_ID });
+  assert.equal(out.url, READ_LINK.url);
+  assert.equal(out.action_id, ACTION_ID);
+  assert.match(out.headline, /^PRODUCTION FULL DATA: /);
+  assert.match(out.next, /get_switchboard_sf_result/);
+  const rows = logged(db);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].stage, "queued");
+  assert.equal(rows[0].action_id, ACTION_ID);
+  assert.equal(rows[0].org_alias, "cd-prod");
+  assert.deepEqual(rows[0].filters, PROD_READ.filters);
+});
+
+test("sf_read queue: the budget counts queue attempts only, in both windows", async () => {
+  const { db } = await queueRead(COUNT_READ);
+  const counts = db.calls.filter((c) => c[0] === "switchboard_sf_read_log" && c[1] === "in");
+  assert.equal(counts.length, 2);
+  assert.deepEqual(counts[0][3], ["queued", "refused"]);
+  for (const [tenMin, day] of [[20, 0], [0, 200]]) {
+    const over = readQueueDb({ tenMin, day });
+    await assert.rejects(queueRead(COUNT_READ, over), /READ BUDGET EXCEEDED.*Do NOT retry/);
+    assert.equal(over.calls.some((c) => c[1] === "switchboard_queue_helper"), false);
+    assert.equal(logged(over)[0].stage, "refused");
+  }
+  await queueRead(COUNT_READ, readQueueDb({ tenMin: 19, day: 199 }));
+});
+
+test("sf_read queue: the kill switch, or no settings row, refuses and logs; nothing is queued", async () => {
+  for (const db of [readQueueDb({ enabled: false }), readQueueDb({ settings: ok(null) }), readQueueDb({ settings: { data: null, error: { message: "down" } } })]) {
+    await assert.rejects(queueRead(COUNT_READ, db), /sf_reads_enabled|kill switch/);
+    assert.equal(db.calls.some((c) => c[1] === "switchboard_queue_helper"), false);
+    assert.equal(logged(db)[0].stage, "refused");
+  }
+});
+
+test("sf_read queue: a bad payload is refused and logged, with what was asked, before any read of the settings", async () => {
+  const db = readQueueDb();
+  await assert.rejects(queueRead({ ...PROD_READ, soql: "SELECT Id FROM Account" }, db), /refused: an sf_read does not take soql/);
+  assert.equal(db.calls.some((c) => c[0] === "switchboard_settings"), false);
+  const row = logged(db)[0];
+  assert.equal(row.stage, "refused");
+  assert.equal(row.org_alias, "cd-prod");
+  const noAlias = readQueueDb();
+  await assert.rejects(queueRead({ level: "objects", production: false }, noAlias), /`alias`/);
+  assert.equal(logged(noAlias)[0].org_alias, "?");
+});
+
+test("sf_read queue: a queue or link refusal is passed on", async () => {
+  await assert.rejects(queueRead(COUNT_READ, readQueueDb({ queue: { data: null, error: { code: "23514", message: "payload check" } } })), /refused: payload check/);
+  await assert.rejects(queueRead(COUNT_READ, readQueueDb({ link: { data: null, error: { code: "55000", message: "another link is live" } } })),
+    (e) => e.message.includes(`queued as ${ACTION_ID}`) && e.message.includes("another link is live"));
+});
+
+const takeDb = ({ take = ok(null), action = ok({ id: ACTION_ID, kind: "sf_read", status: "succeeded" }), run = ok({ summary: "s", finished_at: "t" }) } = {}) =>
+  seqDb({ tables: { switchboard_actions: [action], switchboard_runs: [run] }, rpc: { switchboard_take_sf_result: take } });
+const take = (db, id = ACTION_ID) => m.getSwitchboardSfResultTool.handler({ action_id: id }, { db });
+const TAKEN = { action_id: ACTION_ID, rows: [{ Id: "a0B1", Status__c: "Failed" }], row_count: 1, truncated: false, production_full_data: true };
+
+test("sf result: takes once through switchboard_take_sf_result; a stamped result says PRODUCTION FULL DATA first", async () => {
+  const db = takeDb({ take: ok(TAKEN) });
+  const out = await take(db);
+  assert.deepEqual(db.calls, [["rpc", "switchboard_take_sf_result", { p_action_id: ACTION_ID }]]);
+  assert.equal(Object.keys(out)[0], "stamp");
+  assert.equal(out.stamp, "PRODUCTION FULL DATA");
+  assert.deepEqual(out.rows, TAKEN.rows);
+  assert.equal(out.row_count, 1);
+  assert.equal(out.truncated, false);
+  assert.match(out.note, /deleted from Alfred.*Summarise them/);
+  const plain = await take(takeDb({ take: ok({ ...TAKEN, production_full_data: false }) }));
+  assert.equal(plain.stamp, undefined);
+});
+
+test("sf result: with nothing to take, says not finished, failed, cancelled or gone", async () => {
+  const cases = [
+    [{ action: ok({ id: ACTION_ID, kind: "sf_read", status: "link_issued" }), run: ok(null) }, "not finished"],
+    [{ action: ok({ id: ACTION_ID, kind: "sf_read", status: "consumed" }), run: ok({ summary: "picked up by the helper", finished_at: null }) }, "not finished"],
+    [{ action: ok({ id: ACTION_ID, kind: "sf_read", status: "failed" }), run: ok({ summary: "refused: org mismatch", finished_at: "t" }) }, "failed"],
+    [{ action: ok({ id: ACTION_ID, kind: "sf_read", status: "cancelled" }) }, "cancelled"],
+    [{}, "gone"],
+  ];
+  for (const [over, state] of cases) {
+    const out = await take(takeDb(over));
+    assert.equal(out.state, state);
+    assert.equal(out.rows, null);
+  }
+  assert.equal((await take(takeDb(cases[2][0]))).summary, "refused: org mismatch");
+});
+
+test("sf result: a bad id, an unknown action, another kind or a database error is refused", async () => {
+  await assert.rejects(take(takeDb(), "nope"), /`action_id` must be a UUID/);
+  await assert.rejects(take(takeDb({ action: ok(null) })), /no such action/);
+  await assert.rejects(take(takeDb({ action: ok({ id: ACTION_ID, kind: "sf_check", status: "succeeded" }) })), /not a Salesforce read/);
+  await assert.rejects(take(takeDb({ take: { data: null, error: { message: "down" } } })), /taking the result/);
+});

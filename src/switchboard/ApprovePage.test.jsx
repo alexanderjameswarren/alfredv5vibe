@@ -553,7 +553,74 @@ test('runsByItself: only a sql test', () => {
   const { runsByItself } = jest.requireActual('./ApprovePage');
   expect(runsByItself({ test: true })).toBe(true);
   expect(runsByItself({ kind: 'sql', test: true })).toBe(true);
-  for (const p of [null, {}, { kind: 'sql' }, { test: 'true' }, { kind: 'sf_check', test: true }, { kind: 'git', test: true }, { kind: 'sb_setup' }]) {
+  for (const p of [null, {}, { kind: 'sql' }, { test: 'true' }, { kind: 'sf_check', test: true }, { kind: 'git', test: true }, { kind: 'sb_setup' },
+    { kind: 'sf_read', test: true }]) {
     expect(runsByItself(p)).toBe(false);
+  }
+});
+
+// --- s89e: Salesforce reads (spec 10) ---
+
+const READ_PROD = { alias: 'cd-prod', production: true, level: 'data', object: 'Contribution__c', fields: ['Id', 'Status__c'], limit: 50,
+  filters: [{ field: 'Status__c', op: '=', value: 'Failed' }, { field: 'Amount__c', op: 'in', value: [5, 10] }] };
+const SFR = { ok: true, kind: 'sf_read', action_id: 'r1', fingerprint: 'fpr', project_code: 'sf-cd-prod', payload: READ_PROD,
+  headline: 'PRODUCTION FULL DATA: SF READ DATA ON PRODUCTION cd-prod: 2 FIELDS OF Contribution__c, UP TO 50 ROWS, READ ONLY' };
+const SFR_COUNT = { ...SFR, action_id: 'r2', headline: 'SF READ IDS ON SANDBOX ab-dev: A COUNT OF Contact, READ ONLY',
+  payload: { alias: 'ab-dev', production: false, level: 'ids', object: 'Contact', count: true } };
+
+test('sf read: org, production, level, object, fields, filters and limit; red bar and PRODUCTION FULL DATA banner', async () => {
+  runner({ preview: reply(SFR), approve: reply({ ok: true, action_id: 'r1', sent: true }) });
+  const { container } = open();
+  const lines = await screen.findByTestId('approve-sf-read');
+  expect(lines).toHaveTextContent('Reads PRODUCTION org cd-prod, read only: GET requests, nothing written.');
+  expect(lines).toHaveTextContent('Level: data.');
+  expect(lines).toHaveTextContent('Object: Contribution__c.');
+  expect(lines).toHaveTextContent('Fields: Id, Status__c.');
+  expect(lines).toHaveTextContent('Limit: up to 50 rows.');
+  expect(lines).toHaveTextContent('Filter 1: Status__c = "Failed"');
+  expect(lines).toHaveTextContent('Filter 2: Amount__c in [5,10]');
+  expect(screen.getByTestId('approve-stakes-change')).toHaveTextContent('Approval required');
+  const banner = screen.getByTestId('approve-production-full-data');
+  expect(banner).toHaveTextContent(/production full data/i);
+  expect(banner).toHaveClass('bg-red-700', 'uppercase');
+  expect(screen.getByText(/An sf read has no dry run/)).toBeInTheDocument();
+  expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'sf_read');
+  expect(called('dry-run')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: /^approve and run$/i }));
+  expect(await screen.findByText('Sent to the desktop helper')).toBeInTheDocument();
+  expect(JSON.parse(called('approve')[0][1].body)).toEqual({ token: 'tok1', fingerprint: 'fpr' });
+  expect(screen.getByText('sf r1')).toBeInTheDocument();
+});
+
+test('sf read: a sandbox count has the red bar but no full-data banner, and says count only', async () => {
+  runner({ preview: reply(SFR_COUNT) });
+  open();
+  const lines = await screen.findByTestId('approve-sf-read');
+  expect(lines).toHaveTextContent('Reads sandbox org ab-dev');
+  expect(lines).toHaveTextContent('A count only: no rows.');
+  expect(lines).toHaveTextContent('Filters: none.');
+  expect(screen.getByTestId('approve-stakes-change')).toBeInTheDocument();
+  expect(screen.queryByTestId('approve-production-full-data')).toBeNull();
+});
+
+test('sf read: production ids is not full data; Don\'t run gives the sf cancelled line', async () => {
+  runner({ preview: reply({ ...SFR_COUNT, payload: { ...SFR_COUNT.payload, production: true } }), cancel: reply({ ok: true, cancelled: true, reason: '' }) });
+  open();
+  await screen.findByTestId('approve-sf-read');
+  expect(screen.queryByTestId('approve-production-full-data')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /don't run/i }));
+  expect(await screen.findByText('sf r2 cancelled')).toBeInTheDocument();
+});
+
+test('sf read: lines for the object list and a describe', () => {
+  const { sfReadLines, isProductionFullData } = jest.requireActual('./ApprovePage');
+  expect(sfReadLines({ alias: 'a', production: false, level: 'objects' })).toContain("The org's object list.");
+  const d = sfReadLines({ alias: 'a', production: false, level: 'metadata', object: 'Account' });
+  expect(d).toContain('Object: Account.');
+  expect(d).toContain("The object's describe: its fields and types, no records.");
+  expect(d.some((l) => l.startsWith('Filter'))).toBe(false);
+  expect(isProductionFullData(READ_PROD)).toBe(true);
+  for (const p of [null, { production: true, level: 'ids' }, { production: false, level: 'data' }, { production: 'true', level: 'data' }]) {
+    expect(isProductionFullData(p)).toBe(false);
   }
 });

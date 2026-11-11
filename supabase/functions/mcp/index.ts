@@ -102,8 +102,8 @@ import {
   searchHomerBooksTool,
 } from "../_shared/tools/homer.ts";
 import {
-  getClaimStateTool, getSqlReadTool, getSwitchboardRunTool, issueSwitchboardLinkTool, queueSwitchboardGitTool,
-  queueSwitchboardSbSetupTool, queueSwitchboardSfCheckTool,
+  getClaimStateTool, getSqlReadTool, getSwitchboardRunTool, getSwitchboardSfResultTool, issueSwitchboardLinkTool,
+  queueSwitchboardGitTool, queueSwitchboardSbSetupTool, queueSwitchboardSfCheckTool, queueSwitchboardSfReadTool,
 } from "../_shared/tools/switchboard.ts";
 import {
   getClaudeNotificationSettingsTool,
@@ -3638,6 +3638,55 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardSfCheckTool, args, token),
+  );
+
+  // Switchboard s89e: Salesforce reads by link (spec 10).
+  server.registerTool(
+    "queue_switchboard_sf_read",
+    {
+      title: "Queue Switchboard Sf Read",
+      description:
+        "Queue one READ-ONLY Salesforce read and issue its single-use approval link in the same call. Nothing runs until Alex clicks Approve; then the desktop helper checks the org's Id and IsSandbox against orgs.json and the org's access level, and reads with GET requests only. Never SOQL text: name the object, fields and filters, and the helper builds the query. " +
+        "ASK THE LEAST THAT ANSWERS THE QUESTION: a count first (count: true), then Ids with their dates (level ids), then only the fields a hypothesis needs (level data), with the smallest limit that will do. " +
+        "level: objects (the object list; nothing else), metadata (one object's describe), ids (count, or fields from Id, CreatedDate and LastModifiedDate only, in fields and filters) or data (any fields; needs the org's data level, and on production its own full-data setting). " +
+        "production: true when the org is production; the helper refuses when Salesforce or orgs.json says otherwise. Production with level data is PRODUCTION FULL DATA: the page says so in red and the result is stamped. " +
+        "filters: up to 10, ANDed: {field, op, value}, op one of = != < <= > >= with one plain value, or in with 1 to 100 values; no dots, so no relationship fields. limit: 1 to 1000, with fields. " +
+        "Limits: the kill switch (sf_reads_enabled) and a budget of 20 reads per 10 minutes and 200 a day; a READ BUDGET EXCEEDED error means stop and report, never retry. Every attempt is logged, never rows. " +
+        "Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole; it lasts 30 minutes. The result line (sf <action id> done or failed) arrives in this chat by itself; then call get_switchboard_sf_result once. " +
+        "NEVER pass rows to a CLI prompt or paste them into a report: summarise instead. Tier 2.",
+      inputSchema: {
+        alias: z.string().describe("The org alias, as in orgs.json."),
+        production: z.boolean().describe("Whether the org is production. A wrong answer is refused by the helper."),
+        level: z.enum(["objects", "metadata", "ids", "data"]).describe("objects, metadata, ids or data."),
+        object: z.string().optional().describe("One API name, e.g. Contact or Donation__c. Not for objects."),
+        count: z.boolean().optional().describe("true for SELECT COUNT(), with no fields and no limit. ids and data only."),
+        fields: z.array(z.string()).optional().describe("ids and data, unless count: 1 to 50 API names. At ids only Id, CreatedDate, LastModifiedDate."),
+        limit: z.number().int().optional().describe("With fields: the row cap, 1 to 1000. Ask for few."),
+        filters: z.array(z.object({
+          field: z.string(),
+          op: z.enum(["=", "!=", "<", "<=", ">", ">=", "in"]),
+          value: z.any(),
+        })).optional().describe("Up to 10, ANDed. in takes a list of 1 to 100 values; the others one plain value."),
+        chat_url: z.string().optional().describe("Optional; don't guess it. Only a https://claude.ai/chat/<uuid> address is used."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardSfReadTool, args, token),
+  );
+
+  server.registerTool(
+    "get_switchboard_sf_result",
+    {
+      title: "Get Switchboard Sf Result",
+      description:
+        "Take the rows of one Salesforce read queued with queue_switchboard_sf_read, after its sf <action id> done line. ROWS COME BACK ONCE AND ARE DELETED from Alfred as they are returned; anything not taken is deleted 10 minutes after the read. " +
+        "A production full-data result starts with stamp: PRODUCTION FULL DATA. Returns { stamp?, action_id, row_count, truncated, rows, note }; for a count read, row_count is the count and rows is empty. " +
+        "With nothing to take it says which: state not finished (wait for the line), failed (with the run's summary, e.g. the helper's refusal), cancelled, or gone (already taken or expired; queue the read again if still needed). " +
+        "Summarise what the rows show; don't repeat raw rows, and never put them in a CLI prompt. Tier 1.",
+      inputSchema: {
+        action_id: z.string().describe("The read's action id, from queue_switchboard_sf_read or its sf line."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getSwitchboardSfResultTool, args, token),
   );
 
   server.registerTool(

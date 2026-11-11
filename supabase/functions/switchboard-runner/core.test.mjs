@@ -863,3 +863,152 @@ test("other kinds with a link are refused, not read as SQL", async () => {
   assert.equal(res.status, 409);
   assert.equal(calls.runSql.length, 0);
 });
+
+// --- s89e: Salesforce reads (spec 10) ---
+
+const READ_PAYLOAD = { alias: "cd-prod", production: true, level: "data", object: "Contribution__c", fields: ["Id", "Status__c"],
+  limit: 50, filters: [{ field: "Status__c", op: "=", value: "Failed" }] };
+/** A picked sf_read waiting for its result, with the read's deps recorded. */
+function readFakes({ payload = READ_PAYLOAD, enabled = true, conflict = false, picked = {}, run = {} } = {}) {
+  return fakes({
+    findPicked: async (a, r) => (a === "rd-1" && r === "run-r" ? {
+      action: { id: "rd-1", user_id: USER, kind: "sf_read", status: "consumed", picked_up_at: "t", payload, ...picked },
+      run: { id: "run-r", action_id: "rd-1", mode: "real", finished_at: null, ...run },
+    } : null),
+    sfReadsEnabled: async (u) => (u === USER ? enabled : false),
+    insertSfResult: async function (row) { (this.stored ??= []).push(row); return { conflict }; },
+    logSfRead: async function (row) { (this.logged ??= []).push(row); },
+  });
+}
+const rowsBody = (over = {}) => ({ action_id: "rd-1", run_id: "run-r", ok: true, summary: "sf read data Contribution__c on cd-prod: 2 rows",
+  level: "data", object: "Contribution__c", production_full_data: true, count: 2,
+  rows: [{ Id: "a0B000000000001AAA", Status__c: "Failed" }, { Id: "a0B000000000002AAA", Status__c: "Failed" }], ...over });
+
+test("pickup: all four kinds, sf_read too, use the helper pickup; the older three still do", async () => {
+  for (const kinds of [["git", "sf_check", "sb_setup", "sf_read"], ["sf_read", "sb_setup", "git", "sf_check"], ALL_KINDS]) {
+    const { deps, calls } = fakes();
+    assert.equal((await handle(helper("pickup", { kinds }), deps)).status, 200, JSON.stringify(kinds));
+    assert.equal(calls.pickedHelper, USER);
+  }
+  for (const kinds of [["sf_read"], ["git", "sf_read"], ["git", "sf_check", "sf_read"]]) {
+    const { deps, calls } = fakes();
+    assert.equal((await handle(helper("pickup", { kinds }), deps)).status, 400, JSON.stringify(kinds));
+    assert.equal(calls.pickedHelper, undefined);
+  }
+});
+
+test("sf-result: stores the rows and the stamp, logs ran with no rows, and leaves the run for /result", async () => {
+  const { deps, calls } = readFakes();
+  const res = await handle(helper("sf-result", rowsBody({ query: "SELECT Id, Status__c FROM Contribution__c LIMIT 50" })), deps);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, action_id: "rd-1", stored: true, row_count: 2, truncated: false });
+  assert.equal(deps.stored.length, 1);
+  assert.deepEqual(deps.stored[0], { user_id: USER, action_id: "rd-1", rows: rowsBody().rows, row_count: 2, truncated: false, production_full_data: true });
+  assert.equal(deps.logged.length, 1);
+  const log = deps.logged[0];
+  assert.equal(log.stage, "ran");
+  assert.equal(log.row_count, 2);
+  assert.equal(log.org_alias, "cd-prod");
+  assert.equal(log.object, "Contribution__c");
+  assert.deepEqual(log.fields, ["Id", "Status__c"]);
+  assert.equal(log.query_text, "SELECT Id, Status__c FROM Contribution__c LIMIT 50");
+  assert.equal(JSON.stringify(log).includes("a0B000000000001AAA"), false);
+  assert.equal(calls.finished, undefined);
+  assert.deepEqual(calls.status, []);
+});
+
+test("sf-result: a count read keeps the count; rows are capped at 1000 and marked truncated", async () => {
+  const counted = readFakes({ payload: { alias: "ab-dev", production: false, level: "ids", object: "Contact", count: true } });
+  await handle(helper("sf-result", rowsBody({ rows: [], count: 4213, production_full_data: false })), counted.deps);
+  assert.equal(counted.deps.stored[0].row_count, 4213);
+  assert.equal(counted.deps.stored[0].production_full_data, false);
+  assert.equal(counted.deps.logged[0].query_text, null);
+
+  const many = readFakes();
+  const rows = Array.from({ length: 1005 }, (_, i) => ({ Id: `r${i}` }));
+  const out = await (await handle(helper("sf-result", rowsBody({ rows, count: 1005 })), many.deps)).json();
+  assert.equal(many.deps.stored[0].rows.length, 1000);
+  assert.equal(many.deps.stored[0].truncated, true);
+  assert.equal(out.truncated, true);
+});
+
+test("sf-result: the stamp comes from the payload too, so production full data is never unstamped", async () => {
+  const { deps } = readFakes();
+  await handle(helper("sf-result", rowsBody({ production_full_data: false })), deps);
+  assert.equal(deps.stored[0].production_full_data, true);
+  const sandbox = readFakes({ payload: { ...READ_PAYLOAD, production: false } });
+  await handle(helper("sf-result", rowsBody({ production_full_data: false })), sandbox.deps);
+  assert.equal(sandbox.deps.stored[0].production_full_data, false);
+});
+
+test("sf-result: a failed read stores nothing and logs failed with ids and emails blanked", async () => {
+  const { deps } = readFakes();
+  const res = await handle(helper("sf-result", { action_id: "rd-1", run_id: "run-r", ok: false, summary: "sf read refused",
+    reason: "org 00D5e000000AbCdEAB is production but alex@example.com's entry says sandbox" }), deps);
+  assert.deepEqual(await res.json(), { ok: true, action_id: "rd-1", stored: false });
+  assert.equal(deps.stored, undefined);
+  assert.equal(deps.logged[0].stage, "failed");
+  assert.equal(deps.logged[0].error, "org [id] is production but [email]'s entry says sandbox");
+});
+
+test("sf-result: the kill switch refuses, stores nothing and logs failed", async () => {
+  const { deps } = readFakes({ enabled: false });
+  const res = await handle(helper("sf-result", rowsBody()), deps);
+  assert.equal(res.status, 409);
+  assert.match((await res.json()).error, /sf_reads_enabled/);
+  assert.equal(deps.stored, undefined);
+  assert.equal(deps.logged[0].stage, "failed");
+});
+
+test("sf-result: only a waiting sf_read with its own run; a second result is refused", async () => {
+  for (const over of [{ picked: { kind: "sf_check" } }, { picked: { user_id: "someone" } }, { run: { action_id: "other" } }]) {
+    const { deps } = readFakes(over);
+    assert.equal((await handle(helper("sf-result", rowsBody()), deps)).status, 404, JSON.stringify(over));
+    assert.equal(deps.stored, undefined);
+  }
+  for (const over of [{ picked: { status: "succeeded" } }, { picked: { picked_up_at: null } }, { run: { finished_at: "t" } }, { run: { mode: "dry_run" } }]) {
+    const { deps } = readFakes(over);
+    assert.equal((await handle(helper("sf-result", rowsBody()), deps)).status, 409, JSON.stringify(over));
+    assert.equal(deps.stored, undefined);
+  }
+  const unknown = readFakes();
+  assert.equal((await handle(helper("sf-result", rowsBody({ action_id: "nope" })), unknown.deps)).status, 404);
+  const twice = readFakes({ conflict: true });
+  const res = await handle(helper("sf-result", rowsBody()), twice.deps);
+  assert.equal(res.status, 409);
+  assert.equal(twice.deps.logged, undefined);
+});
+
+test("sf-result: no key or a wrong one, and bad input, are refused before any read", async () => {
+  for (const key of [null, "wrong", SECRET]) {
+    const { deps } = readFakes();
+    assert.equal((await handle(helper("sf-result", rowsBody(), key), deps)).status, 401);
+  }
+  for (const over of [{ action_id: undefined }, { run_id: "" }, { ok: "yes" }, { summary: "" }, { summary: "a\nb" },
+    { rows: "x" }, { rows: [1, 2] }, { rows: [[]] }, { count: -1 }, { count: 1.5 }]) {
+    const { deps } = readFakes({ picked: { kind: "not reached" } });
+    assert.equal((await handle(helper("sf-result", rowsBody(over)), deps)).status, 400, JSON.stringify(over));
+    assert.equal(deps.stored, undefined);
+    assert.equal(deps.logged, undefined);
+  }
+});
+
+test("result: an sf_read's run keeps its summary and never the window's output", async () => {
+  const { deps, calls } = readFakes();
+  const res = await handle(helper("result", { action_id: "rd-1", run_id: "run-r", ok: true, summary: "sf read: 2 rows", exit_code: 0,
+    output: "Result: sf read data Contribution__c on cd-prod: 2 rows." }), deps);
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls.finished[0].result, { ok: true, exit_code: 0 });
+  assert.deepEqual(calls.status, [{ id: "rd-1", status: "succeeded" }]);
+});
+
+test("sf_read link: preview has kind and payload; approve only spends the link", async () => {
+  const { deps, calls, action } = gitFakes();
+  Object.assign(action, { kind: "sf_read", payload: READ_PAYLOAD });
+  const preview = await (await handle(post("preview", { token: TOKEN }, jwt()), deps)).json();
+  assert.equal(preview.kind, "sf_read");
+  assert.deepEqual(preview.payload, READ_PAYLOAD);
+  const res = await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), deps);
+  assert.deepEqual(await res.json(), { ok: true, action_id: "act-1", sent: true });
+  nothingRan(calls);
+});

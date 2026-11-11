@@ -95,6 +95,36 @@ export function sfLines(payload) {
   ];
 }
 
+/** s89e: production with level data, which the page and the result both mark PRODUCTION FULL DATA (spec §10). */
+export function isProductionFullData(payload) {
+  return payload?.production === true && payload?.level === 'data';
+}
+
+/** A Salesforce read in plain words, one line each (spec §10): org, production or sandbox, level, object, what it asks. */
+export function sfReadLines(payload) {
+  const p = payload ?? {};
+  const lines = [
+    `Reads ${p.production === true ? 'PRODUCTION' : 'sandbox'} org ${p.alias ?? '(no alias)'}, read only: GET requests, nothing written.`,
+    `Level: ${p.level ?? '(none)'}.`,
+  ];
+  if (p.level === 'objects') lines.push("The org's object list.");
+  else lines.push(`Object: ${p.object ?? '(none)'}.`);
+  if (p.level === 'metadata') lines.push("The object's describe: its fields and types, no records.");
+  if (p.count === true) lines.push('A count only: no rows.');
+  else if (Array.isArray(p.fields)) {
+    lines.push(`Fields: ${p.fields.join(', ')}.`);
+    lines.push(`Limit: up to ${p.limit ?? '?'} rows.`);
+  }
+  if (p.level === 'ids' || p.level === 'data') {
+    const filters = Array.isArray(p.filters) ? p.filters : [];
+    if (!filters.length) lines.push('Filters: none.');
+    filters.forEach((f, i) => lines.push(`Filter ${i + 1}: ${f?.field} ${f?.op} ${JSON.stringify(f?.value)}`));
+  }
+  lines.push("The helper first checks the org's Id and IsSandbox, and its access level, against orgs.json.");
+  lines.push('The answer goes to Alfred for at most 10 minutes, for Claude to take once and summarise.');
+  return lines;
+}
+
 /** The config files the click writes. */
 export function sbFiles(payload) {
   if (payload?.command === 'org add') return ['orgs.json'];
@@ -259,7 +289,8 @@ export default function ApprovePage() {
   // the address's kind is for display only.
   const isSb = preview?.kind === 'sb_setup';
   const isSf = preview?.kind === 'sf_check';
-  const isGit = preview?.kind === 'git' || isSb || isSf;
+  const isSfRead = preview?.kind === 'sf_read';
+  const isGit = preview?.kind === 'git' || isSb || isSf || isSfRead;
 
   useEffect(() => {
     if (!preview || dryStarted.current || isGit) return;
@@ -327,15 +358,24 @@ export default function ApprovePage() {
   if (isGit) {
     // The action id is the chat's handle: the helper's run row only exists once it picks the action up.
     const id = preview.action_id;
-    const word = isSb ? 'sb' : isSf ? 'sf' : 'git';
+    // An sf_read's line is sf <id>, like a check's (the helper's LINE_WORD).
+    const word = isSb ? 'sb' : isSf || isSfRead ? 'sf' : 'git';
+    const lines = isSb ? sbLines(preview.payload) : isSf ? sfLines(preview.payload) : isSfRead ? sfReadLines(preview.payload)
+      : gitLines(preview.payload, preview.project_code);
     return (
       <Shell preview={preview}>
         {approving && <span hidden data-switchboard-running={preview.kind} />}
+        {isSfRead && isProductionFullData(preview.payload) && (
+          <div data-testid="approve-production-full-data" role="alert"
+            className="mb-4 w-full bg-red-700 text-white text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
+            Production full data
+          </div>
+        )}
         <p className="font-bold text-dark mb-2 break-words">{preview.headline}</p>
         <p className="text-sm text-dark">Project</p>
         <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code} data-switchboard-kind={preview.kind}>{preview.project_code}</p>
-        <ul data-testid={`approve-${word}`} className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">
-          {(isSb ? sbLines(preview.payload) : isSf ? sfLines(preview.payload) : gitLines(preview.payload, preview.project_code)).map((l) => <li key={l}>{l}</li>)}
+        <ul data-testid={`approve-${isSfRead ? 'sf-read' : word}`} className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">
+          {lines.map((l) => <li key={l}>{l}</li>)}
         </ul>
         {isSb && !real && !cancelled && (
           <div data-testid="approve-sb-writes" className="mb-4 text-sm text-dark break-words">
@@ -371,7 +411,7 @@ export default function ApprovePage() {
           </>
         ) : (
           <>
-            <p className="mb-4 text-sm text-dark">{isSb ? 'An sb setup' : isSf ? 'An sf check' : 'Git'} has no dry run. Approve runs this once, on your computer.</p>
+            <p className="mb-4 text-sm text-dark">{isSb ? 'An sb setup' : isSf ? 'An sf check' : isSfRead ? 'An sf read' : 'Git'} has no dry run. Approve runs this once, on your computer.</p>
             <div className="mb-4">
               <label htmlFor="dont-run-reason" className="block text-sm text-dark mb-1">Reason for not running (optional)</label>
               <input id="dont-run-reason" type="text" maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)}
