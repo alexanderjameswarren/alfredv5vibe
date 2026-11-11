@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  parseCsv, normalizeDeviceId, authorsByAsin, ownerFor, splitSeriesTitle, flipAuthor, acquisitionFor, originsByAsin,
+  parseCsv, normalizeDeviceId, authorsByAsin, readsToClose, planFinishes, ownerFor, splitSeriesTitle, flipAuthor, acquisitionFor, originsByAsin,
   aggregateSessions, buildReads, buildDevices, buildPlan, packBatches, batchRows, MAX_BATCH_ROWS,
 } from "./homer-import.mjs";
 
@@ -275,4 +275,30 @@ test("batches: at most 500 rows, self-contained, every read once", () => {
   assert.equal(batches[0].devices.length, 3);
   assert.equal(batches.reduce((n, b) => n + b.reads.length, 0), 700);
   assert.equal(new Set(batches.flatMap((b) => b.reads.map((r) => r.import_key))).size, 700);
+});
+
+test("open clip reads close on the same reader's latest export finish", () => {
+  const open = [
+    { id: "c1", asin: "B1", reader: "alex", started_on: "2026-01-01" },
+    { id: "c2", asin: "B1", reader: "elise", started_on: "2026-01-01" },
+    { id: "c3", asin: "B2", reader: "alex", started_on: null },
+    { id: "c4", asin: "B3", reader: "alex", started_on: "2026-06-01" },
+  ];
+  const finishes = [
+    { asin: "B1", reader: "alex", finished_on: "2026-02-01" }, { asin: "B1", reader: "alex", finished_on: "2026-03-01" },
+    { asin: "B2", reader: "alex", finished_on: "2026-04-01" },
+    { asin: "B3", reader: "alex", finished_on: "2025-12-01" },
+  ];
+  assert.deepEqual(readsToClose(open, finishes), [
+    { id: "c1", asin: "B1", reader: "alex", finished_on: "2026-03-01" },
+    { id: "c3", asin: "B2", reader: "alex", finished_on: "2026-04-01" },
+  ]); // c2: Elise has no export finish; c4: started after the finish, a re-read
+  assert.deepEqual(readsToClose([], finishes), []);
+});
+
+test("plan finishes are the owned, finished export reads", () => {
+  const plan = { ownerOf: new Map([["D1", "alex"]]), reads: [
+    { asin: "B1", device_id: "D1", finished_on: "2026-01-01" }, { asin: "B2", device_id: "D1", finished_on: null },
+    { asin: "B3", device_id: "D9", finished_on: "2026-01-01" }] };
+  assert.deepEqual(planFinishes(plan), [{ asin: "B1", reader: "alex", finished_on: "2026-01-01" }]);
 });

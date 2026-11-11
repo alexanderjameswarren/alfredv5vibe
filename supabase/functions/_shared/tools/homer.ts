@@ -605,18 +605,36 @@ export const createHomerBookTool = defineTool({
 
     // An existing series is referenced, never re-sent, so a slightly different name can't rename it.
     const series: Row[] = [];
-    if (seriesAsin || seriesName) {
-      let q = ctx.db.from("homer_series").select("id");
-      q = seriesAsin ? q.eq("series_asin", seriesAsin) : q.is("series_asin", null).ilike("name", escapeLike(seriesName!));
-      const found = await q.maybeSingle();
+    let ref: { series_asin: string | null; series_name: string | null } = { series_asin: seriesAsin, series_name: null };
+    if (seriesAsin) {
+      const found = await ctx.db.from("homer_series").select("id").eq("series_asin", seriesAsin).maybeSingle();
       if (found.error) throw dbError(tool, "series lookup", found.error);
       if (!found.data) {
         if (!seriesName) throw fail(tool, `series ${seriesAsin} is new to Homer: pass \`series_name\` too.`);
         series.push({ name: seriesName, series_asin: seriesAsin, author });
       }
+    } else if (seriesName) {
+      // A name alone matches any of this user's series by name (case and surrounding spaces ignored), with or
+      // without a series ASIN. homer_import_batch keys a name only among series with no ASIN, so a match that has
+      // one is referenced by its ASIN.
+      const found = await ctx.db.from("homer_series").select("id, name, series_asin").ilike("name", likeText(seriesName));
+      if (found.error) throw dbError(tool, "series lookup", found.error);
+      const matches = ((found.data ?? []) as Row[])
+        .filter((s) => String(s.name ?? "").trim().toLowerCase() === seriesName.toLowerCase());
+      if (matches.length > 1) {
+        throw fail(tool, `${matches.length} series are named "${seriesName}": ` +
+          matches.map((s) => `${s.name} (id ${s.id}, series_asin ${s.series_asin ?? "none"})`).join("; ") +
+          ". Pass that series's `series_asin` to choose one.");
+      }
+      if (matches.length === 1) {
+        const m = matches[0];
+        ref = m.series_asin ? { series_asin: m.series_asin as string, series_name: null } : { series_asin: null, series_name: m.name as string };
+      } else {
+        series.push({ name: seriesName, series_asin: null, author });
+        ref = { series_asin: null, series_name: seriesName };
+      }
     }
-    const book = { asin, title, author, series_asin: seriesAsin, series_name: seriesAsin ? null : seriesName,
-      series_position: position, acquired };
+    const book = { asin, title, author, ...ref, series_position: position, acquired };
     const { data, error } = await ctx.db.rpc("homer_import_batch", { p_batch: { series, books: [book] }, p_dry_run: false });
     if (error) throw dbError(tool, "homer_import_batch", error);
     const refused = ((data as Row)?.refused ?? []) as Row[];

@@ -270,6 +270,35 @@ test("create_homer_book: existing ASIN unchanged; new series needs a name; writt
     /refused: books BTEST00003/);
 });
 
+test("create_homer_book: a series name alone finds one existing series (with or without an ASIN), refuses several, else creates", async () => {
+  const run = async (seriesRows, args) => {
+    let batch = null;
+    let n = 0;
+    const db = fakeDb({ tables: { homer_series: seriesRows, homer_books: () => (n++ === 0 ? [] : [{ id: BOOK }]) },
+      rpcs: { homer_import_batch: (p) => { batch = p; return { data: { refused: [] }, error: null }; } } });
+    await m.createHomerBookTool.handler({ asin: "BTEST00004", title: "Two", ...args }, { db });
+    return { batch, db };
+  };
+  // One match that has a series ASIN: referenced by that ASIN, no series sent (the Street Cultivation bug).
+  let { batch, db } = await run([{ id: S1, name: "TEST Street Saga ", series_asin: "BTESTS0007" }],
+    { series_name: "test street saga", series_position: 2 });
+  assert.deepEqual(batch.p_batch.series, []);
+  assert.equal(batch.p_batch.books[0].series_asin, "BTESTS0007");
+  assert.equal(batch.p_batch.books[0].series_name, null);
+  assert.ok(saw(db, "homer_series", "ilike", "name", "%test street saga%"));
+  // One match with no ASIN: referenced by its stored name.
+  ({ batch } = await run([{ id: S1, name: "TEST Saga", series_asin: null }], { series_name: "TEST SAGA" }));
+  assert.deepEqual(batch.p_batch.series, []);
+  assert.equal(batch.p_batch.books[0].series_name, "TEST Saga");
+  // None (a longer name only contains it): a new series, as before.
+  ({ batch } = await run([{ id: S1, name: "TEST Saga Extended", series_asin: "BTESTS0008" }], { series_name: "TEST Saga" }));
+  assert.deepEqual(batch.p_batch.series, [{ name: "TEST Saga", series_asin: null, author: null }]);
+  assert.equal(batch.p_batch.books[0].series_name, "TEST Saga");
+  // Several: refused, naming them.
+  await assert.rejects(run([{ id: S1, name: "TEST Saga", series_asin: "BTESTS0001" }, { id: S2, name: "test saga", series_asin: null }],
+    { series_name: "TEST Saga" }), /2 series are named "TEST Saga": TEST Saga \(id .*series_asin BTESTS0001\); test saga \(id .*series_asin none\)/);
+});
+
 test("create_homer_queue_items: verified_on required, KU needs its date, positions appended per genre", async () => {
   let inserted = null;
   const db = fakeDb({ tables: { homer_readers: READERS,
