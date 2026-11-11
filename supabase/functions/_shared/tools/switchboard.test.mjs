@@ -854,6 +854,70 @@ test("git: a queue or link refusal is passed on, and says when the action was qu
     (e) => e.message.includes(`queued as ${ACTION_ID}`) && e.message.includes("another link is live"));
 });
 
+// --- s90d: the chained link (then_send, spec 11.9) ------------------------------------------------------------------
+
+const CHAIN = "p-a1-s90e-ab12";
+
+test("chain: then_send on gitsync, checkpoint and push is stored as then: {send}", () => {
+  for (const args of [
+    { project_code: "p-a1", command: "gitsync", then_send: CHAIN },
+    { project_code: "p-a1", command: "gitpush", mode: "checkpoint", paths: ["a.js"], then_send: CHAIN },
+    { project_code: "p-a1", command: "gitpush", mode: "push", then_send: CHAIN },
+    { project_code: "p-a1", command: "gitsync", then_send: "p-a1-s7-zz99" },
+    { project_code: "p-a1", command: "gitsync", then_send: "p-a1-s89ab-c3d4" },
+  ]) {
+    const out = m.gitPayload(args);
+    assert.ok("payload" in out, JSON.stringify(args) + " " + out.refused);
+    assert.deepEqual(out.payload.then, { send: args.then_send });
+    assert.equal(out.payload.then_send, undefined);
+  }
+  // Without then_send, nothing changes.
+  assert.deepEqual(m.gitPayload({ project_code: "p-a1", command: "gitsync" }), { payload: { command: "gitsync" } });
+});
+
+test("chain: refused on gitcom, gitnewtree and a Finish, and for a tag that isn't this project's own", () => {
+  const bad = [
+    [{ command: "gitcom", message: "m", then_send: CHAIN }, /gitcom can't chain a prompt/],
+    [{ command: "gitnewtree", then_send: CHAIN }, /gitnewtree can't chain a prompt/],
+    [{ command: "gitpush", mode: "finish", finish: "phase", then_send: CHAIN }, /a Finish can't chain/],
+    [{ command: "gitsync", then_send: "p-b2-s90e-ab12" }, /not a run tag of p-a1: a chain only sends into the window it ran in/],
+    [{ command: "gitsync", then_send: "p-a1x-s1-ab12" }, /not a run tag of p-a1/],
+    [{ command: "gitsync", then_send: "p-a1-s1-ab1" }, /needs the step's digits/],
+    [{ command: "gitsync", then_send: "p-a1-sa-ab12" }, /needs the step's digits/],
+    [{ command: "gitsync", then_send: "p-a1-s1-AB12" }, /lowercase/],
+    [{ command: "gitsync", then_send: 5 }, /must be a run tag/],
+    [{ command: "gitsync", then_send: "" }, /must be a run tag/],
+    [{ command: "gitsync", then_send: `p-a1-s1-${"x".repeat(33)}` }, /over 40 characters/],
+  ];
+  for (const [args, why] of bad) {
+    const out = m.gitPayload({ project_code: "p-a1", ...args });
+    assert.ok("refused" in out, JSON.stringify(args));
+    assert.match(out.refused, why, JSON.stringify(args));
+  }
+});
+
+test("chain: refused before anything is queued", async () => {
+  const db = gitDb();
+  await assert.rejects(queueGit({ project_code: "p-a1", command: "gitsync", then_send: "p-b2-s1-ab12" }, db), /refused: .*not a run tag of p-a1/);
+  assert.deepEqual(db.calls, []);
+});
+
+test("chain: queued with then in the payload; headline and next say what follows", async () => {
+  const db = gitDb();
+  const out = await queueGit({ project_code: "p-a1", command: "gitpush", mode: "checkpoint", paths: ["a.js"], then_send: CHAIN }, db);
+  const q = db.calls.find(([n]) => n === "switchboard_queue_git")[1];
+  assert.deepEqual(q.p_payload, { command: "gitpush", mode: "checkpoint", paths: ["a.js"], then: { send: CHAIN } });
+  assert.equal(q.p_headline, `GITPUSH CHECKPOINT p-a1: MERGES 1 PATH INTO MAIN, PUSHES, THEN SENDS PROMPT ${CHAIN} AT YOUR TAP`);
+  assert.match(out.next, /replaces both the git link and the Send link/);
+  assert.match(out.next, /ends with the p-a1-s90e-ab12 prompt block/);
+  assert.match(out.next, new RegExp(`git ${ACTION_ID} done; prompt sent`));
+  assert.match(out.next, /done; send not run: <reason>/);
+  assert.match(out.next, /failed; send not run/);
+  assert.equal(m.gitHeadline("p-a1", { command: "gitsync", then: { send: CHAIN } }),
+    `GITSYNC p-a1: MERGES MAIN INTO THE WORKTREE, THEN SENDS PROMPT ${CHAIN} AT YOUR TAP`);
+  assert.equal(m.gitHeadline("p-a1", { command: "gitsync" }), "GITSYNC p-a1: MERGES MAIN INTO THE WORKTREE");
+});
+
 // --- s89e: queue_switchboard_sf_read and get_switchboard_sf_result (spec 10) ----------------------------------------
 
 /** A db whose chains on a table answer from that table's list in turn (the last answer repeats); inserts are kept. */

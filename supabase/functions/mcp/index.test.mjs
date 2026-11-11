@@ -232,6 +232,16 @@ test("switchboard s87e: get_claim_state says it is posted on change, not a heart
   assert.match(t.cfg.description, /overwatch posting off \(the client Salesforce repos, for now\) don't appear/);
 });
 
+test("switchboard s90d: queue_switchboard_git takes then_send and says what a chain replaces", () => {
+  const g = registered.find((r) => r.name === "queue_switchboard_git");
+  assert.ok(g.cfg.inputSchema.then_send);
+  assert.match(g.cfg.description, /REPLACES BOTH the git link and the Send link/);
+  assert.match(g.cfg.description, /the reply still ends with the prompt block/);
+  assert.match(g.cfg.description, /Never chain the checkpoint right after a test/);
+  assert.match(g.cfg.description, /Only on gitsync, and gitpush checkpoint or push; never gitcom, gitnewtree or a Finish/);
+  assert.match(g.cfg.description, /git <id> done; prompt sent/);
+});
+
 test("switchboard s89e: the Salesforce read tools say ask the least, never SOQL, rows once, never to a CLI", () => {
   const q = registered.find((r) => r.name === "queue_switchboard_sf_read");
   assert.deepEqual(Object.keys(q.cfg.inputSchema).sort(),
