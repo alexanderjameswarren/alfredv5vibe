@@ -17,7 +17,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildPlan, packBatches, batchRows, parseCsv } from "./lib/homer-import.mjs";
+import { buildPlan, packBatches, batchRows, parseCsv, planFinishes, readsToClose } from "./lib/homer-import.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -73,6 +73,34 @@ async function call(batch, dryRun) {
   return JSON.parse(text);
 }
 
+const flat = (r) => ({ id: r.id, started_on: r.started_on, finished_on: r.finished_on,
+  asin: r.homer_books?.asin ?? null, reader: r.homer_readers?.key ?? null });
+
+/**
+ * After an import: open clip or chat reads whose book now has a finished export read by the same reader are closed
+ * with that finish, so they stop blocking a new clip read. The dry run only counts them (database + this plan).
+ */
+async function closeOpenReads(plan, write) {
+  const raw = await get("homer_reads?select=id,book_id,started_on,finished_on,homer_books(asin),homer_readers(key)" +
+    "&finished_on=is.null&source=in.(clip,chat)&reader_id=not.is.null");
+  if (raw.length === 0) return [];
+  const open = raw.map(flat);
+  const books = [...new Set(raw.map((r) => r.book_id))];
+  const exported = (await get("homer_reads?select=id,started_on,finished_on,homer_books(asin),homer_readers(key)" +
+    `&source=eq.export&finished_on=not.is.null&reader_id=not.is.null&book_id=in.(${books.join(",")})`)).map(flat);
+  const close = readsToClose(open, [...exported, ...planFinishes(plan)]);
+  if (!write) return close;
+  for (const c of close) {
+    const res = await fetch(`${url}/rest/v1/homer_reads?id=eq.${c.id}&finished_on=is.null`, {
+      method: "PATCH",
+      headers: { apikey: anonKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify({ finished_on: c.finished_on }),
+    });
+    if (!res.ok) throw new Error(`closing read ${c.id}: HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  }
+  return close;
+}
+
 const line = (c) => Object.entries(c).map(([k, v]) => `${k} +${v.inserted} ~${v.updated} =${v.unchanged} x${v.refused}`).join("  ");
 
 async function main() {
@@ -114,6 +142,9 @@ async function main() {
     const done = await call(b, false);
     console.log(`Batch ${i + 1}/${batches.length} applied: ${line(done.counts)}`);
   }
+  const closed = await closeOpenReads(plan, apply);
+  console.log(`${apply ? "Closed" : "Would close"} ${closed.length} open clip or chat read(s) that the export shows finished` +
+    (closed.length ? `: ${closed.map((c) => `${c.asin} (${c.reader}, ${c.finished_on})`).join(", ")}.` : "."));
   console.log("Done. Shared rows (readers, devices, series) repeat across batches, so a dry run counts them as new in each.");
 }
 

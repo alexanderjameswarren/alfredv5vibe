@@ -348,3 +348,30 @@ export function packBatches(plan, max = MAX_BATCH_ROWS) {
 }
 
 export const batchRows = (b) => Object.values(b).reduce((n, list) => n + list.length, 0);
+
+/**
+ * Open clip or chat reads to close after an import (s17b). openReads: [{ id, asin, reader, started_on }];
+ * finishes: [{ asin, reader, finished_on }] from export reads (the database's, plus this plan's). A read closes when
+ * the same reader has a finished export read of the same book, dated the latest such finish. A read started after
+ * that finish is a re-read and stays open (it would also break started_on <= finished_on).
+ */
+export function readsToClose(openReads, finishes) {
+  const latest = new Map();
+  for (const f of finishes) {
+    if (!f.asin || !f.reader || !f.finished_on) continue;
+    const k = `${f.asin}|${f.reader}`;
+    if (!latest.has(k) || f.finished_on > latest.get(k)) latest.set(k, f.finished_on);
+  }
+  const close = [];
+  for (const r of openReads) {
+    const fin = latest.get(`${r.asin}|${r.reader}`);
+    if (!fin || (r.started_on && r.started_on > fin)) continue;
+    close.push({ id: r.id, asin: r.asin, reader: r.reader, finished_on: fin });
+  }
+  return close;
+}
+
+/** The plan's finished export reads as { asin, reader, finished_on }, for reads whose device has an owner. */
+export const planFinishes = (plan) => plan.reads
+  .filter((r) => r.finished_on && plan.ownerOf.get(r.device_id))
+  .map((r) => ({ asin: r.asin, reader: plan.ownerOf.get(r.device_id), finished_on: r.finished_on }));

@@ -5,7 +5,7 @@ description: Homer, Alex's reading tracker and "what to read next" guide in Alfr
 
 # Homer
 
-Skill version: 2026-11-10b
+Skill version: 2026-11-11a
 
 ## What this is for
 
@@ -143,10 +143,23 @@ So Homer never offers a book that isn't out, and can say who is behind on what.
   doesn't have it, add it with `create_homer_book` (ASIN, title, every author, and its series and number if it has
   one; a new series needs its name); then record it with `create_homer_read`. `create_homer_read` refuses an unknown
   ASIN, and a second open chat or clip read of the same book: finish that one with `update_homer_read` instead.
-- **The weekly clip.** Alex clips his Kindle library page, sorted by most recent. Match each title to a book.
-  New starts and finishes become reads with `source: clip`, reader Alex unless he says otherwise. Ask about anything
-  ambiguous (two editions, a title you can't match, a book that looks finished but isn't marked) before writing it.
-  Then do a few availability rechecks (above).
+- **The weekly clip.** Alex clips Amazon's **Manage Your Content and Devices → Content → Books**, sorted
+  "Acquired: Newest to Oldest". The first page is usually enough. It shows title, author, the acquired or borrowed
+  date, a READ badge and a SAMPLE label, and **no ASINs, devices or reading dates**.
+  - Match each title to a book (`search_homer_books`). New starts and finishes become reads with `source: clip`,
+    reader Alex unless he says otherwise. Use the **borrowed or acquired date as `started_on`**; a READ badge with no
+    read in Homer is a finish, dated only if he says when.
+  - **A new book needs its ASIN.** Look it up with web search: author sites and blogs often link
+    `amazon.com/dp/<ASIN>`. A Kindle sample has the same ASIN as its book. Pass `series_asin` to `create_homer_book`
+    whenever you know it, so the book lands in the existing series; a name alone also finds it.
+  - **No ASIN found:** add a queue item for that reader with `create_homer_queue_items`: status `reading`, no `asin`,
+    a `why` starting "Needs ASIN: from clip <date>", and `verified_on` the clip date (it's in his library, so it
+    exists). Every weekly clip retries the open "Needs ASIN" items
+    (`get_homer_queue`, status reading). When one resolves, add the book and the read, and set the item to `read`
+    with `update_homer_queue_item`.
+  - **Samples** he wants to keep go to his queue as `maybe_later`. Other samples are left out.
+  - Ask about anything ambiguous (two editions, a title you can't match, a book that looks finished but isn't
+    marked) before writing it. Then do a few availability rechecks (above).
 - **"Finished X" in chat** becomes a read with `source: chat`. "Quit X" is a read without a finish, plus a verdict
   if he gives one. "Got tired of X" is a tired verdict.
 - Fix wrong dates, hours or readers with `update_homer_read`. **An export read's dates, hours and completion are
