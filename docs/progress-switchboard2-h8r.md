@@ -136,11 +136,16 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 5 git | s88a, s88ab | The user-level rules file and its SessionStart hook (switchboard repo) | none | done in the switchboard repo thread: rules/SWITCHBOARD-RULES.md, installed to %LOCALAPPDATA%\Switchboard\rules\, loaded by session-rules; live-tested in common-defense (all 12 sections) | 2026-11-11 |
 | 5 git | B | Overwatch posting on for the client repos | none | done by Alex: team-impact and actblue\common-defense set to overwatch on | 2026-11-11 |
 | 5 git | s88b | alfred-v5's CLAUDE.md slimmed to Alfred-only rules | none | done (s88b-f5jn). Shared sections removed; kept: Alfred's git notes, Step 0 and project codes, the database steps, all SQL and the queue, numbering, verification queries, the schema snapshot rule, tests and the jestNote. Rules the shared file lacks kept in "Rules the shared file doesn't carry yet", to move into SWITCHBOARD-RULES.md. Fresh CLI sessions needed | 2026-11-11 |
+| 4 | s89 | Plan: the Salesforce read helper (G) | none | done (s89-j3ta). Steps s89a to s89f in Part 4; Thursday needs all six | 2026-11-11 |
+| 4 | s89a | sf_read schema and verify 15 | `db:table:` switchboard_actions, switchboard_runs, switchboard_settings, switchboard_sf_results, switchboard_sf_read_log; `db:fn:` switchboard_queue_helper, switchboard_pickup_helper, switchboard_needs_click, switchboard_take_sf_result, switchboard_prune_sf_results | built (s89a-e7nk). No drift at 11766ba (232 is Homer's). Pending `_pending_switchboard2-h8r_sf_reads.sql`: the sf_read kind with a structured payload check (no SOQL text); needs_click true; queue_helper (sf-<alias>) and pickup_helper take it; sf_reads_enabled (default on); switchboard_sf_results (not audited, hidden, authenticated select only, 10-minute cap); switchboard_sf_read_log (append-only, no rows); take and prune functions; a cron job every minute. Verify 15. Queued together as --test 3aac0e3f-91b5-4255-ad4d-5cfe70067317, not yet run. Spec §10 has Alex's decisions | 2026-11-11 |
+| 4 | s89ab | Verify 15's one failure (take_swept_expired) | same as s89a | done: test 36752508 passed 46/46 (run f150ffa8), CONFORMANT (117); s89a is done with it. Fixed in the test (s89ab-u4dk). Test 3aac0e3f passed 45/46, CONFORMANT (117). Cause: the check called the take and tested `not exists` in one PL/pgSQL assignment, a single statement whose subquery reads the snapshot from before the function's delete. Not RLS: nothing forces RLS, so the definer owner isn't bound by the policy. take_only_own had the same flaw; both takes now run in their own statement. Migration unchanged. Queued again as --test 36752508-278c-4bfb-accf-257faf1f2dbd | 2026-11-11 |
+| 4 | s89b | Number and queue the sf_reads migration | same as s89a, plus `db:migration:233` | queued (s89b-y3gc). Main current (11766ba), no drift. number-migration gave 233: `233_sf_reads.sql`, byte-identical to the pending file (cmp), which is deleted. Queued for real as 1f4dd7b0-ba40-4951-8bff-c72ab458c021, not yet applied. db claims held until the checkpoint | 2026-11-11 |
+| 4 | s89c to s89f | Helper reads; extension; runner, tools and page; live | see Part 4 | todo | |
 
 **Remaining order (2026-11-11):**
 1. s88c.
 2. s88d.
-3. G (s89a to s89e).
+3. G (s89a to s89f).
 4. Skill cards.
 5. Then D, H, I and J.
 
@@ -155,7 +160,7 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 8. Open tests.
 
 **Open question for the next plan step:** which parts of the Salesforce read helper are built today: query, describe, the per-client settings file, access levels, and the production full-data link.
-| 4 | s88-s92 | Salesforce reads: spec §10 | see below | todo | |
+| 4 | s88-s92 | Salesforce reads: spec §10 | see below | re-planned at s89 as s89a to s89f (rows above) | |
 | 5 SF | s93-s96 | Salesforce actions by link: spec §11 | see below | todo | |
 | 6-8 | | Spec §12-§14 | | todo | |
 
@@ -718,23 +723,57 @@ The helper arrives here rather than with Phase 4. Every git link needs a click f
 
 ### Part 4, Salesforce reads
 
-**s88, schema and purge** (database step; estimated run: 10m). Encrypted result storage, `sf_reads_enabled`, a 10-minute purge.
-- create: supabase/migrations/_pending_switchboard2-h8r_sf_reads.sql, supabase/tests/switchboard2-h8r/6_verify_sf_reads.sql
-- SQL: switchboard_actions, switchboard_runs, switchboard_settings
+Re-planned at s89 (2026-11-11) as s89a to s89f, which replace the old s88 to s92 here. Spec §10 has Alex's s89a decisions: no rows in runs, no encryption for now, a structured payload at every level.
 
-**s89, helper reads** (estimated run: 15m). GET only, the org check, level checks, `soql-parser-js`.
-- create: salesforce/helper/ and tests
+**s89a, sf_read schema and verify 15** (database step; estimated run: 15m).
+- create: supabase/migrations/_pending_switchboard2-h8r_sf_reads.sql, supabase/tests/switchboard2-h8r/15_verify_sf_reads.sql
+- update: docs/technical-spec-switchboard2-h8r.md
+- delete: nothing
+- deploy: nothing
+- SQL: switchboard_actions, switchboard_runs, switchboard_settings, switchboard_sf_results, switchboard_sf_read_log
+- db items: db:table: for each, plus db:fn:switchboard_queue_helper, switchboard_pickup_helper, switchboard_needs_click, switchboard_take_sf_result, switchboard_prune_sf_results
 
-**s90, runner: results** (estimated run: 10m).
-- update: supabase/functions/switchboard-runner/index.ts, supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs
-- deploy: switchboard-runner
+**s89b, number and queue** (database step; estimated run: 5m). After test 15 passes and a gitsync.
+- create: supabase/migrations/NNN_sf_reads.sql (the number from claims.cmd number-migration)
+- update: nothing
+- delete: supabase/migrations/_pending_switchboard2-h8r_sf_reads.sql
+- deploy: nothing
+- SQL: switchboard_actions, switchboard_runs, switchboard_settings, switchboard_sf_results, switchboard_sf_read_log
+- db items: the same as s89a, claimed again
 
-**s91, `sf_read` tool** (estimated run: 8m).
-- update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs
-- deploy: mcp
+**s89c, the helper's reads** (switchboard repo; estimated run: 25m). GET-only REST, the Organization check, level checks, the query built from the payload. The window posts rows to the runner itself. The guard blocks the two Alfred read tools in CLI sessions.
+- create: salesforce/read/plan.mjs, salesforce/read/plan.test.mjs, salesforce/read/rest.mjs, salesforce/read/rest.test.mjs, helper/read-window.mjs
+- update: helper/lib/core.mjs, helper/lib/core.test.mjs, helper/helper.mjs, helper/lib/helper.test.mjs, salesforce/guard.mjs, salesforce/guard.test.mjs, salesforce/RULES.md, README.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
 
-**s92, live on the client sandbox** (estimated run: 6m). Results checked by Alex, not pasted.
-- update: fixes only
+**s89d, the extension and host take sf_read** (switchboard repo; estimated run: 10m).
+- create: nothing
+- update: extension/lib/bridge-core.js, extension/claude-watch.js, extension/bridge.js, panel/bridge/host.mjs, README.md
+- delete: nothing
+- deploy: nothing
+- SQL: none
+
+**s89e, runner, tools and page** (estimated run: 25m). Runner `/sf-result`, preview and kind; `queue_sf_read` and `get_sf_read_result`; approve-page lines and the PRODUCTION FULL DATA line.
+- create: nothing
+- update: supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs, supabase/functions/switchboard-runner/index.ts, supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, src/switchboard/ApprovePage.jsx, src/switchboard/ApprovePage.test.jsx
+- delete: nothing
+- deploy: switchboard-runner, mcp (db:deploy)
+- SQL: none
+
+**s89f, live** (estimated run: 10m). A sandbox count first, then production. Results are checked by Alex, not pasted.
+- create: nothing
+- update: fixes only, in files already named above
+- delete: nothing
+- deploy: as needed
+- SQL: none
+
+**Later:**
+- SOQL text with soql-parser-js (15m);
+- encryption (15m);
+- the status.ahk word (5m);
+- the skill card (8m).
 
 ### Part 5, Salesforce actions by link
 

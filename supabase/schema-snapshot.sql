@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-11 07:52, through migration 232 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-11 11:03, through migration 233 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -8965,6 +8965,7 @@ CREATE OR REPLACE FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "
     when p_kind = 'git' and p_payload->>'command' in ('gitpush', 'gitnewtree') then true  -- touches main: always
     when p_kind = 'git' then true       -- gitcom, gitsync: a click until the no-click project
     when p_kind = 'sf_check' then true  -- a link for now (s86pa); read-only, on a sandbox the helper proves first
+    when p_kind = 'sf_read' then true   -- every Salesforce read, by link (s89a, spec 10)
     when p_kind = 'sb_setup' then true  -- writes Switchboard's config: always
     else true                           -- sql, docs and the rest of Salesforce: a click until their own steps say otherwise
   end;
@@ -8974,7 +8975,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_payload" "jsonb", "p_created_by" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_payload" "jsonb", "p_created_by" "text") IS 'Switchboard: whether an action waits for Alex''s click, from its kind, payload and who queued it (spec 11.1, 11.4). Every kind does for now: git, sf_check (by link since s86pa), sb_setup and the rest. Called by the guard trigger, so a caller never sets needs_click.';
+COMMENT ON FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_payload" "jsonb", "p_created_by" "text") IS 'Switchboard: whether an action waits for Alex''s click, from its kind, payload and who queued it (spec 10, 11.1, 11.4). Every kind does for now: git, sf_check (by link since s86pa), sf_read (always), sb_setup and the rest. Called by the guard trigger, so a caller never sets needs_click.';
 
 
 
@@ -9041,7 +9042,7 @@ begin
   with expired as (
     update public.switchboard_actions
        set status = 'failed'
-     where user_id = p_user and kind in ('git', 'sf_check', 'sb_setup') and status = 'queued' and not needs_click
+     where user_id = p_user and kind in ('git', 'sf_check', 'sf_read', 'sb_setup') and status = 'queued' and not needs_click
        and picked_up_at is null and created_at < now() - interval '10 minutes'
     returning id
   )
@@ -9052,10 +9053,10 @@ begin
 
   -- Ready: clicked (consumed), or queued and needing no click. Not while that project has one running.
   select a.* into v_action from public.switchboard_actions a
-   where a.user_id = p_user and a.kind in ('git', 'sf_check', 'sb_setup') and a.picked_up_at is null
+   where a.user_id = p_user and a.kind in ('git', 'sf_check', 'sf_read', 'sb_setup') and a.picked_up_at is null
      and (a.status = 'consumed' or (a.status = 'queued' and not a.needs_click))
      and not exists (select 1 from public.switchboard_actions b
-                      where b.user_id = p_user and b.kind in ('git', 'sf_check', 'sb_setup')
+                      where b.user_id = p_user and b.kind in ('git', 'sf_check', 'sf_read', 'sb_setup')
                         and b.project_code = a.project_code
                         and b.picked_up_at is not null and b.status = 'consumed')
    order by a.created_at, a.id
@@ -9082,7 +9083,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid") IS 'Switchboard: hand the helper the oldest action of p_user, of kind git, sf_check or sb_setup, that is ready to run: clicked, or queued and needing no click. A queued no-click action over 10 minutes old is marked failed first, with a run whose summary says it expired, and is never run. One running at a time per project code, across those kinds. Sets picked_up_at, marks it consumed and opens a real run row. Returns {action_id, run_id, kind, project_code, payload, fingerprint, headline, chat_url}, or null. Called by switchboard-runner with the service role after it checks the pickup key. switchboard_pickup_git stays until the runner moves over (s86c).';
+COMMENT ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid") IS 'Switchboard: hand the helper the oldest action of p_user, of kind git, sf_check, sf_read or sb_setup, that is ready to run: clicked, or queued and needing no click. A queued no-click action over 10 minutes old is marked failed first, with a run whose summary says it expired, and is never run. One running at a time per project code, across those kinds. Sets picked_up_at, marks it consumed and opens a real run row. Returns {action_id, run_id, kind, project_code, payload, fingerprint, headline, chat_url}, or null. Called by switchboard-runner with the service role after it checks the pickup key.';
 
 
 
@@ -9106,6 +9107,27 @@ ALTER FUNCTION "public"."switchboard_prune_runs"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."switchboard_prune_runs"() IS 'Switchboard: clear the result of every run older than 30 days and keep the row. Returns how many. Run daily by the cron job switchboard-prune-runs; no API role can call it.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."switchboard_prune_sf_results"() RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_count integer;
+begin
+  delete from public.switchboard_sf_results where expires_at <= now();
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_prune_sf_results"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_prune_sf_results"() IS 'Switchboard: delete every Salesforce read result past its expires_at. Returns how many. Run each minute by the cron job switchboard-prune-sf-results; no API role can call it.';
 
 
 
@@ -9136,8 +9158,8 @@ begin
   if v_user is null then
     raise exception 'switchboard_queue_helper: no signed-in user.' using errcode = '28000';
   end if;
-  if p_kind is null or p_kind not in ('git', 'sf_check', 'sb_setup') then
-    raise exception 'switchboard_queue_helper: % is not a helper kind (git, sf_check, sb_setup).', coalesce(p_kind, 'null')
+  if p_kind is null or p_kind not in ('git', 'sf_check', 'sf_read', 'sb_setup') then
+    raise exception 'switchboard_queue_helper: % is not a helper kind (git, sf_check, sf_read, sb_setup).', coalesce(p_kind, 'null')
       using errcode = '23514';
   end if;
   if p_payload is null or jsonb_typeof(p_payload) <> 'object' then
@@ -9148,13 +9170,13 @@ begin
   end if;
 
   -- Only the strings the payload checks accept are used; anything else leaves the code null and is refused below.
-  if v_code is null and p_kind = 'sf_check' and jsonb_typeof(p_payload->'alias') = 'string' then
+  if v_code is null and p_kind in ('sf_check', 'sf_read') and jsonb_typeof(p_payload->'alias') = 'string' then
     v_code := 'sf-' || left(regexp_replace(lower(p_payload->>'alias'), '[^a-z0-9_-]', '_', 'g'), 37);
   elsif v_code is null and p_kind = 'sb_setup' and jsonb_typeof(p_payload->'client') = 'string' then
     v_code := 'sb-' || left(p_payload->>'client', 37);
   end if;
   if v_code is null then
-    raise exception 'switchboard_queue_helper: % needs a project code (sf_check and sb_setup derive one from the alias or client).',
+    raise exception 'switchboard_queue_helper: % needs a project code (sf_check, sf_read and sb_setup derive one from the alias or client).',
       p_kind using errcode = '23514';
   end if;
 
@@ -9170,7 +9192,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") IS 'Switchboard: queue an action the desktop helper runs (kind git, sf_check or sb_setup) for the signed-in caller, as created_by claude, and return {action_id, project_code}. git needs p_project_code; with none, an sf_check uses sf-<alias> and an sb_setup sb-<client>, so the one-live-link and one-running limits hold per alias and per client. The guard trigger sets fingerprint, status and needs_click; the payload checks refuse what the kind does not allow. A link, where the kind needs a click, is issued separately by switchboard_issue_link (spec 11.3-11.6).';
+COMMENT ON FUNCTION "public"."switchboard_queue_helper"("p_kind" "text", "p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") IS 'Switchboard: queue an action the desktop helper runs (kind git, sf_check, sf_read or sb_setup) for the signed-in caller, as created_by claude, and return {action_id, project_code}. git needs p_project_code; with none, an sf_check or sf_read uses sf-<alias> and an sb_setup sb-<client>, so the one-live-link and one-running limits hold per alias and per client. The guard trigger sets fingerprint, status and needs_click; the payload checks refuse what the kind does not allow. A link, where the kind needs a click, is issued separately by switchboard_issue_link (spec 10, 11.3-11.6).';
 
 
 
@@ -9210,6 +9232,36 @@ ALTER FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb
 
 
 COMMENT ON FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") IS 'Switchboard: whether a link''s page waits for Alex''s Approve click (s86ag). change: it waits, and the approve page shows the red Approval required bar; every kind but one, including sf_check, gitsync, gitcom and an unknown kind. none: the page runs by itself and closes, which is only a sql --test (payload.test true). Not about whether anything real changes. Carried in the link url as &stakes=; it decides nothing.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."switchboard_take_sf_result"("p_action_id" "uuid") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_user uuid := auth.uid();
+  v_out  jsonb;
+begin
+  if v_user is null then
+    raise exception 'switchboard_take_sf_result: no signed-in user.' using errcode = '28000';
+  end if;
+  -- The sweep first, in case the cron job has stopped: nothing expired survives a take.
+  delete from public.switchboard_sf_results where expires_at <= now();
+  delete from public.switchboard_sf_results
+   where action_id = p_action_id and user_id = v_user and expires_at > now()
+  returning jsonb_build_object('action_id', action_id, 'rows', rows, 'row_count', row_count, 'truncated', truncated,
+                               'production_full_data', production_full_data, 'created_at', created_at, 'expires_at', expires_at)
+    into v_out;
+  return v_out;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_take_sf_result"("p_action_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_take_sf_result"("p_action_id" "uuid") IS 'Switchboard: return the rows of the signed-in caller''s sf_read p_action_id and delete them in the same statement, so they come back once; null when there are none, they were taken, or they expired. Every expired result, anyone''s, is deleted first. Called by the Salesforce read fetch tool (spec 10).';
 
 
 
@@ -18583,7 +18635,7 @@ CREATE TABLE IF NOT EXISTS "public"."switchboard_actions" (
     "picked_up_at" timestamp with time zone,
     CONSTRAINT "switchboard_actions_git_payload" CHECK ((("kind" <> 'git'::"text") OR (COALESCE(("payload" ->> 'command'::"text"), ''::"text") = ANY (ARRAY['gitcom'::"text", 'gitsync'::"text", 'gitnewtree'::"text"])) OR ((COALESCE(("payload" ->> 'command'::"text"), ''::"text") = 'gitpush'::"text") AND (COALESCE(("payload" ->> 'mode'::"text"), ''::"text") = ANY (ARRAY['push'::"text", 'checkpoint'::"text", 'finish'::"text"]))))),
     CONSTRAINT "switchboard_actions_git_repo" CHECK ((("kind" <> 'git'::"text") OR (NOT COALESCE(("payload" ? 'repo'::"text"), false)) OR (COALESCE((("payload" ->> 'command'::"text") = 'gitnewtree'::"text"), false) AND COALESCE(("jsonb_typeof"(("payload" -> 'repo'::"text")) = 'string'::"text"), false) AND COALESCE(("length"(("payload" ->> 'repo'::"text")) <= 240), false) AND COALESCE((("payload" ->> 'repo'::"text") ~ '^[A-Za-z]:(\\[^\\/:*?"<>|[:cntrl:]]+)+$'::"text"), false) AND COALESCE(("strpos"(("payload" ->> 'repo'::"text"), '..'::"text") = 0), false)))),
-    CONSTRAINT "switchboard_actions_kind_valid" CHECK (("kind" = ANY (ARRAY['sql'::"text", 'git'::"text", 'sf_check'::"text", 'sb_setup'::"text", 'sf_deploy'::"text", 'sf_test'::"text", 'sf_read_prod_data'::"text", 'docs'::"text"]))),
+    CONSTRAINT "switchboard_actions_kind_valid" CHECK (("kind" = ANY (ARRAY['sql'::"text", 'git'::"text", 'sf_check'::"text", 'sb_setup'::"text", 'sf_read'::"text", 'sf_deploy'::"text", 'sf_test'::"text", 'sf_read_prod_data'::"text", 'docs'::"text"]))),
     CONSTRAINT "switchboard_actions_link_complete" CHECK ((("link_hash" IS NULL) = ("link_expires_at" IS NULL))),
     CONSTRAINT "switchboard_actions_project_format" CHECK (("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text")),
     CONSTRAINT "switchboard_actions_sb_setup_payload" CHECK ((("kind" <> 'sb_setup'::"text") OR ((COALESCE(("payload" ->> 'command'::"text"), ''::"text") = ANY (ARRAY['client start'::"text", 'org add'::"text"])) AND (COALESCE(("payload" ->> 'client'::"text"), ''::"text") ~ '^[a-z0-9][a-z0-9_-]{0,40}$'::"text") AND COALESCE((("payload" - ARRAY['command'::"text", 'client'::"text", 'repo'::"text", 'adopt'::"text", 'from_sandbox'::"text", 'folder'::"text", 'project'::"text", 'name'::"text", 'sandboxes'::"text", 'integration_ok'::"text", 'orgs'::"text"]) = '{}'::"jsonb"), false) AND
@@ -18596,6 +18648,23 @@ CASE
     WHEN (("payload" ->> 'check'::"text") = 'metadata'::"text") THEN (COALESCE(("jsonb_typeof"(("payload" -> 'metadata_type'::"text")) = 'string'::"text"), false) AND COALESCE((("payload" ->> 'metadata_type'::"text") ~ '^[A-Za-z]{1,80}$'::"text"), false))
     ELSE (NOT COALESCE(("payload" ? 'metadata_type'::"text"), false))
 END AND COALESCE((("payload" - ARRAY['check'::"text", 'alias'::"text", 'metadata_type'::"text"]) = '{}'::"jsonb"), false)))),
+    CONSTRAINT "switchboard_actions_sf_read_payload" CHECK ((("kind" <> 'sf_read'::"text") OR COALESCE(((("payload" - ARRAY['alias'::"text", 'production'::"text", 'level'::"text", 'object'::"text", 'count'::"text", 'fields'::"text", 'filters'::"text", 'limit'::"text"]) = '{}'::"jsonb") AND ("length"(("payload")::"text") <= 8000) AND ("jsonb_typeof"(("payload" -> 'alias'::"text")) = 'string'::"text") AND (("payload" ->> 'alias'::"text") ~ '^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$'::"text") AND ("jsonb_typeof"(("payload" -> 'production'::"text")) = 'boolean'::"text") AND (COALESCE(("payload" ->> 'level'::"text"), ''::"text") = ANY (ARRAY['objects'::"text", 'metadata'::"text", 'ids'::"text", 'data'::"text"])) AND ((("payload" ->> 'level'::"text") <> 'objects'::"text") OR (NOT ("payload" ?| ARRAY['object'::"text", 'count'::"text", 'fields'::"text", 'filters'::"text", 'limit'::"text"]))) AND ((("payload" ->> 'level'::"text") = 'objects'::"text") OR (("jsonb_typeof"(("payload" -> 'object'::"text")) = 'string'::"text") AND (("payload" ->> 'object'::"text") ~ '^[A-Za-z][A-Za-z0-9_]{0,79}$'::"text"))) AND ((("payload" ->> 'level'::"text") <> 'metadata'::"text") OR (NOT ("payload" ?| ARRAY['count'::"text", 'fields'::"text", 'filters'::"text", 'limit'::"text"]))) AND ((("payload" ->> 'level'::"text") <> ALL (ARRAY['ids'::"text", 'data'::"text"])) OR (
+CASE
+    WHEN ("payload" ? 'count'::"text") THEN ((("payload" -> 'count'::"text") = 'true'::"jsonb") AND (NOT ("payload" ?| ARRAY['fields'::"text", 'limit'::"text"])))
+    ELSE (
+    CASE
+        WHEN ("jsonb_typeof"(("payload" -> 'limit'::"text")) = 'number'::"text") THEN ((("payload" ->> 'limit'::"text") ~ '^[0-9]+$'::"text") AND (((("payload" ->> 'limit'::"text"))::numeric >= (1)::numeric) AND ((("payload" ->> 'limit'::"text"))::numeric <= (1000)::numeric)))
+        ELSE false
+    END AND
+    CASE
+        WHEN ("jsonb_typeof"(("payload" -> 'fields'::"text")) = 'array'::"text") THEN ((("jsonb_array_length"(("payload" -> 'fields'::"text")) >= 1) AND ("jsonb_array_length"(("payload" -> 'fields'::"text")) <= 50)) AND ("jsonb_array_length"(("payload" -> 'fields'::"text")) = "jsonb_array_length"("jsonb_path_query_array"("payload", '$."fields"[*]?(@.type() == "string" && @ like_regex "^[A-Za-z][A-Za-z0-9_]{0,79}$")'::"jsonpath"))))
+        ELSE false
+    END)
+END AND ((NOT ("payload" ? 'filters'::"text")) OR
+CASE
+    WHEN ("jsonb_typeof"(("payload" -> 'filters'::"text")) = 'array'::"text") THEN ((("jsonb_array_length"(("payload" -> 'filters'::"text")) >= 1) AND ("jsonb_array_length"(("payload" -> 'filters'::"text")) <= 10)) AND ("jsonb_array_length"(("payload" -> 'filters'::"text")) = "jsonb_array_length"("jsonb_path_query_array"("payload", '$."filters"[*]?(((@.type() == "object" && @."field".type() == "string") && @."field" like_regex "^[A-Za-z][A-Za-z0-9_]{0,79}$") && ((((((@."op" == "=" || @."op" == "!=") || @."op" == "<") || @."op" == "<=") || @."op" == ">") || @."op" == ">=") && (((@."value".type() == "string" || @."value".type() == "number") || @."value".type() == "boolean") || @."value".type() == "null") || ((@."op" == "in" && @."value".type() == "array") && @."value".size() >= 1) && @."value".size() <= 100))'::"jsonpath"))))
+    ELSE false
+END) AND (NOT COALESCE("jsonb_path_exists"("payload", '$."filters"[*].keyvalue()?(!((@."key" == "field" || @."key" == "op") || @."key" == "value"))'::"jsonpath", '{}'::"jsonb", true), true)) AND (NOT COALESCE("jsonb_path_exists"("payload", '$."filters"[*]?(@."op" == "in")."value"[*]?(@.type() == "object" || @.type() == "array")'::"jsonpath", '{}'::"jsonb", true), true)) AND ((("payload" ->> 'level'::"text") = 'data'::"text") OR ((NOT COALESCE("jsonb_path_exists"("payload", '$."fields"[*]?(!((@ == "Id" || @ == "CreatedDate") || @ == "LastModifiedDate"))'::"jsonpath", '{}'::"jsonb", true), true)) AND (NOT COALESCE("jsonb_path_exists"("payload", '$."filters"[*]?(!((@."field" == "Id" || @."field" == "CreatedDate") || @."field" == "LastModifiedDate"))'::"jsonpath", '{}'::"jsonb", true), true))))))), false))),
     CONSTRAINT "switchboard_actions_sql_payload" CHECK ((("kind" <> 'sql'::"text") OR ("jsonb_typeof"(("payload" -> 'sql'::"text")) = 'string'::"text"))),
     CONSTRAINT "switchboard_actions_status_valid" CHECK (("status" = ANY (ARRAY['queued'::"text", 'link_issued'::"text", 'consumed'::"text", 'succeeded'::"text", 'failed'::"text", 'cancelled'::"text"]))),
     CONSTRAINT "switchboard_actions_used_needs_link" CHECK ((("link_used_at" IS NULL) OR ("link_hash" IS NOT NULL)))
@@ -18629,7 +18698,7 @@ COMMENT ON COLUMN "public"."switchboard_actions"."chat_url" IS 'Address of the c
 
 
 
-COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...}, and a gitnewtree may name its "repo", an absolute path (spec 11.3). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], "folder" with from_sandbox, ...} (spec 11.5). Fixed after insert.';
+COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...}, and a gitnewtree may name its "repo", an absolute path (spec 11.3). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], "folder" with from_sandbox, ...} (spec 11.5). sf_read: {"alias", "production", "level": "objects|metadata|ids|data", "object", "count" or "fields" with "limit", "filters"}, never SOQL text (spec 10). Fixed after insert.';
 
 
 
@@ -18852,6 +18921,7 @@ CREATE TABLE IF NOT EXISTS "public"."switchboard_settings" (
     "link_base_url" "text" DEFAULT 'https://alfredv5vibe.vercel.app'::"text" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "sf_reads_enabled" boolean DEFAULT true NOT NULL,
     CONSTRAINT "switchboard_settings_base_format" CHECK (("link_base_url" ~ '^https://[^/]+$'::"text"))
 );
 
@@ -18884,6 +18954,157 @@ COMMENT ON COLUMN "public"."switchboard_settings"."created_at" IS 'Row creation.
 
 
 COMMENT ON COLUMN "public"."switchboard_settings"."updated_at" IS 'Last change. Stamped by the guard trigger.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_settings"."sf_reads_enabled" IS 'The kill switch for Salesforce reads (spec 10). False refuses every sf_read at queue time, and the runner takes no result. reads_enabled is the Supabase one.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."switchboard_sf_read_log" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "action_id" "uuid",
+    "stage" "text" NOT NULL,
+    "org_alias" "text" NOT NULL,
+    "level" "text",
+    "object" "text",
+    "fields" "jsonb",
+    "filters" "jsonb",
+    "query_text" "text",
+    "row_count" integer,
+    "error" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "switchboard_sf_read_log_alias_length" CHECK ((("length"("org_alias") >= 1) AND ("length"("org_alias") <= 80))),
+    CONSTRAINT "switchboard_sf_read_log_count" CHECK ((("row_count" IS NULL) OR ("row_count" >= 0))),
+    CONSTRAINT "switchboard_sf_read_log_fields_array" CHECK ((("fields" IS NULL) OR ("jsonb_typeof"("fields") = 'array'::"text"))),
+    CONSTRAINT "switchboard_sf_read_log_filters_array" CHECK ((("filters" IS NULL) OR ("jsonb_typeof"("filters") = 'array'::"text"))),
+    CONSTRAINT "switchboard_sf_read_log_level" CHECK ((("level" IS NULL) OR ("level" = ANY (ARRAY['objects'::"text", 'metadata'::"text", 'ids'::"text", 'data'::"text"])))),
+    CONSTRAINT "switchboard_sf_read_log_query_length" CHECK ((("query_text" IS NULL) OR ("length"("query_text") <= 20000))),
+    CONSTRAINT "switchboard_sf_read_log_stage" CHECK (("stage" = ANY (ARRAY['queued'::"text", 'refused'::"text", 'ran'::"text", 'failed'::"text"])))
+);
+
+
+ALTER TABLE "public"."switchboard_sf_read_log" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."switchboard_sf_read_log" IS 'SWITCHBOARD. One row per step of a Salesforce read: queued or refused (by the queue tool, which counts the budget from here) and ran or failed (by switchboard-runner). What was asked and how many rows came back, never the rows. Append-only: authenticated can read and add, not change or remove. Spec: docs/technical-spec-switchboard2-h8r.md 10.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."user_id" IS 'Owner. Owner RLS; the runner sets it explicitly.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."action_id" IS 'The sf_read action, when one was queued; null for a refusal before queueing.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."stage" IS 'queued or refused at queue time; ran or failed when the helper''s result came back.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."org_alias" IS 'The org alias asked for.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."level" IS 'objects, metadata, ids or data, as asked.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."object" IS 'The object, for every level but objects.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."fields" IS 'The fields asked for, a json array of API names; null for a count, describe or list.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."filters" IS 'The filters asked for, a json array of {field, op, value}.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."query_text" IS 'The SOQL the helper built and ran, when it ran one.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."row_count" IS 'Rows returned, or the count; null until it ran.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."error" IS 'Why it was refused or failed, with ids and emails already blanked.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_read_log"."created_at" IS 'When this step was logged.';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."switchboard_sf_results" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "action_id" "uuid" NOT NULL,
+    "rows" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "row_count" integer NOT NULL,
+    "truncated" boolean DEFAULT false NOT NULL,
+    "production_full_data" boolean DEFAULT false NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "expires_at" timestamp with time zone DEFAULT ("now"() + '00:10:00'::interval) NOT NULL,
+    CONSTRAINT "switchboard_sf_results_count" CHECK (("row_count" >= 0)),
+    CONSTRAINT "switchboard_sf_results_rows_array" CHECK (("jsonb_typeof"("rows") = 'array'::"text")),
+    CONSTRAINT "switchboard_sf_results_rows_cap" CHECK (
+CASE
+    WHEN ("jsonb_typeof"("rows") = 'array'::"text") THEN ("jsonb_array_length"("rows") <= 1000)
+    ELSE false
+END),
+    CONSTRAINT "switchboard_sf_results_ten_minutes" CHECK (("expires_at" <= ("created_at" + '00:10:00'::interval)))
+);
+
+
+ALTER TABLE "public"."switchboard_sf_results" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."switchboard_sf_results" IS 'SWITCHBOARD. The rows of one Salesforce read (kind sf_read), held briefly: written by switchboard-runner (service role) from the desktop helper, deleted when Claude takes them (switchboard_take_sf_result) and in any case once expired, by the cron job switchboard-prune-sf-results each minute. Never copied to switchboard_runs or the audit log. Not encrypted for now (Alex, 2026-11-11). Spec: docs/technical-spec-switchboard2-h8r.md 10.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_results"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_results"."user_id" IS 'Owner. Set explicitly by switchboard-runner, which writes with the service role. Owner RLS scopes every read.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_results"."action_id" IS 'The sf_read action these rows answer. One result per action.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_results"."rows" IS 'The rows, a json array of objects holding only the asked-for fields, at most 1000. Empty for a count. The object list and a describe are stored as rows too: one per object, or one per field.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_results"."row_count" IS 'Rows returned after the cap, or the count for a count read.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_results"."truncated" IS 'True when the row cap cut the answer.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_results"."production_full_data" IS 'True when the helper stamped the result PRODUCTION FULL DATA: level data on an org Salesforce says is production.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_results"."created_at" IS 'When the runner stored it.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_sf_results"."expires_at" IS 'When it goes: at most 10 minutes after created_at. An expired row is never returned and is deleted by the next take or the minute''s prune.';
 
 
 
@@ -21585,6 +21806,21 @@ ALTER TABLE ONLY "public"."switchboard_settings"
 
 
 
+ALTER TABLE ONLY "public"."switchboard_sf_read_log"
+    ADD CONSTRAINT "switchboard_sf_read_log_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."switchboard_sf_results"
+    ADD CONSTRAINT "switchboard_sf_results_one_per_action" UNIQUE ("action_id");
+
+
+
+ALTER TABLE ONLY "public"."switchboard_sf_results"
+    ADD CONSTRAINT "switchboard_sf_results_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."wb_accounts"
     ADD CONSTRAINT "wb_accounts_pkey" PRIMARY KEY ("id");
 
@@ -22956,6 +23192,10 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."switchboard_settings" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."switchboard_sf_read_log" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
 
@@ -24428,6 +24668,26 @@ ALTER TABLE ONLY "public"."switchboard_settings"
 
 
 
+ALTER TABLE ONLY "public"."switchboard_sf_read_log"
+    ADD CONSTRAINT "switchboard_sf_read_log_action_id_fkey" FOREIGN KEY ("action_id") REFERENCES "public"."switchboard_actions"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."switchboard_sf_read_log"
+    ADD CONSTRAINT "switchboard_sf_read_log_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."switchboard_sf_results"
+    ADD CONSTRAINT "switchboard_sf_results_action_id_fkey" FOREIGN KEY ("action_id") REFERENCES "public"."switchboard_actions"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."switchboard_sf_results"
+    ADD CONSTRAINT "switchboard_sf_results_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
 ALTER TABLE ONLY "public"."wb_accounts"
     ADD CONSTRAINT "wb_accounts_context_id_fkey" FOREIGN KEY ("context_id") REFERENCES "public"."contexts"("id");
 
@@ -25293,6 +25553,10 @@ CREATE POLICY "claude_reader_read" ON "public"."switchboard_settings" FOR SELECT
 
 
 
+CREATE POLICY "claude_reader_read" ON "public"."switchboard_sf_read_log" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
 CREATE POLICY "claude_reader_read" ON "public"."wb_accounts" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
 
 
@@ -26024,6 +26288,20 @@ ALTER TABLE "public"."switchboard_settings" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "switchboard_settings_owner_access" ON "public"."switchboard_settings" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."switchboard_sf_read_log" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "switchboard_sf_read_log_owner_access" ON "public"."switchboard_sf_read_log" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."switchboard_sf_results" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "switchboard_sf_results_owner_access" ON "public"."switchboard_sf_results" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
 
 
 
@@ -27210,6 +27488,10 @@ REVOKE ALL ON FUNCTION "public"."switchboard_prune_runs"() FROM PUBLIC;
 
 
 
+REVOKE ALL ON FUNCTION "public"."switchboard_prune_sf_results"() FROM PUBLIC;
+
+
+
 REVOKE ALL ON FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."switchboard_queue_git"("p_project_code" "text", "p_payload" "jsonb", "p_headline" "text", "p_chat_url" "text") TO "service_role";
@@ -27231,6 +27513,12 @@ GRANT ALL ON FUNCTION "public"."switchboard_settings_guard"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."switchboard_stakes"("p_kind" "text", "p_payload" "jsonb") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."switchboard_take_sf_result"("p_action_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_take_sf_result"("p_action_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."switchboard_take_sf_result"("p_action_id" "uuid") TO "service_role";
 
 
 
@@ -31957,6 +32245,68 @@ GRANT SELECT("created_at") ON TABLE "public"."switchboard_settings" TO "claude_r
 
 
 GRANT SELECT("updated_at") ON TABLE "public"."switchboard_settings" TO "claude_reader";
+
+
+
+GRANT SELECT,INSERT,REFERENCES,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."switchboard_sf_read_log" TO "authenticated";
+GRANT ALL ON TABLE "public"."switchboard_sf_read_log" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("action_id") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("stage") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("org_alias") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("level") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("object") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("fields") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("filters") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("query_text") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("row_count") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("error") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT("created_at") ON TABLE "public"."switchboard_sf_read_log" TO "claude_reader";
+
+
+
+GRANT SELECT,REFERENCES,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."switchboard_sf_results" TO "authenticated";
+GRANT ALL ON TABLE "public"."switchboard_sf_results" TO "service_role";
 
 
 
