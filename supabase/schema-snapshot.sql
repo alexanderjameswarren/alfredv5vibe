@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-10 14:50, through migration 230 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-10 16:03, through migration 231 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -18677,6 +18677,61 @@ COMMENT ON COLUMN "public"."switchboard_actions"."picked_up_at" IS 'When the hel
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."switchboard_claim_state" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "repo" "text" NOT NULL,
+    "claims" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "blocks" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "posted_at" timestamp with time zone NOT NULL,
+    "source_host" "text",
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "switchboard_claim_state_blocks_array" CHECK (("jsonb_typeof"("blocks") = 'array'::"text")),
+    CONSTRAINT "switchboard_claim_state_claims_array" CHECK (("jsonb_typeof"("claims") = 'array'::"text")),
+    CONSTRAINT "switchboard_claim_state_host_length" CHECK ((("source_host" IS NULL) OR (("length"("source_host") >= 1) AND ("length"("source_host") <= 100)))),
+    CONSTRAINT "switchboard_claim_state_repo_length" CHECK ((("length"("repo") >= 1) AND ("length"("repo") <= 300)))
+);
+
+
+ALTER TABLE "public"."switchboard_claim_state" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."switchboard_claim_state" IS 'SWITCHBOARD. The current claims of one repo, one row per user and repo, replaced whole on every claim change (claim, release, yield, cleanup, gitpush checkpoint or finish); never on a timer. Written only by overwatch-ingest (service role) from the claims code''s events; read by get_claim_state. History of blocks is in claim_blocks. Spec: docs/technical-spec-switchboard2-h8r.md 11.8.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_claim_state"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_claim_state"."user_id" IS 'Owner. Set explicitly by overwatch-ingest from CLIPBOARD_USER_ID, since it writes with the service role. Owner RLS scopes every read.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_claim_state"."repo" IS 'The repo, as its repos.json key: the main checkout''s absolute path, e.g. C:\Users\Alex\projects\alfred-v5.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_claim_state"."claims" IS 'Holdings, a json array of {item, owner, kind, claimed_at}: item is the repo-relative file or folder or a db: item, owner the holding project code (main for the main checkout), kind file, folder or db.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_claim_state"."blocks" IS 'Waiting requests still in force, a json array of {waiter, holder, item, since}: the project refused, the project holding the item, the item, and when the first refusal was.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_claim_state"."posted_at" IS 'When the claims code wrote this state (the change''s own time). An older post never replaces a newer one.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_claim_state"."source_host" IS 'The computer the claims code ran on, when it knows it; null otherwise.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_claim_state"."updated_at" IS 'When overwatch-ingest last wrote the row.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."switchboard_read_log" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -21497,6 +21552,16 @@ ALTER TABLE ONLY "public"."switchboard_actions"
 
 ALTER TABLE "public"."switchboard_actions"
     ADD CONSTRAINT "switchboard_actions_sb_setup_folder" CHECK ((("kind" <> 'sb_setup'::"text") OR ((COALESCE(("payload" ? 'folder'::"text"), false) = COALESCE(((("payload" ->> 'command'::"text") = 'client start'::"text") AND ("payload" ? 'from_sandbox'::"text")), false)) AND ((NOT COALESCE(("payload" ? 'folder'::"text"), false)) OR (COALESCE(("jsonb_typeof"(("payload" -> 'folder'::"text")) = 'string'::"text"), false) AND COALESCE(("length"(("payload" ->> 'folder'::"text")) <= 240), false) AND COALESCE((("payload" ->> 'folder'::"text") ~* '^c:\\users\\alex\\projects(\\[^\\/:*?"<>|[:cntrl:]]+)+$'::"text"), false) AND COALESCE(("strpos"(("payload" ->> 'folder'::"text"), '..'::"text") = 0), false)))))) NOT VALID;
+
+
+
+ALTER TABLE ONLY "public"."switchboard_claim_state"
+    ADD CONSTRAINT "switchboard_claim_state_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."switchboard_claim_state"
+    ADD CONSTRAINT "switchboard_claim_state_repo_key" UNIQUE ("user_id", "repo");
 
 
 
@@ -24338,6 +24403,11 @@ ALTER TABLE ONLY "public"."switchboard_actions"
 
 
 
+ALTER TABLE ONLY "public"."switchboard_claim_state"
+    ADD CONSTRAINT "switchboard_claim_state_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
 ALTER TABLE ONLY "public"."switchboard_read_log"
     ADD CONSTRAINT "switchboard_read_log_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
@@ -25207,6 +25277,10 @@ CREATE POLICY "claude_reader_read" ON "public"."switchboard_actions" FOR SELECT 
 
 
 
+CREATE POLICY "claude_reader_read" ON "public"."switchboard_claim_state" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
 CREATE POLICY "claude_reader_read" ON "public"."switchboard_read_log" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
 
 
@@ -25922,6 +25996,13 @@ ALTER TABLE "public"."switchboard_actions" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "switchboard_actions_owner_access" ON "public"."switchboard_actions" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."switchboard_claim_state" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "switchboard_claim_state_owner_access" ON "public"."switchboard_claim_state" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
 
 
 
@@ -31728,6 +31809,43 @@ GRANT SELECT("updated_at") ON TABLE "public"."switchboard_actions" TO "claude_re
 
 
 GRANT SELECT("picked_up_at") ON TABLE "public"."switchboard_actions" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."switchboard_claim_state" TO "authenticated";
+GRANT ALL ON TABLE "public"."switchboard_claim_state" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."switchboard_claim_state" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."switchboard_claim_state" TO "claude_reader";
+
+
+
+GRANT SELECT("repo") ON TABLE "public"."switchboard_claim_state" TO "claude_reader";
+
+
+
+GRANT SELECT("claims") ON TABLE "public"."switchboard_claim_state" TO "claude_reader";
+
+
+
+GRANT SELECT("blocks") ON TABLE "public"."switchboard_claim_state" TO "claude_reader";
+
+
+
+GRANT SELECT("posted_at") ON TABLE "public"."switchboard_claim_state" TO "claude_reader";
+
+
+
+GRANT SELECT("source_host") ON TABLE "public"."switchboard_claim_state" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."switchboard_claim_state" TO "claude_reader";
 
 
 
