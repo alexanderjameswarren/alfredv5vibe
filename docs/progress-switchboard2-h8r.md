@@ -3,7 +3,7 @@
 Project code: `switchboard2-h8r`
 Spec: `docs/technical-spec-switchboard2-h8r.md`
 
-Status: Phases 0 to 3 complete (Phase 3's worktree finished and merged as cb42ff8 on 2026-11-05). Part 3, git by link, continues under the same code in a fresh worktree; the docs came back from `docs/history/` at s80b-s80c. Next: s81.
+Status: Phases 0 to 5 complete; closeout written at s93 (2026-11-12). Next: gitpush Finish, phase, for this worktree. (Earlier: Phase 3's worktree finished and merged as cb42ff8 on 2026-11-05; the docs came back from `docs/history/` at s80b-s80c.)
 
 Rule: one step at a time. The CLI finishes a step, records it here, reports, and stops for Alex.
 
@@ -151,8 +151,34 @@ The run tag is filled in when a step runs. Database items are claimed just in ti
 | 5 git | s90d | The chained link in Alfred | `db:deploy` | done (s90d-r8vz). 234 live; main current (8969606). queue_switchboard_git takes then_send on gitsync and gitpush checkpoint or push, checked as 234 holds it (chainTagProblem) before anything is queued, stored as then: {send}; the headline adds ", THEN SENDS PROMPT <tag> AT YOUR TAP"; the description says it replaces the git and Send links, the reply still ends with the prompt block, never chain the checkpoint right after a test; next gives the three result lines. Page: "Then sends the prompt <tag> when you tap the tile."; no Approve heading on a sql test. Spec 11.9. Tests: tools 85, mcp 51, tables 1, page 49, app 3339 passed / 7 skipped, scripts 77. mcp deployed as v220 (live: 226 tools, then_send present). db:deploy held until the checkpoint | 2026-11-11 |
 | 5 git | s90e | Live test of the chain | none | done. Chained gitsync: action 6583fbb8, run dcc76215, "Already up to date"; its prompt s90e-c2jx arrived and reported the worktree current at 5c7e342. Chained gitpush push: d17d90c6 (switchboard_repo-k7m), run e6db7325, "main Push done". Both posted "done; prompt sent" (Alex). Not run live: a chained checkpoint, a send refused for a busy CLI, a failing command's "failed; send not run" | 2026-11-11 |
 | 5 git | s90ea, s90eb | Fixes from the live test (switchboard repo) | none | done in the switchboard repo thread: approve links change on click, extension 1.2.27 | 2026-11-11 |
-| 5 git | s90f, s90g | Guard gaps (H); a terminal button on each tile (I) | none | todo (switchboard repo) | |
+| 5 git | s90f, s90fb, s90g, s90gb | Guard gaps (H); a terminal button on each tile (I) | none | done from this thread under switchboard_repo-k7m, pushed (on switchboard main). s90f/s90fb (e5d375d): the guard catches more shell edits, including writes into the current folder. s90gb (0d9a22c): the tile's >_ terminal button opens its own checkout; live-tested 11/11. Corrected at s93b: s93 marked these open, because its `git log --since=2026-11-11` meant 11/11 at the current time of day and missed both | 2026-11-11 |
 | 5 git | s90h | Cleanup before closeout | none | done (s90h-t9mk). .claude/CLAUDE.md: "Rules the shared file doesn't carry yet" removed, heading too; all 8 rules are in the installed SWITCHBOARD-RULES.md (lines 47, 48, 50, 66-68, 75). Stale lines marked. Open tests checked against the queue. Two findings: the helper refused an ids read with "level ids reads only the Id field" (d556ef77), though 233, the tool and spec §10 allow Id, CreatedDate and LastModifiedDate at ids (to check in the switchboard repo); sf_check 72ca1cc0 queued since 2026-11-10 with no link | 2026-11-11 |
+| 5 git | s91, s92, s92b | Switchboard repo steps run from this thread (code switchboard_repo-k7m) | none | done, pushed and installed. s91 (a57f876): sb deploy's drift-check retrieve runs inside the checkout (.sb/, excluded, removed after). s92/s92b (e29e0a4): clip's personal-data hold scans the report and the change list, treats test domains and timings as safe, and gives clear hold choices; rules file updated | 2026-11-12 |
+| 5 git | s93 | Phases 3-5 closeout entry | none | done (s93-k2rx). See "Closeout (s93)" below | 2026-11-12 |
+
+**Closeout (s93), 2026-11-12.**
+- **Phases 3-5 done:**
+  - the chain: 234, extension 1.2.26 then 1.2.27, mcp v220, live tests at s90e;
+  - approve links change on click (s90eb);
+  - the s90h cleanup.
+- **Open s90 rows:** none. s90f/s90fb (e5d375d) and s90g/s90gb (0d9a22c) were built and pushed on 11/11 (corrected at s93b).
+- **Dogfooding on 11/12:**
+  - The Common Defense diagnosis (cd_ab_diagnose-r4m) and Fix A (cd_ab_recurring_fix-t6k) ran end to end through Switchboard.
+  - Fix A is in production and in its verification window.
+  - Near miss: the first production validate used relative paths. It packaged main's old files and quick-deployed as all Unchanged. A compare after the deploy caught it.
+- **Carried to the next phase:**
+  - the friction entries logged 11/11-11/12 under switchboard2-h8r, switchboard_repo-k7m, cd_ab_diagnose-r4m and cd_ab_recurring_fix-t6k;
+  - the sb prod toolkit: validate, deploy, dataop, rollback, drift and org checks;
+  - the ids-level filter rule, tied to the contract flag;
+  - finishing the close of the worktree's VS Code window;
+  - config snapshots to Alfred;
+  - the effort count across a Project's several codes;
+  - the old ids-read refusal d556ef77, to check;
+  - sf_check 72ca1cc0, still queued.
+- **Estimate vs actual:**
+  - The plan was 105 steps (originally 50).
+  - The Steps table holds 174 step ids. 163 ran in this thread (s90f, s90fb, s90g and s90gb under switchboard_repo-k7m), 9 in the switchboard repo thread, and 2 are open: s84f and s86q.
+  - Why it grew: lettered fix and live-test steps were added after nearly every build step, and git by link and Salesforce reads were re-planned into many smaller steps.
 
 **s90b, number and queue** (alfred-v5; database step; estimated run: 5m). After test 16 passes and a gitsync.
 - create: supabase/migrations/NNN_chain_send.sql (the number from claims.cmd number-migration)
