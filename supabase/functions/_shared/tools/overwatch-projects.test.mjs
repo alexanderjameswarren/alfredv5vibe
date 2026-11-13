@@ -130,6 +130,60 @@ test("update_project_plan upserts on group_id and reports the guard's refusal", 
   await assert.rejects(() => m.updateProjectPlanTool.handler({ where_now: "x" }, { db }), /group_id is required/);
 });
 
+// --- every code a Project has had (switchboard_prod-w3k spec 9) ---
+
+test("get_project_plans returns each Project's codes, oldest first", async () => {
+  const CODES = [
+    { group_id: "g1", project_code: "switchboard2-h8r", source: "plan" },
+    { group_id: "g1", project_code: "switchboard_prodrepo-w3k", source: "side" },
+    { group_id: "g2", project_code: "other-a1", source: "plan" },
+  ];
+  const db = fakeDb((t) => ({ data: t === "project_codes" ? CODES : [], error: null }),
+    () => ({ data: [{ group_id: "g1" }, { group_id: "g3" }], error: null }));
+  const out = await m.getProjectPlansTool.handler({}, { db });
+  assert.deepEqual(out.data[0].codes, [
+    { project_code: "switchboard2-h8r", source: "plan" }, { project_code: "switchboard_prodrepo-w3k", source: "side" }]);
+  assert.deepEqual(out.data[1].codes, []);
+  assert.ok(db.calls.some(([t, k, a, b]) => t === "project_codes" && k === "in" && a === "group_id" && b.join() === "g1,g3"));
+});
+
+test("codesToAdd: a list of 1 to 20 codes, duplicates dropped; anything else refused", () => {
+  assert.deepEqual(m.codesToAdd("t", undefined), []);
+  assert.deepEqual(m.codesToAdd("t", ["a-b1", "a-b1", "c_d-e2"]), ["a-b1", "c_d-e2"]);
+  assert.throws(() => m.codesToAdd("t", []), /1 to 20 project codes/);
+  assert.throws(() => m.codesToAdd("t", "a-b1"), /1 to 20 project codes/);
+  assert.throws(() => m.codesToAdd("t", ["Not A Code"]), /1 to 20 project codes/);
+  assert.throws(() => m.codesToAdd("t", Array.from({ length: 21 }, (_, i) => `c${i}`)), /1 to 20 project codes/);
+});
+
+test("update_project_plan add_project_codes alone adds side codes and leaves the plan alone", async () => {
+  const db = fakeDb((t) => ({ data: t === "project_codes" ? [{ group_id: "g1", project_code: "old-a1", source: "plan" }] : null, error: null }));
+  const out = await m.updateProjectPlanTool.handler({ group_id: "g1", add_project_codes: ["repo-w3k", "old-a1"] }, { db });
+  assert.equal(db.calls.some(([t, k]) => t === "project_plans" && k === "upsert"), false);
+  const ins = db.calls.find(([t, k]) => t === "project_codes" && k === "insert");
+  assert.deepEqual(ins[2], [{ group_id: "g1", project_code: "repo-w3k", source: "side" }]);
+  assert.deepEqual(out, { group_id: "g1", project_codes_added: ["repo-w3k"], project_codes_already_held: ["old-a1"] });
+});
+
+test("update_project_plan with plan fields and codes changes both", async () => {
+  const db = fakeDb((t) => ({ data: t === "project_plans" ? { group_id: "g1", where_now: "x" } : [], error: null }));
+  const out = await m.updateProjectPlanTool.handler({ group_id: "g1", where_now: "x", add_project_codes: ["repo-w3k"] }, { db });
+  assert.ok(db.calls.some(([t, k]) => t === "project_plans" && k === "upsert"));
+  assert.equal(out.where_now, "x");
+  assert.deepEqual(out.project_codes_added, ["repo-w3k"]);
+});
+
+test("update_project_plan refuses a code another Project holds, naming it, and writes nothing", async () => {
+  const db = fakeDb((t) => ({
+    data: t === "project_codes" ? [{ group_id: "g9", project_code: "taken-a1", source: "plan" }]
+      : t === "item_groups" ? [{ id: "g9", name: "Other Project" }] : null,
+    error: null,
+  }));
+  await assert.rejects(() => m.updateProjectPlanTool.handler({ group_id: "g1", where_now: "x", add_project_codes: ["taken-a1"] }, { db }),
+    /taken-a1 belongs to Other Project \(g9\).*Nothing was changed/);
+  assert.equal(db.calls.some(([, k]) => k === "upsert" || k === "insert"), false);
+});
+
 test("get_project_links filters by kind and by either end", async () => {
   const db = fakeDb();
   await m.getProjectLinksTool.handler({ kind: "no_parallel", group_id: "g1" }, { db });
