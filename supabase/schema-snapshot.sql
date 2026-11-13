@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-11 13:38, through migration 234 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-13 07:48, through migration 235 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -18664,7 +18664,7 @@ END AND ((NOT ("payload" ? 'filters'::"text")) OR
 CASE
     WHEN ("jsonb_typeof"(("payload" -> 'filters'::"text")) = 'array'::"text") THEN ((("jsonb_array_length"(("payload" -> 'filters'::"text")) >= 1) AND ("jsonb_array_length"(("payload" -> 'filters'::"text")) <= 10)) AND ("jsonb_array_length"(("payload" -> 'filters'::"text")) = "jsonb_array_length"("jsonb_path_query_array"("payload", '$."filters"[*]?(((@.type() == "object" && @."field".type() == "string") && @."field" like_regex "^[A-Za-z][A-Za-z0-9_]{0,79}$") && ((((((@."op" == "=" || @."op" == "!=") || @."op" == "<") || @."op" == "<=") || @."op" == ">") || @."op" == ">=") && (((@."value".type() == "string" || @."value".type() == "number") || @."value".type() == "boolean") || @."value".type() == "null") || ((@."op" == "in" && @."value".type() == "array") && @."value".size() >= 1) && @."value".size() <= 100))'::"jsonpath"))))
     ELSE false
-END) AND (NOT COALESCE("jsonb_path_exists"("payload", '$."filters"[*].keyvalue()?(!((@."key" == "field" || @."key" == "op") || @."key" == "value"))'::"jsonpath", '{}'::"jsonb", true), true)) AND (NOT COALESCE("jsonb_path_exists"("payload", '$."filters"[*]?(@."op" == "in")."value"[*]?(@.type() == "object" || @.type() == "array")'::"jsonpath", '{}'::"jsonb", true), true)) AND ((("payload" ->> 'level'::"text") = 'data'::"text") OR ((NOT COALESCE("jsonb_path_exists"("payload", '$."fields"[*]?(!((@ == "Id" || @ == "CreatedDate") || @ == "LastModifiedDate"))'::"jsonpath", '{}'::"jsonb", true), true)) AND (NOT COALESCE("jsonb_path_exists"("payload", '$."filters"[*]?(!((@."field" == "Id" || @."field" == "CreatedDate") || @."field" == "LastModifiedDate"))'::"jsonpath", '{}'::"jsonb", true), true))))))), false))),
+END) AND (NOT COALESCE("jsonb_path_exists"("payload", '$."filters"[*].keyvalue()?(!((@."key" == "field" || @."key" == "op") || @."key" == "value"))'::"jsonpath", '{}'::"jsonb", true), true)) AND (NOT COALESCE("jsonb_path_exists"("payload", '$."filters"[*]?(@."op" == "in")."value"[*]?(@.type() == "object" || @.type() == "array")'::"jsonpath", '{}'::"jsonb", true), true)) AND ((("payload" ->> 'level'::"text") = 'data'::"text") OR (NOT COALESCE("jsonb_path_exists"("payload", '$."fields"[*]?(!((@ == "Id" || @ == "CreatedDate") || @ == "LastModifiedDate"))'::"jsonpath", '{}'::"jsonb", true), true)))))), false))),
     CONSTRAINT "switchboard_actions_sql_payload" CHECK ((("kind" <> 'sql'::"text") OR ("jsonb_typeof"(("payload" -> 'sql'::"text")) = 'string'::"text"))),
     CONSTRAINT "switchboard_actions_status_valid" CHECK (("status" = ANY (ARRAY['queued'::"text", 'link_issued'::"text", 'consumed'::"text", 'succeeded'::"text", 'failed'::"text", 'cancelled'::"text"]))),
     CONSTRAINT "switchboard_actions_used_needs_link" CHECK ((("link_used_at" IS NULL) OR ("link_hash" IS NOT NULL)))
@@ -18743,6 +18743,10 @@ COMMENT ON COLUMN "public"."switchboard_actions"."updated_at" IS 'Last change. S
 
 
 COMMENT ON COLUMN "public"."switchboard_actions"."picked_up_at" IS 'When the helper picked the action up to run it. Set once by switchboard_pickup_git, never cleared. Empty until then.';
+
+
+
+COMMENT ON CONSTRAINT "switchboard_actions_sf_read_payload" ON "public"."switchboard_actions" IS 'sf_read payload (spec 10): alias, production, level, object, count or fields with limit, filters; never SOQL. At ids only Id, CreatedDate and LastModifiedDate come back; ids filters may name any field, and the desktop helper limits them to those three unless the org''s contractAllowsClaude is on (switchboard_prod-w3k spec 7).';
 
 
 
