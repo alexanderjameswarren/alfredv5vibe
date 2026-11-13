@@ -34,7 +34,10 @@ export function gitLines(payload, projectCode) {
   const p = payload ?? {};
   const lines = [];
   if (p.command === 'gitpush') {
-    lines.push(`Runs gitpush ${p.mode ?? '(no mode)'} for ${projectCode}.`);
+    // A finish by link closes the worktree's VS Code window first (spec §10a; built by switchboard repo s13).
+    lines.push(p.mode === 'finish'
+      ? `Closes the ${projectCode} VS Code window, then finishes: runs gitpush finish for ${projectCode}.`
+      : `Runs gitpush ${p.mode ?? '(no mode)'} for ${projectCode}.`);
     if (p.mode === 'checkpoint') {
       lines.push(p.all ? 'Commits every uncommitted path, merges it into main and pushes.'
         : `Commits these paths, merges them into main and pushes: ${(p.paths ?? []).join(', ')}.`);

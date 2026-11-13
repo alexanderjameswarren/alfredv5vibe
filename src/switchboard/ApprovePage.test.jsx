@@ -415,6 +415,17 @@ test('git: plain words for each command', () => {
   expect(w({ command: 'gitnewtree', repo: 'C:\\Users\\Alex\\projects\\alfred-v5' })).toMatch(/In the repo C:\\Users\\Alex\\projects\\alfred-v5\./);
 });
 
+test('git: a finish opens by closing the project\'s VS Code window; a checkpoint is unchanged', async () => {
+  const { gitLines } = jest.requireActual('./ApprovePage');
+  expect(gitLines({ command: 'gitpush', mode: 'finish', finish: 'phase' }, 'p-a1')[0])
+    .toBe('Closes the p-a1 VS Code window, then finishes: runs gitpush finish for p-a1.');
+  expect(gitLines({ command: 'gitpush', mode: 'checkpoint', paths: ['a.sql'] }, 'p-a1'))
+    .toEqual(['Runs gitpush checkpoint for p-a1.', 'Commits these paths, merges them into main and pushes: a.sql.', 'Releases the database claims.']);
+  runner({ preview: reply(GIT) });
+  open();
+  expect(await screen.findByText(/^Closes the switchboard2-h8r VS Code window, then finishes/)).toBeInTheDocument();
+});
+
 // --- sb setup (spec §11.5) ---
 
 const SB = { ok: true, kind: 'sb_setup', action_id: 's1', headline: 'SB ORG ADD acme-dev FOR CLIENT acme', fingerprint: 'fps',
