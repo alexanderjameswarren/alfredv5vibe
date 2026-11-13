@@ -3,8 +3,8 @@
 //
 // Overwatch's projects. Spec: docs/technical-spec-overwatch-q4n.md 4.3, 4.4 and 7.
 //
-//   get_project_plans        tier 1 — Project groups with their plans, estimates, steps used, reports and last report time.
-//   update_project_plan      tier 2 — create or change a Project's plan (status line, target date, waits).
+//   get_project_plans        tier 1 — Project groups with their plans, estimates, codes, steps used, reports and last report time.
+//   update_project_plan      tier 2 — create or change a Project's plan (status line, target date, waits); add side codes.
 //   record_project_estimate  tier 2 — add an estimate to a Project's history; the only way to change its estimate.
 //   get_project_estimates    tier 1 — a Project's estimate history, with original, scope-adjusted and current.
 //   get_project_links        tier 1 — links between Projects.
@@ -77,14 +77,30 @@ async function withEstimates(T: string, ctx: { db: any }, rows: Record<string, u
   });
 }
 
+// Every code a Project has had (project_codes, spec switchboard_prod-w3k 9): steps_used counts run tags under all of them.
+type CodeRow = { group_id: string; project_code: string; source: string };
+
+/** Adds codes ([{project_code, source}], oldest first) to each plan row (one read for the page). */
+async function withCodes(T: string, ctx: { db: any }, rows: Record<string, unknown>[]) {
+  if (!rows.length) return rows;
+  const { data, error } = await ctx.db.from("project_codes").select("group_id, project_code, source")
+    .in("group_id", rows.map((r) => r.group_id as string)).order("added_at", { ascending: true });
+  if (error) throw new Error(describeDbError(T, error));
+  const all = (data ?? []) as CodeRow[];
+  return rows.map((r) => ({
+    ...r,
+    codes: all.filter((c) => c.group_id === r.group_id).map((c) => ({ project_code: c.project_code, source: c.source })),
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // get_project_plans — tier 1 (a computed report, so it keeps its own shape and clamps)
 // ---------------------------------------------------------------------------
 
 export const getProjectPlansTool = defineTool({
   name: "get_project_plans",
-  // overwatch_project_progress reads item_groups, group_types, project_plans and clips.
-  tables: { reads: ["item_groups", "group_types", "project_plans", "clips", "project_estimates"], writes: [] },
+  // overwatch_project_progress reads item_groups, group_types, project_plans, project_codes and clips.
+  tables: { reads: ["item_groups", "group_types", "project_plans", "project_codes", "clips", "project_estimates"], writes: [] },
   tier: 1,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "get_project_plans";
@@ -109,7 +125,7 @@ export const getProjectPlansTool = defineTool({
     const { data, error } = await ctx.db.rpc("overwatch_project_progress", { p_status: status, p_group_ids: groupIds });
     if (error) throw new Error(describeDbError(T, error));
     const rows = (data ?? []) as Record<string, unknown>[];
-    const page = await withEstimates(T, ctx, rows.slice(0, limit));
+    const page = await withCodes(T, ctx, await withEstimates(T, ctx, rows.slice(0, limit)));
     return envelope(page, {
       total: rows.length,
       limit_applied: limit,
@@ -162,25 +178,70 @@ export function planPatch(T: string, args: Record<string, unknown>): Record<stri
   if (given("hurdle_kind")) {
     patch.hurdle_kind = args.hurdle_kind === null ? null : oneOf(T, "hurdle_kind", args.hurdle_kind, HURDLE_KINDS);
   }
-  if (!Object.keys(patch).length) throw new Error(`${T}: nothing to change; pass at least one of ${PLAN_FIELDS.join(", ")}.`);
+  if (!Object.keys(patch).length) {
+    throw new Error(`${T}: nothing to change; pass at least one of ${PLAN_FIELDS.join(", ")}, or add_project_codes.`);
+  }
   return patch;
+}
+
+/** add_project_codes: a list of 1 to 20 project codes, duplicates dropped; [] when not passed. */
+export function codesToAdd(T: string, v: unknown): string[] {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || v.length < 1 || v.length > 20 || v.some((c) => typeof c !== "string" || !CODE.test(c))) {
+    throw new Error(`${T}: add_project_codes must list 1 to 20 project codes, each matching ${CODE}, e.g. ["switchboard_prodrepo-w3k"].`);
+  }
+  return [...new Set(v as string[])];
 }
 
 export const updateProjectPlanTool = defineTool({
   name: "update_project_plan",
-  tables: { reads: ["project_plans"], writes: ["project_plans"] },
+  // project_codes_check_group (the database) refuses a code another Project holds; the read here names it first.
+  tables: { reads: ["project_plans", "project_codes", "item_groups"], writes: ["project_plans", "project_codes"] },
   tier: 2,
   handler: async (args: Record<string, unknown>, ctx) => {
     const T = "update_project_plan";
     const groupId = requireId(T, "group_id", args.group_id);
-    const patch = planPatch(T, args);
-    const { data, error } = await ctx.db
-      .from("project_plans")
-      .upsert({ group_id: groupId, ...patch }, { onConflict: "group_id" })
-      .select(PLAN_COLUMNS)
-      .maybeSingle();
-    if (error) throw new Error(describeDbError(T, error));
-    return data;
+    const codes = codesToAdd(T, args.add_project_codes);
+    const patch = !codes.length || PLAN_FIELDS.some((k) => args[k] !== undefined) ? planPatch(T, args) : null;
+
+    // A code belongs to one Project: refuse, before anything is written, a code another group holds.
+    let held: CodeRow[] = [];
+    if (codes.length) {
+      const { data, error } = await ctx.db.from("project_codes").select("group_id, project_code, source").in("project_code", codes);
+      if (error) throw new Error(describeDbError(T, error));
+      held = (data ?? []) as CodeRow[];
+      const others = held.filter((h) => h.group_id !== groupId);
+      if (others.length) {
+        const { data: groups } = await ctx.db.from("item_groups").select("id, name").in("id", [...new Set(others.map((o) => o.group_id))]);
+        const name = (id: string) => ((groups ?? []) as { id: string; name: string | null }[]).find((g) => g.id === id)?.name;
+        const list = others.map((o) => `${o.project_code} belongs to ${name(o.group_id) ?? "another Project"} (${o.group_id})`);
+        throw new Error(`${T}: ${list.join("; ")}. A code belongs to one Project. Nothing was changed.`);
+      }
+    }
+
+    let plan: Record<string, unknown> | null = null;
+    if (patch) {
+      const { data, error } = await ctx.db
+        .from("project_plans")
+        .upsert({ group_id: groupId, ...patch }, { onConflict: "group_id" })
+        .select(PLAN_COLUMNS)
+        .maybeSingle();
+      if (error) throw new Error(describeDbError(T, error));
+      plan = data;
+    }
+    if (!codes.length) return plan;
+
+    const added = codes.filter((c) => !held.some((h) => h.project_code === c));
+    if (added.length) {
+      const { error } = await ctx.db.from("project_codes")
+        .insert(added.map((project_code) => ({ group_id: groupId, project_code, source: "side" })));
+      if (error) throw new Error(describeDbError(T, error));
+    }
+    return {
+      ...(plan ?? { group_id: groupId }),
+      project_codes_added: added,
+      project_codes_already_held: codes.filter((c) => !added.includes(c)),
+    };
   },
 });
 

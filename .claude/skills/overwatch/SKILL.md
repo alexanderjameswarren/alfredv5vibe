@@ -5,7 +5,7 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
-Skill version: 2026-11-08a
+Skill version: 2026-11-13a
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
@@ -71,6 +71,14 @@ Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
 - `get_project_plans` lists Project groups with their plan and counted effort
   (`steps_used`, `reports`, `last_report_at`). `has_plan: false` means a Project with no
   plan yet: offer to write one.
+- **`steps_used` counts every code the Project has had**, listed in its `codes`: each
+  code its plan ever held (source plan; changing `project_code` keeps the old one) and
+  each side code (source side). A step is a distinct code and step number, so s4 under
+  two codes counts twice and s4b counts with s4.
+- **A side chat's code** (another repo's thread for the same Project, e.g.
+  `switchboard_prodrepo-w3k`) is added with `update_project_plan` `add_project_codes`,
+  when that chat starts, so its steps count. It never changes `project_code`. A code
+  another Project holds is refused, naming it.
 - `update_project_plan` writes the plan: `where_now`, `next_step`, `waiting_on` and
   `waiting_on_kind`, `target_date`, `hurdle_kind` when parking it. Not the estimate.
 - `record_project_estimate` is the only way to change `effort_estimate` (`initial`,

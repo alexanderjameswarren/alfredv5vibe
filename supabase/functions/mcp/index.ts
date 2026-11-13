@@ -4023,8 +4023,10 @@ export function createMcpServer(token: string) {
         "List Alex's Project groups (group type Project) with their plans: project_code, target_date, effort_estimate " +
         "(the current estimate in CLI steps), original_estimate (the first one) and scope_adjusted_estimate (the original " +
         "plus every scope change), the status line (where_now, next_step, waiting_on, waiting_on_kind, " +
-        "waiting_on_group_id, hurdle_kind, status_written_at), and the counted effort: steps_used (distinct step " +
-        "numbers in CLI run tags under the project code), reports and last_report_at. Judge overrun against " +
+        "waiting_on_group_id, hurdle_kind, status_written_at), codes (every project code the Project has had: source plan " +
+        "for a code its plan held, side for another thread's code), and the counted effort: steps_used (distinct code and " +
+        "step number pairs in CLI run tags under every code the Project has had), reports and last_report_at over all of " +
+        "them. Judge overrun against " +
         "effort_estimate; judge the estimate's accuracy against both original and scope-adjusted. has_plan is false for " +
         "a Project with no plan yet. Default: active Projects, most recently reported first. Tier 1.",
       inputSchema: {
@@ -4046,7 +4048,10 @@ export function createMcpServer(token: string) {
         "passed change; null clears one. Write the status line (where_now, next_step, waiting_on and waiting_on_kind) " +
         "on every CLI report: status_written_at is stamped when it changes, and that is what the stall check reads. " +
         "Waiting on another Project: waiting_on_kind 'project' with waiting_on_group_id. Parked: hurdle_kind. The " +
-        "estimate is not set here: use record_project_estimate, which keeps every estimate with its reason. Tier 2.",
+        "estimate is not set here: use record_project_estimate, which keeps every estimate with its reason. " +
+        "Every code the plan's project_code ever holds is kept, so changing it never loses earlier steps. A side thread " +
+        "for the same Project (e.g. another repo's chat) gets its code added with add_project_codes, so its steps count " +
+        "too; project_code is unchanged. A code another Project holds is refused, naming it, and nothing changes. Tier 2.",
       inputSchema: {
         group_id: z.string().describe("The Project group's id."),
         project_code: z.string().nullable().optional().describe("The CLI project code, e.g. overwatch-q4n. One per Project."),
@@ -4057,6 +4062,8 @@ export function createMcpServer(token: string) {
         waiting_on_kind: owEnum(WAITING_KINDS).nullable().optional().describe("alex, decision, project or hurdle."),
         waiting_on_group_id: z.string().nullable().optional().describe("The Project it waits on (waiting_on_kind 'project')."),
         hurdle_kind: owEnum(HURDLE_KINDS).nullable().optional().describe("Why it is parked: technology, time, money or skill."),
+        add_project_codes: z.array(z.string()).optional()
+          .describe("Side codes to count for this Project, 1 to 20, e.g. [\"switchboard_prodrepo-w3k\"]. Recorded as source side; never changes project_code."),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(updateProjectPlanTool, args, token),

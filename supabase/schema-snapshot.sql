@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-13 07:48, through migration 235 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-13 08:26, through migration 236 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -6351,15 +6351,18 @@ CREATE OR REPLACE FUNCTION "public"."overwatch_project_progress"("p_status" "tex
     join public.group_types t on t.id = g.group_type_id and t.kind = 'project'
     left join public.project_plans p on p.group_id = g.id
     left join lateral (
-      select count(distinct (regexp_match(c.run_tag, '^' || p.project_code || '-s([0-9]+)[a-z]?-[a-z0-9]{4}$'))[1])::int
-               as steps_used,
+      -- Steps are distinct (code, step number) pairs: s4 under two codes counts twice, s4 and s4b under one once.
+      select count(distinct (k.code, m.step))::int as steps_used,
              count(*)::int as reports,
              max(c.created_at) as last_report_at,
              min(c.created_at) as first_report_at
-        from public.clips c
-       where p.project_code is not null
-         and c.run_tag like p.project_code || '-s%'
-         and c.run_tag ~ ('^' || p.project_code || '-s[0-9]+[a-z]?-[a-z0-9]{4}$')
+        from (select pc.project_code as code from public.project_codes pc where pc.group_id = g.id
+              union
+              select p.project_code where p.project_code is not null) k
+        join public.clips c
+          on c.run_tag like k.code || '-s%'
+         and c.run_tag ~ ('^' || k.code || '-s[0-9]+[a-z]?-[a-z0-9]{4}$')
+        cross join lateral (select (regexp_match(c.run_tag, '^' || k.code || '-s([0-9]+)[a-z]?-[a-z0-9]{4}$'))[1] as step) m
     ) r on true
    where g.archived = false
      and (p_status is null or g.status = any (p_status))
@@ -6371,7 +6374,7 @@ $_$;
 ALTER FUNCTION "public"."overwatch_project_progress"("p_status" "text"[], "p_group_ids" "text"[]) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."overwatch_project_progress"("p_status" "text"[], "p_group_ids" "text"[]) IS 'Overwatch: the caller''s unarchived Project groups (group_types.kind = project) in the given statuses (default active; null for all), each with its project_plans row if any, and the counted effort from clips.run_tag under the project code: steps_used (distinct step numbers), reports, last_report_at and first_report_at (the pace for the estimated finish). Invoker: RLS on item_groups, project_plans and clips decides the rows. Backs get_project_plans and the /overwatch tab.';
+COMMENT ON FUNCTION "public"."overwatch_project_progress"("p_status" "text"[], "p_group_ids" "text"[]) IS 'Overwatch: the caller''s unarchived Project groups (group_types.kind = project) in the given statuses (default active; null for all), each with its project_plans row if any, and the counted effort from clips.run_tag under every code the Project has had (project_codes, plus the plan''s current code): steps_used (distinct code and step number pairs), reports, last_report_at and first_report_at (the pace for the estimated finish). Invoker: RLS on item_groups, project_plans, project_codes and clips decides the rows. Backs get_project_plans, the /overwatch tab and the nightly counts.';
 
 
 
@@ -6953,6 +6956,38 @@ COMMENT ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payloa
 
 
 
+CREATE OR REPLACE FUNCTION "public"."project_codes_check_group"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_other text;
+begin
+  if not exists (select 1 from public.item_groups g join public.group_types t on t.id = g.group_type_id
+                  where g.id = new.group_id and g.user_id = new.user_id and t.kind = 'project') then
+    raise exception 'project_codes refused: group % is not one of your Project groups (group_types.kind = project).', new.group_id
+      using errcode = '23514';
+  end if;
+  select coalesce(g.name, c.group_id) || ' (' || c.group_id || ')' into v_other
+    from public.project_codes c left join public.item_groups g on g.id = c.group_id
+   where c.user_id = new.user_id and c.project_code = new.project_code and c.group_id <> new.group_id
+     and c.id <> new.id
+   limit 1;
+  if v_other is not null then
+    raise exception 'project_codes refused: % already belongs to %.', new.project_code, v_other using errcode = '23505';
+  end if;
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."project_codes_check_group"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."project_codes_check_group"() IS 'Overwatch: refuses a project_codes row whose group is not the same user''s Project group, or whose code another group already holds (naming that group). Trigger function; no execute grant needed.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."project_estimates_guard"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     SET "search_path" TO 'public', 'pg_temp'
@@ -7022,6 +7057,36 @@ ALTER FUNCTION "public"."project_plans_check_group"() OWNER TO "postgres";
 
 
 COMMENT ON FUNCTION "public"."project_plans_check_group"() IS 'Overwatch: refuses a project_plans or project_links row whose group is not the same user''s Project group (group_types.kind = project); stamps project_plans.updated_at, and status_written_at when the status line changes.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."project_plans_record_code"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+begin
+  if tg_op = 'UPDATE' and old.project_code is not null then
+    insert into public.project_codes (user_id, group_id, project_code, source)
+    select old.user_id, old.group_id, old.project_code, 'plan'
+     where not exists (select 1 from public.project_codes c
+                        where c.user_id = old.user_id and c.project_code = old.project_code and c.group_id = old.group_id);
+  end if;
+  if new.project_code is not null then
+    -- project_codes_check_group refuses a code another group holds, so the plan change fails with it.
+    insert into public.project_codes (user_id, group_id, project_code, source)
+    select new.user_id, new.group_id, new.project_code, 'plan'
+     where not exists (select 1 from public.project_codes c
+                        where c.user_id = new.user_id and c.project_code = new.project_code and c.group_id = new.group_id);
+  end if;
+  return null;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."project_plans_record_code"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."project_plans_record_code"() IS 'Overwatch: after a project_plans insert, or an update of project_code, records the old code (on update) and the new code in project_codes as source plan, so no code a Project has had is lost. A code another Project holds is refused. Trigger function; no execute grant needed.';
 
 
 
@@ -17289,6 +17354,49 @@ COMMENT ON COLUMN "public"."process_friction"."wont_fix_reason" IS 'One line on 
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."project_codes" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "group_id" "text" NOT NULL,
+    "project_code" "text" NOT NULL,
+    "source" "text" NOT NULL,
+    "added_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "project_codes_code_format" CHECK (("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text")),
+    CONSTRAINT "project_codes_source_values" CHECK (("source" = ANY (ARRAY['plan'::"text", 'side'::"text"])))
+);
+
+
+ALTER TABLE "public"."project_codes" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."project_codes" IS 'OVERWATCH. Every project code a Project group has had, so its effort counts across them: overwatch_project_progress counts run tags under each. source plan rows come from the project_plans trigger (each code the plan has held); source side rows from update_project_plan add_project_codes (another thread''s code for the same Project). One code belongs to one Project. Spec: docs/technical-spec-switchboard_prod-w3k.md 9.';
+
+
+
+COMMENT ON COLUMN "public"."project_codes"."id" IS 'Row id.';
+
+
+
+COMMENT ON COLUMN "public"."project_codes"."user_id" IS 'Owner. Must own the group too (project_codes_check_group). Owner RLS.';
+
+
+
+COMMENT ON COLUMN "public"."project_codes"."group_id" IS 'The Project group, an item_groups.id; deleting the group deletes its codes. Must be the owner''s Project group.';
+
+
+
+COMMENT ON COLUMN "public"."project_codes"."project_code" IS 'A project code, as in run tags (<code>-s<n>-<4>). Unique per user: a code belongs to one Project.';
+
+
+
+COMMENT ON COLUMN "public"."project_codes"."source" IS 'plan: the plan''s project_code held it at some point. side: added as another thread''s code for this Project.';
+
+
+
+COMMENT ON COLUMN "public"."project_codes"."added_at" IS 'When the code was recorded here.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."project_estimates" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -21640,6 +21748,16 @@ ALTER TABLE ONLY "public"."process_friction"
 
 
 
+ALTER TABLE ONLY "public"."project_codes"
+    ADD CONSTRAINT "project_codes_code_once" UNIQUE ("user_id", "project_code");
+
+
+
+ALTER TABLE ONLY "public"."project_codes"
+    ADD CONSTRAINT "project_codes_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."project_estimates"
     ADD CONSTRAINT "project_estimates_pkey" PRIMARY KEY ("id");
 
@@ -22639,6 +22757,10 @@ CREATE INDEX "process_friction_open_idx" ON "public"."process_friction" USING "b
 
 
 
+CREATE INDEX "project_codes_group_idx" ON "public"."project_codes" USING "btree" ("group_id");
+
+
+
 CREATE INDEX "project_estimates_group_idx" ON "public"."project_estimates" USING "btree" ("group_id", "created_at");
 
 
@@ -23123,6 +23245,10 @@ CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."project_codes" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
+
+
+
 CREATE OR REPLACE TRIGGER "audit_trigger" AFTER INSERT OR DELETE OR UPDATE ON "public"."project_estimates" FOR EACH ROW EXECUTE FUNCTION "platform"."audit_row"();
 
 
@@ -23415,6 +23541,10 @@ CREATE OR REPLACE TRIGGER "portfolio_slices_guard" BEFORE INSERT OR UPDATE ON "p
 
 
 
+CREATE OR REPLACE TRIGGER "project_codes_check_group" BEFORE INSERT OR UPDATE ON "public"."project_codes" FOR EACH ROW EXECUTE FUNCTION "public"."project_codes_check_group"();
+
+
+
 CREATE OR REPLACE TRIGGER "project_estimates_guard" BEFORE INSERT OR UPDATE ON "public"."project_estimates" FOR EACH ROW EXECUTE FUNCTION "public"."project_estimates_guard"();
 
 
@@ -23424,6 +23554,10 @@ CREATE OR REPLACE TRIGGER "project_plans_check_group" BEFORE INSERT OR UPDATE ON
 
 
 CREATE OR REPLACE TRIGGER "project_plans_check_group" BEFORE INSERT OR UPDATE ON "public"."project_plans" FOR EACH ROW EXECUTE FUNCTION "public"."project_plans_check_group"();
+
+
+
+CREATE OR REPLACE TRIGGER "project_plans_record_code" AFTER INSERT OR UPDATE OF "project_code" ON "public"."project_plans" FOR EACH ROW EXECUTE FUNCTION "public"."project_plans_record_code"();
 
 
 
@@ -24399,6 +24533,16 @@ ALTER TABLE ONLY "public"."portfolios"
 
 ALTER TABLE ONLY "public"."process_friction"
     ADD CONSTRAINT "process_friction_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
+
+
+
+ALTER TABLE ONLY "public"."project_codes"
+    ADD CONSTRAINT "project_codes_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."item_groups"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."project_codes"
+    ADD CONSTRAINT "project_codes_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id");
 
 
 
@@ -25481,6 +25625,10 @@ CREATE POLICY "claude_reader_read" ON "public"."process_friction" FOR SELECT TO 
 
 
 
+CREATE POLICY "claude_reader_read" ON "public"."project_codes" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
 CREATE POLICY "claude_reader_read" ON "public"."project_estimates" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
 
 
@@ -26156,6 +26304,13 @@ ALTER TABLE "public"."process_friction" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "process_friction_owner_access" ON "public"."process_friction" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."project_codes" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "project_codes_owner_access" ON "public"."project_codes" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
 
 
 
@@ -27248,6 +27403,12 @@ GRANT ALL ON FUNCTION "public"."process_inbox_item"("p_inbox_id" "text", "p_payl
 
 
 
+REVOKE ALL ON FUNCTION "public"."project_codes_check_group"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."project_codes_check_group"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."project_codes_check_group"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."project_estimates_guard"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."project_estimates_guard"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."project_estimates_guard"() TO "service_role";
@@ -27257,6 +27418,12 @@ GRANT ALL ON FUNCTION "public"."project_estimates_guard"() TO "service_role";
 REVOKE ALL ON FUNCTION "public"."project_plans_check_group"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."project_plans_check_group"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."project_plans_check_group"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."project_plans_record_code"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."project_plans_record_code"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."project_plans_record_code"() TO "service_role";
 
 
 
@@ -31190,6 +31357,35 @@ GRANT SELECT("status") ON TABLE "public"."process_friction" TO "claude_reader";
 
 
 GRANT SELECT("wont_fix_reason") ON TABLE "public"."process_friction" TO "claude_reader";
+
+
+
+GRANT ALL ON TABLE "public"."project_codes" TO "authenticated";
+GRANT ALL ON TABLE "public"."project_codes" TO "service_role";
+
+
+
+GRANT SELECT("id") ON TABLE "public"."project_codes" TO "claude_reader";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."project_codes" TO "claude_reader";
+
+
+
+GRANT SELECT("group_id") ON TABLE "public"."project_codes" TO "claude_reader";
+
+
+
+GRANT SELECT("project_code") ON TABLE "public"."project_codes" TO "claude_reader";
+
+
+
+GRANT SELECT("source") ON TABLE "public"."project_codes" TO "claude_reader";
+
+
+
+GRANT SELECT("added_at") ON TABLE "public"."project_codes" TO "claude_reader";
 
 
 
