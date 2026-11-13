@@ -983,6 +983,10 @@ test("sf_read: every accepted shape", () => {
     { ...COUNT_READ, filters: [{ field: "CreatedDate", op: ">=", value: "2026-11-01T00:00:00Z" }] },
     { alias: "cd-prod", production: true, level: "ids", object: "Contact", fields: ["Id", "CreatedDate", "LastModifiedDate"], limit: 200,
       filters: [{ field: "Id", op: "in", value: ["003000000000001", "003000000000002"] }] },
+    // An ids filter on any field: the helper applies the contract's filter limit (spec §7, switchboard_prod-w3k).
+    { ...COUNT_READ, filters: [{ field: "Email", op: "=", value: "x" }] },
+    { alias: "cd-prod", production: true, level: "ids", object: "Contact", fields: ["Id"], limit: 50,
+      filters: [{ field: "Recurring_Status__c", op: "in", value: ["Active", "Paused"] }] },
     PROD_READ,
     { ...PROD_READ, filters: [{ field: "Refunded__c", op: "!=", value: true }, { field: "Notes__c", op: "=", value: null }] },
   ]) {
@@ -1013,8 +1017,10 @@ test("sf_read: refused shapes say why, and never take SOQL text", () => {
     [{ ...PROD_READ, filters: [{ field: "Name", op: "=", value: { a: 1 } }] }, /one plain value/],
     [{ ...PROD_READ, filters: [{ field: "Name", op: "in", value: [] }] }, /1 to 100 plain values/],
     [{ ...PROD_READ, filters: [{ field: "Name", op: "in", value: [{ a: 1 }] }] }, /1 to 100 plain values/],
-    [{ ...COUNT_READ, filters: [{ field: "Email", op: "=", value: "x" }] }, /ids reads only Id, CreatedDate, LastModifiedDate.*Email needs level data/],
-    [{ alias: "a", production: false, level: "ids", object: "Contact", fields: ["Id", "Email"], limit: 5 }, /Email needs level data/],
+    [{ alias: "a", production: false, level: "ids", object: "Contact", fields: ["Id", "Email"], limit: 5 },
+      /ids returns only Id, CreatedDate, LastModifiedDate; Email needs level data/],
+    [{ alias: "a", production: false, level: "ids", object: "Contact", fields: ["Name"], limit: 5,
+       filters: [{ field: "Email", op: "=", value: "x" }] }, /Name needs level data/],
   ];
   for (const [p, why] of bad) {
     const r = m.sfReadPayload(p);

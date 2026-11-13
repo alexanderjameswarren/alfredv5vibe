@@ -605,10 +605,11 @@ export function sfReadPayload(args: Record<string, unknown>): { payload: Record<
       }
     }
   }
+  // ids returns only the three fields. Filters may name any field: the helper (salesforce/read/plan.mjs) limits them
+  // to the three unless the org's contractAllowsClaude is on, which only it knows (spec §7, switchboard_prod-w3k).
   if (level === "ids") {
-    const names = [...((p.fields as string[] | undefined) ?? []), ...((p.filters as { field: string }[] | undefined) ?? []).map((f) => f.field)];
-    const other = names.filter((n) => !IDS_FIELDS.includes(n));
-    if (other.length) return r(`ids reads only ${IDS_FIELDS.join(", ")}, in fields and filters; ${[...new Set(other)].join(", ")} needs level data.`);
+    const other = ((p.fields as string[] | undefined) ?? []).filter((n) => !IDS_FIELDS.includes(n));
+    if (other.length) return r(`ids returns only ${IDS_FIELDS.join(", ")}; ${[...new Set(other)].join(", ")} needs level data.`);
   }
   if (JSON.stringify(p).length > 8000) return r("the read is too long; trim the filters.");
   return { payload: p };
