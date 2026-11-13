@@ -1,11 +1,11 @@
 ---
-name: cli-workflow
-description: 'Runs both halves of the CLI loop for Alex''s personal projects. Use it to write CLI prompts (each starts with a "Run tag:" line and a "Window:" line) whenever he asks for CLI instructions or is ready to implement, in React or Python projects, including worktree work (gitnewtree, gitcom, gitsync, gitpush, file and database claims). Use it, more often, whenever CLI output comes back: he sends just "cli", says the CLI responded in any wording (fetch the report with get_recent_clips by run tag or project code), or pastes CLI output. Assume he has not read it. Use it whenever he asks how to commit, sync, push, checkpoint or finish — every git instruction is a numbered step naming where to run it, then the one-line command. Every command, path, setting value and paste-in prompt in to-dos and testing goes in its own copy box, never inline.'
+name: "cli-workflow"
+description: "Runs both halves of the CLI loop for Alex's personal projects. Use it to write CLI prompts (each starts with a \"Run tag:\" line and a \"Window:\" line) whenever he asks for CLI instructions or is ready to implement, in React or Python projects, including worktree work (gitnewtree, gitcom, gitsync, gitpush, file and database claims). Use it, more often, whenever CLI output comes back: he sends just \"cli\", says the CLI responded in any wording (fetch the report with get_recent_clips by run tag or project code), or pastes CLI output. Assume he has not read it. Use it whenever he asks how to commit, sync, push, checkpoint or finish — every git instruction is a numbered step naming where to run it, then the one-line command. Every command, path, setting value and paste-in prompt in to-dos and testing goes in its own copy box, never inline."
 ---
 
 # CLI Workflow
 
-Skill version: 2026-11-09a
+Skill version: 2026-11-12a
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -76,15 +76,21 @@ in a table. It sits on top of the copy-box rule; it does not replace it.
 - **Under the step line comes the copy box**, if there is one. **A terminal copy
   box is a single line**: several PowerShell commands are chained with
   semicolons, never put on separate lines. **After any install, the PATH reload
-  goes at the start of the next command's copy box.** **A command that deletes
-  or moves files starts with `Set-Location` to an absolute folder, or names
-  every path absolutely**, so it can't act on whatever folder the terminal
-  happens to be in.
+  goes at the start of the next command's copy box.** **Any terminal step that
+  must run in a particular folder starts its copy box with `Set-Location` to that
+  folder's absolute path**, chained with a semicolon
+  (`Set-Location "C:\Users\Alex\projects\actblue\common-defense"; sf org list`).
+  Never "in your terminal at the X folder" with no command to get there. **A
+  command that deletes or moves files starts with `Set-Location` to an absolute
+  folder, or names every path absolutely**, so it can't act on whatever folder
+  the terminal happens to be in.
 - **A Chrome extension reload goes in the same step as the reinstall** that
   copies the new version in, with an Expected line naming the new version (for
   example "Expected: chrome://extensions shows Alfred's Clipboard 1.2.11").
   Reloaded before the reinstall, Chrome keeps the old version; split into two
-  steps, the reload gets skipped.
+  steps, the reload gets skipped. **Chrome loads the installed copy, so every
+  extension change needs the reinstall, even when the CLI's report says "no
+  reinstall needed".**
 - **Then an "Expected:" line**, only when there is something specific to see.
   **Every terminal step has one**, so a command that fails silently shows.
   It describes what Alex will see on screen, in order ("the tile turns green and
@@ -287,7 +293,19 @@ the report would have him push or finish over it. It also leaves the report
 sitting unread in the Alfred inbox, because the thread never asked for it.
 
 **A reply with a git link or git step carries no prompt at all** ("Git by link").
-The prompt waits for the next reply, after the result.
+The prompt waits for the next reply, after the result. The one exception is a
+chained link ("Chained links" under Git by link): its prompt block comes first
+and the chain link sits directly under it, last in the reply, in place of the
+Send link.
+
+**Any approve link (git, SQL, chain) ends the reply.** Steps that follow it, such
+as a reinstall, wait for the next reply, after its result.
+
+**A reply with an approve link has no other step that asks Alex to paste anything
+back** (a Job ID, a count, terminal output). The link's result line posts into the
+chat by itself, and it can't post while he is typing in the chat box. A step that
+needs a paste-back goes in its own reply, before or after the link's reply, never
+alongside it.
 
 **A prompt offered again is repeated whole**: the full prompt block, with its Send
 link directly under it, in the same reply. A Send link on its own, pointing at an
@@ -356,6 +374,12 @@ Estimated run: 12m
 - **Paths are written out, one form or the other**: comma-separated on the key's
   line (`- update: src/a.js, src/a.test.js`), or one per line under the key as
   `  - path`. Never "src/a.js and its test": the guard matches paths, not words.
+- **Deploy entries are names only**: function names or Salesforce component
+  names, comma-separated, nothing else on the line before or between them. Any
+  note goes in brackets after the list:
+  `- deploy: actblue_DataTriggerHandler, actblue_DataTriggerHandlerTest (sandbox actblue only)`.
+  Never prose such as "sandbox actblue only: ...": the guard reads the whole
+  entry as one name.
 - **A step that writes a `_pending_` migration declares under SQL every table the
   file creates, alters or grants on**, even though nothing runs yet. The plan guard
   counts the tables any written SQL file touches; "SQL: none" got a drafting step
@@ -774,6 +798,27 @@ would have asked, it refuses and says why. The CLI still never runs any of them.
    succeeded means completed, even when nothing changed.
 5. **The terminal command is the fallback**: when the tool refuses, the helper
    isn't running, or Alex asks for it. Give it as a step, as below.
+
+#### Chained links
+
+A gitsync, or a gitpush checkpoint or push, can carry the next prompt:
+`queue_switchboard_git` with `then_send` set to that prompt's run tag (it must
+start with the same project code). One link then runs the git command, and only
+if it succeeds the tile reads "Send git + prompt"; Alex's tap sends the prompt.
+
+- **Use it when the next prompt does not depend on the git result** beyond it
+  succeeding: a sync before a step, a checkpoint before the next build step.
+- **Never chain the checkpoint that comes right after a test**: the test result
+  decides what the next prompt says.
+- **The reply ends with the prompt block, then the chain link directly under it**,
+  with nothing after. The chain link replaces both the git link and the Send link.
+  The step says to click it, approve, then tap the tile when it reads "Send git +
+  prompt".
+- **The result line is one of three**: `git <id> done; prompt sent`, `git <id>
+  done; send not run: <reason>` (then repeat the prompt whole with a Send link),
+  or `git <id> failed; send not run` (handle the failure; the prompt waits).
+- In the chat, the link reads "Approving…" on click, "Sent ✓" once approved, then
+  the result's words.
 
 ### Git commands are steps
 
@@ -1393,9 +1438,11 @@ inline in a sentence, never inside backticks in prose.
 A find-and-replace is two blocks, labelled "Find:" and "Replace with:". One
 block per string, so each has its own copy button.
 
-A copy box that deletes or moves files (`Remove-Item`, `Move-Item`, `rm`, `mv`)
-starts with `Set-Location` to an absolute folder, or uses absolute paths
-throughout. Never a relative path that depends on where the terminal is.
+A copy box that must run in a particular folder starts with `Set-Location` to
+its absolute path, chained with a semicolon. A copy box that deletes or moves
+files (`Remove-Item`, `Move-Item`, `rm`, `mv`) starts with `Set-Location` to an
+absolute folder, or uses absolute paths throughout. Never a relative path that
+depends on where the terminal is.
 
 Bad:
   Go to line 350. Change
