@@ -426,6 +426,21 @@ test('git: a finish opens by closing the project\'s VS Code window; a checkpoint
   expect(await screen.findByText(/^Closes the switchboard2-h8r VS Code window, then finishes/)).toBeInTheDocument();
 });
 
+test('git: a finish with no_prod_deploy says approving confirms nothing went to production; a plain finish does not (w3k s9)', async () => {
+  const NPD = { ...GIT, project_code: 'cd_ab_diagnose-r4m',
+    headline: 'GITPUSH FINISH cd_ab_diagnose-r4m: MERGES INTO MAIN, PUSHES, REMOVES THE WORKTREE; APPROVING CONFIRMS NOTHING FROM CD_AB_DIAGNOSE-R4M WENT TO PRODUCTION',
+    payload: { command: 'gitpush', mode: 'finish', finish: 'phase', no_prod_deploy: true } };
+  runner({ preview: reply(NPD) });
+  const a = open();
+  expect(await screen.findByTestId('approve-no-prod-deploy'))
+    .toHaveTextContent('Approving confirms nothing from cd_ab_diagnose-r4m went to production.');
+  a.unmount();
+  runner({ preview: reply(GIT) });
+  open();
+  await screen.findByText(GIT.headline);
+  expect(screen.queryByTestId('approve-no-prod-deploy')).toBeNull();
+});
+
 // --- sb setup (spec §11.5) ---
 
 const SB = { ok: true, kind: 'sb_setup', action_id: 's1', headline: 'SB ORG ADD acme-dev FOR CLIENT acme', fingerprint: 'fps',

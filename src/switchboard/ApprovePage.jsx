@@ -381,6 +381,14 @@ export default function ApprovePage() {
             Then sends the prompt <span className="font-mono break-all">{preview.payload.then.send}</span> when you tap the tile.
           </p>
         )}
+        {/* w3k s9: a Salesforce repo's Finish with no production deploy recorded; approving is Alex's word that none went out. */}
+        {preview.kind === 'git' && preview.payload?.command === 'gitpush' && preview.payload?.mode === 'finish'
+          && preview.payload?.no_prod_deploy === true && (
+          <p data-testid="approve-no-prod-deploy" role="alert"
+            className="mb-2 p-3 bg-red-700 text-white font-bold text-lg rounded-lg break-words">
+            Approving confirms nothing from {preview.project_code} went to production.
+          </p>
+        )}
         <p className="text-sm text-dark">Project</p>
         <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code} data-switchboard-kind={preview.kind}>{preview.project_code}</p>
         <ul data-testid={`approve-${isSfRead ? 'sf-read' : word}`} className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">
