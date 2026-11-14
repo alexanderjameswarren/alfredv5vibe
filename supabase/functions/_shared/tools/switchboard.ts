@@ -159,7 +159,7 @@ const GIT_KEYS: Record<string, string[]> = {
   gitcom: ["command", "message", "include_unclaimed"],
   gitsync: ["command", "then_send"],
   gitnewtree: ["command", "install", "repo"],
-  gitpush: ["command", "mode", "finish", "paths", "all", "db", "message", "include_unclaimed", "then_send"],
+  gitpush: ["command", "mode", "finish", "paths", "all", "db", "message", "include_unclaimed", "then_send", "no_prod_deploy"],
 };
 
 /**
@@ -203,8 +203,21 @@ export function gitPayload(args: Record<string, unknown>): { payload: Record<str
     return r(`${command} can't chain a prompt: only gitsync and gitpush checkpoint or push take \`then_send\`.`);
   }
   const extra = Object.keys(p).filter((k) => !GIT_KEYS[command].includes(k));
-  if (extra.length) return r(`${command} does not take ${extra.join(", ")}.`);
+  if (extra.length) {
+    if (extra.includes("no_prod_deploy")) {
+      return r(`\`no_prod_deploy\` is only for gitpush finish, not ${command}: only a Finish checks for a production deploy.`);
+    }
+    return r(`${command} does not take ${extra.join(", ")}.`);
+  }
   for (const k of Object.keys(p)) if (p[k] === undefined || p[k] === null) delete p[k];
+  // w3k s9: a Salesforce repo's Finish refuses with no production deploy recorded unless this says none went out.
+  // The helper refuses it outside a Salesforce repo; here only true, and only on a Finish.
+  if (p.no_prod_deploy !== undefined) {
+    if (p.no_prod_deploy !== true) return r("`no_prod_deploy` can only be true; leave it out otherwise.");
+    if (p.mode !== "finish") {
+      return r(`\`no_prod_deploy\` is only for gitpush finish, not ${p.mode ?? "(no mode)"}: only a Finish checks for a production deploy.`);
+    }
+  }
 
   if (p.message !== undefined) {
     const m = p.message;
@@ -280,7 +293,8 @@ function gitCommandHeadline(code: string, p: Record<string, unknown>): string {
         return `GITPUSH CHECKPOINT ${code}: MERGES ${what} INTO MAIN, PUSHES${p.db === "keep" ? ", KEEPS THE DB CLAIMS" : ""}`;
       }
       return `GITPUSH FINISH ${code}: MERGES INTO MAIN, PUSHES, REMOVES THE WORKTREE` +
-        (p.finish === "project-done" ? ", MOVES THE DOCS TO HISTORY" : "");
+        (p.finish === "project-done" ? ", MOVES THE DOCS TO HISTORY" : "") +
+        (p.no_prod_deploy === true ? `; APPROVING CONFIRMS NOTHING FROM ${code.toUpperCase()} WENT TO PRODUCTION` : "");
     }
   }
 }

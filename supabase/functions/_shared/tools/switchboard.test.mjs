@@ -562,6 +562,31 @@ test("git: headlines", () => {
   assert.match(h({ command: "gitpush", mode: "finish", finish: "project-done" }), /REMOVES THE WORKTREE, MOVES THE DOCS TO HISTORY$/);
 });
 
+test("git: no_prod_deploy on a Finish is stored and the headline says what approving confirms (w3k s9)", async () => {
+  const db = gitDb();
+  await queueGit({ project_code: "cd_ab_diagnose-r4m", command: "gitpush", mode: "finish", finish: "phase", no_prod_deploy: true }, db);
+  assert.deepEqual(db.calls[0][1].p_payload, { command: "gitpush", mode: "finish", finish: "phase", no_prod_deploy: true });
+  assert.equal(db.calls[0][1].p_headline, "GITPUSH FINISH cd_ab_diagnose-r4m: MERGES INTO MAIN, PUSHES, REMOVES THE WORKTREE; " +
+    "APPROVING CONFIRMS NOTHING FROM CD_AB_DIAGNOSE-R4M WENT TO PRODUCTION");
+  assert.doesNotMatch(m.gitHeadline("p-a1", { command: "gitpush", mode: "finish", finish: "phase" }), /PRODUCTION/);
+});
+
+test("git: no_prod_deploy refused off a Finish or when not true, before anything is queued (w3k s9)", async () => {
+  for (const [args, want] of [
+    [{ command: "gitpush", mode: "checkpoint", all: true, no_prod_deploy: true }, /only for gitpush finish, not checkpoint/],
+    [{ command: "gitpush", mode: "push", no_prod_deploy: true }, /only for gitpush finish, not push/],
+    [{ command: "gitsync", no_prod_deploy: true }, /only for gitpush finish, not gitsync/],
+    [{ command: "gitcom", no_prod_deploy: true }, /only for gitpush finish, not gitcom/],
+    [{ command: "gitnewtree", no_prod_deploy: true }, /only for gitpush finish, not gitnewtree/],
+    [{ command: "gitpush", mode: "finish", finish: "phase", no_prod_deploy: false }, /can only be true/],
+    [{ command: "gitpush", mode: "finish", finish: "phase", no_prod_deploy: "yes" }, /can only be true/],
+  ]) {
+    const db = gitDb();
+    await assert.rejects(queueGit({ project_code: "p-a1", ...args }, db), want, JSON.stringify(args));
+    assert.equal(db.calls.length, 0);
+  }
+});
+
 test("git: every accepted shape", () => {
   for (const p of [
     { command: "gitcom", message: " one line ", include_unclaimed: "none" },
