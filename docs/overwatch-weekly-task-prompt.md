@@ -32,7 +32,10 @@ nightly counts.
 > The task runs the text that was pasted, not the text in this repo. So the prompt carries a
 > version, and Step 11 echoes it.
 >
-> ### `PROMPT VERSION: 2026-11-08a`
+> ### `PROMPT VERSION: 2026-11-16a`
+>
+> 2026-11-16a: plan_change and direct_writes are severity normal (inbox), not high; Step 9 says
+> high and urgent are for time-sensitive things only. The failure signal stays high.
 >
 > 2026-11-08a: the release look-back is `release_watch_days` and the drift audit's no-run window is
 > `drift_no_run_days`, each with a stated default. A missing setting with a default uses it and shows
@@ -57,7 +60,7 @@ nightly counts.
    everything below "THE PROMPT" line as its instructions.
 3. **Run it once by hand** and say in the chat that this run is manual (Step 2 then runs it even
    on another day). Check: a `platform_runs` row for `overwatch` / `weekly` closed `ok`; the weekly
-   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-11-08a`.
+   note in `get_overwatch_notes`; a report showing `PROMPT VERSION: 2026-11-16a`.
 
 ---
 
@@ -66,7 +69,7 @@ nightly counts.
 ---
 
 You are running Overwatch's weekly review for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-11-08a`. **First, load the `overwatch` skill.** It tells you how to read the
+`PROMPT VERSION: 2026-11-16a`. **First, load the `overwatch` skill.** It tells you how to read the
 week, what makes a friction pattern and its fix, when a parked project has become possible, and how
 to word the note. Follow these steps in order for everything else. **Where the skill and these
 steps disagree, these steps win.** Do not improvise.
@@ -283,8 +286,9 @@ It runs every week, drift-audit week or not.
 
 Every item is one `raise_signal`, never `create_inbox_item`:
 - `app: "overwatch"`, `job: "weekly"`, `started_by: "task:overwatch-weekly"`.
-- `severity`: `"high"` for a plan change; `"normal"` for a friction fix, newly possible and the
-  drift audit; `"low"` for the feature watch.
+- `severity`: `"normal"` for a plan change, a friction fix, newly possible, the drift audit and
+  direct writes; `"low"` for the feature watch.
+  Severity decides whether Alex's phone buzzes: high and urgent become notifications. Use them only for something time-sensitive; a proposal or a finding with no near date is normal.
 - `subject_key`: stable from week to week, so a repeat folds into the open item:
   `overwatch:weekly:<kind>`, plus `:<the pattern, app or group id>` when the item is about one
   thing. Lower case, no spaces, no date; for example `overwatch:weekly:plan_change`,
@@ -334,7 +338,7 @@ item (Step 2.4) uses kind `schedule_mismatch`.
    ```
 5. **One for the drift audit, when Step 8 found anything**, kind `drift_audit`. First line:
    `Overwatch: drift audit — <N> findings`. Title: `Overwatch: drift audit, <N> findings`. One line per finding.
-6. **One for direct writes, when Step 8b found anything**, kind `direct_writes`, `severity: "high"`,
+6. **One for direct writes, when Step 8b found anything**, kind `direct_writes`, `severity: "normal"`,
    `subject_key: "overwatch:weekly:direct_writes"` (stable, so a repeat folds into the open item). First line:
    `Overwatch: task prompts writing directly — <N> tasks`. Title: `Overwatch: <N> task prompts write directly`.
    One line per finding: `<task>: <tool> — "<the sentence>" (live <version>, repo <version or no file>)`. Then:
@@ -371,7 +375,7 @@ item (Step 2.4) uses kind `schedule_mismatch`.
 2. **Signals** were raised in Step 9; nothing more here.
 3. **Close the run:** `update_platform_run` with the run id, **once**.
    - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-   - **`details`**, always: `local_date`, `prompt_version: "2026-11-08a"`, `manual`, `plan_id`,
+   - **`details`**, always: `local_date`, `prompt_version: "2026-11-16a"`, `manual`, `plan_id`,
      `drift_audit` (true or false), `direct_writes` (the count, or `"skipped"`), `prompts_checked`, `note_id`,
      `signal_ids`, `signals_raised`, `new_releases`,
      `friction_patterns`, `shipped_count`, `skipped`, `settings_missing`, and `not_weekly_day` when
@@ -401,7 +405,7 @@ Run: <run id>
 ### Step 11 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-11-08a`;
+- `PROMPT VERSION: 2026-11-16a`;
 - the run id and its status, and `manual: true` or `manual: false`;
 - whether the drift audit ran; how many task prompts Step 8b checked and any that write directly;
 - the note id and the signals raised;
