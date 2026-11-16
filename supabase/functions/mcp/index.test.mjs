@@ -656,6 +656,8 @@ test("Warren Buffet Phase 4 schemas advertise exactly the args their handlers re
   assert.match(desc("record_wb_subscription_review"), /changes nothing else on the subscription/);
   assert.match(desc("record_wb_subscription_review"), /required unless the verdict is cancel/);
   assert.match(desc("get_wb_subscriptions"), /usage_clues.*last_reviewed_on and last_verdict/);
+  const subs = registered.find((r) => r.name === "get_wb_subscriptions").cfg.inputSchema;
+  for (const k of ["ids", "offset", "limit"]) assert.ok(k in subs, `get_wb_subscriptions advertises ${k}`);
 });
 
 test("Warren Buffet Phase 2 schemas advertise exactly the args their handlers read, at the agreed tiers", () => {
@@ -664,7 +666,7 @@ test("Warren Buffet Phase 2 schemas advertise exactly the args their handlers re
   // bodies are cut out first so they are not read as part of a block above them.
   const helperArgs = {};
   let rest = src;
-  for (const h of ["ruleFields", "fixArgs", "fixAction"]) {
+  for (const h of ["ruleFields", "fixArgs", "fixAction", "subscriptionPage"]) {
     const start = rest.search(new RegExp(`(export )?(async )?function ${h}\\(`));
     const body = rest.slice(start).split("\n}\n")[0];
     helperArgs[h] = [...body.matchAll(/\bargs\.(\w+)/g)].map((m) => m[1]);

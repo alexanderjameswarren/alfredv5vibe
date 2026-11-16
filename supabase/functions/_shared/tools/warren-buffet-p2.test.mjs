@@ -350,6 +350,44 @@ test("get_wb_subscriptions returns the review fields, and reviews newest first, 
   assert.ok(!plain.log.some((q) => q.table === "wb_subscription_reviews"));
 });
 
+test("get_wb_subscriptions by ids returns just those rows, deduped, with the other filters and includes", async () => {
+  const db = subDb({ prices: [{ subscription_id: id(70), effective_on: "2026-09-01", amount: 6 }] });
+  const out = await m.getWbSubscriptionsTool.handler({ ids: [id(70), id(70)], status: "watching", include_prices: true }, { db });
+  const ops = db.log.find((q) => q.table === "wb_subscription_overview").ops;
+  assert.deepEqual(ops.find((o) => o[0] === "in"), ["in", "id", [id(70)]]);
+  assert.deepEqual(ops.find((o) => o[0] === "eq"), ["eq", "status", "watching"]);
+  assert.deepEqual(ops.find((o) => o[0] === "range"), ["range", 0, 0]);
+  assert.equal(out.data.length, 1);
+  assert.equal(out.data[0].prices.length, 1);
+  assert.equal(out.meta.truncated, false);
+});
+
+test("get_wb_subscriptions pages with offset and gives the next offset", async () => {
+  const rows = [{ id: id(72) }, { id: id(73) }];
+  const db = fakeDb((table) => (table === "wb_subscription_overview" ? { data: rows, error: null, count: 7 } : { data: [], error: null }));
+  const out = await m.getWbSubscriptionsTool.handler({ offset: 2, limit: 2 }, { db });
+  assert.deepEqual(db.op("wb_subscription_overview", "range")[0], ["range", 2, 3]);
+  assert.equal(out.meta.truncated, true);
+  assert.equal(out.meta.total, 7);
+  assert.equal(out.meta.next_offset, 4);
+  const last = fakeDb((table) => (table === "wb_subscription_overview" ? { data: rows, error: null, count: 6 } : { data: [], error: null }));
+  const end = await m.getWbSubscriptionsTool.handler({ offset: 4, limit: 2 }, { db: last });
+  assert.equal(end.meta.truncated, false);
+  assert.equal(end.meta.next_offset, undefined);
+});
+
+test("get_wb_subscriptions refuses bad ids and offsets before reading", async () => {
+  const db = subDb();
+  const T = m.getWbSubscriptionsTool.handler;
+  await assert.rejects(T({ ids: [] }, { db }), /get_wb_subscriptions: ids: must be a non-empty array.*Nothing was read/);
+  await assert.rejects(T({ ids: "abc" }, { db }), /ids: must be a non-empty array/);
+  await assert.rejects(T({ ids: Array.from({ length: 51 }, (_, i) => id(i + 1)) }, { db }), /ids: at most 50/);
+  await assert.rejects(T({ ids: ["not-a-uuid"] }, { db }), /ids.*uuid/);
+  await assert.rejects(T({ offset: -1 }, { db }), /offset: must be a whole number of 0 or more/);
+  await assert.rejects(T({ ids: [id(70)], offset: 5 }, { db }), /offset: cannot be combined with ids/);
+  assert.equal(db.log.length, 0, "nothing was read");
+});
+
 test("upsert_wb_subscription sets and clears usage_clues", async () => {
   const db = subDb({ sub: { ...SUB, status: "active" } });
   await m.upsertWbSubscriptionTool.handler({ id: id(70), usage_clues: " ZZ app opens " }, { db });

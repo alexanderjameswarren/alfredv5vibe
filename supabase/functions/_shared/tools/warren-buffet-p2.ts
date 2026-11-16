@@ -32,6 +32,7 @@
 // ============================================================================
 
 import { defineTool, describeDbError, envelope, readTable } from "../platform.ts";
+import { parseReadOptions } from "../platform-read.ts";
 import {
   absent, checkRange, escapeLike, limitOf, listResult, MONEY_CONTEXT_ID, nextDay, oneOf, optBool, optText,
   pacificMidnight, parseDate, parseMoney, requireId, searchTerm, WB_KINDS,
@@ -1139,6 +1140,23 @@ function positiveMoney(T: string, key: string, v: unknown): number | null {
 
 // get_wb_subscriptions — tier 1
 
+// The overview is a view, not a registered table, so readTable can't serve it. ids and offset
+// follow the shared rules (parseReadOptions): at most 50 ids, deduped, no offset with ids.
+const SUB_READ_SETTINGS = {
+  table: "wb_subscription_overview", columns: [], has_context_id: false, has_archived: false, has_status: true,
+};
+
+export function subscriptionPage(T: string, args: Obj): { ids: string[] | null; offset: number; limit: number } {
+  let opts;
+  try {
+    opts = parseReadOptions({ ids: args.ids, offset: args.offset }, SUB_READ_SETTINGS);
+  } catch (e) {
+    throw new Error(`${T}: ${(e as Error).message}. Nothing was read.`);
+  }
+  const ids = opts.ids ? opts.ids.map((v) => uuidOf(T, "ids", v)) : null;
+  return { ids, offset: opts.offset, limit: ids ? ids.length : limitOf(T, args.limit) };
+}
+
 export const getWbSubscriptionsTool = defineTool({
   name: "get_wb_subscriptions",
   tier: 1,
@@ -1151,13 +1169,14 @@ export const getWbSubscriptionsTool = defineTool({
     const overdueOnly = optBool(T, "overdue_only", args.overdue_only) ?? false;
     const includePrices = optBool(T, "include_prices", args.include_prices) ?? false;
     const includeReviews = optBool(T, "include_reviews", args.include_reviews) ?? false;
-    const LIMIT = limitOf(T, args.limit);
+    const { ids, offset, limit: LIMIT } = subscriptionPage(T, args);
     let q = ctx.db.from("wb_subscription_overview").select(SUB_COLUMNS, { count: "exact" });
+    if (ids) q = q.in("id", ids);
     if (status) q = q.eq("status", status);
     if (merchantId) q = q.eq("merchant_id", merchantId);
     if (search) q = q.ilike("name", `%${escapeLike(search)}%`);
     if (overdueOnly) q = q.eq("overdue", true);
-    const { data, error, count } = await q.order("status").order("name").limit(LIMIT);
+    const { data, error, count } = await q.order("status").order("name").range(offset, offset + LIMIT - 1);
     if (error) throw new Error(dbError(T, error));
     let rows = (data ?? []) as unknown as Obj[];
     if (includePrices && rows.length) {
@@ -1185,7 +1204,12 @@ export const getWbSubscriptionsTool = defineTool({
       }
       rows = rows.map((r) => ({ ...r, reviews: bySub.get(r.id as string) ?? [] }));
     }
-    return listResult(rows, count, LIMIT);
+    const total = count ?? offset + rows.length;
+    const truncated = total > offset + rows.length;
+    return envelope(rows, {
+      count: total, limit_applied: LIMIT, truncated,
+      ...(truncated ? { total, next_offset: offset + rows.length } : {}),
+    });
   },
 });
 
