@@ -5,7 +5,7 @@ description: "Look after money that has already happened in Warren Buffet (the M
 
 # Money with Warren Buffet: what happened, and what to fix
 
-Skill version: 2026-11-03c
+Skill version: 2026-11-15b
 
 This skill covers what has happened. **wb-planning** covers what is coming and whether we can
 afford it; load it for planned items, projects, free cash with a what-if, missed dates and matches.
@@ -22,6 +22,22 @@ that table, nothing more.
 
 **Privacy:** this file names no real amounts, payees or products. Say them in chat only.
 
+🛑 **Live data first.** Before any money report, status, total or "what needs my attention" answer,
+read it now with the tools. Never answer from an earlier read in this chat, from the weekly cleanup
+inbox item's text, or from memory. Say what period or as-of time the read covers ("1–31 Oct", "as
+of today, 15 Nov"). If a tool fails, say so and stop there; never fall back to older numbers.
+
+🛑 **Help with every to-do.** Whenever a reply names something for Alex to do (an action item, a
+review queue row, a weekly cleanup line, a rule finding, a missed date), give him three things for each:
+1. **What it means**, in plain words: what is wrong or due and why it matters. No tool names,
+   field names or JSON.
+2. **The record's link** (below).
+3. **An offer to do it here** when a tool can ("Want me to mark it reviewed with that note?"),
+   still showing before writing. When no tool can (a bank transfer, a call to the provider), say
+   where he does it instead.
+
+Never show Alex a raw tool call as the instruction.
+
 ## 1. "What needs my attention?"
 
 - Use `get_wb_action_items`. Lead with `below_floor`, then the red flags, then the rest by section.
@@ -29,7 +45,8 @@ that table, nothing more.
     in the next 30 days (`low_30d_balance` on `low_30d_on`), moved by `first_below_on`. A dip later
     than 30 days is not in it. If `first_below_on` is null, there is nothing to move. Never quote another "move" amount.
   - **A past-due card bill is a red flag only**, not a card bill to pay.
-- Give each row's link (`link_kind`, `link_id`) and its `todo`.
+- Give each row's link (`link_kind`, `link_id`), and turn its `todo` into the three parts of
+  **Help with every to-do**: never paste the `todo` text or a tool name as the instruction.
 - **It only reads.** Never mark, match, confirm or change anything from it without asking Alex first.
 - **To close a fee flag:** ask Alex for the note, then call `mark_wb_reviewed` with that one charge's
   `transaction_ids` and `note`. Reviewed plus a note is the only thing that clears a flag. Only a refund-kind credit of the same amount on that card turns it green (never a card payment or a transfer), and each refund counts for one fee.
@@ -70,7 +87,10 @@ that table, nothing more.
 ## 4. Subscriptions
 
 - `get_wb_subscriptions` (current price, review_date, `usage_clues`, `last_reviewed_on`,
-  `last_verdict`; `include_prices`, `include_reviews`). It has **no ids option yet**: find one by `search` on its name.
+  `last_verdict`; `include_prices`, `include_reviews`). When you know a subscription's id (from an
+  action item, a charge or an earlier read), fetch it with `ids` (up to 50); otherwise `search` on
+  its name. `offset` pages a long list: a truncation note gives the next offset. `ids` and `offset`
+  don't combine.
 - `upsert_wb_subscription`: create, confirm a detected one, pause, cancel, set the review date or
   `usage_clues`. **Bulk saves of review dates or clues pass `reprocess: false`.**
 - `record_wb_subscription_price`: a new price from a date; with `transaction_id`, the charge's date.
@@ -116,7 +136,8 @@ annual, prepaid and auto-renewing ones.
 market check, notes, and any missing prices from step a), then `record_wb_subscription_review`,
 and `record_wb_subscription_price` for each missing price. It saves the review and moves the review
 date together, and changes nothing else. **Cancelling, downgrading or switching are separate
-proposed calls** (`upsert_wb_subscription`), never folded into the review. A refusal from the
+proposed calls** (`upsert_wb_subscription`), never folded into the review; cancelling at the
+provider itself is a to-do for Alex (**Help with every to-do**). A refusal from the
 database comes back as it is: read it to Alex and fix the input.
 
 ## 6. Setting review dates
@@ -138,13 +159,16 @@ renewal. Show them all in one table, then save with `upsert_wb_subscription` (`r
 
 `get_wb_spending`, `get_wb_cash_flow`, `get_wb_true_cost`, `get_wb_cash_projection`,
 `get_wb_net_worth`, `get_wb_balance_history`, `get_wb_holdings`.
+- **Read them now** (**Live data first**), even when the same report ran earlier in the chat.
 - **Read them; never recompute** a total they already give.
 - **Say what period each one covers**, and what it leaves out (spending excludes transfers, income and investments).
 
 ## 9. Approving a line from the weekly Money cleanup item
 
-Run exactly the proposed call after Alex says so, nothing more. When the line is a review, follow
-section 5.
+The item's text is a week old: read the record live first (**Live data first**), and explain the
+line to Alex with **Help with every to-do** rather than showing its proposed call. Run exactly the
+proposed call after Alex says so, nothing more. If the live read shows it no longer applies, say so
+and run nothing. When the line is a review, follow section 5.
 
 ## Left out on purpose
 

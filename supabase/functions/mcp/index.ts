@@ -5287,7 +5287,7 @@ export function createMcpServer(token: string) {
         overdue_only: z.boolean().optional().describe("Only subscriptions whose expected charge is missing."),
         include_prices: z.boolean().optional().describe("Add each subscription's price history, newest first."),
         include_reviews: z.boolean().optional().describe("Add each subscription's reviews, newest first, at most 10 each."),
-        limit: z.number().optional().describe("Max rows, default 20, cap 50."),
+        ...readOptions(),
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(getWbSubscriptionsTool, args, token),
