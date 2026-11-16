@@ -12,8 +12,9 @@ Files claimed at S24 (2026-11-15): `.claude/skills/wb-money/SKILL.md`, `supabase
 | S24 | Spec, progress, claims | none | no | 10m | Done 2026-11-15 |
 | S25 | F1 and F2: the wb-money skill rules and a new version date | none | no | 15m | Done 2026-11-15 (version 2026-11-15a) |
 | S26 | F3: ids and offset on get_wb_subscriptions, with tests, and the skill line | none | no | 20m | Done 2026-11-15 (skill 2026-11-15b) |
-| S27 | Deploy mcp, then Checkpoint; one fresh claude.ai thread tests F1, F2 and F3 | `db:deploy` | mcp | 15m (+ gitsync wait) | Deployed 2026-11-16: mcp v224 ACTIVE, `verify_jwt` false; awaiting Checkpoint |
-| S28 | Record Alex's fresh-thread test of F1, F2 and F3, and close part 1 | none | no | 5m | Next |
+| S27 | Deploy mcp, then Checkpoint; one fresh claude.ai thread tests F1, F2 and F3 | `db:deploy` | mcp | 15m (+ gitsync wait) | Done 2026-11-16: mcp v224 ACTIVE, `verify_jwt` false; Checkpoint 2708138 |
+| S28 | Record Alex's fresh-thread test; fix its three gaps in the skill (stale accounts, links on every to-do, rule findings link the rule) | none | no | 10m | Done 2026-11-16 (skill 2026-11-16a) |
+| S29 | Alex runs gitpush Checkpoint for the skill, uploads it and retests the three gaps in a fresh thread; record the retest and close part 1 | none | no | 5m | Next |
 
 ## Step scopes
 
@@ -56,13 +57,14 @@ Files claimed at S24 (2026-11-15): `.claude/skills/wb-money/SKILL.md`, `supabase
 
 ## Next step's scope
 
-Run tag: warren_buffet_p4-r6d-s28-<new>
+Run tag: warren_buffet_p4-r6d-s29-<new>
 - create: nothing
 - update: docs/progress-warren_buffet_p4-r6d-fixes.md
 - delete: nothing
 - deploy: nothing
 - SQL: none
 - Estimated run: 5m
+- Before it: Alex runs `gitpush warren_buffet_p4-r6d checkpoint --paths .claude/skills/wb-money/SKILL.md docs/progress-warren_buffet_p4-r6d-fixes.md`, uploads wb-money 2026-11-16a to claude.ai, and retests in a fresh thread: stale accounts (reads the wb-sync log, names the cause), a link on every to-do (including a subscription price change), and rule findings linking the rule.
 
 ## Decisions
 
@@ -90,3 +92,13 @@ Run tag: warren_buffet_p4-r6d-s28-<new>
 | S27 | warren_buffet_p4-r6d-s27-w2hv | 15m | 0m 54s |
 
 - S27: the gitsync brought in 119dff2, with two switchboard_prod-w3k docs and nothing under supabase/functions or the skill. No drift, so the tests weren't rerun. `db:deploy` claimed, and `supabase functions deploy mcp` run from this worktree: v224 ACTIVE, `verify_jwt` false. Checkpoint pending, which releases `db:deploy`.
+
+| S28 | warren_buffet_p4-r6d-s28-q6ld | 10m | 0m 45s |
+
+- S27 Checkpoint landed at 2708138; `db:deploy` released.
+- S28: Alex's fresh-thread test (wb-money 2026-11-15b, mcp v224):
+  - F3, `ids` on get_wb_subscriptions: pass (called with ids, returned the subscription).
+  - F2, Live data first: pass (a second ask hours later read again and named its date).
+  - F1, Help with every to-do: mostly pass, with three gaps: it advised reconnecting the bank when the wb-sync log showed a SimpleFIN 503 and an unfinished run; a subscription price change had no link; rule findings linked the merchant instead of the rule.
+- S28 fixes, skill 2026-11-16a: a 🛑 "Stale accounts: read the sync log first" rule (get_platform_runs, `warren_buffet` / `wb-sync`; reconnect only on a login error; a 503 is SimpleFIN's side; a stuck run is a job problem); the link part of Help with every to-do now has no exceptions; §3 links each rule finding to its `rule_id`.
+- S28: a claim block from job_health-t4m on `mcp/index.ts` and `mcp/index.test.mjs`; both were unchanged from main and released with yield.

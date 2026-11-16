@@ -5,7 +5,7 @@ description: "Look after money that has already happened in Warren Buffet (the M
 
 # Money with Warren Buffet: what happened, and what to fix
 
-Skill version: 2026-11-15b
+Skill version: 2026-11-16a
 
 This skill covers what has happened. **wb-planning** covers what is coming and whether we can
 afford it; load it for planned items, projects, free cash with a what-if, missed dates and matches.
@@ -31,12 +31,25 @@ of today, 15 Nov"). If a tool fails, say so and stop there; never fall back to o
 review queue row, a weekly cleanup line, a rule finding, a missed date), give him three things for each:
 1. **What it means**, in plain words: what is wrong or due and why it matters. No tool names,
    field names or JSON.
-2. **The record's link** (below).
+2. **The record's link** (below), for every to-do, with no exceptions. A subscription price change
+   links to the subscription (or its review queue row). If a row truly has no record to link, say
+   so in one line rather than leave the link out.
 3. **An offer to do it here** when a tool can ("Want me to mark it reviewed with that note?"),
    still showing before writing. When no tool can (a bank transfer, a call to the provider), say
    where he does it instead.
 
 Never show Alex a raw tool call as the instruction.
+
+🛑 **Stale accounts: read the sync log first.** When accounts look out of date, or payments look
+late because nothing new has come in, read the sync job's own log before saying why:
+`get_platform_runs` with app `warren_buffet` and job `wb-sync`. Tell Alex in plain words what it
+shows: the last good run, and each failed or unfinished run with its error. Never guess the cause
+without reading the log.
+- **A login or connection error** (for example `auth_expired`): only then suggest reconnecting at
+  the bank or in SimpleFIN Bridge.
+- **A server error** (for example an HTTP 503): that is SimpleFIN's side. Say so, and say the next
+  run usually catches up. Nothing for Alex to do at his bank.
+- **A run left "running" for hours:** a job problem to log, not something for Alex to fix at his bank.
 
 ## 1. "What needs my attention?"
 
@@ -72,6 +85,8 @@ Never show Alex a raw tool call as the instruction.
 
 - **Health first:** `get_wb_rule_health` lists findings by kind, each with its `detail`. A finding
   that is deliberate gets `acknowledge_wb_rule_health` with a short reason; it comes back on its own if it grows.
+- **Link each finding to its rule** (the finding's `rule_id`), not the merchant. Link the merchant
+  only when the finding is about the merchant itself (for example, a merchant with no category).
 - **Before any new rule, preview it:** `get_wb_rule_preview` with `match`, or with `transaction_id`
   for the "always do this" plan. Show Alex the count and samples. Then `create_wb_rule`, or
   `create_wb_rule_from_transaction` (it proposes first; call again with `confirmed: true` after his OK).
