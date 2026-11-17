@@ -57,12 +57,19 @@ Build estimate, s3 to s11: 133m across 9 steps, plus about 22m spent on s1 and s
 
 - **s10 (s10-r8kd):** overwatch skill 2026-11-17a (the "Review missed jobs since <time>" chat flow, the "Every alert" wording rule, the Step 8b allowed exceptions); task-prompts skill 2026-11-17b (the "Alert wording" section and its checklist line); spec §10 and O2 (tested at the first Job health check run, 2026-11-17 4:07 PM Pacific). inventory.test.mjs 24 of 24. Not checkpointed.
 
-## Next step's scope (s11, closeout)
+- **s10 checkpointed** (main 1fdd14e). Both skills (overwatch 2026-11-17a, task-prompts 2026-11-17b) are accepted in claude.ai. Claude's notification is off on every task except the Job health check.
+- **s11 (s11-w2qe), closeout:** O2 answered in the spec. A healthy run sends no notification (manual run 2026-11-17 2:54 PM Pacific, platform_runs 0d04859d, ok). Firing the task with appended text runs it twice, so a manual run is Run now with no added text. Every open item is closed except O6. No db claims are held. Next: gitpush Finish (project-done, db release).
 
-- create: nothing
-- update: docs/progress-job_health-t4m.md, docs/technical-spec-job_health-t4m.md
-- delete: nothing
-- deploy: nothing
-- SQL: none
-- What: record O2's answer from the 4:07 PM run; estimate against actual; the gitpush Finish request. Alex turns off Claude's notification on every task except the Job health check (by hand), and accepts both skills through `propose_skills`.
+## Estimate against actual
+
+- **Estimate:** 12 steps.
+- **Actual:** 11 steps (s1 to s11). The lettered sub-steps count with their step: s4b to s4d, s5b and s5c, s6b, s8b, s9b.
+
+## Open items left (follow-up work)
+
+- **O6:** new SimpleFIN accounts at a bank are not fetched by the per-bank calls (spec §11).
+
+## Next step's scope
+
+None. The project is done; Alex runs gitpush Finish.
 
