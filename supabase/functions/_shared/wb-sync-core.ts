@@ -131,7 +131,11 @@ export function unixToIso(value: unknown): string | null {
  * The request for one run. Deno's fetch refuses URLs with embedded
  * credentials, so they move into a Basic auth header. Never log either value.
  */
-export function buildRequest(accessUrl: string, startDate: Date): { url: string; authorization: string } {
+export function buildRequest(
+  accessUrl: string,
+  startDate: Date,
+  accountIds?: string[] | null,
+): { url: string; authorization: string } {
   const u = new URL(accessUrl);
   const user = decodeURIComponent(u.username);
   const pass = decodeURIComponent(u.password);
@@ -139,8 +143,109 @@ export function buildRequest(accessUrl: string, startDate: Date): { url: string;
   u.username = "";
   u.password = "";
   const base = u.toString().replace(/\/+$/, "");
-  const url = `${base}/accounts?start-date=${toUnixSeconds(startDate)}&pending=1`;
+  const only = (accountIds ?? []).map((id) => `&account=${encodeURIComponent(id)}`).join("");
+  const url = `${base}/accounts?start-date=${toUnixSeconds(startDate)}&pending=1${only}`;
   return { url, authorization: `Basic ${btoa(`${user}:${pass}`)}` };
+}
+
+// ── Per-bank fetch (docs/technical-spec-job_health-t4m.md §5.2, s4c) ─────────
+// One /accounts call per institution, in parallel, so one slow bank no longer
+// holds up the rest. SimpleFIN expects 24 requests a day or fewer, and
+// account-filtered requests have their own quota: 4 banks is 4 a day.
+
+export interface InstitutionGroup {
+  org: string;
+  /** null: one unfiltered call for everything (no accounts stored yet). */
+  accountIds: string[] | null;
+}
+
+export interface FailedInstitution {
+  org: string;
+  kind: string;
+  error: string;
+}
+
+export type FetchOutcome =
+  | { org: string; ok: true; body: Obj; accountIds: string[] | null }
+  | { org: string; ok: false; kind: string; error: string };
+
+/** Stored SimpleFIN accounts grouped by institution, both sorted, for a stable plan and log. */
+export function groupAccounts(rows: Array<{ external_id: string; institution: string | null }>): InstitutionGroup[] {
+  const byOrg = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const org = r.institution?.trim() || "(no institution)";
+    if (!byOrg.has(org)) byOrg.set(org, new Set());
+    byOrg.get(org)!.add(String(r.external_id));
+  }
+  return [...byOrg.keys()].sort().map((org) => ({ org, accountIds: [...byOrg.get(org)!].sort() }));
+}
+
+/** The calls to make: one per group, or one unfiltered call when nothing is stored yet. */
+export function fetchPlan(groups: InstitutionGroup[]): InstitutionGroup[] {
+  return groups.length ? groups : [{ org: "(all)", accountIds: null }];
+}
+
+/**
+ * One body from every institution that answered. Accounts outside a call's
+ * filter are dropped, so a server that ignores account= cannot double them.
+ */
+export function mergeFetches(outcomes: FetchOutcome[]): {
+  body: Obj;
+  failed: FailedInstitution[];
+  total: number;
+  allFailed: boolean;
+} {
+  const accounts: Obj[] = [];
+  const seen = new Set<string>();
+  const messages: string[] = [];
+  const failed: FailedInstitution[] = [];
+  for (const o of outcomes) {
+    if (!o.ok) {
+      failed.push({ org: o.org, kind: o.kind, error: o.error });
+      continue;
+    }
+    const wanted = o.accountIds ? new Set(o.accountIds) : null;
+    for (const a of (Array.isArray(o.body.accounts) ? o.body.accounts : []) as Obj[]) {
+      const id = String(a.id);
+      if ((wanted && !wanted.has(id)) || seen.has(id)) continue;
+      seen.add(id);
+      accounts.push(a);
+    }
+    messages.push(...errorMessages(o.body as { errors?: unknown; errlist?: unknown }));
+  }
+  return {
+    body: { accounts, errors: [...new Set(messages)] },
+    failed,
+    total: outcomes.length,
+    allFailed: outcomes.length > 0 && failed.length === outcomes.length,
+  };
+}
+
+/** When no bank answered: the run fails as a single call did. A 403 anywhere is the token, so auth wins. */
+export function allFailedFailure(failed: FailedInstitution[]): {
+  status: "failed" | "auth_expired";
+  kind: string;
+  message: string;
+} {
+  const auth = failed.find((f) => f.kind === "auth");
+  const kinds = new Set(failed.map((f) => f.kind));
+  const kind = auth ? "auth" : kinds.size === 1 ? failed[0].kind : "fetch";
+  const message = failed.length === 1
+    ? failed[0].error
+    : `No bank answered: ${failed.map((f) => `${f.org}: ${f.error}`).join(" | ")}`;
+  return { status: auth ? "auth_expired" : "failed", kind, message };
+}
+
+/** The partial-run message, naming each bank that did not answer and why. */
+export function partialMessage(failed: FailedInstitution[], total: number): string {
+  const list = failed.map((f) => `${f.org} (${f.error})`).join("; ");
+  return `${failed.length} of ${total} banks did not answer, so their accounts were not updated: ${list}. ` +
+    `The other banks were saved.`;
+}
+
+/** ok only when every bank answered with no blocking error. */
+export function syncStatus(blocking: string[], failed: FailedInstitution[]): "ok" | "partial" {
+  return failed.length > 0 ? "partial" : runStatus(blocking);
 }
 
 /** Replace every occurrence of each secret (and its parts) with [redacted]. */
@@ -468,6 +573,8 @@ export function alertFor(input: AlertInput, institutions: string[], runId: strin
     title = "SimpleFIN did not answer in time — the money sync stopped";
   } else if (input.failureKind === "time_budget") {
     title = "The money sync ran out of time and stopped";
+  } else if (input.failureKind === "partial") {
+    title = "Some banks did not answer the money sync — the others were saved";
   } else {
     title = "The daily money sync failed";
   }

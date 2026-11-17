@@ -67,10 +67,10 @@ class RunFailure extends Error {
 
 type Obj = Record<string, unknown>;
 
-async function fetchSimplefin(accessUrl: string, windowStart: Date): Promise<Obj> {
+async function fetchSimplefin(accessUrl: string, windowStart: Date, accountIds: string[] | null): Promise<Obj> {
   let request;
   try {
-    request = core.buildRequest(accessUrl, windowStart);
+    request = core.buildRequest(accessUrl, windowStart, accountIds);
   } catch {
     throw new RunFailure("SIMPLEFIN_ACCESS_URL is not a valid access URL.", "failed", "config");
   }
@@ -103,6 +103,54 @@ async function fetchSimplefin(accessUrl: string, windowStart: Date): Promise<Obj
     }
     throw err;
   }
+}
+
+/** One institution's call, never throwing: its failure becomes an outcome so the others still count. */
+async function fetchOne(
+  accessUrl: string,
+  windowStart: Date,
+  group: core.InstitutionGroup,
+  secrets: string[],
+): Promise<core.FetchOutcome> {
+  const t0 = Date.now();
+  const log = (status: string) =>
+    console.log(`[wb-sync] fetch org=${group.org} t=${core.seconds(Date.now() - t0)}s status=${status}`);
+  try {
+    const body = await fetchSimplefin(accessUrl, windowStart, group.accountIds);
+    log("ok");
+    return { org: group.org, ok: true, body, accountIds: group.accountIds };
+  } catch (err) {
+    log("error");
+    const kind = err instanceof RunFailure ? err.kind : "fetch";
+    const message = err instanceof Error ? err.message : String(err);
+    return { org: group.org, ok: false, kind, error: core.redact(message, secrets) };
+  }
+}
+
+/**
+ * Every institution in parallel, each under FETCH_TIMEOUT_MS, so the whole fetch
+ * ends inside the time budget. Throws as a single call did when no bank answered.
+ */
+async function fetchAll(
+  db: SupabaseClient,
+  owner: core.Owner,
+  accessUrl: string,
+  windowStart: Date,
+  secrets: string[],
+): Promise<{ body: Obj; failed: core.FailedInstitution[]; total: number }> {
+  const { data, error } = await db
+    .from("wb_accounts")
+    .select("external_id, institution")
+    .eq("context_id", owner.context_id)
+    .eq("source", "simplefin");
+  if (error) throw new Error(`wb_accounts read: ${error.message}`);
+  const plan = core.fetchPlan(core.groupAccounts((data ?? []) as Array<{ external_id: string; institution: string | null }>));
+  const merged = core.mergeFetches(await Promise.all(plan.map((g) => fetchOne(accessUrl, windowStart, g, secrets))));
+  if (merged.allFailed) {
+    const f = core.allFailedFailure(merged.failed);
+    throw new RunFailure(f.message, f.status, f.kind);
+  }
+  return merged;
 }
 
 /** Logs a stage's elapsed time; with check, throws a time_budget failure when it would start too late. */
@@ -482,15 +530,20 @@ Deno.serve(async (req) => {
 
     // A simulated run skips SimpleFIN entirely and writes no wb_ data.
     stage("fetch");
-    const body: Obj = simulate
-      ? { errors: [core.SIMULATED_MESSAGE], accounts: [] }
-      : await fetchSimplefin(accessUrl!, windowStart);
+    const fetched = simulate
+      ? { body: { errors: [core.SIMULATED_MESSAGE], accounts: [] } as Obj, failed: [], total: 0 }
+      : await fetchAll(db, owner, accessUrl!, windowStart, secrets);
+    const body = fetched.body;
+    const failedInstitutions = fetched.failed;
     const { informational, blocking } = core.classifyErrors(core.errorMessages(body));
+    // A failed bank's accounts are absent from body, so its pending rows are left alone.
     const { counts, processing, detection } = await sync(db, body, owner, now, windowStart, blocking.length > 0, stage);
     stage("close", false);
-    // Processing and detection problems are recorded but never change the status.
-    const status = core.runStatus(blocking);
+    // Processing and detection problems are recorded but never change the status. A partial run
+    // never moves the window: it starts from the last ok run, so a failed bank's days are re-fetched.
+    const status = core.syncStatus(blocking, failedInstitutions);
     const blockingSafe = blocking.map((m) => core.redact(m, secrets));
+    const partialSafe = failedInstitutions.length ? core.partialMessage(failedInstitutions, fetched.total) : null;
 
     await close({
       status,
@@ -514,16 +567,22 @@ Deno.serve(async (req) => {
           : {}),
         simplefin_errors: blockingSafe,
         simplefin_notices: informational.map((m) => core.redact(m, secrets)),
-        ...(status === "partial" ? { failure_kind: "simplefin_errors" } : {}),
+        ...(partialSafe
+          ? { failure_kind: "partial", failed_institutions: failedInstitutions }
+          : status === "partial"
+          ? { failure_kind: "simplefin_errors" }
+          : {}),
         ...gapDetail,
         ...(simulate ? { simulated: true } : {}),
       },
-      error_message: status === "partial" ? blockingSafe.join(" | ") : null,
+      error_message: status === "partial" ? [partialSafe, ...blockingSafe].filter(Boolean).join(" | ") : null,
     });
     const orgNames = ((body.accounts ?? []) as Obj[]).map((a) => ((a.org ?? {}) as Obj).name as string);
-    const alerts = blockingSafe.length
-      ? await alert(blockingSafe.map((message) => ({ message, failureKind: null })), orgNames)
-      : { raised: 0, duplicate: 0 };
+    const alertInputs: core.AlertInput[] = [
+      ...blockingSafe.map((message) => ({ message, failureKind: null })),
+      ...(partialSafe ? [{ message: partialSafe, failureKind: "partial" }] : []),
+    ];
+    const alerts = alertInputs.length ? await alert(alertInputs, orgNames) : { raised: 0, duplicate: 0 };
     // Only a fully ok run clears them: a partial run still has a connection that needs attention.
     const resolved = status === "ok" && !simulate ? await resolve() : { resolved: 0 };
     console.log(
@@ -534,7 +593,7 @@ Deno.serve(async (req) => {
         `pending_deleted=${counts.pending_deleted} processed=${counts.transactions_processed} ` +
         `processing_errors=${processing.errors.length} ` +
         `subscriptions_detected=${detection?.created ?? 0} detection_error=${detection?.error ? "yes" : "no"} ` +
-        `errors=${blocking.length} ` +
+        `errors=${blocking.length} failed_institutions=${failedInstitutions.length} ` +
         `signals_raised=${alerts.raised} signals_duplicate=${alerts.duplicate} resolved=${resolved.resolved}`,
     );
     return json({
@@ -546,6 +605,7 @@ Deno.serve(async (req) => {
       subscriptions_detected: detection?.created ?? 0,
       detection_error: Boolean(detection?.error),
       simplefin_errors: blocking.length,
+      failed_institutions: failedInstitutions.map((f) => f.org),
       alerts,
       resolved,
       ...(simulate ? { simulated: true } : {}),

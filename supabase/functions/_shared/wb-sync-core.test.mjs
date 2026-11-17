@@ -480,3 +480,107 @@ test("seconds: one decimal for the stage log", () => {
   assert.equal(core.seconds(0), "0.0");
   assert.equal(core.seconds(88_149), "88.1");
 });
+
+// ── Per-bank fetch (job_health-t4m s4c) ──────────────────────────────────────
+
+const STORED_ACCOUNTS = [
+  { external_id: "WF-2", institution: "Wells Fargo" },
+  { external_id: "CS-1", institution: "Charles Schwab US" },
+  { external_id: "WF-1", institution: "Wells Fargo" },
+  { external_id: "X-1", institution: null },
+];
+const acct = (id, org) => ({ id, name: `Acct ${id}`, org: { name: org } });
+const okOutcome = (org, ids, extra = {}) => ({
+  org,
+  ok: true,
+  accountIds: ids,
+  body: { accounts: ids.map((id) => acct(id, org)), errors: [], ...extra },
+});
+
+test("per-bank: accounts grouped by institution, sorted; nothing stored → one unfiltered call", () => {
+  assert.deepEqual(core.groupAccounts(STORED_ACCOUNTS), [
+    { org: "(no institution)", accountIds: ["X-1"] },
+    { org: "Charles Schwab US", accountIds: ["CS-1"] },
+    { org: "Wells Fargo", accountIds: ["WF-1", "WF-2"] },
+  ]);
+  assert.deepEqual(core.fetchPlan([]), [{ org: "(all)", accountIds: null }]);
+});
+
+test("per-bank: buildRequest adds one account= per id, encoded; none without ids", () => {
+  const access = "https://user:pass@bridge.example/simplefin";
+  const start = new Date("2026-11-01T00:00:00Z");
+  const { url } = core.buildRequest(access, start, ["ACT-1", "a b"]);
+  assert.ok(url.endsWith("&pending=1&account=ACT-1&account=a%20b"));
+  assert.ok(core.buildRequest(access, start).url.endsWith("&pending=1"));
+});
+
+test("per-bank: all answer → merged body, status ok, nothing failed", () => {
+  const m = core.mergeFetches([okOutcome("Wells Fargo", ["WF-1", "WF-2"]), okOutcome("Charles Schwab US", ["CS-1"])]);
+  assert.deepEqual(m.body.accounts.map((a) => a.id), ["WF-1", "WF-2", "CS-1"]);
+  assert.deepEqual(m.failed, []);
+  assert.equal(m.allFailed, false);
+  assert.equal(core.syncStatus([], m.failed), "ok");
+});
+
+test("per-bank: a server that ignores account= cannot double accounts", () => {
+  const everything = { accounts: [acct("WF-1", "Wells Fargo"), acct("CS-1", "Charles Schwab US")], errors: ["x needs login"] };
+  const m = core.mergeFetches([
+    { org: "Wells Fargo", ok: true, accountIds: ["WF-1"], body: everything },
+    { org: "Charles Schwab US", ok: true, accountIds: ["CS-1"], body: everything },
+  ]);
+  assert.deepEqual(m.body.accounts.map((a) => a.id), ["WF-1", "CS-1"]);
+  assert.deepEqual(m.body.errors, ["x needs login"]);
+});
+
+test("per-bank: one fails → partial, the others saved, one partial signal naming the bank", () => {
+  const m = core.mergeFetches([
+    okOutcome("Charles Schwab US", ["CS-1"]),
+    { org: "Wells Fargo", ok: false, kind: "timeout", error: "SimpleFIN did not answer within 105 s." },
+  ]);
+  assert.deepEqual(m.body.accounts.map((a) => a.id), ["CS-1"]);
+  assert.deepEqual(m.failed, [{ org: "Wells Fargo", kind: "timeout", error: "SimpleFIN did not answer within 105 s." }]);
+  assert.equal(m.allFailed, false);
+  assert.equal(core.syncStatus([], m.failed), "partial");
+
+  const message = core.partialMessage(m.failed, m.total);
+  assert.match(message, /^1 of 2 banks did not answer/);
+  assert.match(message, /Wells Fargo \(SimpleFIN did not answer within 105 s\.\)/);
+  const alert = core.alertFor({ message, failureKind: "partial" }, [], "run-1", "2026-11-17");
+  assert.equal(core.failureSubject(alert), "wb-sync:failure:kind:partial");
+  assert.match(alert.title, /Some banks did not answer/);
+  assert.match(alert.text, /Wells Fargo/);
+  const [params] = core.signalParams([alert], "u1", "run-1", "2026-11-17");
+  assert.equal(params.p_severity, "low");
+  assert.equal(params.p_details.failure_kind, "partial");
+});
+
+test("per-bank: all fail → failed as before; one kind kept, mixed kinds → fetch, any 403 → auth_expired", () => {
+  const t = { org: "Wells Fargo", ok: false, kind: "timeout", error: "SimpleFIN did not answer within 105 s." };
+  const h = { org: "Charles Schwab US", ok: false, kind: "http", error: "SimpleFIN returned HTTP 524." };
+  const a = { org: "Charles Schwab US", ok: false, kind: "auth", error: "SimpleFIN refused the access URL (HTTP 403)." };
+
+  const one = core.mergeFetches([t]);
+  assert.equal(one.allFailed, true);
+  assert.deepEqual(core.allFailedFailure(one.failed), { status: "failed", kind: "timeout", message: t.error });
+
+  const mixed = core.allFailedFailure(core.mergeFetches([t, h]).failed);
+  assert.equal(mixed.status, "failed");
+  assert.equal(mixed.kind, "fetch");
+  assert.equal(mixed.message, `No bank answered: Wells Fargo: ${t.error} | Charles Schwab US: ${h.error}`);
+
+  const auth = core.allFailedFailure(core.mergeFetches([t, a]).failed);
+  assert.equal(auth.status, "auth_expired");
+  assert.equal(auth.kind, "auth");
+});
+
+test("per-bank: the window after a partial run still reaches back to the last ok run", () => {
+  // Ok run 3 days ago; a partial run yesterday (a bank failed) is not ok, so it is not the anchor.
+  const lastOk = new Date(NOW - 3 * DAY);
+  const partialRun = new Date(NOW - 1 * DAY);
+  const failed = [{ org: "Wells Fargo", kind: "http", error: "SimpleFIN returned HTTP 524." }];
+  assert.notEqual(core.syncStatus([], failed), "ok");
+  const w = core.chooseWindow(NOW, lastOk);
+  assert.equal(w.start.getTime(), lastOk - 10 * DAY);
+  assert.ok(w.start < new Date(partialRun - 10 * DAY), "the failed bank's days since the last ok run are re-fetched");
+  assert.equal(w.gap, null);
+});
