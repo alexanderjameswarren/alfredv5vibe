@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-17 12:41, through migration 238 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-17 14:11, through migration 239 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -31774,6 +31774,30 @@ GRANT SELECT("notes") ON TABLE "public"."platform_schedules" TO "claude_reader";
 
 
 GRANT SELECT("created_at") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("hourly_until") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("max_run_minutes") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("catch_up") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("failure_subject") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("failure_severity") ON TABLE "public"."platform_schedules" TO "claude_reader";
+
+
+
+GRANT SELECT("started_by") ON TABLE "public"."platform_schedules" TO "claude_reader";
 
 
 

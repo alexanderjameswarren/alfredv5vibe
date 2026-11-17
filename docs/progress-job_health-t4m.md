@@ -43,30 +43,32 @@ Build estimate, s3 to s11: 133m across 9 steps, plus about 22m spent on s1 and s
 - **s7, live:** the first tick ran at 12:45 Pacific. It swept f847a5cd (no signal, older than 24 h); the state row is clean; there are no alerts (spec §6.3). The s8 check (s8-d7nb) ran at 12:44, before that tick, and stopped.
 - **s8b (s8b-q3lx):** built the `get_job_health` tool (`_shared/tools/job-health.ts` and its test, 6 tests). It is registered in mcp/index.ts (227 tools; index.test.mjs passes 51 of 51). mcp v225 is deployed; the platform check is CONFORMANT; db:deploy is released. Open item O7, the read role's grants, is for s10. Next: Checkpoint the four tool files.
 
-## Next step's scope (s9, the health-check task)
+- **s9 (s9-b6rw):**
+  - the task prompt `docs/claude-health-check-task-prompt.md`, PROMPT VERSION 2026-11-17a;
+  - task-prompts skill 2026-11-17a, with the rule 10 exception;
+  - the schedule-row and reader-grants migration (O7), numbered **239** (`db:migration:239` claimed), and test 3;
+  - nothing queued.
 
-- create: docs/claude-health-check-task-prompt.md, supabase/migrations/_pending_job_health-t4m_health_check_schedule.sql, supabase/tests/job_health-t4m/3_health_check_schedule_test.sql
-- update: .claude/skills/task-prompts/SKILL.md (the rule 2 exception, spec §10), docs/technical-spec-job_health-t4m.md (§8.2, and O2's test)
+- **s9b (s9b-g8ce):** 239 is written (body identical to the pending file), and the pending file is deleted.
+  - Migration action: 732bec80-7e7a-46ce-96a9-7bfdaadca96d (expect 1).
+  - Test action: a9425256-249a-48b9-b607-e572b902ba6a.
+  - **Queued, not applied.** `db:table:platform_schedules`, `db:table:job_health_state` and `db:migration:239` are held until the migration runs and the test passes.
+  - Then: Alex creates the claude.ai task "Job health check" from the prompt (every 2 hours, 6 AM to 8 PM Pacific) with its notification on, and Checkpoints 239, the test, the prompt and the skill.
+
+## Next step's scope (s10, the skills)
+
+- create: nothing
+- update: .claude/skills/overwatch/SKILL.md, .claude/skills/task-prompts/SKILL.md, docs/technical-spec-job_health-t4m.md
 - delete: nothing
 - deploy: nothing
-- SQL: the `alfred/job_health_check` platform_schedules row (daily, expected_by 06:00, grace 2, max_run_minutes 10, catch_up skip, started_by task:job-health-check). It is queued after gitsync and the drift check, claiming `db:table:platform_schedules` at that step. Then Alex creates the claude.ai scheduled task from the prompt (every 2 hours, 6 AM to 8 PM Pacific) and turns its notification on.
-
-## Next step's scope (s7, verify the watchdog live; done, kept for the record)
-
-- create: nothing (a further test script only if a check needs one: supabase/tests/job_health-t4m/3_watchdog_live_verify.sql)
-- update: docs/technical-spec-job_health-t4m.md
-- delete: nothing
-- deploy: nothing
-- SQL: read-only checks with get_sql_read after the first real ticks:
-  - `job_health_state` is stamped every 15 minutes, with no `last_watchdog_error`;
-  - any old stuck runs are marked failed with no signal;
-  - no outage was opened during a normal day.
-
-## Next step's scope (s8, the get_job_health tool)
-
-- create: supabase/functions/_shared/tools/job-health.ts, supabase/functions/_shared/tools/job-health.test.mjs
-- update: supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs (both free now: warren_buffet_p4-r6d no longer holds them; claim them at s8), docs/technical-spec-job_health-t4m.md
-- delete: nothing
-- deploy: mcp
-- SQL: none (`check_platform_conformance` after the deploy)
+- SQL: none
+- What:
+  - **overwatch:**
+    - the "review missed jobs since <time>" chat flow (spec §7), using `get_job_health` with `since`: run_now jobs first with their task names, then the stuck runs, which need Alex, and confirm the outage has closed;
+    - the Part F alert-wording rule (§9.1);
+    - Step 8b's judgment: the Job health check's notification and the watchdog's direct items are not findings;
+    - a version bump.
+  - **task-prompts:**
+    - the "Alert wording" section (§9.1), with its checklist line (still owed from §10);
+    - a version bump.
 
