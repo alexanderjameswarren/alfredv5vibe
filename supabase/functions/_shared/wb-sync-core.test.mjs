@@ -30,6 +30,33 @@ test("window: boundary at 79 days, overlap and cap meet", () => {
   assert.equal(NOW - core.chooseWindowStart(NOW, last), 89 * DAY);
 });
 
+test("window cap: a recent ok run is not cut, no gap", () => {
+  const last = new Date(NOW - 1 * DAY);
+  const w = core.chooseWindow(NOW, last);
+  assert.equal(core.WINDOW_MAX_DAYS, 14);
+  assert.equal(w.start.getTime(), last - 10 * DAY);
+  assert.equal(w.gap, null);
+});
+
+test("window cap: exactly 14 days back is not cut", () => {
+  const w = core.chooseWindow(NOW, new Date(NOW - 4 * DAY));
+  assert.equal(NOW - w.start, 14 * DAY);
+  assert.equal(w.gap, null);
+});
+
+test("window cap: failures for 10 days → start at 14 days back, gap recorded", () => {
+  // Last ok Sep 26 13:00 UTC → wanted Sep 16; cap Sep 22 13:00 UTC (06:00 Pacific).
+  const w = core.chooseWindow(NOW, new Date(NOW - 10 * DAY));
+  assert.equal(NOW - w.start, 14 * DAY);
+  assert.deepEqual(w.gap, { from: "2026-09-16", to: "2026-09-22" });
+});
+
+test("window cap: no ok run ever → 14 days, the 89-day backfill is a gap", () => {
+  const w = core.chooseWindow(NOW, null);
+  assert.equal(NOW - w.start, 14 * DAY);
+  assert.deepEqual(w.gap, { from: "2026-07-09", to: "2026-09-22" });
+});
+
 test("localDate uses Pacific time", () => {
   // 05:00 UTC on Oct 7 is still Oct 6 in Los Angeles.
   assert.equal(core.localDate(new Date("2026-10-07T05:00:00Z")), "2026-10-06");
@@ -378,4 +405,78 @@ test("detectResult: counts, missing fields as 0, error kept and capped", () => {
   assert.deepEqual(core.detectResult(null, null), { created: 0, linked: 0, error: null });
   const r = core.detectResult({ created: 9 }, "x".repeat(400));
   assert.deepEqual([r.created, r.linked, r.error.length], [0, 0, 300]);
+});
+
+// ── Time limits (job_health-t4m) ─────────────────────────────────────────────
+
+test("limits: one named constant each, and the budget leaves room inside the 150 s wall clock", () => {
+  assert.equal(core.FETCH_TIMEOUT_MS, 105_000);
+  assert.ok(core.FETCH_TIMEOUT_MS < core.TIME_BUDGET_MS);
+  assert.equal(core.TIME_BUDGET_MS, 120_000);
+  assert.ok(core.TIME_BUDGET_MS + 30_000 <= 150_000);
+});
+
+test("timeout path: a fetch that never answers is cut off with TimeoutError, and its signal is aborted", async () => {
+  let seen;
+  const hung = (signal) => {
+    seen = signal;
+    return new Promise(() => {}); // never settles, ignores the signal: the worst case
+  };
+  const started = Date.now();
+  await assert.rejects(core.withTimeout(hung, 30), (err) => {
+    assert.ok(core.isTimeout(err));
+    assert.equal(err.name, "TimeoutError");
+    assert.equal(err.ms, 30);
+    return true;
+  });
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(seen.aborted, true);
+});
+
+test("timeout path: a fetch that rejects on abort still settles as a timeout, not as its own error", async () => {
+  const honours = (signal) =>
+    new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("network error"))));
+  await assert.rejects(core.withTimeout(honours, 20), (err) => core.isTimeout(err));
+});
+
+test("timeout path: an answer in time passes through, and its own error is not a timeout", async () => {
+  assert.equal(await core.withTimeout(async () => 42, 1000), 42);
+  await assert.rejects(core.withTimeout(async () => { throw new Error("HTTP 503"); }, 1000), (err) => {
+    assert.equal(core.isTimeout(err), false);
+    assert.equal(err.message, "HTTP 503");
+    return true;
+  });
+});
+
+test("timeout path: the failure signal is the normal one, kind timeout", () => {
+  const a = core.alertFor({ message: "SimpleFIN did not answer within 60 s.", failureKind: "timeout" }, [], "run-1", "2026-11-16");
+  assert.equal(a.subject, "kind:timeout");
+  assert.equal(core.failureSubject(a), "wb-sync:failure:kind:timeout");
+  assert.match(a.title, /did not answer in time/);
+  const [p] = core.signalParams([a], "user-1", "run-1", "2026-11-16");
+  assert.equal(p.p_severity, "low");
+  assert.equal(p.p_details.failure_kind, "timeout");
+});
+
+test("budget path: a stage at or under 120 s goes ahead; past it, the message names the stage", () => {
+  assert.equal(core.budgetExceeded("holdings", 119_999), null);
+  assert.equal(core.budgetExceeded("holdings", 120_000), null);
+  const msg = core.budgetExceeded("processing 2/3", 121_400);
+  assert.match(msg, /stage "processing 2\/3"/);
+  assert.match(msg, /121\.4 s/);
+  assert.match(msg, /120 s time budget/);
+  assert.equal(core.budgetExceeded("x", 50, 40) !== null, true);
+});
+
+test("budget path: the failure signal is the normal one, kind time_budget", () => {
+  const msg = core.budgetExceeded("detection", 125_000);
+  const a = core.alertFor({ message: msg, failureKind: "time_budget" }, [], "run-2", "2026-11-16");
+  assert.equal(core.failureSubject(a), "wb-sync:failure:kind:time-budget");
+  assert.match(a.title, /ran out of time/);
+  assert.match(a.text, /Stopped before stage "detection"/);
+});
+
+test("seconds: one decimal for the stage log", () => {
+  assert.equal(core.seconds(0), "0.0");
+  assert.equal(core.seconds(88_149), "88.1");
 });
