@@ -201,6 +201,20 @@ Also new: `last_heartbeat_at`, the newest Claude run seen. `last_sweep` is `{at,
 
 **O3:** migration 233 already queued `cron.schedule` through the runner, so the cron job stays in the migration.
 
+### 6.3 Live (s7)
+
+238 was applied and merged to main (c500746) on 2026-11-17. pg_cron's `*/15` fires at :00, :15, :30 and :45, so the first tick ran at 12:45:00 Pacific. Results:
+- **f847a5cd** (Nov 16's wb-sync) is now `failed`, with failure_kind `stuck`, `swept_by job_health_watchdog`, and the error "Still running after 1904 minutes; marked stuck by the job-health watchdog." It got no signal, because it is older than 24 h.
+- **`job_health_state`:**
+  - `last_watchdog_run_at` 20:45:00 UTC;
+  - `last_watchdog_error` null;
+  - `last_heartbeat_at` 20:09:13 UTC;
+  - `outage_started_at` null;
+  - `last_sweep` {swept 1, signalled 0, alerted 0}.
+- **No job_health signals or inbox items.**
+
+The s8 check at 12:44 came before that first tick, which is why it found f847a5cd still running.
+
 ## 7. Part E — Missed runs and recovery
 
 `public.job_health_missed_runs(p_user uuid, p_from timestamptz, p_to timestamptz)` returns a set of `(app, job, executor, expected_at, catch_up)`, for schedules with `enabled` and a non-null `catch_up`:
@@ -229,6 +243,8 @@ It is backed by the RPC `public.get_job_health(p_since timestamptz default null)
 - `since`: the window's start. It defaults to the start of the previous `job_health_check` run, or 24 hours ago. So each problem is reported once, and the task never reads its own earlier runs.
 
 `tables: { reads: ["platform_runs", "platform_schedules", "job_health_state"], writes: [] }`. The file is `_shared/tools/job-health.ts` with its test, registered in `mcp/index.ts` (held by warren_buffet_p4-r6d; it is claimed at s8).
+
+**As built (s8b).** The tool takes one optional `since`: an ISO timestamp with a time zone. Anything else is refused before the database. Without `since`, the RPC's own default applies. The handler calls `ctx.db.rpc("get_job_health")` and returns the RPC's object bare, with these field names (spec §6.2): `watchdog {last_run_at, minutes_since, healthy, last_error}`, `outage {open, started_at, alerted_at, last_heartbeat_at, last_recovery_at, last_outage_started_at}`, `stuck_runs […, swept]`, `missed_runs [{app, job, executor, expected_at, catch_up, task_name}]`. The description tells both callers when to use it: the scheduled health check, with no `since`, and a chat ("connections are back", "review missed jobs since <time>"), with `since`. It also says what each field means. It is mcp version 225, deployed 2026-11-17 12:51 Pacific, and the platform check is CONFORMANT (119 tables).
 
 ### 8.2 The task (`docs/claude-health-check-task-prompt.md`, s9)
 
@@ -357,6 +373,7 @@ The stuck dispatcher's push: `The hourly dispatcher hung at <time>. Fix needed: 
 - **O1 (answered s4).** The Nov 16 Edge logs: "booted (time: 405ms)" at 05:00:06; "[wb-sync] stage=context: WB_CONTEXT_ID length=19" at 05:00:07; then nothing until "shutdown" at 05:02:36, 150 s after boot. So the run hung after the context stage, most likely in the SimpleFIN fetch, and the wall clock killed the worker before close or catch ran. The fix is the fetch timeout, the 120 s time budget and the stage log (§5.2).
 - **O5 (answered s4b): the fetch limit.** Alex chose 105 s; deployed with the 14-day window cap (§5.2). The Nov 17 run (9fbc453b) failed with HTTP 524 at 125 s on a 13-day window, so the window was not its cause: SimpleFIN is slow. Per-bank parallel calls may follow as s4c. The s4 analysis: Ok runs in the last 3 weeks: 13 accounts, 20 holdings, 28–51 transactions returned, 2–20 rows processed, an 11–13 day window, and 76–125 s in all. The database stages are about a dozen small queries over that. The failed runs show where the time goes: HTTP 524 (a gateway timeout) at 125.5 s three times, Oct 28, Oct 29 and Nov 1, and HTTP 503 at 47 s on Nov 15, all with nothing after the fetch. So SimpleFIN's one `/accounts` call takes roughly 75–120 s on a normal day. A 60 s limit would fail almost every run. Recommendation: `FETCH_TIMEOUT_MS` = 105 000. The fetch starts at about 2 s, so it ends by about 107 s, leaving about 13 s for the database stages inside the 120 s budget and 30 s more to close. The first deployed runs' stage logs confirm the split.
 - **O6 (open, from s4c): new accounts.** The per-bank calls ask only for stored account ids, so an account newly opened at a bank is not discovered. Options: a weekly unfiltered call (one more request a week, but it is the slow single call again); or an unfiltered `balances-only=1` call each day alongside the per-bank calls, if it turns out to be fast. The first week of fetch logs decides it. Also open: whether the bridge counts filtered calls per account or per request ("their own quota"). The `errors` array will show a quota warning if one comes.
+- **O7 (open, for s10): the read role's grants.** `claude_reader`, the role behind `get_sql_read`, has no select on `job_health_state`, although `register_table` gave it a `claude_reader_read` policy. It also now gets "permission denied" on `platform_schedules`, which it could read at s5. The likely cause is column-level grants that don't cover 237's new columns. Not fixed at s8b.
 - **O2 (answered s3, test at s9).** The scheduled-task tool documents that a task's push fires "when a run finishes with something noteworthy", as the server judges it, not on every run. s9 tests it with one healthy run and one forced alert.
 - **O3 (at s6).** If the SQL runner refuses `cron.schedule`, the cron statement goes to the SQL editor as the runner-refused fallback. It holds no secret.
 - **O4 (decided in this spec, for Alex to confirm).** A stuck dispatcher run gets a direct alert (§5.1), because its own signal would wait on the dispatcher.

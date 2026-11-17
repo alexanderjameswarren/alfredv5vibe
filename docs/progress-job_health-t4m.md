@@ -38,7 +38,20 @@ Build estimate, s3 to s11: 133m across 9 steps, plus about 22m spent on s1 and s
 - **O3 (at s6).** If the runner refuses `cron.schedule`, that statement goes to the SQL editor. It holds no secret.
 - **O4 (agreed s3).** A stuck dispatcher run gets a direct inbox item and push (spec §5.1).
 
-## Next step's scope (s7, verify the watchdog live)
+## Done since s6b
+
+- **s7, live:** the first tick ran at 12:45 Pacific. It swept f847a5cd (no signal, older than 24 h); the state row is clean; there are no alerts (spec §6.3). The s8 check (s8-d7nb) ran at 12:44, before that tick, and stopped.
+- **s8b (s8b-q3lx):** built the `get_job_health` tool (`_shared/tools/job-health.ts` and its test, 6 tests). It is registered in mcp/index.ts (227 tools; index.test.mjs passes 51 of 51). mcp v225 is deployed; the platform check is CONFORMANT; db:deploy is released. Open item O7, the read role's grants, is for s10. Next: Checkpoint the four tool files.
+
+## Next step's scope (s9, the health-check task)
+
+- create: docs/claude-health-check-task-prompt.md, supabase/migrations/_pending_job_health-t4m_health_check_schedule.sql, supabase/tests/job_health-t4m/3_health_check_schedule_test.sql
+- update: .claude/skills/task-prompts/SKILL.md (the rule 2 exception, spec §10), docs/technical-spec-job_health-t4m.md (§8.2, and O2's test)
+- delete: nothing
+- deploy: nothing
+- SQL: the `alfred/job_health_check` platform_schedules row (daily, expected_by 06:00, grace 2, max_run_minutes 10, catch_up skip, started_by task:job-health-check). It is queued after gitsync and the drift check, claiming `db:table:platform_schedules` at that step. Then Alex creates the claude.ai scheduled task from the prompt (every 2 hours, 6 AM to 8 PM Pacific) and turns its notification on.
+
+## Next step's scope (s7, verify the watchdog live; done, kept for the record)
 
 - create: nothing (a further test script only if a check needs one: supabase/tests/job_health-t4m/3_watchdog_live_verify.sql)
 - update: docs/technical-spec-job_health-t4m.md
