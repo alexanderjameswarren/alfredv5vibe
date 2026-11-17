@@ -76,6 +76,7 @@ import {
   updateReminderTool,
 } from "../_shared/tools/reminders.ts";
 import { createArnoldPlanTool, getArnoldPlanTool, getArnoldProgressTool } from "../_shared/tools/arnold.ts";
+import { getJobHealthTool } from "../_shared/tools/job-health.ts";
 import {
   createHomerBookTool,
   createHomerNeverTool,
@@ -2571,6 +2572,29 @@ export function createMcpServer(token: string) {
       },
     },
     async (args) => runToolForMcp(getPlatformSchedulesTool, args, token),
+  );
+
+  // Job health (docs/technical-spec-job_health-t4m.md 8.1): the watchdog's view, through the get_job_health RPC.
+  server.registerTool(
+    "get_job_health",
+    {
+      title: "Get Job Health",
+      description:
+        "What the Alfred job-health watchdog knows: is it running, is a Claude outage open, which runs got stuck, and which scheduled runs were missed. " +
+        "Call it (1) as step 2 of the scheduled job-health check, with no since, so each problem is reported once; (2) in chat when Alex says connections are back, " +
+        "or asks to \"review missed jobs since <time>\" or whether the scheduled jobs are healthy: pass that time as since. " +
+        "Returns one object: since (the window's start); " +
+        "watchdog {last_run_at, minutes_since, healthy, last_error}: healthy is false when the watchdog has not run for more than 35 minutes, which means pg_cron or the database is down or the job is failing; last_error is the last run's failed part, verbatim; " +
+        "outage {open, started_at, alerted_at, last_heartbeat_at, last_recovery_at, last_outage_started_at}: open means no Claude task has started for 2 hours inside 5 AM to 8 PM Pacific (the watchdog has already sent Alex the outage alert); last_outage_started_at is the start of the last closed outage, the time to review missed jobs from; " +
+        "stuck_runs [{id, app, job, started_at, finished_at, error_message, ran_minutes, max_run_minutes, swept}]: swept true means the watchdog marked it failed as stuck in the window; swept false means it is still running past its limit now (only while the watchdog is down); " +
+        "missed_runs [{app, job, executor, expected_at, catch_up, task_name}]: expected runs in the window with no run in their slot, counted once the slot has ended. catch_up says what to do: self, the next run covers it; skip, not worth running late; run_now, Alex runs task_name once by hand in claude.ai (offer to walk him through it). " +
+        "Times are UTC; show them to Alex in 12-hour Pacific. Read-only, tier 1.",
+      inputSchema: {
+        since: z.string().optional().describe(
+          "Window start, an ISO timestamp with a time zone, e.g. \"2026-11-17T09:40:00-08:00\". Default: the start of the previous finished job-health check run, else 24 hours ago."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(getJobHealthTool, args, token),
   );
 
   // --- Ken -------------------------------------------------------------------

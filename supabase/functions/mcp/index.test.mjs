@@ -456,7 +456,9 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_HOMER_15B = ["create_homer_plan", "create_homer_never", "update_homer_verdict", "create_homer_book",
     "create_homer_read", "update_homer_read", "update_homer_device", "update_homer_series", "update_homer_taste_profile",
     "update_homer_genre", "create_homer_queue_items", "update_homer_queue_item"];
-  for (const name of [...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
+  // Job health s8, +1.
+  const EXPECTED_ADDED_JOB_HEALTH_8 = ["get_job_health"];
+  for (const name of [...EXPECTED_ADDED_JOB_HEALTH_8, ...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
                       ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C, ...EXPECTED_ADDED_P5,
@@ -481,9 +483,10 @@ test("the tool count is 72 after the job-search tools", () => {
   // 2026-11-05, +1: queue_switchboard_git. +2: add_delivery_override, end_delivery_override. 2026-11-06, +1: update_signal.
   // 2026-11-08, +2: queue_switchboard_sf_check, queue_switchboard_sb_setup. 2026-11-10, +11: Homer's read tools; +12: its writes.
   // 2026-11-11, +1: get_claim_state. +2: queue_switchboard_sf_read, get_switchboard_sf_result.
+  // 2026-11-17, +1: get_job_health (job_health-t4m s8).
   assert.ok(registered.some((r) => r.name === "record_wb_subscription_review"), "record_wb_subscription_review is not registered");
-  assert.equal(registered.length, 226,
-    `expected 226 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 227,
+    `expected 227 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
