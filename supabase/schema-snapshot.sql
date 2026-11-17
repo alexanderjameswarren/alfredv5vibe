@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-17 11:58, through migration 237 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-17 12:41, through migration 238 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -4221,6 +4221,76 @@ COMMENT ON FUNCTION "public"."executions_last_completed"() IS 'Restructure P2. A
 
 
 
+CREATE OR REPLACE FUNCTION "public"."get_job_health"("p_since" timestamp with time zone DEFAULT NULL::timestamp with time zone, "p_now" timestamp with time zone DEFAULT "now"()) RETURNS "jsonb"
+    LANGUAGE "plpgsql" STABLE
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_user  uuid := auth.uid();
+  v_since timestamptz;
+  v_state public.job_health_state;
+  v_mins  int;
+begin
+  if v_user is null then
+    raise exception 'get_job_health needs a signed-in user';
+  end if;
+
+  -- Default window: since the previous finished health check, else 24 hours.
+  v_since := coalesce(
+    p_since,
+    (select max(pr.started_at) from public.platform_runs pr
+     where pr.user_id = v_user and pr.app = 'alfred' and pr.job = 'job_health_check'
+       and pr.status <> 'running' and pr.started_at <= p_now),
+    p_now - interval '24 hours');
+
+  select * into v_state from public.job_health_state where user_id = v_user;
+  v_mins := floor(extract(epoch from (p_now - v_state.last_watchdog_run_at)) / 60)::int;
+
+  return jsonb_build_object(
+    'since', v_since,
+    'watchdog', jsonb_build_object(
+      'last_run_at', v_state.last_watchdog_run_at,
+      'minutes_since', v_mins,
+      'healthy', coalesce(v_mins <= 35, false),
+      'last_error', v_state.last_watchdog_error),
+    'outage', jsonb_build_object(
+      'open', v_state.outage_started_at is not null,
+      'started_at', v_state.outage_started_at,
+      'alerted_at', v_state.outage_alerted_at,
+      'last_heartbeat_at', v_state.last_heartbeat_at,
+      'last_recovery_at', v_state.last_recovery_at,
+      'last_outage_started_at', v_state.last_outage_started_at),
+    'stuck_runs', coalesce((
+      select jsonb_agg(x order by x.started_at) from (
+        -- Swept in the window.
+        select pr.id, pr.app, pr.job, pr.started_at, pr.finished_at, pr.error_message,
+               (pr.details ->> 'ran_minutes')::int as ran_minutes,
+               (pr.details ->> 'max_run_minutes')::int as max_run_minutes, true as swept
+        from public.platform_runs pr
+        where pr.user_id = v_user and pr.details ->> 'failure_kind' = 'stuck' and pr.finished_at >= v_since
+        union all
+        -- Still running past the limit: only possible while the watchdog is not running.
+        select pr.id, pr.app, pr.job, pr.started_at, null, pr.error_message,
+               floor(extract(epoch from (p_now - pr.started_at)) / 60)::int, s.max_run_minutes, false
+        from public.platform_runs pr
+        join public.platform_schedules s on s.user_id = pr.user_id and s.app = pr.app and s.job = pr.job
+        where pr.user_id = v_user and pr.status = 'running' and s.max_run_minutes is not null
+          and pr.started_at < p_now - make_interval(mins => s.max_run_minutes)
+      ) x), '[]'::jsonb),
+    'missed_runs', coalesce((
+      select jsonb_agg(m order by m.expected_at)
+      from public.job_health_missed_runs(v_user, v_since, p_now) m), '[]'::jsonb));
+end;
+$$;
+
+
+ALTER FUNCTION "public"."get_job_health"("p_since" timestamp with time zone, "p_now" timestamp with time zone) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."get_job_health"("p_since" timestamp with time zone, "p_now" timestamp with time zone) IS 'Job health: for the get_job_health tool (s8). The watchdog''s last run (healthy within 35 min), the outage state, runs swept stuck since p_since (and any still running past their limit), and missed runs since p_since. p_since defaults to the previous finished alfred/job_health_check run, else 24 hours ago. Read-only; the caller''s rows only.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."get_platform_contract"() RETURNS "jsonb"
     LANGUAGE "plpgsql" STABLE SECURITY DEFINER
     SET "search_path" TO 'public', 'platform'
@@ -5095,6 +5165,373 @@ ALTER FUNCTION "public"."item_group_members_stamp_removal"() OWNER TO "postgres"
 
 
 COMMENT ON FUNCTION "public"."item_group_members_stamp_removal"() IS 'Restructure P5. BEFORE INSERT OR UPDATE on item_group_members: stamps removed_by with auth.uid() when a member is removed, clears it when put back.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."job_health_alert"("p_user" "uuid", "p_text" "text", "p_push" "text", "p_task_name" "text", "p_now" timestamp with time zone DEFAULT "now"()) RETURNS "text"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  v_id text := gen_random_uuid()::text;
+begin
+  insert into public.inbox (id, user_id, captured_text, source_type, source_app, ai_status, source_metadata)
+  values (v_id, p_user, p_text, 'task', 'overwatch', 'complete',
+          jsonb_build_object('task_name', p_task_name,
+                             'run_date', to_char(p_now at time zone 'America/Los_Angeles', 'YYYY-MM-DD'),
+                             'kind', 'job_health'));
+  insert into public.reminders (user_id, text, due_at, state, inbox_id, created_by, started_by)
+  values (p_user, p_push, p_now, 'scheduled', v_id, 'app', 'task:job-health-watchdog');
+  return v_id;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."job_health_alert"("p_user" "uuid", "p_text" "text", "p_push" "text", "p_task_name" "text", "p_now" timestamp with time zone) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."job_health_alert"("p_user" "uuid", "p_text" "text", "p_push" "text", "p_task_name" "text", "p_now" timestamp with time zone) IS 'Job health: writes one inbox item (source_app overwatch, source_type task, ai_status complete) and one reminder due now linked to it, which notify-dispatch pushes. Used only by job_health_watchdog: outage, recovery, stuck dispatcher.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."job_health_catch_up_line"("p_catch_up" "text", "p_task_name" "text") RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+  select case p_catch_up
+    when 'self'    then 'The next run covers the gap: nothing to do.'
+    when 'skip'    then 'Not worth running late: nothing to do.'
+    when 'run_now' then format('Run it once by hand: open the ''%s'' task in claude.ai and press Run now.', p_task_name)
+    else 'No catch-up rule is set for this job.'
+  end
+$$;
+
+
+ALTER FUNCTION "public"."job_health_catch_up_line"("p_catch_up" "text", "p_task_name" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."job_health_catch_up_line"("p_catch_up" "text", "p_task_name" "text") IS 'Job health: the recovery sentence for a catch_up rule (self, skip, run_now), for alert wording.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."job_health_duration"("p" interval) RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+  select case
+    when p < interval '1 hour' then greatest(floor(extract(epoch from p) / 60), 0)::int || ' min'
+    else floor(extract(epoch from p) / 3600)::int || ' h ' || (floor(extract(epoch from p) / 60)::int % 60) || ' min'
+  end
+$$;
+
+
+ALTER FUNCTION "public"."job_health_duration"("p" interval) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."job_health_duration"("p" interval) IS 'Job health: a duration for alert wording ("45 min", "3 h 5 min").';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."job_health_missed_runs"("p_user" "uuid", "p_from" timestamp with time zone, "p_to" timestamp with time zone DEFAULT "now"()) RETURNS TABLE("app" "text", "job" "text", "executor" "text", "expected_at" timestamp with time zone, "catch_up" "text", "task_name" "text")
+    LANGUAGE "sql" STABLE
+    SET "search_path" TO ''
+    AS $$
+  with s as (
+    select ps.app, ps.job, ps.executor, ps.cadence, ps.day_of_week, ps.expected_by, ps.grace_hours,
+           ps.hourly_until, ps.catch_up,
+           -- As job_health_task_name, inlined: this runs as the caller, who cannot execute the helper.
+           coalesce(nullif(regexp_replace(coalesce(ps.started_by, ''), '^task:', ''), ''), ps.app || '/' || ps.job) as task_name
+    from public.platform_schedules ps
+    where ps.user_id = p_user and ps.enabled and ps.catch_up is not null
+  ),
+  days as (
+    select d::date as d
+    from generate_series((p_from at time zone 'America/Los_Angeles')::date,
+                         (p_to   at time zone 'America/Los_Angeles')::date,
+                         interval '1 day') as g(d)
+  ),
+  slots as (
+    -- Once a day (or week): expected at expected_by; the slot is that Pacific day up to expected_by + grace.
+    select s.app, s.job, s.executor, s.catch_up, s.task_name,
+           (days.d + s.expected_by) at time zone 'America/Los_Angeles' as expected_at,
+           days.d::timestamp at time zone 'America/Los_Angeles' as slot_from,
+           ((days.d + s.expected_by) at time zone 'America/Los_Angeles') + make_interval(hours => s.grace_hours) as slot_to
+    from s cross join days
+    where s.hourly_until is null
+      and (s.cadence = 'daily' or extract(dow from days.d)::int = s.day_of_week)
+    union all
+    -- Hourly: one each hour from expected_by to hourly_until; the slot is that hour.
+    select s.app, s.job, s.executor, s.catch_up, s.task_name,
+           ((days.d + s.expected_by) at time zone 'America/Los_Angeles') + make_interval(hours => h),
+           ((days.d + s.expected_by) at time zone 'America/Los_Angeles') + make_interval(hours => h),
+           ((days.d + s.expected_by) at time zone 'America/Los_Angeles') + make_interval(hours => h + 1)
+    from s cross join days
+    cross join generate_series(0, floor(extract(epoch from (s.hourly_until - s.expected_by)) / 3600)::int) as hrs(h)
+    where s.hourly_until is not null
+  )
+  select sl.app, sl.job, sl.executor, sl.expected_at, sl.catch_up, sl.task_name
+  from slots sl
+  where sl.expected_at >= p_from
+    and sl.slot_to <= p_to
+    and not exists (
+      select 1 from public.platform_runs r
+      where r.user_id = p_user and r.app = sl.app and r.job = sl.job
+        and r.started_at >= sl.slot_from and r.started_at < sl.slot_to)
+  order by sl.expected_at, sl.app, sl.job
+$$;
+
+
+ALTER FUNCTION "public"."job_health_missed_runs"("p_user" "uuid", "p_from" timestamp with time zone, "p_to" timestamp with time zone) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."job_health_missed_runs"("p_user" "uuid", "p_from" timestamp with time zone, "p_to" timestamp with time zone) IS 'Job health: expected runs between p_from and p_to with no run started in their slot, for enabled schedules with a catch_up rule. Daily and weekly: due at expected_by (Pacific), slot = that day to expected_by + grace_hours. Hourly (hourly_until set): each hour from expected_by to hourly_until, slot = that hour. Counted only once the slot has ended.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."job_health_task_name"("p_started_by" "text", "p_app" "text", "p_job" "text") RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    SET "search_path" TO ''
+    AS $$
+  select coalesce(nullif(regexp_replace(coalesce(p_started_by, ''), '^task:', ''), ''), p_app || '/' || p_job)
+$$;
+
+
+ALTER FUNCTION "public"."job_health_task_name"("p_started_by" "text", "p_app" "text", "p_job" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."job_health_task_name"("p_started_by" "text", "p_app" "text", "p_job" "text") IS 'Job health: the name alerts use for a job: its schedule''s started_by without "task:" (the scheduled task''s name), else app/job.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."job_health_watchdog"("p_now" timestamp with time zone DEFAULT "now"()) RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+declare
+  c_tz       constant text := 'America/Los_Angeles';
+  v_user     uuid;
+  v_errors   text[];
+  v_swept    int;
+  v_signal   int;
+  v_alerted  int;
+  r          record;
+  v_ran      int;
+  v_msg      text;
+  v_text     text;
+  v_title    text;
+  v_task     text;
+  v_state    public.job_health_state;
+  v_last     timestamptz;
+  v_anchor   timestamptz;
+  v_local    timestamp;
+  v_id       text;
+  v_missed   int;
+  v_by_hand  int;
+  v_lines    text;
+  v_summary  jsonb := '[]'::jsonb;
+  v_event    text;
+begin
+  perform set_config('app.actor', 'job_health_watchdog', true);
+
+  for v_user in select distinct ps.user_id from public.platform_schedules ps loop
+    v_errors := '{}';
+    v_swept := 0; v_signal := 0; v_alerted := 0; v_event := null;
+    insert into public.job_health_state (user_id) values (v_user) on conflict (user_id) do nothing;
+
+    -- a. Sweep stuck runs (spec 5.1).
+    begin
+      for r in
+        select pr.id, pr.app, pr.job, pr.started_at, s.max_run_minutes, s.failure_subject, s.failure_severity,
+               s.started_by, s.catch_up
+        from public.platform_runs pr
+        join public.platform_schedules s on s.user_id = pr.user_id and s.app = pr.app and s.job = pr.job
+        where pr.user_id = v_user
+          and pr.status = 'running'
+          and s.max_run_minutes is not null
+          and pr.started_at < p_now - make_interval(mins => s.max_run_minutes)
+        order by pr.started_at
+        for update of pr skip locked
+      loop
+        v_ran := floor(extract(epoch from (p_now - r.started_at)) / 60)::int;
+        v_msg := format('Still running after %s minutes; marked stuck by the job-health watchdog.', v_ran);
+        update public.platform_runs
+        set status = 'failed', finished_at = p_now, error_message = v_msg,
+            details = details || jsonb_build_object('failure_kind', 'stuck', 'swept_by', 'job_health_watchdog',
+                                                    'ran_minutes', v_ran, 'max_run_minutes', r.max_run_minutes)
+        where id = r.id and status = 'running';
+        if not found then continue; end if;
+        v_swept := v_swept + 1;
+
+        -- Older stuck runs are marked only: no signal, no alert.
+        continue when r.started_at < p_now - interval '24 hours';
+
+        v_task  := public.job_health_task_name(r.started_by, r.app, r.job);
+        v_title := left(format('%s stuck: marked failed after %s min', r.job, v_ran), 200);
+        v_text  := format(
+          E'%s was stuck and has been marked failed\n\n'
+          || 'What happened: %s/%s run %s started at %s and was still running after %s min (its limit is %s min). '
+          || E'The watchdog marked it failed.\n\n'
+          || E'Kind: fix needed. Claude and Supabase are up; something in this job is broken.\n\n'
+          || E'Error (verbatim): "%s"\n\n'
+          || 'What to check: the job''s own record of that run: the Edge Function logs at that time for an Alfred job '
+          || E'(wb-sync), or the task''s run history in claude.ai for a Claude task.\n\n'
+          || E'Recovery: %s To find the cause, start a new Claude thread and paste:\n\n'
+          || '    Fast track: diagnose %s/%s run %s. It was still running after %s min and was marked failed as stuck. '
+          || 'Error: "%s". Read the run with get_platform_runs, find why it hung, and propose the fix.',
+          r.job, r.app, r.job, r.id, public.job_health_when(r.started_at, p_now), v_ran, r.max_run_minutes,
+          v_msg, public.job_health_catch_up_line(r.catch_up, v_task),
+          r.app, r.job, r.id, v_ran, v_msg);
+
+        -- The job's own failure signal, inserted as raise_signal would (it refuses under pg_cron).
+        if r.failure_subject is not null and r.started_by is not null then
+          insert into public.signals (user_id, app, job, severity, subject_key, title, body, started_by, source_ref, details)
+          values (v_user, r.app, r.job, coalesce(r.failure_severity, 'high'),
+                  replace(r.failure_subject, '{kind}', 'stuck'), v_title, v_text, r.started_by,
+                  'job_health:stuck:' || r.id,
+                  jsonb_build_object(
+                    'kind', 'failure', 'run_id', r.id, 'failure_kind', 'stuck',
+                    'item', jsonb_build_object(
+                      'captured_text', v_text,
+                      'source_app', r.app,
+                      'source_metadata', jsonb_build_object(
+                        'task_name', v_title,
+                        'run_date', to_char(p_now at time zone c_tz, 'YYYY-MM-DD'),
+                        'kind', 'failure'))))
+          on conflict (user_id, source_ref) where source_ref is not null do nothing;
+          if found then v_signal := v_signal + 1; end if;
+        end if;
+
+        -- d. O4: the dispatcher cannot deliver its own failure, so it gets a direct item and push too.
+        if r.app = 'alfred' and r.job = 'claude_hourly_notifications' then
+          perform public.job_health_alert(
+            v_user, v_text,
+            format('The hourly dispatcher hung at %s. Fix needed: task notifications may be stuck. Details in your inbox.',
+                   public.job_health_when(r.started_at, p_now)),
+            v_title, p_now);
+          v_alerted := v_alerted + 1;
+        end if;
+      end loop;
+    exception when others then
+      v_errors := v_errors || ('sweep: ' || sqlerrm);
+    end;
+
+    -- b and c. Heartbeat, outage and recovery (spec 6).
+    begin
+      select * into v_state from public.job_health_state where user_id = v_user for update;
+      select max(pr.started_at) into v_last
+      from public.platform_runs pr where pr.user_id = v_user and pr.executor = 'claude' and pr.started_at <= p_now;
+      v_local  := p_now at time zone c_tz;
+      v_anchor := greatest(v_last, (v_local::date + time '05:15') at time zone c_tz);
+
+      if v_state.outage_started_at is null then
+        if v_local::time >= time '05:00' and v_local::time < time '20:00'
+           and p_now - v_anchor > interval '2 hours' then
+          v_text := format(
+            E'Claude tasks stopped at %1$s\n\n'
+            || 'What happened: no Claude scheduled task has started since %1$s (%2$s). The hourly dispatcher, inbox '
+            || 'enrichment and every other Claude task are not running, so Alfred notifications from tasks are not going out.'
+            || E'\n\nKind: outage. Claude, or Claude''s connection to Alfred, is down.\n\n'
+            || 'What to check: status.claude.com and status.supabase.com. If either shows an incident, wait: there is '
+            || E'nothing to fix on our side.\n\n'
+            || E'Recovery: once it is fixed, start a new Claude thread and paste:\n\n'
+            || E'    Overwatch: connections are back. Review missed jobs since %1$s and give me the recovery plan.\n\n'
+            || 'If both status pages have been green for over an hour, treat it as fix needed: check in claude.ai that the '
+            || 'scheduled tasks are still enabled and that the Alfred connector is connected.',
+            public.job_health_when(v_anchor, p_now), public.job_health_duration(p_now - v_anchor));
+          v_id := public.job_health_alert(
+            v_user, v_text,
+            format('Claude tasks stopped at %s. Outage: check status.claude.com and status.supabase.com. Details in your inbox.',
+                   public.job_health_when(v_anchor, p_now)),
+            'Job health: outage', p_now);
+          update public.job_health_state
+          set outage_started_at = v_anchor, outage_alerted_at = p_now, outage_inbox_id = v_id
+          where user_id = v_user;
+          v_event := 'outage_opened';
+        end if;
+
+      elsif v_last > v_state.outage_started_at then
+        -- One line per job, its missed times together.
+        select string_agg(m.line, E'\n' order by m.first_at)
+        into v_lines
+        from (
+          select min(mr.expected_at) as first_at, mr.catch_up,
+                 format('- %s (%s/%s), %s: %s. %s', mr.task_name, mr.app, mr.job,
+                        string_agg(public.job_health_when(mr.expected_at, p_now), ', ' order by mr.expected_at),
+                        mr.catch_up, public.job_health_catch_up_line(mr.catch_up, mr.task_name)) as line
+          from public.job_health_missed_runs(v_user, v_state.outage_started_at, p_now) mr
+          group by mr.app, mr.job, mr.task_name, mr.catch_up
+        ) m;
+        -- Counts are of runs, not jobs.
+        select count(*), count(*) filter (where mr.catch_up = 'run_now')
+        into v_missed, v_by_hand
+        from public.job_health_missed_runs(v_user, v_state.outage_started_at, p_now) mr;
+
+        v_text := format(
+          E'Claude tasks are running again: %1$s to %2$s\n\n'
+          || E'What happened: no Claude task ran for %3$s. %4$s scheduled runs were missed.\n\n'
+          || E'Kind: outage, now over.\n\n'
+          || E'Missed runs:%5$s\n\n'
+          || E'Recovery: run the "run it now" jobs above by hand. For a full review, start a new Claude thread and paste:\n\n'
+          || '    Overwatch: connections are back. Review missed jobs since %1$s and give me the recovery plan.',
+          public.job_health_when(v_state.outage_started_at, p_now), public.job_health_when(v_last, p_now),
+          public.job_health_duration(v_last - v_state.outage_started_at), v_missed,
+          case when v_missed = 0 then ' none.' else E'\n' || v_lines end);
+        perform public.job_health_alert(
+          v_user, v_text,
+          format('Claude tasks are running again. %s runs missed, %s to run by hand. List in your inbox.', v_missed, v_by_hand),
+          'Job health: recovery', p_now);
+        update public.job_health_state
+        set last_outage_started_at = outage_started_at, last_recovery_at = v_last,
+            outage_started_at = null, outage_alerted_at = null, outage_inbox_id = null
+        where user_id = v_user;
+        v_event := 'recovered';
+      end if;
+
+      update public.job_health_state set last_heartbeat_at = v_last where user_id = v_user;
+    exception when others then
+      v_errors := v_errors || ('heartbeat: ' || sqlerrm);
+    end;
+
+    -- e. State.
+    update public.job_health_state
+    set last_watchdog_run_at = p_now,
+        last_watchdog_error  = nullif(array_to_string(v_errors, '; '), ''),
+        last_sweep           = jsonb_build_object('at', p_now, 'swept', v_swept, 'signalled', v_signal, 'alerted', v_alerted),
+        updated_at           = now()
+    where user_id = v_user;
+
+    v_summary := v_summary || jsonb_build_object('user_id', v_user, 'swept', v_swept, 'signalled', v_signal,
+                                                 'alerted', v_alerted, 'event', v_event, 'errors', to_jsonb(v_errors));
+  end loop;
+  return jsonb_build_object('at', p_now, 'users', v_summary);
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."job_health_watchdog"("p_now" timestamp with time zone) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."job_health_watchdog"("p_now" timestamp with time zone) IS 'Job health: the Alfred watchdog, run by pg_cron job-health-every-15-min. Per user: sweeps stuck runs (failed, failure_kind stuck; signal only if started in the last 24 h; the dispatcher also gets a direct alert), opens an outage after 2 h with no Claude run between 5 AM and 8 PM Pacific (one inbox item and push), closes it with one recovery item listing missed runs, and stamps job_health_state. p_now exists for the test only.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."job_health_when"("p_at" timestamp with time zone, "p_now" timestamp with time zone DEFAULT "now"()) RETURNS "text"
+    LANGUAGE "sql" STABLE
+    SET "search_path" TO ''
+    AS $$
+  select case
+    when p_at is null then 'an unknown time'
+    when (p_at at time zone 'America/Los_Angeles')::date = (p_now at time zone 'America/Los_Angeles')::date
+      then to_char(p_at at time zone 'America/Los_Angeles', 'FMHH12:MI AM')
+    else to_char(p_at at time zone 'America/Los_Angeles', 'FMHH12:MI AM "on" Mon FMDD')
+  end
+$$;
+
+
+ALTER FUNCTION "public"."job_health_when"("p_at" timestamp with time zone, "p_now" timestamp with time zone) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."job_health_when"("p_at" timestamp with time zone, "p_now" timestamp with time zone) IS 'Job health: a time for alert wording, 12-hour Pacific ("9:40 AM"), with the date ("on Nov 16") when it is not p_now''s day.';
 
 
 
@@ -16292,6 +16729,73 @@ COMMENT ON COLUMN "public"."job_applications"."source_inbox_id" IS 'The inbox ca
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."job_health_state" (
+    "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
+    "last_watchdog_run_at" timestamp with time zone,
+    "last_watchdog_error" "text",
+    "last_heartbeat_at" timestamp with time zone,
+    "outage_started_at" timestamp with time zone,
+    "outage_alerted_at" timestamp with time zone,
+    "outage_inbox_id" "text",
+    "last_recovery_at" timestamp with time zone,
+    "last_outage_started_at" timestamp with time zone,
+    "last_sweep" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "job_health_state_last_sweep_object" CHECK (("jsonb_typeof"("last_sweep") = 'object'::"text"))
+);
+
+
+ALTER TABLE "public"."job_health_state" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."job_health_state" IS 'Job health: the Alfred watchdog''s state, one row per user. Written only by job_health_watchdog (pg_cron job-health-every-15-min); read by get_job_health. An open outage has outage_started_at set.';
+
+
+
+COMMENT ON COLUMN "public"."job_health_state"."user_id" IS 'The owner; one row each.';
+
+
+
+COMMENT ON COLUMN "public"."job_health_state"."last_watchdog_run_at" IS 'When the watchdog last ran (its p_now). get_job_health calls it healthy within 35 minutes.';
+
+
+
+COMMENT ON COLUMN "public"."job_health_state"."last_watchdog_error" IS 'The parts that failed on the last run, verbatim (sweep: ...; heartbeat: ...), or null when all ran.';
+
+
+
+COMMENT ON COLUMN "public"."job_health_state"."last_heartbeat_at" IS 'The newest started_at of any platform_runs row with executor claude, as of the last run.';
+
+
+
+COMMENT ON COLUMN "public"."job_health_state"."outage_started_at" IS 'Open outage: the heartbeat anchor it is counted from (the last Claude run, or 5:15 AM). Null when no outage is open.';
+
+
+
+COMMENT ON COLUMN "public"."job_health_state"."outage_alerted_at" IS 'When the open outage''s inbox item and reminder were written. One alert per outage.';
+
+
+
+COMMENT ON COLUMN "public"."job_health_state"."outage_inbox_id" IS 'The open outage''s inbox item.';
+
+
+
+COMMENT ON COLUMN "public"."job_health_state"."last_recovery_at" IS 'When the last outage closed: the start of the Claude run that ended it.';
+
+
+
+COMMENT ON COLUMN "public"."job_health_state"."last_outage_started_at" IS 'The last closed outage''s start, for "review missed jobs since <time>".';
+
+
+
+COMMENT ON COLUMN "public"."job_health_state"."last_sweep" IS 'The last run''s sweep: {at, swept, signalled, alerted}.';
+
+
+
+COMMENT ON COLUMN "public"."job_health_state"."updated_at" IS 'When the row last changed.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."ken_areas" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" DEFAULT "auth"."uid"() NOT NULL,
@@ -21624,6 +22128,11 @@ ALTER TABLE ONLY "public"."job_applications"
 
 
 
+ALTER TABLE ONLY "public"."job_health_state"
+    ADD CONSTRAINT "job_health_state_pkey" PRIMARY KEY ("user_id");
+
+
+
 ALTER TABLE ONLY "public"."ken_areas"
     ADD CONSTRAINT "ken_areas_pkey" PRIMARY KEY ("id");
 
@@ -24417,6 +24926,11 @@ ALTER TABLE ONLY "public"."job_applications"
 
 
 
+ALTER TABLE ONLY "public"."job_health_state"
+    ADD CONSTRAINT "job_health_state_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."ken_attempts"
     ADD CONSTRAINT "ken_attempts_item_id_fkey" FOREIGN KEY ("item_id") REFERENCES "public"."ken_items"("id") ON DELETE CASCADE;
 
@@ -25585,6 +26099,10 @@ CREATE POLICY "claude_reader_read" ON "public"."job_applications" FOR SELECT TO 
 
 
 
+CREATE POLICY "claude_reader_read" ON "public"."job_health_state" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
+
+
+
 CREATE POLICY "claude_reader_read" ON "public"."ken_areas" FOR SELECT TO "claude_reader" USING (("user_id" = '26f0707f-b586-4a3e-841c-8c313d6ab1e5'::"uuid"));
 
 
@@ -26175,6 +26693,13 @@ ALTER TABLE "public"."job_applications" ENABLE ROW LEVEL SECURITY;
 
 
 CREATE POLICY "job_applications_owner_access" ON "public"."job_applications" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+ALTER TABLE "public"."job_health_state" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "job_health_state_owner_access" ON "public"."job_health_state" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
 
 
 
@@ -27120,6 +27645,12 @@ GRANT ALL ON FUNCTION "public"."executions_last_completed"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."get_job_health"("p_since" timestamp with time zone, "p_now" timestamp with time zone) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."get_job_health"("p_since" timestamp with time zone, "p_now" timestamp with time zone) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."get_job_health"("p_since" timestamp with time zone, "p_now" timestamp with time zone) TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."get_platform_contract"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_platform_contract"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_platform_contract"() TO "service_role";
@@ -27224,6 +27755,36 @@ GRANT ALL ON FUNCTION "public"."item_group_members_last_completed"() TO "service
 REVOKE ALL ON FUNCTION "public"."item_group_members_stamp_removal"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."item_group_members_stamp_removal"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."item_group_members_stamp_removal"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."job_health_alert"("p_user" "uuid", "p_text" "text", "p_push" "text", "p_task_name" "text", "p_now" timestamp with time zone) FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."job_health_catch_up_line"("p_catch_up" "text", "p_task_name" "text") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."job_health_duration"("p" interval) FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."job_health_missed_runs"("p_user" "uuid", "p_from" timestamp with time zone, "p_to" timestamp with time zone) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."job_health_missed_runs"("p_user" "uuid", "p_from" timestamp with time zone, "p_to" timestamp with time zone) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."job_health_missed_runs"("p_user" "uuid", "p_from" timestamp with time zone, "p_to" timestamp with time zone) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."job_health_task_name"("p_started_by" "text", "p_app" "text", "p_job" "text") FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."job_health_watchdog"("p_now" timestamp with time zone) FROM PUBLIC;
+
+
+
+REVOKE ALL ON FUNCTION "public"."job_health_when"("p_at" timestamp with time zone, "p_now" timestamp with time zone) FROM PUBLIC;
 
 
 
@@ -30586,6 +31147,55 @@ GRANT SELECT("duplicate_of") ON TABLE "public"."job_applications" TO "claude_rea
 
 
 GRANT SELECT("source_inbox_id") ON TABLE "public"."job_applications" TO "claude_reader";
+
+
+
+GRANT SELECT,REFERENCES,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."job_health_state" TO "authenticated";
+GRANT ALL ON TABLE "public"."job_health_state" TO "service_role";
+
+
+
+GRANT SELECT("user_id") ON TABLE "public"."job_health_state" TO "claude_reader";
+
+
+
+GRANT SELECT("last_watchdog_run_at") ON TABLE "public"."job_health_state" TO "claude_reader";
+
+
+
+GRANT SELECT("last_watchdog_error") ON TABLE "public"."job_health_state" TO "claude_reader";
+
+
+
+GRANT SELECT("last_heartbeat_at") ON TABLE "public"."job_health_state" TO "claude_reader";
+
+
+
+GRANT SELECT("outage_started_at") ON TABLE "public"."job_health_state" TO "claude_reader";
+
+
+
+GRANT SELECT("outage_alerted_at") ON TABLE "public"."job_health_state" TO "claude_reader";
+
+
+
+GRANT SELECT("outage_inbox_id") ON TABLE "public"."job_health_state" TO "claude_reader";
+
+
+
+GRANT SELECT("last_recovery_at") ON TABLE "public"."job_health_state" TO "claude_reader";
+
+
+
+GRANT SELECT("last_outage_started_at") ON TABLE "public"."job_health_state" TO "claude_reader";
+
+
+
+GRANT SELECT("last_sweep") ON TABLE "public"."job_health_state" TO "claude_reader";
+
+
+
+GRANT SELECT("updated_at") ON TABLE "public"."job_health_state" TO "claude_reader";
 
 
 

@@ -18,7 +18,9 @@ Each database step runs the CLAUDE.md sequence: check, gitsync, drift check, cla
 | — | s4d (counts with s4) | One real wb-sync run, triggered by Alex from the cron command | none | none | 5m | done (s4d-r8kx, then Alex at 11:15 Pacific): ok in 8.7 s; every bank 2.5–4.4 s; txn_new 16, processed 19; hidden City National accounts no error |
 | 5 | s5 | **Part B/E, schedules.** Migration: the six new `platform_schedules` columns with checks and comments, the values on the 13 rows (spec §4; job_health_check row moves to s9); test script; number | supabase/migrations/_pending_job_health-t4m_schedule_limits.sql, supabase/tests/job_health-t4m/1_schedule_limits_test.sql | `db:table:platform_schedules` | 10m | done (s5-v3fd): drafted; drift check clean; numbered **237** (`db:migration:237` and `supabase/migrations/237_schedule_limits.sql` claimed); nothing queued |
 | — | s5b, s5c (count with s5) | Write 237 from the pending file, delete the pending file; claim `db:table:platform_schedules`; queue the migration (expect 13) and the test (--test); conformance | supabase/migrations/237_schedule_limits.sql, supabase/migrations/_pending_job_health-t4m_schedule_limits.sql (delete) | `db:table:platform_schedules` | 8m | queued (s5b-p9gm wrote 237 and claimed the table; the plan guard refused an `rm` chained after a `diff` as an "undeclared update"; s5c-k4wj deleted it with a lone `rm`). Migration action 9454fb2f-5077-4e4b-a32d-6efafed77b51; test action 8cce6afb-7cd1-4d99-8fd0-54e16f2f5871. **Queued, not applied.** `db:table:platform_schedules` and `db:migration:237` held until the migration runs and the test passes; then Checkpoint 237 and the test |
-| 6 | s6 | **Parts B, C, E, watchdog.** Migration: `job_health_state` (register_table), `job_health_missed_runs`, `job_health_watchdog` (sweep, heartbeat, recovery, direct inbox and reminders, F wording), `get_job_health` RPC, pg_cron `job-health-every-15-min` (open item O3); test script; queue; conformance | supabase/migrations/_pending_job_health-t4m_watchdog.sql, supabase/tests/job_health-t4m/ | `db:table:job_health_state`, `db:table:inbox`, `db:table:reminders`, `db:table:signals`, `db:table:platform_runs`, `db:fn:job_health_watchdog`, `db:fn:job_health_missed_runs`, `db:fn:get_job_health` | 30m | todo |
+| — | s5 result | 237 applied, test passed, in main (e632af3) | | | | done |
+| — | s6b (counts with s6) | Write 238 (ellipsis comment fixed), delete the pending file, claim the 13 db items, queue both | supabase/migrations/238_watchdog.sql | the 13 s6 items | 5m | queued (s6b-y5ht): migration action dbff180b-1443-4514-aa79-e9f7f1a301bb; test action 801b5ffd-f8aa-4cb7-9252-4b0108858cc7. **Queued, not applied.** The 13 db items and `db:migration:238` are held until the migration runs and the test passes; then Checkpoint 238 and the test |
+| 6 | s6 (s6-z2mc: drafted, test written, numbered **238**) | **Parts B, C, E, watchdog.** Migration: `job_health_state` (register_table), `job_health_missed_runs`, `job_health_watchdog` (sweep, heartbeat, recovery, direct inbox and reminders, F wording), `get_job_health` RPC, pg_cron `job-health-every-15-min` (open item O3); test script; queue; conformance | supabase/migrations/_pending_job_health-t4m_watchdog.sql, supabase/tests/job_health-t4m/ | `db:table:job_health_state`, `db:table:inbox`, `db:table:reminders`, `db:table:signals`, `db:table:platform_runs`, `db:fn:job_health_watchdog`, `db:fn:job_health_missed_runs`, `db:fn:get_job_health` | 30m | todo |
 | 7 | s7 | **Verify live.** The cron is ticking; `job_health_state` is updating; f847a5cd is marked failed (no signal, older than 24 h); test scripts for the outage and recovery paths; Checkpoint s5 and s6 | supabase/tests/job_health-t4m/ | none | 12m | todo |
 | 8 | s8 | **Part D, tool.** Claim mcp/index.ts and index.test.mjs (wait for warren_buffet_p4-r6d); `get_job_health` tool and its test; registration; tables test; mcp deploy; conformance; Checkpoint | supabase/functions/_shared/tools/job-health.ts, supabase/functions/_shared/tools/job-health.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs | `db:deploy` | 15m | todo; blocked until r6d releases the mcp files |
 | 9 | s9 | **Part D, task.** Settle open item O2 first. The health-check prompt (task-prompts skeleton, spec §8.2, §9.4); the task-prompts exception (spec §10); hand it over so Alex creates the task | docs/claude-health-check-task-prompt.md, .claude/skills/task-prompts/SKILL.md | none | 15m | todo |
@@ -36,11 +38,22 @@ Build estimate, s3 to s11: 133m across 9 steps, plus about 22m spent on s1 and s
 - **O3 (at s6).** If the runner refuses `cron.schedule`, that statement goes to the SQL editor. It holds no secret.
 - **O4 (agreed s3).** A stuck dispatcher run gets a direct inbox item and push (spec §5.1).
 
-## Next step's scope (s6, the watchdog)
+## Next step's scope (s7, verify the watchdog live)
 
-- create: supabase/migrations/_pending_job_health-t4m_watchdog.sql, supabase/tests/job_health-t4m/2_watchdog_test.sql
+- create: nothing (a further test script only if a check needs one: supabase/tests/job_health-t4m/3_watchdog_live_verify.sql)
 - update: docs/technical-spec-job_health-t4m.md
 - delete: nothing
 - deploy: nothing
-- SQL: none until the draft is approved. The migration covers `job_health_state` (register_table), `job_health_missed_runs`, `job_health_watchdog` (sweep, heartbeat, missed runs, recovery, direct inbox and reminders, Part F wording), `get_job_health`, and the pg_cron job `job-health-every-15-min`. Its db items (`db:table:job_health_state`, `db:table:inbox`, `db:table:reminders`, `db:table:signals`, `db:table:platform_runs`, `db:fn:job_health_watchdog`, `db:fn:job_health_missed_runs`, `db:fn:get_job_health`) are claimed at the queueing step, after 237 has run, gitsync and the drift check
+- SQL: read-only checks with get_sql_read after the first real ticks:
+  - `job_health_state` is stamped every 15 minutes, with no `last_watchdog_error`;
+  - any old stuck runs are marked failed with no signal;
+  - no outage was opened during a normal day.
+
+## Next step's scope (s8, the get_job_health tool)
+
+- create: supabase/functions/_shared/tools/job-health.ts, supabase/functions/_shared/tools/job-health.test.mjs
+- update: supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs (both free now: warren_buffet_p4-r6d no longer holds them; claim them at s8), docs/technical-spec-job_health-t4m.md
+- delete: nothing
+- deploy: mcp
+- SQL: none (`check_platform_conformance` after the deploy)
 
