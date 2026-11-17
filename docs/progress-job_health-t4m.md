@@ -55,20 +55,14 @@ Build estimate, s3 to s11: 133m across 9 steps, plus about 22m spent on s1 and s
   - **Queued, not applied.** `db:table:platform_schedules`, `db:table:job_health_state` and `db:migration:239` are held until the migration runs and the test passes.
   - Then: Alex creates the claude.ai task "Job health check" from the prompt (every 2 hours, 6 AM to 8 PM Pacific) with its notification on, and Checkpoints 239, the test, the prompt and the skill.
 
-## Next step's scope (s10, the skills)
+- **s10 (s10-r8kd):** overwatch skill 2026-11-17a (the "Review missed jobs since <time>" chat flow, the "Every alert" wording rule, the Step 8b allowed exceptions); task-prompts skill 2026-11-17b (the "Alert wording" section and its checklist line); spec §10 and O2 (tested at the first Job health check run, 2026-11-17 4:07 PM Pacific). inventory.test.mjs 24 of 24. Not checkpointed.
+
+## Next step's scope (s11, closeout)
 
 - create: nothing
-- update: .claude/skills/overwatch/SKILL.md, .claude/skills/task-prompts/SKILL.md, docs/technical-spec-job_health-t4m.md
+- update: docs/progress-job_health-t4m.md, docs/technical-spec-job_health-t4m.md
 - delete: nothing
 - deploy: nothing
 - SQL: none
-- What:
-  - **overwatch:**
-    - the "review missed jobs since <time>" chat flow (spec §7), using `get_job_health` with `since`: run_now jobs first with their task names, then the stuck runs, which need Alex, and confirm the outage has closed;
-    - the Part F alert-wording rule (§9.1);
-    - Step 8b's judgment: the Job health check's notification and the watchdog's direct items are not findings;
-    - a version bump.
-  - **task-prompts:**
-    - the "Alert wording" section (§9.1), with its checklist line (still owed from §10);
-    - a version bump.
+- What: record O2's answer from the 4:07 PM run; estimate against actual; the gitpush Finish request. Alex turns off Claude's notification on every task except the Job health check (by hand), and accepts both skills through `propose_skills`.
 

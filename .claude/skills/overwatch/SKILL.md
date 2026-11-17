@@ -5,16 +5,17 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
-Skill version: 2026-11-13a
+Skill version: 2026-11-17a
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
 It is allowed to be pushy, but it never sends anything itself. Its nightly and weekly runs
 raise one signal per item (`raise_signal`, with the item in `details.item` and its importance
 as the severity); the dispatcher writes the item, folds repeats into the open one, and decides
-what reaches Alex under the `delivery` section of Overwatch's own plan. The one exception is the
+what reaches Alex under the `delivery` section of Overwatch's own plan. The exceptions are the
 nightly's dispatcher checks, written straight to the inbox because the dispatcher may be what is
-broken. Every other app's task only raises signals too. Overwatch never calls `create_reminder`
+broken, and the job-health alerts (the Job health check's notification and the watchdog's direct
+items), for the same reason. Every other app's task only raises signals too. Overwatch never calls `create_reminder`
 or `send_alfred_push` from those runs, and `pushes_per_day` and `push_time` are no longer read.
 
 Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
@@ -52,6 +53,27 @@ Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
    rules (below): friendly dates, records as links, the inbox as "<N> items. Nothing
    urgent." unless something is urgent, and a stopped schedule or task offered as a bug to
    log.
+
+### "Review missed jobs since <time>" (after an outage)
+
+Alex pastes this after an outage ends: it is the recovery prompt in the Job health check's alert and in
+the watchdog's outage and recovery items ("Overwatch: connections are back. Review missed jobs since
+<time> and give me the recovery plan.").
+1. **Read.** `get_job_health` with `since` set to his time, as an ISO timestamp with a time zone. A
+   plain time ("9:40 AM", "this morning at 6") is Pacific.
+2. **Missed runs**, from `missed_runs`, one line each in plain words: the job (its `task_name` when it
+   has one, else app/job), when it should have run (12-hour Pacific), and its `catch_up`:
+   - `run_now` (list these first): suggest running it by hand now, and say how: "open the '<task
+     name>' task in claude.ai and press Run now"; for an Alfred job, the Edge Function's cron command.
+   - `self`: the next scheduled run covers the gap, so nothing to do.
+   - `skip`: not worth catching up, so nothing to do.
+3. **Stuck runs**, from `stuck_runs`: each with its app/job, start time and `error_message` verbatim.
+   `swept: false` means it is still running past its limit, so the watchdog is not running either.
+4. **The outage:** say whether `outage.open` is false (closed at `last_recovery_at`) and whether
+   `watchdog.healthy` is true. If either is not, say it is still broken.
+5. **End with one recovery plan:** what to run now, what to leave alone, and anything still broken
+   (a stuck run needs a Fast track thread to find its cause). Write nothing, and run nothing, without
+   Alex's yes.
 
 ### Going through an Overwatch list
 
@@ -307,6 +329,13 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
   - Yesterday's Activity is one bullet per app, the thing done, not the rows: "Sam: 3
     practice passes", "Money: 14 transactions reviewed".
   - A quiet night under Action Required is one bullet: "Nothing needs you tonight."
+  - **Every alert** (a note line, an item or a signal title about something broken) says what
+    happened, what to check or do now, and how to recover. Then say which case it is:
+    - **outage:** Claude or Supabase is down, so wait, then paste the recovery prompt
+      ("Overwatch: connections are back. Review missed jobs since <time> …");
+    - **fix needed:** no outage, something of ours is broken, so start a thread, possibly the
+      emergency fix lane (a Fast track prompt).
+    The full wording is spec `docs/technical-spec-job_health-t4m.md` §9.
 
 ## Writing or changing a scheduled-task prompt
 
@@ -323,6 +352,9 @@ The procedure is `docs/overwatch-weekly-task-prompt.md`. The judgment it asks fo
   `log_claude_notification`) named in a "never" sentence is the rule working; named in an instruction to
   call it, or in the allowed-writes list, is a finding. Unsure counts as a finding, quoted. The inventory
   only says which tools a file names, so it narrows the list but cannot decide.
+  **Allowed exceptions, never flag them:** the Job health check task's own Claude notification (its
+  final message is the alert, by task-prompts rule 10), and the job-health watchdog's direct inbox
+  items and reminders (a database job, not a task: outage, recovery and stuck-dispatcher alerts).
 
 - **The week.** Say what moved, by project and app: shipped first, then progress, then
   what was used. Group many small rows into one line ("12 SAM practice passes"). A

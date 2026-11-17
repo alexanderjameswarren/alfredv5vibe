@@ -5,7 +5,7 @@ description: "The rules every Alfred scheduled-task prompt follows: signals only
 
 # Task prompts
 
-Skill version: 2026-11-17a (the Job health check exception in rule 10)
+Skill version: 2026-11-17b (the Alert wording section)
 
 A scheduled task (DJ daily, Ken seed check, Money cleanup and the rest) runs the text pasted into
 claude.ai. That text lives in a repo file in `docs/`. These rules come from the ten prompts at
@@ -64,6 +64,23 @@ Severity is the task's judgment, not a channel: `high` for what should reach Ale
 nudge the plan says to send), `normal` for what can wait in the inbox, `low` for what is only worth
 keeping. The delivery rules in Overwatch's plan turn that into hold, inbox or a notification.
 
+## Alert wording
+
+Any prompt that raises a failure (or any other alert) words it so Alex can act without looking
+anything up. The item, or the alert message, says in this order:
+1. **What happened**, one plain sentence, times in 12-hour Pacific, the error verbatim;
+2. **The next thing to check or do** (a status page, a log, a setting);
+3. **The recovery**, ending with a paste-ready prompt in a block of its own.
+
+Then it says which case it is:
+- **outage:** Claude or Supabase is down, nothing of ours to fix. Wait, then paste the recovery prompt
+  ("Overwatch: connections are back. Review missed jobs since <time> and give me the recovery plan.").
+- **fix needed:** no outage, something of ours is broken. Start a thread (a Fast track prompt when it
+  is urgent).
+
+The worked example is `docs/claude-health-check-task-prompt.md` (cases A and B). The full wording is
+spec `docs/technical-spec-job_health-t4m.md` §9.
+
 ## Checklist
 
 - [ ] No `create_inbox_item`, `send_alfred_push`, `create_reminder` or `log_claude_notification`
@@ -72,6 +89,8 @@ keeping. The delivery rules in Overwatch's plan turn that into hold, inbox or a 
 - [ ] Every `raise_signal` has `app`, `job`, `severity`, `subject_key` (no date unless a weekly
       report), `title`, `started_by: "task:<slug>"`, `source_ref`, and `details.kind` (+ `item`).
 - [ ] A failure path: high, `kind: "failure"`, stable key, verbatim error, raised every time.
+- [ ] Every alert says what happened, what to check or do, and the recovery, and names its case
+      (outage or fix needed) (Alert wording).
 - [ ] Run opened first and closed once, on every path; `prompt_version` in the close.
 - [ ] PROMPT VERSION bumped, with a one-line change note; the report line echoes it.
 - [ ] No reads of earlier runs, items or signals to decide whether to raise.
