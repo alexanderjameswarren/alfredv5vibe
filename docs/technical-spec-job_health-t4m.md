@@ -165,6 +165,42 @@ Each tick, for each user with `platform_schedules` rows, each part in its own `b
 
 Registered with `platform.register_table('public.job_health_state')` (audited false, since it is written every 15 minutes). Grants come from `register_table`, and anon gets nothing.
 
+### 6.2 As built (s6, migration `_pending_job_health-t4m_watchdog.sql`)
+
+The s6 prompt came after §5–§9, and where the two differ, the build follows the prompt.
+
+**`job_health_state` columns** use the prompt's names:
+
+| was | now |
+|---|---|
+| `last_tick_at` | `last_watchdog_run_at` |
+| `last_tick_error` | `last_watchdog_error` |
+| `outage_since` | `outage_started_at` |
+| `last_recovered_at` | `last_recovery_at` |
+| `last_outage_since` | `last_outage_started_at` |
+
+Also new: `last_heartbeat_at`, the newest Claude run seen. `last_sweep` is `{at, swept, signalled, alerted}`. Authenticated may read the table but not write it.
+
+**Functions.** Every one takes `p_now timestamptz default now()`, only so the test can run them at chosen times; nothing else passes it.
+- `job_health_watchdog(p_now)`: security definer. Execute is revoked from public, anon, authenticated and service_role. It sets `app.actor = job_health_watchdog` for the audit log.
+- `job_health_missed_runs(p_user, p_from, p_to default now())`: security invoker. Granted to authenticated and service_role; owner RLS keeps it to the caller's rows. It also returns `task_name`.
+- `get_job_health(p_since default null, p_now default now())`: security invoker; uses `auth.uid()`; granted to authenticated and service_role.
+- Helpers, all private: `job_health_alert` (one inbox item plus one reminder), `job_health_when` ("9:40 AM", or "9:40 AM on Nov 16" for another day), `job_health_duration` ("3 h 5 min"), `job_health_task_name`, `job_health_catch_up_line`.
+
+**The sweep's error message** is the prompt's: `Still running after <n> minutes; marked stuck by the job-health watchdog.` It replaces §5.1's wording, and it is also the "Error (verbatim)" in the §9.3 text.
+
+**Inbox items** use `source_type 'task'`, the prompt's choice and what task-written items already use, not §6's `'manual'`. Their ids are `gen_random_uuid()::text`, as `create_reminder` makes them.
+
+**Decisions §5–§9 did not cover:**
+- **The stuck dispatcher's direct alert (O4)** follows the same 24-hour rule as the signal. An older stuck dispatcher run is marked only.
+- **A job's "task name"** in the wording is its schedule's `started_by` without `task:` (for example `claude-hourly-notifications`), else `app/job`. Schedules have no display-name column.
+- **The recovery item** lists one line per job, with all its missed times: `- <task> (<app>/<job>), <times>: <rule>. <what happens>`. Its counts are runs, not jobs. "Recovered at" is the start of the Claude run that ended the outage.
+- **Missed runs are counted only once their slot has ended**, up to `p_to`. A daily job's slot runs to `expected_by + grace_hours`, so a recovery at 10:30 does not yet count a job due at 8:00 with 6 hours' grace.
+- **`get_job_health`'s default `since`** is the start of the newest *finished* `job_health_check` run, so the task's own running row is ignored; failing that, 24 hours ago. Its `stuck_runs` carry `swept` (true when swept, false when still running past the limit), `ran_minutes` and `max_run_minutes`.
+- **The heartbeat** only counts runs started at or before `p_now`.
+
+**O3:** migration 233 already queued `cron.schedule` through the runner, so the cron job stays in the migration.
+
 ## 7. Part E — Missed runs and recovery
 
 `public.job_health_missed_runs(p_user uuid, p_from timestamptz, p_to timestamptz)` returns a set of `(app, job, executor, expected_at, catch_up)`, for schedules with `enabled` and a non-null `catch_up`:
@@ -331,5 +367,5 @@ The stuck dispatcher's push: `The hourly dispatcher hung at <time>. Fix needed: 
 |---|---|
 | s4 | `db:deploy` (wb-sync) |
 | s5 | `db:table:platform_schedules` (the columns, the values and the job_health_check row; the sweep itself ships in s6) |
-| s6 | `db:table:job_health_state` (new), `db:table:inbox`, `db:table:reminders`, `db:table:signals`, `db:table:platform_runs`, `db:fn:job_health_watchdog`, `db:fn:job_health_missed_runs`, `db:fn:get_job_health` |
+| s6 (queued at s6b) | `db:table:job_health_state` (new), `db:table:inbox`, `db:table:reminders`, `db:table:signals`, `db:table:platform_runs`, `db:fn:job_health_watchdog`, `db:fn:job_health_missed_runs`, `db:fn:get_job_health`, `db:fn:job_health_alert`, `db:fn:job_health_when`, `db:fn:job_health_duration`, `db:fn:job_health_task_name`, `db:fn:job_health_catch_up_line` |
 | s8 | `db:deploy` (mcp) |
