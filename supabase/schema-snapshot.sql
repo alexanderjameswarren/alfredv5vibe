@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-13 08:26, through migration 236 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-17 11:58, through migration 237 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -16993,9 +16993,21 @@ CREATE TABLE IF NOT EXISTS "public"."platform_schedules" (
     "enabled" boolean DEFAULT true NOT NULL,
     "notes" "text",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "hourly_until" time without time zone,
+    "max_run_minutes" integer,
+    "catch_up" "text",
+    "failure_subject" "text",
+    "failure_severity" "text",
+    "started_by" "text",
     CONSTRAINT "platform_schedules_cadence_check" CHECK (("cadence" = ANY (ARRAY['daily'::"text", 'weekly'::"text"]))),
+    CONSTRAINT "platform_schedules_catch_up_check" CHECK ((("catch_up" IS NULL) OR ("catch_up" = ANY (ARRAY['self'::"text", 'skip'::"text", 'run_now'::"text"])))),
     CONSTRAINT "platform_schedules_day_of_week_check" CHECK ((("day_of_week" >= 0) AND ("day_of_week" <= 6))),
     CONSTRAINT "platform_schedules_executor_check" CHECK (("executor" = ANY (ARRAY['workshop'::"text", 'claude'::"text", 'alfred'::"text"]))),
+    CONSTRAINT "platform_schedules_failure_severity_check" CHECK ((("failure_severity" IS NULL) OR ("failure_severity" = ANY (ARRAY['low'::"text", 'normal'::"text", 'high'::"text", 'urgent'::"text"])))),
+    CONSTRAINT "platform_schedules_failure_subject_check" CHECK ((("failure_subject" IS NULL) OR ("replace"("failure_subject", '{kind}'::"text", 'stuck'::"text") ~ '^[a-z0-9][a-z0-9:_.-]{0,199}$'::"text"))),
+    CONSTRAINT "platform_schedules_hourly_until_check" CHECK ((("hourly_until" IS NULL) OR (("cadence" = 'daily'::"text") AND ("hourly_until" > "expected_by")))),
+    CONSTRAINT "platform_schedules_max_run_minutes_check" CHECK ((("max_run_minutes" IS NULL) OR ("max_run_minutes" > 0))),
+    CONSTRAINT "platform_schedules_started_by_check" CHECK ((("started_by" IS NULL) OR "public"."started_by_valid"("started_by"))),
     CONSTRAINT "platform_schedules_weekly_needs_day" CHECK ((("cadence" <> 'weekly'::"text") OR ("day_of_week" IS NOT NULL)))
 );
 
@@ -17020,6 +17032,30 @@ COMMENT ON COLUMN "public"."platform_schedules"."grace_hours" IS 'How late befor
 
 
 COMMENT ON COLUMN "public"."platform_schedules"."enabled" IS 'False suspends staleness checking without deleting the definition — a paused job should not alarm, and should not have to be reconstructed from memory later.';
+
+
+
+COMMENT ON COLUMN "public"."platform_schedules"."hourly_until" IS 'When set, the job is expected every hour from expected_by to this time (America/Los_Angeles), not once a day. Daily cadence only, and later than expected_by. Null: once a day (or week).';
+
+
+
+COMMENT ON COLUMN "public"."platform_schedules"."max_run_minutes" IS 'A run still running this many minutes after started_at is stuck: job_health_watchdog marks it failed (failure_kind stuck). Three times the p95 of recent runs, never under 10. Null: never swept.';
+
+
+
+COMMENT ON COLUMN "public"."platform_schedules"."catch_up" IS 'What to do about a missed run: self (the next run covers it), skip (a missed run is not worth making up), run_now (run it by hand). Null: not checked for missed runs.';
+
+
+
+COMMENT ON COLUMN "public"."platform_schedules"."failure_subject" IS 'The job''s own failure signal subject_key. {kind} is replaced by the failure kind (stuck); the result must match the signals subject format. Null: the watchdog raises no signal for this job.';
+
+
+
+COMMENT ON COLUMN "public"."platform_schedules"."failure_severity" IS 'The severity the job uses for its own failure signals (low, normal, high, urgent); the watchdog uses the same.';
+
+
+
+COMMENT ON COLUMN "public"."platform_schedules"."started_by" IS 'The job''s started_by (started_by_valid), used when the watchdog raises a signal on the job''s behalf.';
 
 
 

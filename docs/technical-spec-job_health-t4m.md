@@ -59,7 +59,15 @@ How `max_run_minutes` was set: three times the p95 of the last 30 days' ok and p
 | warren_buffet / wb-sync | alfred | — | 10 (116 s; the Edge wall clock ends a run long before 10 min anyway) | self | `wb-sync:failure:kind:{kind}` | low | `task:wb-sync` |
 | alfred / job_health_check (new, Part D) | claude | — | 10 | skip | null (the task alerts through its own notification) | null | `task:job-health-check` |
 
-Before s5 is queued, each subject is checked against its prompt file again (the drift check). The DJ daily, DJ weekly and Ken prompts live in `docs/history/`.
+Before s5 is queued, each subject is checked against its prompt file again (the drift check). The DJ daily, DJ weekly and Ken prompts live in `docs/history/`. **Checked at s5:** every failure subject and started_by above matches its prompt file. The exception is claude_hourly_notifications, whose subject is new by design. Migration 237 (`237_schedule_limits.sql`) adds the columns with checks and comments, and sets these values on the 13 existing rows (notify-dispatch all null). The job_health_check row comes at s9.
+
+Checks in 237:
+- `catch_up` is one of the three values;
+- `max_run_minutes` is > 0;
+- `failure_severity` is one of the four values;
+- `failure_subject`, with `{kind}` → `stuck`, matches the signals subject format;
+- `started_by` passes `started_by_valid`;
+- `hourly_until` is for daily rows only, and is later than `expected_by`.
 
 **DJ daily is `run_now`** because the play-history read only reaches back so far: plays from a missed day can be lost if the next run waits a day. The new `job_health_check` row: `cadence daily`, `expected_by 06:00`, `grace_hours 2` (it only checks the day's first run). The s5 migration inserts it.
 
@@ -111,6 +119,17 @@ Deployed at s4b: wb-sync version 17, 2026-11-17 08:05 Pacific.
 - **Not covered (O6).** An account newly added at a bank appears only through an unfiltered call. The per-bank plan only asks for accounts already stored, so a new one is not fetched until something makes an unfiltered call. Hidden accounts are still requested; if a closed account's id makes SimpleFIN return an error, that error shows as a blocking error, and the run is `partial`.
 
 Deployed at s4c: wb-sync version 18, 2026-11-17 08:16 Pacific.
+
+**Proved at s4d.** Alex triggered v18 from the cron job's own command at 11:15 Pacific on Nov 17. It was ok in 8.7 s, against 76–125 s before. Every bank was ok:
+
+| bank | fetch time |
+|---|---|
+| Charles Schwab US | 2.5 s |
+| Wells Fargo Elise's Wells Fargo Brokerage | 3.1 s |
+| City National Bank Online | 3.4 s |
+| Wells Fargo | 4.4 s |
+
+The run had txn_new 16, processed 19 and failed_institutions 0. It resolved 1 failure signal. The two hidden City National accounts caused no error. With runs this short, wb-sync's `max_run_minutes` of 10 (§4) is generous. It stays at 10, because the sweep only needs to be above the 150 s wall clock.
 
 ## 6. Part C — The Alfred watchdog
 
