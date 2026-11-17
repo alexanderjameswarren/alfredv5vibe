@@ -17,6 +17,63 @@ export const OVERLAP_DAYS = 10;
 
 const DAY_MS = 86_400_000;
 
+// ── Time limits (docs/technical-spec-job_health-t4m.md §5.2) ─────────────────
+// The Edge wall clock ends the worker at 150 s with no catch and no close, which
+// left run f847a5cd "running" on 2026-11-16. These keep every run closable.
+
+/** The SimpleFIN request, headers and body together, is abandoned after this (O5: normal calls take 75–120 s). */
+export const FETCH_TIMEOUT_MS = 105_000;
+/** No stage starts after this, from the request's start; the rest is kept for closing the run. */
+export const TIME_BUDGET_MS = 120_000;
+
+/** Thrown by withTimeout when the limit passes first. */
+export class TimeoutError extends Error {
+  ms: number;
+  constructor(ms: number) {
+    super(`timed out after ${ms} ms`);
+    this.name = "TimeoutError";
+    this.ms = ms;
+  }
+}
+
+/**
+ * Runs work with an AbortSignal and rejects with TimeoutError after ms, whether
+ * or not the work honours the signal: a hung body read cannot outlast it.
+ */
+export function withTimeout<T>(work: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      // Reject first, so the race settles as a timeout, not as the abort's own error.
+      reject(new TimeoutError(ms));
+      controller.abort();
+    }, ms);
+  });
+  const run = work(controller.signal);
+  run.catch(() => {}); // its rejection after a timeout is expected and ignored
+  return Promise.race([run, limit]).finally(() => clearTimeout(timer));
+}
+
+export function isTimeout(err: unknown): boolean {
+  return err instanceof TimeoutError;
+}
+
+/** Whole seconds with one decimal, for the stage log. */
+export function seconds(ms: number): string {
+  return (ms / 1000).toFixed(1);
+}
+
+/**
+ * The error message when a stage would start past the budget, else null.
+ * elapsedMs is measured from the start of the request.
+ */
+export function budgetExceeded(stage: string, elapsedMs: number, budgetMs = TIME_BUDGET_MS): string | null {
+  if (elapsedMs <= budgetMs) return null;
+  return `Stopped before stage "${stage}" at ${seconds(elapsedMs)} s: past the ${budgetMs / 1000} s time budget ` +
+    `(the rest is kept to close the run).`;
+}
+
 export type SnapshotSource = "sync" | "manual" | "import";
 
 /** YYYY-MM-DD in America/Los_Angeles. */
@@ -36,6 +93,27 @@ export function chooseWindowStart(now: Date, lastOkStartedAt: Date | null): Date
   if (!lastOkStartedAt) return cap;
   const overlap = new Date(lastOkStartedAt.getTime() - OVERLAP_DAYS * DAY_MS);
   return overlap > cap ? overlap : cap;
+}
+
+/** The fetch never reaches back further than this, so failures cannot widen it. */
+export const WINDOW_MAX_DAYS = 14;
+
+export type WindowGap = { from: string; to: string };
+
+/**
+ * chooseWindowStart, capped at WINDOW_MAX_DAYS before now. When the cap cuts
+ * it, gap names the local dates not fetched; `to` is the cap's own day, which
+ * is only partly fetched, so a later fill re-fetches it (upserts, harmless).
+ */
+export function chooseWindow(
+  now: Date,
+  lastOkStartedAt: Date | null,
+  maxDays = WINDOW_MAX_DAYS,
+): { start: Date; gap: WindowGap | null } {
+  const wanted = chooseWindowStart(now, lastOkStartedAt);
+  const cap = new Date(now.getTime() - maxDays * DAY_MS);
+  if (wanted >= cap) return { start: wanted, gap: null };
+  return { start: cap, gap: { from: localDate(wanted), to: localDate(cap) } };
 }
 
 export function toUnixSeconds(at: Date): number {
@@ -386,6 +464,10 @@ export function alertFor(input: AlertInput, institutions: string[], runId: strin
     title = "SimpleFIN refused the money sync's access — the access URL may need renewing";
   } else if (input.failureKind === "config") {
     title = "The money sync is missing a setting";
+  } else if (input.failureKind === "timeout") {
+    title = "SimpleFIN did not answer in time — the money sync stopped";
+  } else if (input.failureKind === "time_budget") {
+    title = "The money sync ran out of time and stopped";
   } else {
     title = "The daily money sync failed";
   }

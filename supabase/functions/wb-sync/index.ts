@@ -74,25 +74,48 @@ async function fetchSimplefin(accessUrl: string, windowStart: Date): Promise<Obj
   } catch {
     throw new RunFailure("SIMPLEFIN_ACCESS_URL is not a valid access URL.", "failed", "config");
   }
-  let res: Response;
   try {
-    res = await fetch(request.url, { headers: { Authorization: request.authorization } });
-  } catch {
-    // The underlying error quotes the URL, so it is not kept.
-    throw new RunFailure("SimpleFIN request failed: network error.", "failed", "network");
+    // The limit covers the request and the body read together.
+    return await core.withTimeout(async (signal) => {
+      let res: Response;
+      try {
+        res = await fetch(request.url, { headers: { Authorization: request.authorization }, signal });
+      } catch {
+        // The underlying error quotes the URL, so it is not kept.
+        throw new RunFailure("SimpleFIN request failed: network error.", "failed", "network");
+      }
+      if (res.status === 403) {
+        throw new RunFailure("SimpleFIN refused the access URL (HTTP 403): revoked or invalid.", "auth_expired", "auth");
+      }
+      if (res.status === 402) {
+        throw new RunFailure("SimpleFIN says payment is required (HTTP 402).", "failed", "payment");
+      }
+      if (!res.ok) throw new RunFailure(`SimpleFIN returned HTTP ${res.status}.`, "failed", "http");
+      try {
+        return (await res.json()) as Obj;
+      } catch {
+        throw new RunFailure("SimpleFIN returned a body that is not JSON.", "failed", "parse");
+      }
+    }, core.FETCH_TIMEOUT_MS);
+  } catch (err) {
+    if (core.isTimeout(err)) {
+      throw new RunFailure(`SimpleFIN did not answer within ${core.FETCH_TIMEOUT_MS / 1000} s.`, "failed", "timeout");
+    }
+    throw err;
   }
-  if (res.status === 403) {
-    throw new RunFailure("SimpleFIN refused the access URL (HTTP 403): revoked or invalid.", "auth_expired", "auth");
-  }
-  if (res.status === 402) {
-    throw new RunFailure("SimpleFIN says payment is required (HTTP 402).", "failed", "payment");
-  }
-  if (!res.ok) throw new RunFailure(`SimpleFIN returned HTTP ${res.status}.`, "failed", "http");
-  try {
-    return (await res.json()) as Obj;
-  } catch {
-    throw new RunFailure("SimpleFIN returned a body that is not JSON.", "failed", "parse");
-  }
+}
+
+/** Logs a stage's elapsed time; with check, throws a time_budget failure when it would start too late. */
+type Stage = (name: string, check?: boolean) => void;
+
+function stageClock(startedMs: number): Stage {
+  return (name, check = true) => {
+    const elapsed = Date.now() - startedMs;
+    console.log(`[wb-sync] stage=${name} t=${core.seconds(elapsed)}s`);
+    if (!check) return;
+    const over = core.budgetExceeded(name, elapsed);
+    if (over) throw new RunFailure(over, "failed", "time_budget");
+  };
 }
 
 interface Counts {
@@ -111,9 +134,12 @@ interface Counts {
  * Phase 2 processing for the given ids, in chunks. Never throws: a failed chunk
  * is recorded and its rows stay unprocessed, to be picked up by the next run.
  */
-async function processTransactions(db: SupabaseClient, ids: string[]): Promise<core.ProcessTotals> {
+async function processTransactions(db: SupabaseClient, ids: string[], stage: Stage): Promise<core.ProcessTotals> {
   let totals = core.emptyProcessTotals();
-  for (const [i, part] of core.chunks(ids, core.PROCESS_CHUNK).entries()) {
+  const parts = core.chunks(ids, core.PROCESS_CHUNK);
+  for (const [i, part] of parts.entries()) {
+    // Outside the try: a time_budget stop ends the run; unprocessed rows wait for the next one.
+    stage(`processing ${i + 1}/${parts.length}`);
     try {
       const { data, error } = await db.rpc("wb_process_transactions", { ids: part });
       totals = core.addProcessResult(
@@ -149,6 +175,7 @@ async function sync(
   now: Date,
   windowStart: Date,
   hasBlockingErrors: boolean,
+  stage: Stage,
 ): Promise<{ counts: Counts; processing: core.ProcessTotals; detection: core.DetectResult | null }> {
   const nowIso = now.toISOString();
   const asOf = core.localDate(now);
@@ -168,6 +195,7 @@ async function sync(
 
   // 1. Accounts. Only sync-owned columns are in the payload, so human columns
   //    are never touched by the upsert's update.
+  stage("accounts");
   const { data: acctRows, error: acctErr } = await db
     .from("wb_accounts")
     .upsert(accounts.map((a) => core.mapAccount(a, owner, nowIso)), { onConflict: "source,external_id" })
@@ -178,6 +206,7 @@ async function sync(
   counts.accounts = accountIds.length;
 
   // 2. Today's balances, skipping any account whose row today is manual or import.
+  stage("balances");
   const planned = accounts
     .filter((a) => idByExternal.has(String(a.id)))
     .map((a) => core.mapSnapshot(a, idByExternal.get(String(a.id))!, owner, asOf));
@@ -196,6 +225,7 @@ async function sync(
   counts.snapshots_written = write.length;
 
   // 3. Today's holdings.
+  stage("holdings");
   const holdings = new Map<string, ReturnType<typeof core.mapHolding>>();
   for (const a of accounts) {
     const accountId = idByExternal.get(String(a.id));
@@ -212,6 +242,7 @@ async function sync(
   counts.holdings = holdings.size;
 
   // 4. Transactions. Deduped first: one upsert statement cannot touch a row twice.
+  stage("transactions");
   const txns = new Map<string, ReturnType<typeof core.mapTransaction>>();
   const returnedIdsByAccount = new Map<string, Set<string>>();
   for (const a of accounts) {
@@ -269,6 +300,7 @@ async function sync(
   counts.transactions_unchanged = existing - changed;
 
   // 5. Pending rows that this fetch covered and did not return.
+  stage("pending");
   const storedPending = await selectAll<core.StoredPending>((from, to) =>
     db
       .from("wb_transactions")
@@ -288,6 +320,7 @@ async function sync(
 
   // 6. Phase 2 processing: new and changed rows, plus any never processed
   //    (an earlier failed chunk, or rows from before processing existed).
+  stage("unprocessed");
   let unprocessed: string[] = [];
   let unprocessedError: string | null = null;
   try {
@@ -305,11 +338,12 @@ async function sync(
   }
   const doomedSet = new Set(doomed);
   const ids = core.idsToProcess(upserted, touched, unprocessed).filter((id) => !doomedSet.has(id));
-  let processing = await processTransactions(db, ids);
+  let processing = await processTransactions(db, ids, stage);
   if (unprocessedError) processing = core.addProcessResult(processing, null, unprocessedError);
   counts.transactions_processed = processing.processed;
 
   // 7. Subscription detection: monthly charges of similar size become watching rows.
+  stage("detection");
   const detection = await detectSubscriptions(db);
 
   return { counts, processing, detection };
@@ -328,6 +362,7 @@ function early(stage: string, status: number, error: string, extra: Obj = {}): R
 }
 
 Deno.serve(async (req) => {
+  const stage = stageClock(Date.now());
   // ── 1. The gate. Nothing above this line touches state. ──────────────────
   const expected = env("WB_SYNC_SECRET");
   if (!expected) return early("config", 503, "WB_SYNC_SECRET is not set; refusing all requests.");
@@ -365,6 +400,8 @@ Deno.serve(async (req) => {
   const owner: core.Owner = { user_id: ctxRow.user_id as string, context_id: contextId };
 
   // ── 3. Window, from the last ok run. ─────────────────────────────────────
+  // No budget check before the run exists: there is no row to close yet.
+  stage("last_run", false);
   const now = new Date();
   const { data: lastOk, error: lastErr } = await db
     .from("platform_runs")
@@ -381,7 +418,13 @@ Deno.serve(async (req) => {
       code: lastErr.code ?? null,
     });
   }
-  const windowStart = core.chooseWindowStart(now, lastOk ? new Date(lastOk.started_at as string) : null);
+  // Capped at WINDOW_MAX_DAYS; the cut-off dates are recorded, not fetched (spec §5.2).
+  const { start: windowStart, gap: windowGap } = core.chooseWindow(
+    now,
+    lastOk ? new Date(lastOk.started_at as string) : null,
+  );
+  if (windowGap) console.log(`[wb-sync] window_gap from=${windowGap.from} to=${windowGap.to} (not fetched)`);
+  const gapDetail = windowGap ? { window_gap: windowGap } : {};
   const coveredFrom = core.localDate(windowStart);
   const coveredTo = core.localDate(now);
 
@@ -438,11 +481,13 @@ Deno.serve(async (req) => {
     if (!accessUrl && !simulate) throw new RunFailure("SIMPLEFIN_ACCESS_URL is not set.", "failed", "config");
 
     // A simulated run skips SimpleFIN entirely and writes no wb_ data.
+    stage("fetch");
     const body: Obj = simulate
       ? { errors: [core.SIMULATED_MESSAGE], accounts: [] }
       : await fetchSimplefin(accessUrl!, windowStart);
     const { informational, blocking } = core.classifyErrors(core.errorMessages(body));
-    const { counts, processing, detection } = await sync(db, body, owner, now, windowStart, blocking.length > 0);
+    const { counts, processing, detection } = await sync(db, body, owner, now, windowStart, blocking.length > 0, stage);
+    stage("close", false);
     // Processing and detection problems are recorded but never change the status.
     const status = core.runStatus(blocking);
     const blockingSafe = blocking.map((m) => core.redact(m, secrets));
@@ -470,6 +515,7 @@ Deno.serve(async (req) => {
         simplefin_errors: blockingSafe,
         simplefin_notices: informational.map((m) => core.redact(m, secrets)),
         ...(status === "partial" ? { failure_kind: "simplefin_errors" } : {}),
+        ...gapDetail,
         ...(simulate ? { simulated: true } : {}),
       },
       error_message: status === "partial" ? blockingSafe.join(" | ") : null,
@@ -509,7 +555,8 @@ Deno.serve(async (req) => {
     const status = failure?.status ?? "failed";
     const kind = failure?.kind ?? "db";
     const message = core.redact(err instanceof Error ? err.message : String(err), secrets);
-    await close({ status, error_message: message, details: { failure_kind: kind } });
+    stage(`close_failed kind=${kind}`, false);
+    await close({ status, error_message: message, details: { failure_kind: kind, ...gapDetail } });
     const alerts = await alert([{ message, failureKind: kind }], []);
     console.error(`[wb-sync] ${status}: failure_kind=${kind} signals_raised=${alerts.raised} signals_duplicate=${alerts.duplicate}`);
     return json({ ok: false, run_id: runId, status, failure_kind: kind, error: message, alerts }, 500);

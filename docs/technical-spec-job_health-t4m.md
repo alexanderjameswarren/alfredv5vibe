@@ -86,7 +86,16 @@ For each `platform_runs` row with `status = 'running'` whose schedule (same `use
 
 ### 5.2 The wb-sync fix (s4)
 
-`fetchSimplefin` passes `signal: AbortSignal.timeout(60_000)` to `fetch`. The signal also bounds reading the body. A `TimeoutError`, from the request or the body, throws `RunFailure("SimpleFIN did not answer within 60 s.", "failed", "timeout")`, so the run closes `failed` with kind `timeout` and raises `wb-sync:failure:kind:timeout`. The 60 s value is a named constant in `wb-sync-core.ts`, with a test. **Open item O1** must be settled first (§11).
+Built at s4:
+- **Fetch timeout.** `core.withTimeout` gives `fetchSimplefin` an AbortController signal and races it against a timer, so a body read that ignores the signal still cannot outlast the limit. On a timeout it throws `RunFailure("SimpleFIN did not answer within <n> s.", "failed", "timeout")`. The run closes `failed` with kind `timeout` and raises `wb-sync:failure:kind:timeout`, severity low, through the normal path. The limit is `core.FETCH_TIMEOUT_MS`.
+- **Time budget.** `core.TIME_BUDGET_MS` = 120 000, timed from the start of the request. Before each stage (fetch, accounts, balances, holdings, transactions, pending, unprocessed, each processing chunk, detection), a stage that would start after 120 s throws `RunFailure(<"Stopped before stage "<name>" at <t> s: past the 120 s time budget …">, "failed", "time_budget")`. That leaves 30 s of the 150 s wall clock to close the run and raise `wb-sync:failure:kind:time-budget`.
+- **Stage log.** Every stage logs `[wb-sync] stage=<name> t=<seconds>s`, including `last_run` before the run opens and `close` / `close_failed kind=<kind>` at the end.
+
+**The fetch limit (O5, settled s4b).** `FETCH_TIMEOUT_MS` = 105 000. The 60 s first asked for would have failed nearly every day, because SimpleFIN alone takes most of a normal run.
+
+**The window cap (s4b).** The start is still 10 days before the last ok run (its `started_at`, whose local date is its `covered_to`), and never more than 89 days back. `core.chooseWindow` now also caps it at `WINDOW_MAX_DAYS` = 14 days before now, so a run of failures cannot widen the fetch. When the cap cuts it, the dates not fetched go into the run's `details.window_gap` as `{ from, to }` (local dates; `to` is the cap's day, which is partly fetched), on ok and failed closes alike, and the log line `[wb-sync] window_gap from=… to=… (not fetched)` is written. A run with no earlier ok run also fetches 14 days and records the rest of the 89 as a gap. Nothing fills a recorded gap yet. **Filling it is a later item** (for example a one-off run with an explicit window, or a fill step after an ok run).
+
+Deployed at s4b: wb-sync version 17, 2026-11-17 08:05 Pacific.
 
 ## 6. Part C — The Alfred watchdog
 
@@ -275,8 +284,9 @@ The stuck dispatcher's push: `The hourly dispatcher hung at <time>. Fix needed: 
 
 ## 11. Open items
 
-- **O1 (before s4).** Confirm why wb-sync hung, from the Edge Function logs for wb-sync around 13:00 UTC on Nov 16. If it was the wall-clock limit, not the SimpleFIN fetch, s4 must also bring the sync's run time down (p95 is already 116 s), not just add the timeout.
-- **O2 (before s9).** Does a claude.ai scheduled task notify on every completed run? If it does, healthy runs would notify 8 times a day, and D needs another way to stay quiet.
+- **O1 (answered s4).** The Nov 16 Edge logs: "booted (time: 405ms)" at 05:00:06; "[wb-sync] stage=context: WB_CONTEXT_ID length=19" at 05:00:07; then nothing until "shutdown" at 05:02:36, 150 s after boot. So the run hung after the context stage, most likely in the SimpleFIN fetch, and the wall clock killed the worker before close or catch ran. The fix is the fetch timeout, the 120 s time budget and the stage log (§5.2).
+- **O5 (answered s4b): the fetch limit.** Alex chose 105 s; deployed with the 14-day window cap (§5.2). The Nov 17 run (9fbc453b) failed with HTTP 524 at 125 s on a 13-day window, so the window was not its cause: SimpleFIN is slow. Per-bank parallel calls may follow as s4c. The s4 analysis: Ok runs in the last 3 weeks: 13 accounts, 20 holdings, 28–51 transactions returned, 2–20 rows processed, an 11–13 day window, and 76–125 s in all. The database stages are about a dozen small queries over that. The failed runs show where the time goes: HTTP 524 (a gateway timeout) at 125.5 s three times, Oct 28, Oct 29 and Nov 1, and HTTP 503 at 47 s on Nov 15, all with nothing after the fetch. So SimpleFIN's one `/accounts` call takes roughly 75–120 s on a normal day. A 60 s limit would fail almost every run. Recommendation: `FETCH_TIMEOUT_MS` = 105 000. The fetch starts at about 2 s, so it ends by about 107 s, leaving about 13 s for the database stages inside the 120 s budget and 30 s more to close. The first deployed runs' stage logs confirm the split.
+- **O2 (answered s3, test at s9).** The scheduled-task tool documents that a task's push fires "when a run finishes with something noteworthy", as the server judges it, not on every run. s9 tests it with one healthy run and one forced alert.
 - **O3 (at s6).** If the SQL runner refuses `cron.schedule`, the cron statement goes to the SQL editor as the runner-refused fallback. It holds no secret.
 - **O4 (decided in this spec, for Alex to confirm).** A stuck dispatcher run gets a direct alert (§5.1), because its own signal would wait on the dispatcher.
 
