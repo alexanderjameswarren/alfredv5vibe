@@ -1012,3 +1012,86 @@ test("sf_read link: preview has kind and payload; approve only spends the link",
   assert.deepEqual(await res.json(), { ok: true, action_id: "act-1", sent: true });
   nothingRan(calls);
 });
+
+// --- dataops_alfred-d4x: sf_dataop, the production data run by link only ---
+
+const FIVE = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop"];
+const DATAOP_PAYLOAD = { alias: "cd-prod", repo: "C:\\Users\\Alex\\projects\\common-defense", plan: "dataops/fixc-plan.json",
+  stamp: "0".repeat(64), preflight_at: "2026-11-18T15:00:00Z", object: "Demo_Gift__c",
+  problem: "Forty-five gifts were saved without a link to their plan.", expected: 45, write: { kind: "bulk" },
+  rows: [{ label: "Gifts in the list with no plan link", before: 45, goal: 0 }] };
+const kindsFakes = () => fakes({ pickupHelper: async function (u, k) { this.args = [u, k]; return { ...PICKED, kind: "sf_dataop" }; } });
+
+test("pickup: only a helper naming all five kinds passes them on, so only it can be handed an sf_dataop", async () => {
+  const all = kindsFakes();
+  const body = await (await handle(helper("pickup", { kinds: [...FIVE].reverse() }), all.deps)).json();
+  assert.equal(body.action.kind, "sf_dataop");
+  assert.deepEqual(all.deps.args, [USER, FIVE]);
+  for (const kinds of [["git", "sf_check", "sb_setup", "sf_read"], ["git", "sf_check", "sb_setup"]]) {
+    const older = kindsFakes();
+    assert.equal((await handle(helper("pickup", { kinds }), older.deps)).status, 200, JSON.stringify(kinds));
+    assert.deepEqual(older.deps.args, [USER, undefined], JSON.stringify(kinds));
+  }
+});
+
+test("pickup: sf_dataop with only some of the kinds is refused and picks nothing", async () => {
+  for (const kinds of [["sf_dataop"], ["git", "sf_dataop"], ["git", "sf_check", "sb_setup", "sf_dataop"], ["sf_read", "sf_dataop"]]) {
+    const { deps, calls } = fakes({ stalePicks: async () => { throw new Error("not reached"); } });
+    const res = await handle(helper("pickup", { kinds }), deps);
+    assert.equal(res.status, 400, JSON.stringify(kinds));
+    assert.equal(calls.pickedHelper, undefined);
+  }
+});
+
+test("pickup: a picked sf_dataop gets 4 hours before it is failed, every other kind 30 minutes", async () => {
+  const now = Date.parse("2026-11-18T12:00:00Z");
+  const { deps, calls } = fakes({ stalePicks: async (u, before, dataopBefore) => (calls.stale = { before, dataopBefore }, []) });
+  await handle(helper("pickup", { kinds: FIVE }), deps, now);
+  assert.deepEqual(calls.stale, { before: "2026-11-18T11:30:00.000Z", dataopBefore: "2026-11-18T08:00:00.000Z" });
+});
+
+test("result: an sf_dataop's run keeps its summary and never the window's output (O8)", async () => {
+  const { deps, calls } = fakes({
+    findPicked: async (a, r) => (a === "dop-1" && r === "run-d" ? {
+      action: { id: "dop-1", user_id: USER, kind: "sf_dataop", status: "consumed", picked_up_at: "t", payload: DATAOP_PAYLOAD },
+      run: { id: "run-d", action_id: "dop-1", mode: "real", finished_at: null },
+    } : null),
+  });
+  const res = await handle(helper("result", { action_id: "dop-1", run_id: "run-d", ok: false, summary: "dataop stopped at step 2",
+    exit_code: 1, output: "Step 2 already changed 30 live records. Backup: C:\\x" }), deps);
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls.finished[0].result, { ok: false, exit_code: 1 });
+  assert.equal(calls.finished[0].summary, "dataop stopped at step 2");
+  assert.deepEqual(calls.status, [{ id: "dop-1", status: "failed" }]);
+});
+
+test("sf_dataop link: preview shows the payload; approve needs Alex's session and only spends the link", async () => {
+  const { deps, calls, action } = gitFakes();
+  Object.assign(action, { kind: "sf_dataop", payload: DATAOP_PAYLOAD });
+  const preview = await (await handle(post("preview", { token: TOKEN }, jwt()), deps)).json();
+  assert.equal(preview.kind, "sf_dataop");
+  assert.deepEqual(preview.payload, DATAOP_PAYLOAD);
+  // No session, another user's, or a bad one: refused before the link is touched.
+  for (const headers of [{}, jwt("other"), jwt("bad")]) {
+    const res = await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, headers), deps);
+    assert.equal(res.status, 401, JSON.stringify(headers));
+  }
+  assert.equal(calls.consumed.length, 0);
+  assert.equal((await handle(post("dry-run", { token: TOKEN }, jwt()), deps)).status, 409);
+  assert.equal((await handle(post("approve", { token: TOKEN }, jwt()), deps)).status, 400);
+  const res = await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), deps);
+  assert.deepEqual(await res.json(), { ok: true, action_id: "act-1", sent: true });
+  assert.equal(calls.consumed.length, 1);
+  nothingRan(calls);
+});
+
+test("queue: the CLI's route never makes an sf_dataop, whatever the body says", async () => {
+  const { deps, calls } = fakes();
+  const res = await handle(queue({ project_code: "p-x", sql: "select 1", description: "Reads the number 1.", kind: "sf_dataop",
+    payload: DATAOP_PAYLOAD, needs_click: false }), deps);
+  assert.equal(res.status, 200);
+  assert.equal(calls.inserted[0].kind, "sql");
+  assert.equal(calls.inserted[0].created_by, "cli");
+  assert.equal("needs_click" in calls.inserted[0], false);
+  assert.deepEqual(Object.keys(calls.inserted[0].payload).sort(), ["description", "sql"]);
+});

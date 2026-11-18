@@ -12,6 +12,7 @@
 //   queue_switchboard_sb_setup  tier 2  queue sb client start or org add answers and issue its link (§11.5)
 //   queue_switchboard_sf_read   tier 2  queue one Salesforce read and issue its link (§10)
 //   get_switchboard_sf_result   tier 1  take a Salesforce read's rows, once (§10)
+//   queue_switchboard_sf_dataop tier 2  queue a production data run and issue its link (dataops_alfred-d4x)
 //
 // Database access ONLY through ctx.db, except get_sql_read's query itself: see readerSeam.
 // ============================================================================
@@ -566,7 +567,9 @@ export const SF_LEVELS = ["objects", "metadata", "ids", "data"];
 const SF_NAME = /^[A-Za-z][A-Za-z0-9_]{0,79}$/;
 const SF_OPS = ["=", "!=", "<", "<=", ">", ">="];
 const IDS_FIELDS = ["Id", "CreatedDate", "LastModifiedDate"];
-const SF_READ_KEYS = ["alias", "production", "level", "object", "count", "fields", "limit", "filters"];
+const SF_READ_KEYS = ["alias", "production", "level", "object", "objects", "count", "fields", "limit", "filters"];
+/** d4x: a metadata read may describe up to this many objects in one link, as the helper (salesforce/read/plan.mjs) allows. */
+export const SF_OBJECTS_MAX = 20;
 const isScalar = (v: unknown) => v === null || ["string", "number", "boolean"].includes(typeof v);
 
 export function sfReadPayload(args: Record<string, unknown>): { payload: Record<string, unknown> } | { refused: string } {
@@ -582,8 +585,20 @@ export function sfReadPayload(args: Record<string, unknown>): { payload: Record<
   const level = p.level as string;
   const has = (k: string) => p[k] !== undefined;
   if (level === "objects") {
-    const not = ["object", "count", "fields", "limit", "filters"].filter(has);
+    const not = ["object", "objects", "count", "fields", "limit", "filters"].filter(has);
     return not.length ? r(`objects lists the org's objects and takes no ${not.join(", ")}.`) : { payload: p };
+  }
+  // d4x: one production read link for every object a preflight needs.
+  if (has("objects")) {
+    if (level !== "metadata") return r("`objects` (a list) is for level metadata only; other levels take one `object`.");
+    if (has("object")) return r("give `object` or `objects`, not both.");
+    const list = p.objects;
+    if (!Array.isArray(list) || list.length < 1 || list.length > SF_OBJECTS_MAX || !list.every((o) => typeof o === "string" && SF_NAME.test(o))) {
+      return r(`\`objects\` must list 1 to ${SF_OBJECTS_MAX} API names (no dots).`);
+    }
+    if (new Set(list.map((o) => (o as string).toLowerCase())).size !== list.length) return r("an object is listed twice in `objects`.");
+    const not = ["count", "fields", "limit", "filters"].filter(has);
+    return not.length ? r(`metadata describes objects and takes no ${not.join(", ")}.`) : { payload: p };
   }
   if (typeof p.object !== "string" || !SF_NAME.test(p.object)) return r("`object` must be one API name, e.g. Contact or Donation__c (no dots).");
   if (level === "metadata") {
@@ -632,7 +647,9 @@ export function sfReadPayload(args: Record<string, unknown>): { payload: Record<
 export function sfReadHeadline(p: Record<string, unknown>): string {
   const full = p.production === true && p.level === "data";
   const where = `${p.production === true ? "PRODUCTION" : "SANDBOX"} ${p.alias}`;
+  const many = Array.isArray(p.objects) ? (p.objects as string[]) : null;
   const what = p.level === "objects" ? "THE OBJECT LIST"
+    : many ? `THE DESCRIBE OF ${many.length} OBJECT${many.length === 1 ? "" : "S"}: ${many.slice(0, 5).join(", ")}${many.length > 5 ? ` AND ${many.length - 5} MORE` : ""}`
     : p.level === "metadata" ? `THE DESCRIBE OF ${p.object}`
     : p.count === true ? `A COUNT OF ${p.object}`
     : `${(p.fields as string[]).length} FIELD${(p.fields as string[]).length === 1 ? "" : "S"} OF ${p.object}, UP TO ${p.limit} ROWS`;
@@ -657,6 +674,8 @@ export const queueSwitchboardSfReadTool = defineTool({
       stage, org_alias: typeof p.alias === "string" && p.alias.trim() ? p.alias.trim().slice(0, 80) : "?",
       level: SF_LEVELS.includes(p.level as string) ? p.level : null,
       object: typeof p.object === "string" ? p.object.slice(0, 80) : null,
+      // d4x O4: needs the migration's objects column, so this tool deploys after it.
+      ...(Array.isArray(p.objects) ? { objects: p.objects.slice(0, SF_OBJECTS_MAX + 1) } : {}),
       fields: Array.isArray(p.fields) ? p.fields : null,
       filters: Array.isArray(p.filters) ? p.filters : null,
       ...extra,
@@ -705,6 +724,112 @@ export const queueSwitchboardSfReadTool = defineTool({
       next: "Give Alex the url whole; it lasts 30 minutes. Nothing runs until he clicks Approve; then the desktop helper checks the org " +
         `against orgs.json and Salesforce and reads. The result line (sf ${actionId} done or failed) arrives in this chat by itself; ` +
         `then call get_switchboard_sf_result with this action_id, once: the rows come back once and are deleted, and are gone 10 minutes after the read.`,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// queue_switchboard_sf_dataop (dataops_alfred-d4x A1): the production data run, started only by Alex's click on its
+// link (switchboard spec D1). The payload is the contract in docs/technical-spec-dataops_alfred-d4x.md, checked here
+// first so a refusal says why, then by the database's switchboard_actions_sf_dataop_payload, then by the helper against
+// the stamped plan. This tool queues and issues the link; nothing here can approve it.
+// ---------------------------------------------------------------------------
+
+const DATAOP_KEYS = ["alias", "repo", "plan", "stamp", "preflight_at", "object", "problem", "expected", "write", "rows", "rehearsal"];
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/;
+const PLAN_PATH = /^[A-Za-z0-9_.-]+([\\/][A-Za-z0-9_.-]+)*\.json$/;
+export const DATAOP_MAX_ROWS = 40;
+const chars = (s: string) => [...s].length;
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+const isCount = (v: unknown) => Number.isInteger(v) && (v as number) >= 0;
+
+export function sfDataopPayload(args: Record<string, unknown>): { payload: Record<string, unknown> } | { refused: string } {
+  const r = (refused: string) => ({ refused });
+  const p = payloadOf(args);
+  const extra = Object.keys(p).filter((k) => !DATAOP_KEYS.includes(k));
+  if (extra.length) {
+    return r(`an sf_dataop does not take ${extra.join(", ")}. Pass sb's printed arguments exactly as they are; the Id list, SOQL and scripts never go in the link (the stamp covers them).`);
+  }
+  const missing = DATAOP_KEYS.filter((k) => k !== "rehearsal" && p[k] === undefined);
+  if (missing.length) return r(`missing ${missing.join(", ")}: pass every argument sb printed.`);
+  if (typeof p.alias !== "string" || !SF_ALIAS.test(p.alias)) return r("`alias` must be the production org's alias (letters, digits, _ . -).");
+  if (typeof p.repo !== "string" || p.repo.length > 240 || !GIT_REPO.test(p.repo) || p.repo.includes("..")) {
+    return r("`repo` must be the checkout's absolute path, e.g. C:\\Users\\Alex\\projects\\common-defense, with no ..");
+  }
+  if (typeof p.plan !== "string" || p.plan.length > 260 || !PLAN_PATH.test(p.plan) || p.plan.includes("..")) {
+    return r("`plan` must be the plan file's path inside repo, ending .json, with no ..");
+  }
+  if (typeof p.stamp !== "string" || !/^[0-9a-f]{64}$/.test(p.stamp)) return r("`stamp` must be the full preflight stamp: 64 lower-case hex characters.");
+  if (typeof p.preflight_at !== "string" || !ISO_TIME.test(p.preflight_at)) return r("`preflight_at` must be an ISO time, e.g. 2026-11-18T15:00:00Z.");
+  if (typeof p.object !== "string" || !SF_NAME.test(p.object)) return r("`object` must be one API name, e.g. Contact or Donation__c.");
+  if (typeof p.problem !== "string" || chars(p.problem) < 20 || chars(p.problem) > 600) return r("`problem` must be the plan's problem sentence, 20 to 600 characters.");
+  if (!Number.isInteger(p.expected) || (p.expected as number) < 1 || (p.expected as number) > 999_999_999) {
+    return r("`expected` must be the whole number of records the write changes, at least 1.");
+  }
+  const w = p.write;
+  if (!isObject(w) || Object.keys(w).some((k) => k !== "kind" && k !== "class")) return r("`write` must be {kind: bulk} or {kind: batch, class}.");
+  if (w.kind === "bulk") {
+    if (w.class !== undefined) return r("a bulk write takes no class.");
+  } else if (w.kind === "batch") {
+    if (typeof w.class !== "string" || !SF_NAME.test(w.class)) return r("a batch write needs its deployed class name.");
+  } else {
+    return r("`write.kind` must be bulk or batch (D5: no other way to write).");
+  }
+  const rows = p.rows;
+  if (!Array.isArray(rows) || rows.length < 1 || rows.length > DATAOP_MAX_ROWS) return r(`\`rows\` must list 1 to ${DATAOP_MAX_ROWS} state rows.`);
+  for (const [i, row] of rows.entries()) {
+    const at = `row ${i + 1}`;
+    if (!isObject(row)) return r(`${at} must be {label, before, goal, knock_on?}.`);
+    const bad = Object.keys(row).filter((k) => !["label", "before", "goal", "knock_on"].includes(k));
+    if (bad.length) return r(`${at} does not take ${bad.join(", ")}.`);
+    if (typeof row.label !== "string" || !row.label.trim() || chars(row.label) > 200 || /[\r\n]/.test(row.label)) {
+      return r(`${at}'s label must be one line of 1 to 200 characters.`);
+    }
+    if (!isCount(row.before) || !isCount(row.goal)) return r(`${at}'s before and goal must be whole numbers, 0 or more.`);
+    if (row.knock_on !== undefined && typeof row.knock_on !== "boolean") return r(`${at}'s knock_on must be true or false.`);
+  }
+  if (p.rehearsal !== undefined) {
+    const h = p.rehearsal;
+    if (!isObject(h) || Object.keys(h).some((k) => k !== "sandbox" && k !== "at")) return r("`rehearsal` must be {sandbox, at}, or left out.");
+    if (typeof h.sandbox !== "string" || !SF_ALIAS.test(h.sandbox)) return r("`rehearsal.sandbox` must be the sandbox's alias.");
+    if (typeof h.at !== "string" || !ISO_TIME.test(h.at)) return r("`rehearsal.at` must be an ISO time.");
+  }
+  if (JSON.stringify(p).length > 16000) return r("the payload is over 16,000 characters.");
+  return { payload: p };
+}
+
+export function sfDataopHeadline(code: string, p: Record<string, unknown>): string {
+  const n = (p.expected as number).toLocaleString("en-US");
+  const w = p.write as { kind: string; class?: string };
+  const how = w.kind === "batch" ? `BY BATCH ${w.class}` : "BY BULK";
+  return `PRODUCTION DATA RUN ${code} ON ${p.alias}: ABOUT TO CHANGE ${n} LIVE RECORD${p.expected === 1 ? "" : "S"} OF ${p.object} ${how}`;
+}
+
+export const queueSwitchboardSfDataopTool = defineTool({
+  name: "queue_switchboard_sf_dataop",
+  tier: 2,
+  tables: { reads: ["switchboard_actions", "switchboard_settings"], writes: ["switchboard_actions"] },
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "queue_switchboard_sf_dataop";
+    const code = typeof args.project_code === "string" ? args.project_code.trim() : "";
+    if (!PROJECT_CODE.test(code)) throw fail(tool, "`project_code` must be the data operation's project code, as sb printed it.");
+    const checked = sfDataopPayload(args);
+    if ("refused" in checked) throw fail(tool, `refused: ${checked.refused}`);
+    const headline = sfDataopHeadline(code, checked.payload);
+    // needs_click is always true for this kind, whoever queues it (the database sets it and refuses false).
+    const actionId = await queueHelper(tool, ctx, "sf_dataop", code, checked.payload, headline, chatOf(args));
+    const { data, error } = await ctx.db.rpc("switchboard_issue_link", { p_action_id: actionId });
+    if (error) {
+      if (REFUSALS.has(error.code ?? "")) throw fail(tool, `queued as ${actionId}, but no link: ${error.message}`);
+      throw dbError(tool, `issuing the link for ${actionId}`, error);
+    }
+    return {
+      ...(data as Record<string, unknown>), action_id: actionId, headline, payload: checked.payload,
+      next: "Give Alex the url whole, in its own reply; it lasts 30 minutes. ONLY HIS CLICK ON APPROVE STARTS THE RUN. The page " +
+        `shows the PRODUCTION banner, "About to change ${(checked.payload.expected as number).toLocaleString("en-US")} live records", ` +
+        "the problem, the stamp and the Before and Goal rows. After the click the desktop helper must pick it up within 15 minutes " +
+        "or it fails unrun; it checks the stamp and the sandbox pass against the plan before anything is written. " +
+        `The result line (dataop ${actionId} done or failed) arrives in this chat by itself, and the receipt as a clip.`,
     };
   },
 });
