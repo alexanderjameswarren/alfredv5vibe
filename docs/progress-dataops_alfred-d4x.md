@@ -19,8 +19,8 @@ Markers: ✱ a migration link, ⚙ a function deploy, ⛳ a checkpoint.
 | s5 | A1 | Checkpoint A1 to main, then `claims.cmd status` | ⛳ | 5m | done 2026-11-18: checkpoint 5113c35 (run 2a9dcb6e); test 9cebb5d4 passed 56 of 56; every db: claim released (confirmed at s6) |
 | s6 | A2 | The approve page for sf_dataop | ⛳ | 30m | built 2026-11-18; 60 switchboard app tests pass; Alex's look waits on s6b |
 | s6b | A2 | A dev-only fixture route so Alex can see the sf_dataop page with a sample payload, nothing queued | | 20m | done 2026-11-18: `/approve-fixture/sf_dataop` on the dev server only; 65 switchboard and 3,352 app tests pass; the build has no fixture code; Alex's A2 tests passed; A2 in main by checkpoint 4b67587 and live |
-| s7 | A3 | Full A3 (O9): salesforce-workflow and cli-workflow | ⛳ | 45m | written 2026-11-18, both at Skill version 2026-11-18; checkpoint pending |
-| s8 | | Full suites and Finish | | 10m | |
+| s7 | A3 | Full A3 (O9): salesforce-workflow and cli-workflow | ⛳ | 45m | done 2026-11-18: both at Skill version 2026-11-18, checkpointed into main by link |
+| s8 | | Full suites and Finish | | 10m | done 2026-11-18: every suite passes; main's skill files match the worktree; Finish is Alex's, by link |
 
 The total estimate is 3h10 (s3c and s4b added).
 
@@ -83,6 +83,14 @@ Alex runs gitpush in **Checkpoint** mode for this worktree, with these paths. Th
 - SQL: none. Check and claim db:table:switchboard_actions, db:table:switchboard_runs, db:table:switchboard_sf_read_log, db:fn:switchboard_needs_click, db:fn:switchboard_queue_helper, db:fn:switchboard_pickup_helper and db:deploy; then `claims.cmd number-migration`.
 - Estimated run: 10m
 
+## For the switchboard thread (switchboard_dataops-d4x)
+
+The Alfred side is done. As of 2026-11-18:
+- **A1 and A2 are live** (checkpoints 5113c35 and 4b67587; migration 240).
+- **The sf_dataop payload contract** is in main at `C:\Users\Alex\projects\alfred-v5\docs\technical-spec-dataops_alfred-d4x.md`, under "The sf_dataop payload contract".
+- **Both skills depend on two sb commands** that switchboard s8 is building: `sb prod dataop-link <code> --plan <file>` (prints the queue tool's arguments) and `sb prod dataop <code> --plan <file> --dry-run`. If s8 renames either, both skills need a one-line change.
+- **One stale claim** remains on the deleted `supabase/migrations/_pending_dataops_alfred-d4x_sf_dataop.sql`. Finish releases it.
+
 ## Later
 
 - The 15-minute pickup expiry (O6) should eventually cover every action kind, because of Alfred bug e12efcee (https://alfredv5vibe.vercel.app/e12efcee), where an approved git link that never ran stayed live. For now it applies to `sf_dataop` only.
@@ -102,3 +110,4 @@ Alex runs gitpush in **Checkpoint** mode for this worktree, with these paths. Th
 | s6 | 30m | 6m | sf_dataop page: orange banner, count, problem, facts, stamp, rows; 6 new tests |
 | s6b | 20m | 4m | fixture, App.js dev route, runner and session props; 5 new tests; full app suite and build |
 | s7 | 45m | 4m | both skills for the dataops flow; finish by link with no window step |
+| s8 | 10m | 3m | all suites pass; skills in main match; skills pushed whole as clips |
