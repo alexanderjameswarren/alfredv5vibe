@@ -1161,3 +1161,123 @@ test("sf result: a bad id, an unknown action, another kind or a database error i
   await assert.rejects(take(takeDb({ action: ok({ id: ACTION_ID, kind: "sf_check", status: "succeeded" }) })), /not a Salesforce read/);
   await assert.rejects(take(takeDb({ take: { data: null, error: { message: "down" } } })), /taking the result/);
 });
+
+// --- dataops_alfred-d4x: the sf_read objects list, and queue_switchboard_sf_dataop ----------------------------------
+
+const OBJS = Array.from({ length: 20 }, (_, i) => `Obj${i + 1}__c`);
+const META = { alias: "cd-prod", production: true, level: "metadata" };
+
+test("sf_read objects: 1 to 20 names at metadata are accepted, and the headline names them", () => {
+  for (const objects of [["Contact"], OBJS]) assert.deepEqual(m.sfReadPayload({ ...META, objects }), { payload: { ...META, objects } });
+  assert.equal(m.sfReadHeadline({ ...META, objects: ["Contact", "Account"] }),
+    "SF READ METADATA ON PRODUCTION cd-prod: THE DESCRIBE OF 2 OBJECTS: Contact, Account, READ ONLY");
+  assert.equal(m.sfReadHeadline({ ...META, objects: OBJS }),
+    "SF READ METADATA ON PRODUCTION cd-prod: THE DESCRIBE OF 20 OBJECTS: Obj1__c, Obj2__c, Obj3__c, Obj4__c, Obj5__c AND 15 MORE, READ ONLY");
+});
+
+test("sf_read objects: 21, empty, dotted, doubled, with object, or at another level is refused", () => {
+  for (const [p, why] of [
+    [{ ...META, objects: [...OBJS, "Contact"] }, /1 to 20 API names/],
+    [{ ...META, objects: [] }, /1 to 20 API names/],
+    [{ ...META, objects: ["Account.Name"] }, /1 to 20 API names/],
+    [{ ...META, objects: ["Contact", "contact"] }, /listed twice/],
+    [{ ...META, objects: ["Contact"], object: "Account" }, /not both/],
+    [{ ...META, objects: ["Contact"], count: true }, /takes no count/],
+    [{ alias: "cd-prod", production: true, level: "ids", objects: ["Contact"], count: true }, /level metadata only/],
+    [{ alias: "cd-prod", production: true, level: "objects", objects: ["Contact"] }, /takes no objects/],
+  ]) {
+    const r = m.sfReadPayload(p);
+    assert.ok("refused" in r, JSON.stringify(p));
+    assert.match(r.refused, why, JSON.stringify(p));
+  }
+});
+
+test("sf_read objects: the log row keeps the list", async () => {
+  const { db } = await queueRead({ ...META, objects: ["Contact", "Account"] });
+  const row = logged(db).find((r) => r.stage === "queued");
+  assert.deepEqual(row.objects, ["Contact", "Account"]);
+  assert.equal(row.object, null);
+});
+
+const DATAOP = { alias: "cd-prod", repo: "C:\\Users\\Alex\\projects\\common-defense", plan: "dataops/fixc-plan.json",
+  stamp: "0123456789abcdef".repeat(4), preflight_at: "2026-11-18T15:00:00.000Z", object: "Demo_Gift__c",
+  problem: "Forty-five gifts were saved without a link to their plan.", expected: 26571,
+  write: { kind: "batch", class: "FixCLinkBatch" },
+  rows: [{ label: "Gifts in the list with no plan link", before: 26571, goal: 0 },
+         { label: "Knock-on check: Plans whose paid total went up today", before: 0, goal: 12, knock_on: true }],
+  rehearsal: { sandbox: "cd-dev1", at: "2026-11-18T16:00:00Z" } };
+const queueDataop = (args, db = helperDb()) => m.queueSwitchboardSfDataopTool.handler(args, { db });
+
+test("sf_dataop: tier 2; queued as sf_dataop with its project code, then the link; nothing else", async () => {
+  assert.equal(m.queueSwitchboardSfDataopTool.tier, 2);
+  const db = helperDb();
+  const out = await queueDataop({ project_code: "cd_ab_link_installments-q8d", chat_url: "x", ...DATAOP }, db);
+  assert.deepEqual(db.calls.map((c) => c[0]), ["switchboard_queue_helper", "switchboard_issue_link"]);
+  const [, params] = db.calls[0];
+  assert.equal(params.p_kind, "sf_dataop");
+  assert.equal(params.p_project_code, "cd_ab_link_installments-q8d");
+  assert.deepEqual(params.p_payload, DATAOP);
+  assert.equal(params.p_headline,
+    "PRODUCTION DATA RUN cd_ab_link_installments-q8d ON cd-prod: ABOUT TO CHANGE 26,571 LIVE RECORDS OF Demo_Gift__c BY BATCH FixCLinkBatch");
+  assert.equal(out.url, LINK.url);
+  assert.match(out.next, /ONLY HIS CLICK ON APPROVE STARTS THE RUN/);
+  assert.match(out.next, /About to change 26,571 live records/);
+  assert.match(out.next, new RegExp(`dataop ${ACTION_ID} done or failed`));
+});
+
+test("sf_dataop: a bulk write without rehearsal is accepted; the headline says BY BULK", () => {
+  const { rehearsal: _r, ...rest } = DATAOP;
+  const p = { ...rest, expected: 1, write: { kind: "bulk" } };
+  assert.deepEqual(m.sfDataopPayload(p), { payload: p });
+  assert.equal(m.sfDataopHeadline("p-x", p), "PRODUCTION DATA RUN p-x ON cd-prod: ABOUT TO CHANGE 1 LIVE RECORD OF Demo_Gift__c BY BULK");
+});
+
+test("sf_dataop: every refusal says why, and nothing is queued", async () => {
+  const bad = [
+    [{ ...DATAOP, ids: ["a0D000000000001AAA"] }, /does not take ids.*stamp covers them/],
+    [{ ...DATAOP, soql: "SELECT Id FROM Contact" }, /does not take soql/],
+    [{ ...DATAOP, stamp: undefined }, /missing stamp/],
+    [{ ...DATAOP, stamp: "abc" }, /64 lower-case hex/],
+    [{ ...DATAOP, stamp: "A".repeat(64) }, /64 lower-case hex/],
+    [{ ...DATAOP, alias: "-x" }, /`alias`/],
+    [{ ...DATAOP, repo: "projects\\common-defense" }, /`repo`/],
+    [{ ...DATAOP, repo: "C:\\Users\\..\\x" }, /`repo`/],
+    [{ ...DATAOP, plan: "../plan.json" }, /`plan`/],
+    [{ ...DATAOP, plan: "dataops/plan.csv" }, /`plan`/],
+    [{ ...DATAOP, preflight_at: "2026-11-18" }, /`preflight_at`/],
+    [{ ...DATAOP, object: "Gift.Plan" }, /`object`/],
+    [{ ...DATAOP, problem: "too short" }, /`problem`/],
+    [{ ...DATAOP, expected: 0 }, /`expected`/],
+    [{ ...DATAOP, expected: 4.5 }, /`expected`/],
+    [{ ...DATAOP, expected: "45" }, /`expected`/],
+    [{ ...DATAOP, write: { kind: "batch" } }, /deployed class name/],
+    [{ ...DATAOP, write: { kind: "bulk", class: "X" } }, /bulk write takes no class/],
+    [{ ...DATAOP, write: { kind: "apex" } }, /bulk or batch/],
+    [{ ...DATAOP, write: "bulk" }, /`write` must be/],
+    [{ ...DATAOP, rows: [] }, /1 to 40 state rows/],
+    [{ ...DATAOP, rows: Array.from({ length: 41 }, (_, i) => ({ label: `Row number ${i}`, before: 1, goal: 0 })) }, /1 to 40 state rows/],
+    [{ ...DATAOP, rows: [{ label: "Gifts with no link", before: -1, goal: 0 }] }, /whole numbers/],
+    [{ ...DATAOP, rows: [{ label: "Gifts with no link", before: 1, goal: 0, soql: "x" }] }, /does not take soql/],
+    [{ ...DATAOP, rows: [{ label: "x".repeat(201), before: 1, goal: 0 }] }, /1 to 200 characters/],
+    [{ ...DATAOP, rows: [{ label: "two\nlines", before: 1, goal: 0 }] }, /one line/],
+    [{ ...DATAOP, rows: [{ label: "Gifts with no link", before: 1, goal: 0, knock_on: "yes" }] }, /knock_on/],
+    [{ ...DATAOP, rehearsal: { sandbox: "cd-dev1", at: "2026-11-18T16:00:00Z", passed: true } }, /`rehearsal` must be/],
+    [{ ...DATAOP, rehearsal: { sandbox: "cd-dev1", at: "today" } }, /rehearsal.at/],
+  ];
+  for (const [p, why] of bad) {
+    const r = m.sfDataopPayload(p);
+    assert.ok("refused" in r, JSON.stringify(p).slice(0, 120));
+    assert.match(r.refused, why, JSON.stringify(p).slice(0, 120));
+  }
+  const db = helperDb();
+  await assert.rejects(queueDataop({ project_code: "p-x", ...DATAOP, stamp: "abc" }, db), /refused: `stamp`/);
+  await assert.rejects(queueDataop({ ...DATAOP }, db), /`project_code`/);
+  assert.equal(db.calls.length, 0);
+});
+
+test("sf_dataop: the database's refusal and a link refusal are reported, not retried", async () => {
+  await assert.rejects(queueDataop({ project_code: "p-x", ...DATAOP },
+    helperDb({ queue: { data: null, error: { code: "23514", message: "violates check constraint" } } })), /refused: violates/);
+  await assert.rejects(queueDataop({ project_code: "p-x", ...DATAOP },
+    helperDb({ link: { data: null, error: { code: "55000", message: "another link is live" } } })), new RegExp(`queued as ${ACTION_ID}, but no link`));
+});

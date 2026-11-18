@@ -37,8 +37,10 @@ export type PickedAction = {
   action_id: string; run_id: string; kind?: string; project_code: string; payload: Record<string, unknown>;
   fingerprint: string; headline: string; chat_url: string | null;
 };
-/** The kinds the desktop helper runs (spec 10, 11.3-11.6). sf_read since s89e. */
-export const HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read"] as const;
+/** The kinds the desktop helper runs (spec 10, 11.3-11.6). sf_read since s89e; sf_dataop since dataops_alfred-d4x. */
+export const HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop"] as const;
+/** What a helper from before dataops_alfred-d4x asks for; still served, and never handed an sf_dataop (O3). */
+const S89_HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read"];
 /** What a helper from before s89c asks for; still served, so an older install keeps picking up. */
 const OLDER_HELPER_KINDS = ["git", "sf_check", "sb_setup"];
 export type Picked = {
@@ -52,10 +54,16 @@ export type Deps = {
   userId: string;
   /** switchboard_pickup_git, with the service role: git only, for a helper that asks for no other kind. */
   pickupGit(userId: string): Promise<PickedAction | null>;
-  /** switchboard_pickup_helper (218), with the service role: any helper kind. */
-  pickupHelper(userId: string): Promise<PickedAction | null>;
-  /** Helper-kind actions still consumed that were picked before `before`, with their open real run if any. */
-  stalePicks(userId: string, before: string): Promise<{ action_id: string; run_id: string | null }[]>;
+  /**
+   * switchboard_pickup_helper, with the service role. `kinds` is passed only for a helper that runs sf_dataop; without
+   * it the function serves today's four and never hands one out (O3).
+   */
+  pickupHelper(userId: string, kinds?: string[]): Promise<PickedAction | null>;
+  /**
+   * Helper-kind actions still consumed with their open real run if any: picked before `before`, or for an sf_dataop
+   * (a production data run, which may take hours) before `dataopBefore`.
+   */
+  stalePicks(userId: string, before: string, dataopBefore: string): Promise<{ action_id: string; run_id: string | null }[]>;
   findPicked(actionId: string, runId: string): Promise<Picked | null>;
   finishRun(runId: string, fields: Record<string, unknown>): Promise<void>;
   insertAction(row: Record<string, unknown>): Promise<{ id: string }>;
@@ -489,8 +497,10 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
 }
 
 /**
- * A git, sf_check (s86pa) or sb_setup link (spec 11.3-11.5). Nothing runs here: Approve spends the link, which marks the action
- * consumed, and the pickup hands it to the desktop helper. No dry run exists, so none is asked for.
+ * A git, sf_check (s86pa), sb_setup, sf_read or sf_dataop link (spec 11.3-11.5; dataops_alfred-d4x). Nothing runs here:
+ * Approve, with Alex's signed-in session, the token and the fingerprint, spends the link, which marks the action
+ * consumed, and the pickup hands it to the desktop helper. For an sf_dataop that click is the only way a production data
+ * run starts (D1). No dry run exists, so none is asked for.
  */
 async function handleHelperRun(
   route: string, body: Record<string, unknown> | null, action: Action, jwt: string, token: string, deps: Deps,
@@ -537,6 +547,8 @@ async function handleHelperRun(
 
 /** A picked action with no result after this long is marked failed at the next pickup, so its project's queue moves. */
 export const PICK_TIMEOUT_MS = 30 * 60 * 1000;
+/** An sf_dataop's own limit: a production data run's batch and waits can take far longer than 30 minutes. */
+export const DATAOP_PICK_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 const MAX_SUMMARY = 300;
 const MAX_OUTPUT = 8000;
 const TIMED_OUT = "timed out: the helper picked this up but never reported a result.";
@@ -548,35 +560,41 @@ const isHelperKind = (k: unknown): k is string => typeof k === "string" && (HELP
 
 /**
  * The kinds the helper says it runs: body `kinds`, an array. None given means git only, the helper before s86e.
- * switchboard_pickup_helper has no kind filter, so only git alone or every helper kind can be served exactly.
+ * Served exactly: git alone, every helper kind, or one of the older full sets. Only a helper naming every kind,
+ * sf_dataop included, has its kinds passed on, so only it can be handed an sf_dataop (O3).
  */
-function pickupKinds(body: Record<string, unknown> | null): { pick?: "git" | "helper"; error?: string } {
+function pickupKinds(body: Record<string, unknown> | null): { pick?: "git" | "helper"; kinds?: string[]; error?: string } {
   const kinds = body?.kinds;
   if (kinds === undefined || kinds === null) return { pick: "git" };
   if (!Array.isArray(kinds) || !kinds.length || !kinds.every(isHelperKind)) {
     return { error: `kinds must be a list of helper kinds: ${HELPER_KINDS.join(", ")}.` };
   }
   const set = new Set(kinds);
+  const exactly = (list: readonly string[]) => set.size === list.length && list.every((k) => set.has(k));
   if (set.size === 1 && set.has("git")) return { pick: "git" };
-  if (HELPER_KINDS.every((k) => set.has(k))) return { pick: "helper" };
-  // A helper from before s89c: it refuses an sf_read it is handed, and that refusal closes the run.
-  if (set.size === OLDER_HELPER_KINDS.length && OLDER_HELPER_KINDS.every((k) => set.has(k))) return { pick: "helper" };
+  if (exactly(HELPER_KINDS)) return { pick: "helper", kinds: [...HELPER_KINDS] };
+  // A helper from before dataops_alfred-d4x, and one from before s89c (which refuses an sf_read it is handed, and that
+  // refusal closes the run). Neither is ever handed an sf_dataop: the pickup's default leaves it out.
+  if (exactly(S89_HELPER_KINDS) || exactly(OLDER_HELPER_KINDS)) return { pick: "helper" };
   return { error: `kinds must be ["git"] or all of ${HELPER_KINDS.join(", ")}; the pickup cannot serve a part of them.` };
 }
 
 /** Fail every pick older than the timeout, then hand out the next ready action of a kind the helper asked for, or null. */
 async function handlePickup(req: Request, deps: Deps, now: number): Promise<Response> {
   if (!pickupAuthorised(req, deps)) return json({ ok: false, error: "unauthorized" }, 401);
-  const { pick, error } = pickupKinds(await readBody(req));
+  const { pick, kinds, error } = pickupKinds(await readBody(req));
   if (error) return json({ ok: false, error }, 400);
-  const stale = await deps.stalePicks(deps.userId, new Date(now - PICK_TIMEOUT_MS).toISOString());
+  const stale = await deps.stalePicks(deps.userId, new Date(now - PICK_TIMEOUT_MS).toISOString(),
+    new Date(now - DATAOP_PICK_TIMEOUT_MS).toISOString());
   for (const s of stale) {
     if (s.run_id) {
       await deps.finishRun(s.run_id, { summary: TIMED_OUT, result: { ok: false, timed_out: true }, finished_at: new Date(now).toISOString() });
     }
     await deps.setStatus(s.action_id, "failed");
   }
-  const picked = pick === "helper" ? await deps.pickupHelper(deps.userId) : await deps.pickupGit(deps.userId);
+  const picked = pick === "helper"
+    ? await (kinds ? deps.pickupHelper(deps.userId, kinds) : deps.pickupHelper(deps.userId))
+    : await deps.pickupGit(deps.userId);
   // pickup_git returns no kind; everything it hands out is git.
   const action = picked && pick === "git" ? { ...picked, kind: "git" } : picked;
   return json({ ok: true, action, timed_out: stale.map((s) => s.action_id) });
@@ -609,8 +627,9 @@ async function handleResult(req: Request, deps: Deps, now: number): Promise<Resp
   if (a.status !== "consumed" || !a.picked_up_at || r.mode !== "real" || r.finished_at) {
     return json({ ok: false, error: `this action is ${a.status} and no longer waiting for a result.` }, 409);
   }
-  // s89e: a read's rows went to /sf-result; its run keeps the summary only, never the window's output.
-  if (a.kind === "sf_read") output = undefined;
+  // s89e: a read's rows went to /sf-result; its run keeps the summary only, never the window's output. An sf_dataop
+  // likewise (O8): its receipt goes to Alfred as a clip push (D6).
+  if (a.kind === "sf_read" || a.kind === "sf_dataop") output = undefined;
   await deps.finishRun(r.id, {
     summary, result: { ok: body.ok, ...(exitCode === undefined ? {} : { exit_code: exitCode }), ...(output === undefined ? {} : { output }) },
     finished_at: new Date(now).toISOString(),
@@ -674,6 +693,8 @@ async function handleSfResult(req: Request, deps: Deps): Promise<Response> {
     org_alias: typeof p.alias === "string" && p.alias ? p.alias.slice(0, 80) : "?",
     level: LEVELS.includes(p.level as string) ? p.level : null,
     object: typeof p.object === "string" ? p.object : null,
+    // d4x O4: a metadata read of several objects. Needs the migration's objects column, so deploy after it.
+    ...(Array.isArray(p.objects) ? { objects: p.objects } : {}),
     fields: Array.isArray(p.fields) ? p.fields : null,
     filters: Array.isArray(p.filters) ? p.filters : null,
     // Optional for now: the helper may add the SOQL it built later.

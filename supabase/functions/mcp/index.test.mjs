@@ -245,7 +245,7 @@ test("switchboard s90d: queue_switchboard_git takes then_send and says what a ch
 test("switchboard s89e: the Salesforce read tools say ask the least, never SOQL, rows once, never to a CLI", () => {
   const q = registered.find((r) => r.name === "queue_switchboard_sf_read");
   assert.deepEqual(Object.keys(q.cfg.inputSchema).sort(),
-    ["alias", "chat_url", "count", "fields", "filters", "level", "limit", "object", "production"]);
+    ["alias", "chat_url", "count", "fields", "filters", "level", "limit", "object", "objects", "production"]);
   assert.match(q.cfg.description, /ASK THE LEAST THAT ANSWERS THE QUESTION: a count first/);
   assert.match(q.cfg.description, /Never SOQL text/);
   assert.match(q.cfg.description, /PRODUCTION FULL DATA/);
@@ -458,7 +458,9 @@ test("the tool count is 72 after the job-search tools", () => {
     "update_homer_genre", "create_homer_queue_items", "update_homer_queue_item"];
   // Job health s8, +1.
   const EXPECTED_ADDED_JOB_HEALTH_8 = ["get_job_health"];
-  for (const name of [...EXPECTED_ADDED_JOB_HEALTH_8, ...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
+  // dataops_alfred-d4x A1, +1 (the production data run by link).
+  const EXPECTED_ADDED_DATAOPS_A1 = ["queue_switchboard_sf_dataop"];
+  for (const name of [...EXPECTED_ADDED_DATAOPS_A1, ...EXPECTED_ADDED_JOB_HEALTH_8,...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
                       ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C, ...EXPECTED_ADDED_P5,
@@ -483,10 +485,10 @@ test("the tool count is 72 after the job-search tools", () => {
   // 2026-11-05, +1: queue_switchboard_git. +2: add_delivery_override, end_delivery_override. 2026-11-06, +1: update_signal.
   // 2026-11-08, +2: queue_switchboard_sf_check, queue_switchboard_sb_setup. 2026-11-10, +11: Homer's read tools; +12: its writes.
   // 2026-11-11, +1: get_claim_state. +2: queue_switchboard_sf_read, get_switchboard_sf_result.
-  // 2026-11-17, +1: get_job_health (job_health-t4m s8).
+  // 2026-11-17, +1: get_job_health (job_health-t4m s8). 2026-11-18, +1: queue_switchboard_sf_dataop (dataops_alfred-d4x A1).
   assert.ok(registered.some((r) => r.name === "record_wb_subscription_review"), "record_wb_subscription_review is not registered");
-  assert.equal(registered.length, 227,
-    `expected 227 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 228,
+    `expected 228 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 

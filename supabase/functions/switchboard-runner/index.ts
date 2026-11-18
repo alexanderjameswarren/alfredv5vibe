@@ -20,13 +20,16 @@ import {
 //                  unless it's a test action, whose one run this is.
 //   POST /approve  Alex's JWT. { token, fingerprint } -> { run_id, summary, conformance, counts }. Needs a clean latest dry run.
 //   POST /cancel   Alex's JWT. { token, reason? } -> { run_id, cancelled, reason }. Spends the link; runs nothing.
-//   A git, sf_check (s86pa) or sb_setup link (spec 11.3-11.5): /preview adds kind and payload; /approve only spends
+//   A git, sf_check (s86pa), sb_setup, sf_read or sf_dataop link: /preview adds kind and payload; /approve only spends
 //   the link, so the action is consumed for the helper, and runs nothing here; /cancel needs no dry run; /dry-run is refused.
 //   POST /pickup   x-switchboard-pickup-key. { kinds? } -> { action (with kind) | null, timed_out }. The desktop helper.
-//                  No kinds: git only, by switchboard_pickup_git. All of git, sf_check, sb_setup, sf_read (or the older
-//                  three, from a helper before s89c): switchboard_pickup_helper.
+//                  No kinds: git only, by switchboard_pickup_git. All five, sf_dataop included: switchboard_pickup_helper
+//                  with p_kinds. The four without sf_dataop, or the older three (a helper before s89c): the same, with
+//                  no p_kinds, so never an sf_dataop (dataops_alfred-d4x O3). A pick with no result is failed after 30
+//                  minutes, an sf_dataop's after 4 hours.
 //   POST /result   x-switchboard-pickup-key. { action_id, run_id, ok, summary, exit_code?, output? } -> { status }. Any helper kind.
-//                  An sf_read's run keeps no output: its rows went to /sf-result.
+//                  An sf_read's or sf_dataop's run keeps no output (O8): a read's rows went to /sf-result, a data run's
+//                  receipt is a clip push.
 //   POST /sf-result x-switchboard-pickup-key. { action_id, run_id, ok, summary, level, object, production_full_data, count,
 //                  rows, query? } or { ..., ok: false, reason } -> { stored }. An sf_read's rows, before its /result (s89e):
 //                  into switchboard_sf_results for at most 10 minutes, plus a switchboard_sf_read_log row. The run is untouched.
@@ -106,10 +109,17 @@ function deps(): Deps {
     pickupKey: Deno.env.get("SWITCHBOARD_PICKUP_KEY") ?? "",
     userId: Deno.env.get("CLIPBOARD_USER_ID") ?? "",
     pickupGit: async (userId) => must(await db.rpc("switchboard_pickup_git", { p_user: userId })) as PickedAction | null,
-    pickupHelper: async (userId) => must(await db.rpc("switchboard_pickup_helper", { p_user: userId })) as PickedAction | null,
-    stalePicks: async (userId, before) => {
-      const actions = must(await db.from("switchboard_actions").select("id").eq("user_id", userId).in("kind", [...HELPER_KINDS])
-        .eq("status", "consumed").lt("picked_up_at", before)) as { id: string }[];
+    // p_kinds only when the helper runs sf_dataop; the default leaves it out (O3).
+    pickupHelper: async (userId, kinds) =>
+      must(await db.rpc("switchboard_pickup_helper", kinds ? { p_user: userId, p_kinds: kinds } : { p_user: userId })) as PickedAction | null,
+    stalePicks: async (userId, before, dataopBefore) => {
+      const others = HELPER_KINDS.filter((k) => k !== "sf_dataop");
+      const actions = [
+        ...must(await db.from("switchboard_actions").select("id").eq("user_id", userId).in("kind", others)
+          .eq("status", "consumed").lt("picked_up_at", before)) as { id: string }[],
+        ...must(await db.from("switchboard_actions").select("id").eq("user_id", userId).eq("kind", "sf_dataop")
+          .eq("status", "consumed").lt("picked_up_at", dataopBefore)) as { id: string }[],
+      ];
       if (!actions.length) return [];
       const runs = must(await db.from("switchboard_runs").select("id, action_id")
         .in("action_id", actions.map((a) => a.id)).eq("mode", "real").is("finished_at", null)) as { id: string; action_id: string }[];

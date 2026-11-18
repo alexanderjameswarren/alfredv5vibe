@@ -104,7 +104,8 @@ import {
 } from "../_shared/tools/homer.ts";
 import {
   getClaimStateTool, getSqlReadTool, getSwitchboardRunTool, getSwitchboardSfResultTool, issueSwitchboardLinkTool,
-  queueSwitchboardGitTool, queueSwitchboardSbSetupTool, queueSwitchboardSfCheckTool, queueSwitchboardSfReadTool,
+  queueSwitchboardGitTool, queueSwitchboardSbSetupTool, queueSwitchboardSfCheckTool, queueSwitchboardSfDataopTool,
+  queueSwitchboardSfReadTool,
 } from "../_shared/tools/switchboard.ts";
 import {
   getClaudeNotificationSettingsTool,
@@ -3676,7 +3677,7 @@ export function createMcpServer(token: string) {
       description:
         "Queue one READ-ONLY Salesforce read and issue its single-use approval link in the same call. Nothing runs until Alex clicks Approve; then the desktop helper checks the org's Id and IsSandbox against orgs.json and the org's access level, and reads with GET requests only. Never SOQL text: name the object, fields and filters, and the helper builds the query. " +
         "ASK THE LEAST THAT ANSWERS THE QUESTION: a count first (count: true), then Ids with their dates (level ids), then only the fields a hypothesis needs (level data), with the smallest limit that will do. " +
-        "level: objects (the object list; nothing else), metadata (one object's describe), ids (count, or fields from Id, CreatedDate and LastModifiedDate only; its filters may name any field, but the helper limits them to those three unless the org's contract allows client data to reach Claude) or data (any fields; needs the org's data level, and on production its own full-data setting). " +
+        "level: objects (the object list; nothing else), metadata (one object's describe, or with objects up to 20 objects' describes in one link, e.g. every object a preflight needs), ids (count, or fields from Id, CreatedDate and LastModifiedDate only; its filters may name any field, but the helper limits them to those three unless the org's contract allows client data to reach Claude) or data (any fields; needs the org's data level, and on production its own full-data setting). " +
         "production: true when the org is production; the helper refuses when Salesforce or orgs.json says otherwise. Production with level data is PRODUCTION FULL DATA: the page says so in red and the result is stamped. " +
         "filters: up to 10, ANDed: {field, op, value}, op one of = != < <= > >= with one plain value, or in with 1 to 100 values; no dots, so no relationship fields. limit: 1 to 1000, with fields. " +
         "Limits: the kill switch (sf_reads_enabled) and a budget of 20 reads per 10 minutes and 200 a day; a READ BUDGET EXCEEDED error means stop and report, never retry. Every attempt is logged, never rows. " +
@@ -3687,6 +3688,7 @@ export function createMcpServer(token: string) {
         production: z.boolean().describe("Whether the org is production. A wrong answer is refused by the helper."),
         level: z.enum(["objects", "metadata", "ids", "data"]).describe("objects, metadata, ids or data."),
         object: z.string().optional().describe("One API name, e.g. Contact or Donation__c. Not for objects."),
+        objects: z.array(z.string()).optional().describe("metadata only, instead of object: 1 to 20 API names, each once, described in one read."),
         count: z.boolean().optional().describe("true for SELECT COUNT(), with no fields and no limit. ids and data only."),
         fields: z.array(z.string()).optional().describe("ids and data, unless count: 1 to 50 API names. At ids only Id, CreatedDate, LastModifiedDate."),
         limit: z.number().int().optional().describe("With fields: the row cap, 1 to 1000. Ask for few."),
@@ -3699,6 +3701,38 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardSfReadTool, args, token),
+  );
+
+  // dataops_alfred-d4x A1: the production data run by link (switchboard spec D1).
+  server.registerTool(
+    "queue_switchboard_sf_dataop",
+    {
+      title: "Queue Switchboard Sf Dataop",
+      description:
+        "Queue a PRODUCTION Salesforce data run (switchboard's Runner 2) and issue its single-use approval link in the same call. ONLY ALEX'S CLICK ON APPROVE STARTS IT: no tool, CLI or Claude session can approve or run it. " +
+        "THE ARGUMENTS COME FROM SB: pass every argument sb printed for this plan, verbatim; never write, edit, round or reorder one. The desktop helper refuses the run if any of them differs from the stamped plan. " +
+        "Use only after a sandbox PASS for the same stamp, in its own reply. The link carries no Ids, SOQL or scripts: the stamp covers them. " +
+        "The approve page shows the PRODUCTION banner, \"About to change N live records\", the problem, the stamp and the Before and Goal rows. After the click the helper must pick it up within 15 minutes or it fails unrun. " +
+        "One live link per project code. Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole; it lasts 30 minutes. The result line (dataop <action id> done or failed) arrives in this chat by itself, and the receipt as a clip. Tier 2.",
+      inputSchema: {
+        project_code: z.string().describe("The data operation's project code, as sb printed it."),
+        alias: z.string().describe("As sb printed it: the production org's alias."),
+        repo: z.string().describe("As sb printed it: the checkout's absolute path."),
+        plan: z.string().describe("As sb printed it: the plan file's path inside repo."),
+        stamp: z.string().describe("As sb printed it: the full preflight stamp, 64 hex characters."),
+        preflight_at: z.string().describe("As sb printed it: the preflight time."),
+        object: z.string().describe("As sb printed it: the object the write changes."),
+        problem: z.string().describe("As sb printed it: the plan's problem sentence."),
+        expected: z.number().int().describe("As sb printed it: how many live records the write changes."),
+        write: z.object({ kind: z.enum(["bulk", "batch"]), class: z.string().optional() })
+          .describe("As sb printed it: {kind: bulk} or {kind: batch, class}."),
+        rows: z.array(z.object({ label: z.string(), before: z.number().int(), goal: z.number().int(), knock_on: z.boolean().optional() }))
+          .describe("As sb printed it: the state rows with Before and Goal, knock-on rows last."),
+        rehearsal: z.object({ sandbox: z.string(), at: z.string() }).optional().describe("As sb printed it, if it printed one: the sandbox pass."),
+        chat_url: z.string().optional().describe("Optional; don't guess it. Only a https://claude.ai/chat/<uuid> address is used."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardSfDataopTool, args, token),
   );
 
   server.registerTool(
