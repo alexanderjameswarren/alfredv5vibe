@@ -5,7 +5,7 @@ description: "Runs Salesforce client work (Team IMPACT, ActBlue, any client org)
 
 # Salesforce workflow (with Switchboard)
 
-Skill version: 2026-11-12b
+Skill version: 2026-11-18
 
 Client work is real work on someone else's system. Alex cares most about the
 **code changes**: he must always be able to say exactly what changed, and nothing
@@ -13,7 +13,8 @@ reaches production that he has not seen and run himself.
 
 This skill sits on top of **cli-workflow**. Run tags, the Window line, the scope
 block, Send links, the copy-box rule, the step format, the report format and the
-one-prompt-at-a-time rules all come from there. This skill adds what is different
+one-prompt-at-a-time rules all come from there, and so do the prompt and report
+rules for data runs ("Salesforce data runs"). This skill adds what is different
 for a Salesforce client repo.
 
 ## The hard rules
@@ -21,10 +22,15 @@ for a Salesforce client repo.
 1. **Claude never touches production.** No deploy, no test run, no data, no
    scheduling. Production steps are Alex's, in his own terminal or in Setup, from
    steps this chat writes. The guard refuses anything aimed at production anyway.
+   **The one way production data changes is Alex's click** on an `sf_dataop`
+   approval link (see "Data operations"). No Claude session, chat or CLI, ever
+   starts a production run.
 2. **Claude never runs anonymous Apex, never writes records, and never schedules
    or aborts a job.** Claude reads records only through Switchboard reads by link
    (see "Salesforce reads"), never through a CLI. Scheduling is always a step for
-   Alex (see "Scheduled jobs").
+   Alex (see "Scheduled jobs"). Read-only diagnosis Apex that Alex runs is allowed
+   (see "Diagnosis scripts"). No free-form Apex ever writes production data: the
+   runners write only by a bulk dataop or a named, deployed Batch class (D5).
 3. **One fix, one project code, one worktree, one branch.** Even two tiny fixes
    with no overlap get two worktrees, so each can be reviewed, deployed and rolled
    back on its own.
@@ -40,6 +46,11 @@ for a Salesforce client repo.
    production deploy has succeeded.
 6. **Never commit, push or merge from the CLI.** Alex runs gitcom, gitpush and the
    pull-request merge (git by link, or his terminal as the fallback).
+7. **No hand edits and no hand comparisons, ever.** Alex never edits a CSV,
+   creates a record in the UI or compares two outputs by eye. A plan file says what
+   should happen, a runner does it, and the runner's own table says PASS or FAIL.
+   When a step would need a hand edit or a comparison, the plan or the tool is
+   missing something: stop and fix that instead.
 
 ## Locations in client work
 
@@ -331,8 +342,8 @@ Set-Location "<absolute worktree path>"; sf project deploy quick --job-id <job i
   compare with `git diff`: no difference, ignoring line endings, is a pass. Any
   difference is a failure.
 
-**Data changes** use `sb prod dataop <code> --plan <file>`, once built
-(switchboard_prodrepo-w3k); until then the "Data operations" steps below, by hand.
+**Data changes** never run from this stage's terminal steps: they go through the
+"Data operations" flow below, ending in an `sf_dataop` approval link.
 
 **Deletions** use a manifest pair the CLI writes in the worktree (scope it:
 `manifest/destructive/package.xml`, empty of members, and
@@ -351,14 +362,14 @@ In order:
 
 1. Post-deploy configuration, if any (see "Often forgotten" below), and any
    scheduled job (see "Scheduled jobs").
-2. **Finish by link**: `queue_switchboard_git` with the code and gitpush mode
-   `finish` (finish mode `pr` pushes the branch and opens the pull request). The
-   link ends the reply. When the `git <id> done` line arrives, Claude reads the
-   run with `get_switchboard_run` and **takes the pull request link from its
-   result**, never asking Alex for it. Finish by link closes the worktree's VS Code
-   window once that is built (switchboard_prodrepo-w3k); until then, Alex closes
-   it before clicking. The fallback is the terminal step
-   `Set-Location "<absolute repo path>"; gitpush <code> finish`.
+2. **Finish is one gitpush finish link**: `queue_switchboard_git` with the code
+   and gitpush mode `finish` (finish mode `pr` pushes the branch and opens the pull
+   request). The link closes the worktree's VS Code window itself, so **there is no
+   "close the window" step**. The link ends the reply. When the `git <id> done` line
+   arrives, Claude reads the run with `get_switchboard_run` and **takes the pull
+   request link from its result**, never asking Alex for it. The terminal fallback
+   (cli-workflow's "Closing out a project") is the only place a window-close step
+   still appears.
 3. Alex merges the pull request (GitHub, or `gh pr merge`), then pulls main.
    main now matches production. Merge right after the deploy succeeds, even when
    verification takes days. Mark PLAN.md deployed (date and job id).
@@ -403,8 +414,10 @@ someone changed production since the sandbox test: stop and decide with Alex.
   thread, rather than patching here.
 - **A production deploy fails**: a Salesforce deploy is all or nothing, so nothing
   is half deployed. Read the errors, fix in the worktree, back through the gate.
-- **A data operation partly fails**: record the failure count and the failed Ids
-  (data-ops), and rerun only those, after the cause of the failure is understood.
+- **A data run STOPS** (see "STOPPED" under Data operations): its message says
+  what already changed and prints the undo command. Nothing is undone or rerun
+  until the cause is understood and Alex decides; a changed plan means a full
+  preflight and a new rehearsal before any new link.
 - **Two fixes on the same components** deploy one at a time; the second waits
   until the first's verification window closes.
 
@@ -461,64 +474,194 @@ here:
   line, with the cron expression explained in words, and Alex checks Scheduled
   Jobs afterwards.
 
-## Data operations (Alex only)
+## Data operations (the dataops flow)
 
-Some fixes need records touched: a re-sync, a backfill, a cleanup. Claude drafts;
-Alex runs, sandbox first. Every operation leaves a record in the repo, so months
-later anyone can see exactly what was done.
+Some fixes need records touched: a re-sync, a backfill, a cleanup. These rules
+govern every **data operation** (a write to client records) and its closeout. The
+design and the exact runner output are in Switchboard's
+`docs/technical-spec-switchboard_dataops-d4x.md`, and the link's payload is in
+alfred-v5's `docs/technical-spec-dataops_alfred-d4x.md`. Prompt, report and
+step-format rules for these runs are in cli-workflow's "Salesforce data runs".
 
-**Which tool:**
+**The order never changes:** plan file, preflight, sandbox rehearsal, then
+production by link. Each step refuses until the one before it has passed for the
+same stamp.
 
-- **Logic must re-run** (a class or trigger recomputes the records): a **Batch
-  Apex class**, written with its test, through the normal stages (gate, sandbox
-  deploy and tests, production validate and quick deploy). Alex starts it with one
-  line in the Developer Console (`Database.executeBatch(new <Class>(), 200);`),
-  which Claude writes. Batches of 200 keep each chunk inside governor limits; a
-  single anonymous Apex run over thousands of records does not. When the job is
-  done, a **destructive deploy deletes the class and its test** from production
-  (click tier: Alex runs it, Stage 7's deletion commands), so nothing that must
-  never run again stays in the org.
-- **Fields set to known values**: a **reviewed CSV**. First a read-only export of
-  the current values (Id and each field to change) as the backup and undo file,
-  then the change CSV (Id and new values), checked row by row, loaded by Alex with
-  `sf data update bulk` or Data Loader.
-- Workbench only for quick read-only checks: it leaves no record and can't be
-  repeated exactly.
+### Which way to write (D5)
 
-**Before either:** a read-only count of the records in scope; then the list of
-what fires on that object (triggers, record-triggered flows, workflow rules and
-validation, from the repo) and what each would do, including any email; decide
-with Alex whether to use any bypass the org has. Rehearse in the sandbox (a
-developer sandbox has no production data, so the batch is proven by its test
-class there). Afterwards, the same count again and the batch job's failure count.
+The runners write in only two ways, and preflight refuses anything else:
 
-**The record: one folder per operation, `data-ops/<yyyy-mm-dd>-<slug>/`**, in the
-client repo, committed with the fix's pull request:
+- **A bulk dataop** (insert, update, delete or upsert) for fields set to known
+  values;
+- **a named Batch Apex class**, already deployed, when logic must re-run. It is
+  written with its test and goes through the normal stages (gate, sandbox deploy
+  and tests, production validate and quick deploy). **The runner starts it and
+  polls it**; Alex no longer types `Database.executeBatch` anywhere. Closeout
+  deletes the class and its test from production (see "Closeout").
 
-- `README.md`: who asked and why, what it changes, what fires, the sandbox
-  rehearsal, the production run time, and the batch job Id with its success and
-  failure counts;
-- `apex/`: the batch class and test exactly as deployed (outside force-app, so
-  they can never be deployed again by accident);
-- `run.apex`: the exact line Alex ran;
-- `counts-before.txt` and `counts-after.txt`;
-- `destructive/`: the manifest pair that deleted the class;
-- `affected-ids.csv`: the record Ids touched, and for a field fix the old and new
-  values. **Ids and changed values only: never names, emails or amounts.** If the
-  client's agreement doesn't allow record Ids in the repo, or a changed field is
-  personal, keep the CSVs in the project's Drive folder (Alex's Secorus Google
-  Drive, `<org>/<client>/<project name>/<project code>/`), with a delete date,
-  and have the README point there. Say in the README which kind of sandbox the
-  rehearsal ran in: a partial or full sandbox has a copy of real data, a
-  developer sandbox has none.
+### The plan file
 
-**`sb prod dataop <code> --plan <file>`** (Alex's terminal, once built by
-switchboard_prodrepo-w3k) runs the production load from a plan file in the
-worktree (object, operation, CSV, expected count). It takes the backup, checks the
-CSV's Ids match the backup's exactly, refuses without a recorded sandbox
-rehearsal, and records the counts before and after and the failed rows.
-`sb prod rollback <code>` restores from that backup. Until it is built, Alex runs
-the load by hand as above, and the CLI creates the folder from this list.
+The CLI writes the plan file in the worktree, and the plan drives everything
+after it. It holds:
+
+- **`problem`**: the problem in plain English.
+- **The approved Id list**, or a filter whose set must equal the list (D12, needed
+  above 1,000 Ids).
+- **State rows**. Each is a plain-English label, one SOQL count on the list, its
+  **Before** and its **Goal**. Rows where Before and Goal differ are the fix;
+  equal ones are safety checks.
+  - Labels are plain English of three words or more: never coded (`A|B`, `k=v`),
+    never a field or API name, never all capitals. The plan refuses anything else.
+- **`write`**: `bulk`, or `batch` with the class, and the number it is expected
+  to change.
+- **`knockOn`**: a predicted effect elsewhere, such as plans whose paid total goes
+  up. Each becomes a "Knock-on check:" row in the final table, with the
+  prediction as its Goal.
+- **`waits`**, between the write and the final table:
+  - **A wait-until** has a settle query (no queued or running jobs from named
+    classes, or a count unchanged for N minutes) and **always a time limit**.
+  - **A manual pause** has an instruction, and is used **only when no query can
+    tell**. A plan with one is rehearsed by Alex, not the CLI.
+- **`orgWide`** rows, split at preflight time. "Before preflight, NOT in the list"
+  must be 0. "Created since preflight" is information only.
+- **`decisions`**, and the **`preflight`** and **`rehearsal`** sections that the
+  two commands below read.
+
+### Preflight, once
+
+The CLI runs `sb preflight <code> --plan <file>`. It is read-only, and the whole
+preflight runs every time.
+
+- **Production field access needs one read link.** Preflight never asks
+  production itself. Queue one `queue_switchboard_sf_read` at level `metadata`
+  with `objects` listing every object it names (up to 20) and `production: true`.
+  The helper keeps the field facts for preflight to read, so Claude does not need
+  to fetch the rows. Then the CLI runs preflight again.
+- **All decisions go to Alex in one round**: every open one, numbered, with its
+  options and recommendation, in one reply. **If an answer changes the plan, the
+  whole preflight runs again.** A changed plan, script or HEAD breaks the stamp,
+  and nothing later accepts it.
+- **The verdicts:**
+  - **NOT PASSED**: fix what it lists, then run it again.
+  - **WAITING FOR …**: production reads, the write test at HEAD (`sb test` in the
+    worktree), answers, or flags.
+  - **PREFLIGHT PASSED. Stamp <short hash>.**: the plan is stamped (D7).
+
+### Sandbox rehearsal (Runner 1)
+
+`sb rehearse <code> --plan <file>`, on the plan's sandbox.
+
+- **The CLI runs it**, unless the plan has a manual pause. Then the runner
+  refuses in a Claude session, and **Alex runs it in his own terminal**.
+- It refuses unless the newest preflight passed and its stamp still matches. It
+  creates its own test records (each group's values carry TEST), runs the same
+  write production will get, prints the table, deletes its records, and records
+  a pass for that stamp (D8). A pass has no expiry; the production run still
+  rechecks the counts.
+
+### Production (Runner 2), by link only
+
+- **Only after a sandbox PASS for the same stamp, and in its own reply.** That
+  reply holds the production step and nothing else: no CLI prompt, and no other
+  link.
+- **The link's arguments come from sb, verbatim.** The CLI runs
+  `sb prod dataop-link <code> --plan <file>`, which reads only files and prints
+  `queue_switchboard_sf_dataop`'s arguments as JSON. Claude passes them unchanged,
+  never writing, rounding or reordering one, and gives Alex the link. Any value
+  that differs from the stamped plan makes the helper refuse.
+- **Claude sessions never start it.** Only Alex's click on the link does.
+- **What Alex sees on the approve page:**
+  - an **orange PRODUCTION, LIVE CLIENT DATA** banner (orange is a warning; red
+    is kept for problems);
+  - "About to change N live records";
+  - the problem, the org, the object, the write (bulk, or the batch class);
+  - the stamp, short and in full, and the preflight time;
+  - the sandbox rehearsal, and the Before and Goal rows, with the fix rows in bold
+    and the knock-on checks marked.
+- **After the click**, the desktop helper must pick it up **within 15 minutes, or
+  it fails unrun**. That is the normal outcome if the desktop is off: queue a new
+  link. A picked run that sends no result for 4 hours is marked failed.
+- **The run** opens in a window on Alex's desktop:
+  1. **Step 1, READ** checks the stamp, the access and the Before counts, and
+     shows Before and Goal. A Before that differs from preflight stops the run
+     with nothing changed.
+  2. **Step 2, WRITE (LIVE)** asks for **Enter, only here, before the write**:
+     "Press Enter to change N LIVE records, or q to stop". Then it backs up,
+     writes, and prints "Expected N, changed N". The sandbox never asks.
+  3. **The waits** run next. Only a manual pause asks for Enter again, for its
+     instruction ("WAITING FOR YOU: …").
+  4. **Step 3, READ** prints the full table.
+- **The result** arrives in the chat by itself as `dataop <id> done` or
+  `dataop <id> failed`, and the receipt comes as a clip. Nothing is pasted.
+
+`sb prod dataop <code> --plan <file> --dry-run` (Alex's terminal) runs every
+gate and both reads with no write, if he wants to see it first.
+
+### The tables
+
+Every runner prints the same table: plain-English label, Before, Goal, After,
+and PASS or FAIL, with the knock-on checks as rows labelled "Knock-on check:".
+
+- Claude reports the runner's verdicts, never its own comparison of the numbers.
+- There are no coded output lines anywhere.
+
+### STOPPED
+
+Any stop ends with three things, and Claude passes all three on whole:
+
+- **what already changed** ("Step 2 already changed 30 live records. Backup:
+  <path>", or "Nothing was changed");
+- **the undo command, printed and never run**. Claude gives it to Alex as a step
+  only once he decides to undo;
+- **what to do next**: in production, the `dataop <id> failed` line arrives in the
+  chat by itself (or Alex says "check the run"). In the sandbox, the CLI's report
+  carries it.
+
+### Checks outside a data run: the prediction card
+
+A check whose result is predicted and lies outside a data run uses the card:
+**Predicted, Actual, PASS/FAIL**. That covers the morning checks after a code fix
+and the closeout checks. Pure diagnosis is exempt. Inside a data run the
+prediction is a knock-on row instead.
+
+### Closeout
+
+`sb closeout <code> --plan <file>`, from the plan's `closeout.steps`. Alex runs it
+in his terminal; the CLI may run only `--dry-run`. It runs three kinds of step:
+
+- **checks**, as prediction cards;
+- **deletes**: temporary classes leave production by validate, then a quick
+  deploy, behind the WRITE (LIVE) panel and Enter, and are recorded for the finish
+  gate;
+- **reverts**: permission changes stay as Setup clicks Alex makes, each checked
+  straight after.
+
+A production deploy made outside `sb prod deploy` is recorded with
+`sb prod record <code> <deploy Id>`, which the CLI may run with `--dry-run`.
+
+### The record
+
+Every operation leaves a record, so months later anyone can see exactly what was
+done:
+
+- **In the repo**: the plan file, committed with the fix's pull request, and
+  PLAN.md naming the stamp, the rehearsal and the production run.
+- **In the run log**: the receipts.
+- **Ids and changed values only, never names, emails or amounts.** If the client's
+  agreement doesn't allow record Ids in the repo, or a changed field is personal,
+  keep those files in the project's Drive folder (Alex's Secorus Google Drive,
+  `<org>/<client>/<project name>/<project code>/`) with a delete date 90 days
+  after closeout (D10), and point to it from PLAN.md.
+
+## Diagnosis scripts
+
+Diagnosis isn't restricted by the data-operations rules. **Read-only anonymous
+Apex, run by Alex, is still allowed** for it.
+
+- Every diagnosis script starts with the line `// READ-ONLY`.
+- **Before handing one over, Claude checks it holds no write**: no `insert`,
+  `update`, `delete`, `upsert` or `merge`, and no `Database.*` write call. A
+  script with one is not a diagnosis script: it goes through "Data operations".
 
 ## Salesforce reads (by link)
 
@@ -533,6 +676,9 @@ tools and `sf data` in every CLI session.
   production full data and the contract flag. Alex sets these in his terminal
   (`sb org set` / `sb org add`; the exact flags are in Switchboard's
   salesforce/RULES.md); by link they're refused.
+- **A describe of several objects is one read:** level `metadata` with `objects`
+  (1 to 20 names, each once) instead of `object`. Preflight's production access
+  uses it.
 - **A read is structured, never SOQL:** an object, a count or 1 to 50 fields with
   a limit of 1 to 1000, and up to 10 filters (`=`, `!=`, `<`, `<=`, `>`, `>=`, or
   `in` with a list). No relationship fields. Values are typed from the object's

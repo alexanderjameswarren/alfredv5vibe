@@ -18,8 +18,8 @@ Markers: ✱ a migration link, ⚙ a function deploy, ⛳ a checkpoint.
 | s4c | A1 | After 240 is applied: queue the test script (`--test`), deploy mcp and switchboard-runner, conformance, verify | ⚙ | 15m | done 2026-11-18: both deployed; /queue gives 401; CONFORMANT; test queued as action 9cebb5d4-25e0-4944-b690-953ad5cb201d, result pending |
 | s5 | A1 | Checkpoint A1 to main, then `claims.cmd status` | ⛳ | 5m | done 2026-11-18: checkpoint 5113c35 (run 2a9dcb6e); test 9cebb5d4 passed 56 of 56; every db: claim released (confirmed at s6) |
 | s6 | A2 | The approve page for sf_dataop | ⛳ | 30m | built 2026-11-18; 60 switchboard app tests pass; Alex's look waits on s6b |
-| s6b | A2 | A dev-only fixture route so Alex can see the sf_dataop page with a sample payload, nothing queued | | 20m | done 2026-11-18: `/approve-fixture/sf_dataop` on the dev server only; 65 switchboard and 3,352 app tests pass; the build has no fixture code; Alex's A2 tests pending |
-| s7 | A3 | Full A3 (O9): salesforce-workflow and cli-workflow | ⛳ | 45m | |
+| s6b | A2 | A dev-only fixture route so Alex can see the sf_dataop page with a sample payload, nothing queued | | 20m | done 2026-11-18: `/approve-fixture/sf_dataop` on the dev server only; 65 switchboard and 3,352 app tests pass; the build has no fixture code; Alex's A2 tests passed; A2 in main by checkpoint 4b67587 and live |
+| s7 | A3 | Full A3 (O9): salesforce-workflow and cli-workflow | ⛳ | 45m | written 2026-11-18, both at Skill version 2026-11-18; checkpoint pending |
 | s8 | | Full suites and Finish | | 10m | |
 
 The total estimate is 3h10 (s3c and s4b added).
@@ -101,3 +101,4 @@ Alex runs gitpush in **Checkpoint** mode for this worktree, with these paths. Th
 | s4c | 15m | 2m | mcp and switchboard-runner deployed; 401 and CONFORMANT; test queued |
 | s6 | 30m | 6m | sf_dataop page: orange banner, count, problem, facts, stamp, rows; 6 new tests |
 | s6b | 20m | 4m | fixture, App.js dev route, runner and session props; 5 new tests; full app suite and build |
+| s7 | 45m | 4m | both skills for the dataops flow; finish by link with no window step |
