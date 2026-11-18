@@ -5,7 +5,7 @@ description: "Runs both halves of the CLI loop for Alex's personal projects. Use
 
 # CLI Workflow
 
-Skill version: 2026-11-12a
+Skill version: 2026-11-18
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -418,7 +418,7 @@ At the same time, if the project has a portfolio slice (1c in "Starting a new
 project"), call `update_portfolio_slice` with `status: "done"` for it, and say so
 in one line.
 
-**A phase closeout, where the group stays open** (step 5 below): do not call
+**A phase closeout, where the group stays open** (step 3 of the second reply, below): do not call
 `record_project_estimate` `kind: "final"`. A Project has one final, recorded only
 when its last slice finishes and the group closes. Instead, since no group close
 writes it, log the phase as shipped yourself: `log_activity` with
@@ -430,20 +430,25 @@ next may have changed: the work ended up different from the slice's phases text,
 the plan's `notes_for_next_review` mention this work, or the next planned slice in
 that lane depends on it. Otherwise say nothing about a review.
 
-That reply is a list of steps in the step format, in this order:
+**Finish is one gitpush finish link, with no "close the window" step.** The
+closeout takes two replies.
 
-1. Worktree only: close the worktree's VS Code window. Keep this step: gitpush
-   Finish now checks, and refuses with "Close the <code> VS Code window first,
-   then run this again. Nothing was changed." while anything still has the
-   worktree folder open.
-2. **MAIN** terminal: the `gitpush` Finish command. Every push builds the app
-   first, as Vercel does, when it carries app files (src/, public/,
-   package.json); a failed build pushes nothing and says how to rerun.
-   `--skip-build` skips it, for emergencies only.
-3. This chat: rename it — the same name with "Not done" removed.
-4. Switchboard: check it is clear — the project's tile is gone, and for main,
+**The first reply** holds only the Finish link: `queue_switchboard_git` with the
+code and gitpush mode `finish`, plus its message.
+- For a worktree, the link **closes that worktree's VS Code window itself** before
+  it finishes (which also ends the Claude session in it), so no step asks Alex to.
+- Every push builds the app first, as Vercel does, when it carries app files
+  (src/, public/, package.json). A failed build pushes nothing and says how to
+  rerun.
+- As with every git link, the reply ends there.
+
+**The second reply** comes after the `git <id> done` line has been read. It is a
+list of steps in the step format, in this order:
+
+1. This chat: rename it — the same name with "Not done" removed.
+2. Switchboard: check it is clear — the project's tile is gone, and for main,
    the bar reads `main: free`, with no claims left under the project code.
-5. Alfred app: close the project's Project group as **Completed**. That close
+3. Alfred app: close the project's Project group as **Completed**. That close
    writes the project's `shipped` row in Overwatch's activity log by itself, so do
    not also call `log_activity` for it. Name the group exactly as it appears in the
    app (plain words, no project code: "Starting a new project", 1a).
@@ -452,39 +457,37 @@ That reply is a list of steps in the step format, in this order:
    the later phases still belong to it. That is a phase closeout (above): no
    final estimate, and Claude logs the phase's shipped row.
 
-For a worktree it looks like this:
+For a worktree, the second reply looks like this:
 
 ````
-**1.** Worktree VS Code window: close the rem-j7p VS Code window.
-
----
-
-**2.** **MAIN** terminal: run
-```
-gitpush rem-j7p finish --message "rem-j7p: reminders"
-```
-Expected: the worktree is removed. If it reports uncommitted changes, paste the output here before answering y.
-
----
-
-**3.** This chat: rename it to
+**1.** This chat: rename it to
 ```
 rem-j7p Reminders
 ```
 
 ---
 
-**4.** Switchboard: check the rem-j7p tile is gone.
+**2.** Switchboard: check the rem-j7p tile is gone.
 Expected: no tile and no claims under rem-j7p.
 
 ---
 
-**5.** Alfred app: open the group "Reminders" and close it as Completed.
+**3.** Alfred app: open the group "Reminders" and close it as Completed.
 Expected: the group shows as closed; Overwatch logs it as shipped.
 ````
 
-For main, drop step 1, use `gitpush main finish`, and step 4 checks the bar
-reads `main: free`. Step 5, closing the Project group, applies to both.
+For main, the link runs `gitpush main finish`, and step 2 checks the bar reads
+`main: free`. Step 3, closing the Project group, applies to both.
+
+**The terminal fallback**, used only when the link can't be (the tool refuses,
+or the helper isn't running), is the one place a window-close step remains. It
+has two steps in the first reply:
+1. Worktree VS Code window: close it. gitpush Finish refuses with "Close the
+   <code> VS Code window first, then run this again. Nothing was changed." while
+   anything still has the worktree folder open.
+2. **MAIN** terminal: the `gitpush <code> finish` command.
+
+`--skip-build` skips the build, for emergencies only.
 
 If the last report raised anything, deal with it first. Closeout waits.
 
@@ -751,8 +754,8 @@ cost three sessions of work in one day.
   worktree commits mid-project. The database step uses it because that is the
   mid-project moment that most needs a commit, not because it is a database mode.
 - **Finish on a worktree runs from main, with that worktree's VS Code window
-  closed first.** Closing the window also ends the Claude session in its
-  terminal. Finish cannot remove a worktree that a window is still open on —
+  closed first.** By link, the link closes it; in the terminal fallback, Alex
+  does. Closing the window also ends the Claude session in its terminal. Finish cannot remove a worktree that a window is still open on —
   the merge and push succeed, the removal fails, and he is left running
   recovery commands.
 
@@ -919,7 +922,9 @@ commits every uncommitted path, which is rarely what Checkpoint is for.
 paths.** Checkpoint commits the named paths itself, and finds nothing to do if
 they're already committed.
 
-**Finishing a worktree.** The claims, the branch and the worktree all go.
+**Finishing a worktree.** The claims, the branch and the worktree all go. By
+link (the normal way, "Closing out a project") there is no window step. The
+terminal fallback:
 
 ````
 **1.** Worktree VS Code window: close the rem-j7p VS Code window.
@@ -1033,6 +1038,10 @@ deliberate final error. The rules are in alfred-v5's `CLAUDE.md`.
   nothing (a gitsync with nothing to merge). Failed means a non-zero exit or a
   helper refusal. The run summary ends with the command's own "Result:" line;
   report that. "Check the git run" from Alex means the same read.
+- `sf <action id> done` or `failed`: a Salesforce check or read. For a read, take
+  its rows once with `get_switchboard_sf_result`.
+- `dataop <action id> done` or `failed`: a production data run. Read it with
+  `get_switchboard_run`; its receipt arrives as a clip. See "Salesforce data runs".
 
 **The SQL editor is the fallback, for two things only:** what the runner refused, and
 anything holding a secret such as a password, which never goes in the queue.
@@ -1067,6 +1076,46 @@ prompt never needs to ask for a yield; the hook covers it.
 holder's name. A deadlocked tile shows "⇄" and the other thread's name. A holder's
 tile shows "Blocking N". The clipboard button under the arrows opens a window
 running `claims.cmd status`.
+
+## Salesforce data runs: prompts, replies and reports
+
+The flow itself (plan file, preflight, rehearsal, the production link, closeout)
+is in salesforce-workflow's "Data operations". This section holds only the
+prompt, reply and report rules for it.
+
+- **Prompts.**
+  - The CLI may run `sb preflight`, `sb rehearse` (not for a plan with a manual
+    pause), `sb prod dataop-link` (it prints the link's arguments), and
+    `sb closeout --dry-run` or `sb prod record --dry-run`.
+  - It never runs any other `sb prod`, never runs `sb closeout` for real, and
+    never runs anything against production.
+  - A prompt that would need it is the wrong prompt.
+- **One round of decisions.** When preflight lists open decisions, the reply puts
+  every one to Alex together, numbered, each with its options and a
+  recommendation. If an answer changes the plan, the next prompt reruns the whole
+  preflight; never a part of it.
+- **Production gets its own reply, after a sandbox PASS for the same stamp.** That
+  reply carries the `queue_switchboard_sf_dataop` link and its steps, and nothing
+  else: no CLI prompt, no git link, no Send link. Its arguments are copied
+  verbatim from the `sb prod dataop-link` output in the CLI's report. The reply
+  tells Alex:
+  - what the page will show;
+  - that the helper must pick the run up within 15 minutes of his click;
+  - that the window asks for Enter only before the write (and at a manual pause
+    the plan has), and q stops it with nothing changed.
+- **Reports carry the runner's own table.** Before, Goal, After and PASS or FAIL,
+  with the knock-on rows.
+  - Claude reports the runner's verdict line and every FAIL row by its label.
+  - It never recomputes or compares numbers by eye, and never asks Alex to.
+- **STOPPED is passed on whole:** what already changed, the undo command
+  (printed, never run, and given as a step only once Alex decides), and the next
+  move. A production stop arrives as the `dataop <id> failed` line.
+- **The prediction card** (Predicted, Actual, PASS/FAIL) is the format for a
+  predicted check outside a data run, such as the morning checks after a code fix
+  or a closeout check. In a testing step, Alex's feedback is the card's PASS or
+  FAIL, never a raw number to compare.
+- **Diagnosis Apex.** A read-only script handed to Alex starts with `// READ-ONLY`.
+  Claude checks it for writes first (salesforce-workflow's "Diagnosis scripts").
 
 ## Getting the report back
 
