@@ -682,3 +682,104 @@ test('sf read: lines for the object list and a describe', () => {
     expect(isProductionFullData(p)).toBe(false);
   }
 });
+
+// --- dataops_alfred-d4x A2: a production data run (kind sf_dataop) ---
+
+const STAMP = '0123456789abcdef'.repeat(4);
+const DATAOP = { alias: 'cd-prod', repo: 'C:\\Users\\Alex\\projects\\common-defense', plan: 'dataops/fixc-plan.json', stamp: STAMP,
+  preflight_at: '2026-11-18T15:00:00Z', object: 'Demo_Gift__c',
+  problem: 'Forty-five gifts were saved without a link to their plan, so the plan totals miss them.', expected: 26571,
+  write: { kind: 'batch', class: 'FixCLinkBatch' },
+  rows: [{ label: 'Gifts in the list with no plan link', before: 26571, goal: 0 },
+         { label: 'Gifts in the list still marked as paid', before: 45, goal: 45 },
+         { label: 'Plans whose paid total went up today', before: 0, goal: 12, knock_on: true }],
+  rehearsal: { sandbox: 'cd-dev1', at: '2026-11-18T16:00:00Z' } };
+const DOP = { ok: true, kind: 'sf_dataop', action_id: 'd1', fingerprint: 'fpd', project_code: 'cd_ab_link_installments-q8d', payload: DATAOP,
+  headline: 'PRODUCTION DATA RUN cd_ab_link_installments-q8d ON cd-prod: ABOUT TO CHANGE 26,571 LIVE RECORDS OF Demo_Gift__c BY BATCH FixCLinkBatch' };
+
+test('sf_dataop: orange PRODUCTION banner with black text, the count, problem, write, stamp, times and rows', async () => {
+  const { localTime } = jest.requireActual('./ApprovePage');
+  runner({ preview: reply(DOP), approve: reply({ ok: true, action_id: 'd1', sent: true }) });
+  const { container } = open();
+  const banner = await screen.findByTestId('approve-production');
+  expect(banner).toHaveTextContent(/production, live client data/i);
+  expect(banner).toHaveClass('bg-orange-400', 'text-black');
+  expect(banner).not.toHaveClass('bg-red-700');
+  expect(banner).not.toHaveClass('text-white');
+  expect(screen.queryByTestId('approve-production-full-data')).toBeNull();
+  expect(screen.getByTestId('approve-dataop-count')).toHaveTextContent('About to change 26,571 live records');
+  expect(screen.getByTestId('approve-dataop-problem')).toHaveTextContent(DATAOP.problem);
+  expect(screen.getByTestId('approve-dataop-write')).toHaveTextContent('Batch Apex class FixCLinkBatch');
+  const stamp = screen.getByTestId('approve-dataop-stamp');
+  expect(stamp).toHaveTextContent('0123456789ab');
+  expect(stamp).toHaveTextContent(STAMP);
+  expect(screen.getByTestId('approve-dataop-preflight')).toHaveTextContent(localTime('2026-11-18T15:00:00Z'));
+  expect(screen.getByTestId('approve-dataop-rehearsal')).toHaveTextContent(`Rehearsed on cd-dev1 at ${localTime('2026-11-18T16:00:00Z')}`);
+  const rows = screen.getByTestId('approve-dataop-rows').querySelectorAll('tbody tr');
+  expect(rows).toHaveLength(3);
+  expect(rows[0]).toHaveTextContent('Gifts in the list with no plan link26,5710');
+  expect(rows[0]).toHaveClass('font-bold');
+  expect(rows[1]).not.toHaveClass('font-bold');
+  expect(rows[0]).not.toHaveAttribute('data-knock-on');
+  expect(rows[2]).toHaveAttribute('data-knock-on');
+  expect(rows[2]).toHaveTextContent('Knock-on check: Plans whose paid total went up today');
+  expect(screen.getByText(/its sandbox rehearsal was the dry run/)).toBeInTheDocument();
+  expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'sf_dataop');
+  expect(screen.getByTestId('approve-stakes-change')).toBeInTheDocument();
+  expect(called('dry-run')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: /^approve and run$/i }));
+  expect(await screen.findByText('Sent to the desktop helper')).toBeInTheDocument();
+  expect(screen.getByText(/within 15 minutes/)).toBeInTheDocument();
+  expect(JSON.parse(called('approve')[0][1].body)).toEqual({ token: 'tok1', fingerprint: 'fpd' });
+  expect(screen.getByText('dataop d1')).toBeInTheDocument();
+});
+
+test('sf_dataop: bulk, one record, no rehearsal; a knock-on label already prefixed is not doubled', async () => {
+  const { rehearsal: _r, ...rest } = DATAOP;
+  const payload = { ...rest, expected: 1, write: { kind: 'bulk' },
+    rows: [{ label: 'Knock-on check: Plans whose paid total went up today', before: 0, goal: 1, knock_on: true }] };
+  runner({ preview: reply({ ...DOP, payload }) });
+  open();
+  expect(await screen.findByTestId('approve-dataop-count')).toHaveTextContent(/^About to change 1 live record$/);
+  expect(screen.getByTestId('approve-dataop-write')).toHaveTextContent('Bulk dataop');
+  expect(screen.queryByTestId('approve-dataop-rehearsal')).toBeNull();
+  const row = screen.getByTestId('approve-dataop-rows').querySelector('tbody tr');
+  expect(row).toHaveTextContent(/^Knock-on check: Plans whose paid total went up today01$/);
+});
+
+test('sf_dataop: Don\'t run gives the dataop cancelled line', async () => {
+  runner({ preview: reply(DOP), cancel: reply({ ok: true, cancelled: true, reason: 'not today' }) });
+  open();
+  await screen.findByTestId('approve-dataop');
+  fireEvent.change(screen.getByLabelText(/reason for not running/i), { target: { value: 'not today' } });
+  fireEvent.click(screen.getByRole('button', { name: /don't run/i }));
+  expect(await screen.findByText('dataop d1 cancelled: not today')).toBeInTheDocument();
+});
+
+test('sf_dataop: helpers for the stamp, times and labels', () => {
+  const { shortStamp, localTime, rowLabel } = jest.requireActual('./ApprovePage');
+  expect(shortStamp(STAMP)).toBe('0123456789ab');
+  expect(shortStamp(undefined)).toBe('');
+  expect(localTime('not a time')).toBe('not a time');
+  expect(rowLabel({ label: 'Plans up', knock_on: true })).toBe('Knock-on check: Plans up');
+  expect(rowLabel({ label: 'Plans up' })).toBe('Plans up');
+});
+
+test('the other kinds have no orange banner and no data-run panel', async () => {
+  for (const preview of [SFR, { ...PREVIEW, kind: 'git', payload: { command: 'gitsync' } }]) {
+    runner({ preview: reply(preview) });
+    const { unmount } = open();
+    await screen.findByTestId(preview.kind === 'sf_read' ? 'approve-sf-read' : 'approve-git');
+    expect(screen.queryByTestId('approve-production')).toBeNull();
+    expect(screen.queryByTestId('approve-dataop')).toBeNull();
+    expect(screen.getByText(/has no dry run\. Approve runs this once, on your computer\./)).toBeInTheDocument();
+    unmount();
+  }
+});
+
+test('sf read: a metadata read of several objects lists them', () => {
+  const { sfReadLines } = jest.requireActual('./ApprovePage');
+  const lines = sfReadLines({ alias: 'cd-prod', production: true, level: 'metadata', objects: ['Contact', 'Account'] });
+  expect(lines).toContain('Objects (2): Contact, Account.');
+  expect(lines.some((l) => l.startsWith('Object:'))).toBe(false);
+});

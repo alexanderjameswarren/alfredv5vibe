@@ -111,6 +111,8 @@ export function sfReadLines(payload) {
     `Level: ${p.level ?? '(none)'}.`,
   ];
   if (p.level === 'objects') lines.push("The org's object list.");
+  // dataops_alfred-d4x: a metadata read of several objects, in one link.
+  else if (Array.isArray(p.objects)) lines.push(`Objects (${p.objects.length}): ${p.objects.join(', ')}.`);
   else lines.push(`Object: ${p.object ?? '(none)'}.`);
   if (p.level === 'metadata') lines.push("The object's describe: its fields and types, no records.");
   if (p.count === true) lines.push('A count only: no rows.');
@@ -126,6 +128,87 @@ export function sfReadLines(payload) {
   lines.push("The helper first checks the org's Id and IsSandbox, and its access level, against orgs.json.");
   lines.push('The answer goes to Alfred for at most 10 minutes, for Claude to take once and summarise.');
   return lines;
+}
+
+// ---------------------------------------------------------------------------
+// dataops_alfred-d4x A2: a production data run (kind sf_dataop). The payload is the contract in
+// docs/technical-spec-dataops_alfred-d4x.md; the helper checks every shown value against the stamped plan before it
+// writes, so the page shows what will run. Orange is the PRODUCTION warning (O7); red stays for problems.
+// ---------------------------------------------------------------------------
+
+/** The stamp's first 12 characters, as sb prints it. */
+export const shortStamp = (stamp) => String(stamp ?? '').slice(0, 12);
+
+/** An ISO time in the viewer's local time, or the text as given if it doesn't parse. */
+export function localTime(iso) {
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? String(iso ?? '') : new Date(t).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+const KNOCK_ON = 'Knock-on check: ';
+/** A row's label, with the knock-on prefix sb uses when the row is one and the label doesn't already carry it. */
+export function rowLabel(row) {
+  const label = String(row?.label ?? '');
+  return row?.knock_on === true && !label.startsWith(KNOCK_ON.trim()) ? `${KNOCK_ON}${label}` : label;
+}
+
+const count = (n) => (typeof n === 'number' ? n.toLocaleString('en-US') : '?');
+
+function DataopRun({ payload }) {
+  const p = payload ?? {};
+  const n = p.expected;
+  const write = p.write?.kind === 'batch' ? `Batch Apex class ${p.write?.class ?? '(no class)'}` : 'Bulk dataop';
+  const rows = Array.isArray(p.rows) ? p.rows : [];
+  return (
+    <div data-testid="approve-dataop" className="mb-4">
+      <p data-testid="approve-dataop-count" className="text-2xl font-bold text-dark mb-3 break-words">
+        About to change {count(n)} live record{n === 1 ? '' : 's'}
+      </p>
+      <p data-testid="approve-dataop-problem" className="text-dark mb-4 break-words">{p.problem}</p>
+      <dl className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark grid grid-cols-[auto_1fr] gap-x-3 gap-y-2">
+        <dt className="font-medium">Org</dt><dd className="font-mono break-all">{p.alias}</dd>
+        <dt className="font-medium">Object</dt><dd className="font-mono break-all">{p.object}</dd>
+        <dt className="font-medium">Write</dt><dd data-testid="approve-dataop-write" className="break-words">{write}</dd>
+        <dt className="font-medium">Stamp</dt>
+        <dd data-testid="approve-dataop-stamp" className="min-w-0">
+          <span className="font-mono font-bold">{shortStamp(p.stamp)}</span>
+          <span className="block font-mono text-xs break-all">{p.stamp}</span>
+        </dd>
+        <dt className="font-medium">Preflight</dt><dd data-testid="approve-dataop-preflight">{localTime(p.preflight_at)}</dd>
+        {p.rehearsal && (
+          <>
+            <dt className="font-medium">Sandbox</dt>
+            <dd data-testid="approve-dataop-rehearsal" className="break-words">
+              Rehearsed on <span className="font-mono">{p.rehearsal.sandbox}</span> at {localTime(p.rehearsal.at)}
+            </dd>
+          </>
+        )}
+        <dt className="font-medium">Plan</dt><dd className="font-mono text-xs break-all">{p.repo}\{p.plan}</dd>
+      </dl>
+      <div className="mb-2 overflow-x-auto">
+        <table data-testid="approve-dataop-rows" className="w-full text-sm text-dark border-collapse">
+          <thead>
+            <tr className="border-b border-border text-left">
+              <th className="py-2 pr-3 font-medium">Check</th>
+              <th className="py-2 px-2 font-medium text-right">Before</th>
+              <th className="py-2 pl-2 font-medium text-right">Goal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} data-knock-on={r.knock_on === true ? '' : undefined}
+                className={`border-b border-border ${r.before !== r.goal ? 'font-bold' : ''}`}>
+                <td className="py-2 pr-3 break-words">{rowLabel(r)}</td>
+                <td className="py-2 px-2 text-right tabular-nums">{count(r.before)}</td>
+                <td className="py-2 pl-2 text-right tabular-nums">{count(r.goal)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-dark mb-4">Bold rows are the fix. The others are safety checks and must not change.</p>
+    </div>
+  );
 }
 
 /** The config files the click writes. */
@@ -234,7 +317,13 @@ function ResultLine({ line }) {
   );
 }
 
-export default function ApprovePage() {
+const realSession = () => supabase.auth.getSession();
+
+/**
+ * `runner` and `session` exist only for the dev fixture (ApproveFixture.jsx, dataops_alfred-d4x s6b), which passes
+ * local fakes. In use both are left out, so the page calls the real runner with the real session.
+ */
+export default function ApprovePage({ runner = callRunner, session = realSession } = {}) {
   const { token } = useParams();
   const linkKind = new URLSearchParams(useLocation().search).get('kind');
   const kind = ['sql', 'git', 'deploy'].includes(linkKind) ? linkKind : 'sql';
@@ -253,12 +342,12 @@ export default function ApprovePage() {
   useEffect(() => {
     let live = true;
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session: current } } = await session();
       if (!live) return;
-      setSignedIn(Boolean(session));
-      if (!session) return;
+      setSignedIn(Boolean(current));
+      if (!current) return;
       try {
-        const { status, body } = await callRunner('preview', { token });
+        const { status, body } = await runner('preview', { token });
         if (!live) return;
         if (body.ok) setPreview(body);
         else setEnded(linkEnded(status, body.error) ?? String(body.error));
@@ -267,7 +356,7 @@ export default function ApprovePage() {
       }
     })();
     return () => { live = false; };
-  }, [token]);
+  }, [token, runner, session]);
 
   function refusal({ status, body }) {
     const over = linkEnded(status, body.error);
@@ -280,7 +369,7 @@ export default function ApprovePage() {
     setNote(null);
     setDry(null);
     try {
-      const out = await callRunner('dry-run', { token });
+      const out = await runner('dry-run', { token });
       if (out.body.run_id) setDry(out.body);
       else refusal(out);
     } catch {
@@ -294,7 +383,8 @@ export default function ApprovePage() {
   const isSb = preview?.kind === 'sb_setup';
   const isSf = preview?.kind === 'sf_check';
   const isSfRead = preview?.kind === 'sf_read';
-  const isGit = preview?.kind === 'git' || isSb || isSf || isSfRead;
+  const isDataop = preview?.kind === 'sf_dataop';
+  const isGit = preview?.kind === 'git' || isSb || isSf || isSfRead || isDataop;
 
   useEffect(() => {
     if (!preview || dryStarted.current || isGit) return;
@@ -308,7 +398,7 @@ export default function ApprovePage() {
     setApproving(true);
     setNote(null);
     try {
-      const out = await callRunner('approve', { token, fingerprint: preview.fingerprint });
+      const out = await runner('approve', { token, fingerprint: preview.fingerprint });
       if (out.body.run_id || (isGit && out.body.sent)) setReal(out.body);
       else refusal(out);
     } catch {
@@ -322,7 +412,7 @@ export default function ApprovePage() {
     setBusy(true);
     setNote(null);
     try {
-      const out = await callRunner('cancel', { token, reason });
+      const out = await runner('cancel', { token, reason });
       if (out.body.cancelled) setCancelled(out.body);
       else refusal(out);
     } catch {
@@ -362,13 +452,19 @@ export default function ApprovePage() {
   if (isGit) {
     // The action id is the chat's handle: the helper's run row only exists once it picks the action up.
     const id = preview.action_id;
-    // An sf_read's line is sf <id>, like a check's (the helper's LINE_WORD).
-    const word = isSb ? 'sb' : isSf || isSfRead ? 'sf' : 'git';
-    const lines = isSb ? sbLines(preview.payload) : isSf ? sfLines(preview.payload) : isSfRead ? sfReadLines(preview.payload)
-      : gitLines(preview.payload, preview.project_code);
+    // An sf_read's line is sf <id>, like a check's; a production data run's is dataop <id> (the helper's LINE_WORD).
+    const word = isSb ? 'sb' : isSf || isSfRead ? 'sf' : isDataop ? 'dataop' : 'git';
+    const lines = isDataop ? [] : isSb ? sbLines(preview.payload) : isSf ? sfLines(preview.payload)
+      : isSfRead ? sfReadLines(preview.payload) : gitLines(preview.payload, preview.project_code);
     return (
       <Shell preview={preview}>
         {approving && <span hidden data-switchboard-running={preview.kind} />}
+        {isDataop && (
+          <div data-testid="approve-production" role="alert"
+            className="mb-4 w-full bg-orange-400 text-black text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
+            Production, live client data
+          </div>
+        )}
         {isSfRead && isProductionFullData(preview.payload) && (
           <div data-testid="approve-production-full-data" role="alert"
             className="mb-4 w-full bg-red-700 text-white text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
@@ -391,9 +487,11 @@ export default function ApprovePage() {
         )}
         <p className="text-sm text-dark">Project</p>
         <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code} data-switchboard-kind={preview.kind}>{preview.project_code}</p>
-        <ul data-testid={`approve-${isSfRead ? 'sf-read' : word}`} className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">
-          {lines.map((l) => <li key={l}>{l}</li>)}
-        </ul>
+        {isDataop ? <DataopRun payload={preview.payload} /> : (
+          <ul data-testid={`approve-${isSfRead ? 'sf-read' : word}`} className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">
+            {lines.map((l) => <li key={l}>{l}</li>)}
+          </ul>
+        )}
         {isSb && !real && !cancelled && (
           <div data-testid="approve-sb-writes" className="mb-4 text-sm text-dark break-words">
             {preview.payload?.from_sandbox && (
@@ -422,13 +520,19 @@ export default function ApprovePage() {
         ) : real ? (
           <>
             <RunResult title="Sent to the desktop helper"
-              summary="It runs in a terminal window on your computer. The result comes back to the chat when it finishes."
+              summary={isDataop
+                ? 'It must pick it up within 15 minutes, or it fails unrun. It checks the stamp and the sandbox pass first, and pauses for your Enter before it writes. The result comes back to the chat when it finishes.'
+                : 'It runs in a terminal window on your computer. The result comes back to the chat when it finishes.'}
               runId={id} />
             <ResultLine line={`${word} ${id}`} />
           </>
         ) : (
           <>
-            <p className="mb-4 text-sm text-dark">{isSb ? 'An sb setup' : isSf ? 'An sf check' : isSfRead ? 'An sf read' : 'Git'} has no dry run. Approve runs this once, on your computer.</p>
+            <p className="mb-4 text-sm text-dark">
+              {isDataop
+                ? 'A production data run has no dry run here: its sandbox rehearsal was the dry run. Approve runs this once, on your computer, against the live org.'
+                : `${isSb ? 'An sb setup' : isSf ? 'An sf check' : isSfRead ? 'An sf read' : 'Git'} has no dry run. Approve runs this once, on your computer.`}
+            </p>
             <div className="mb-4">
               <label htmlFor="dont-run-reason" className="block text-sm text-dark mb-1">Reason for not running (optional)</label>
               <input id="dont-run-reason" type="text" maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)}

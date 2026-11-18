@@ -1,8 +1,13 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Alfred from './Alfred';
 import OAuthConsent from './OAuthConsent';
 import SendFromDesktop from './switchboard/SendFromDesktop';
 import ApprovePage from './switchboard/ApprovePage';
+
+// Dev server only (dataops_alfred-d4x s6b): the approve page with a sample payload and a fake runner. CRA sets
+// NODE_ENV to "production" in a build, so webpack drops this branch and its import, and the build has no such route.
+const ApproveFixture = process.env.NODE_ENV !== 'production' ? lazy(() => import('./switchboard/ApproveFixture')) : null;
 
 // Step 2 of docs/technical-spec-navigation-urls.md: mount the router and
 // change nothing else. This replaces the hard-coded
@@ -21,6 +26,9 @@ function App() {
         <Route path="/oauth/consent" element={<OAuthConsent />} />
         <Route path="/send/:runTag" element={<SendFromDesktop />} />
         <Route path="/approve/:token" element={<ApprovePage />} />
+        {ApproveFixture && process.env.NODE_ENV !== 'production' && (
+          <Route path="/approve-fixture/:kind" element={<Suspense fallback={null}><ApproveFixture /></Suspense>} />
+        )}
         <Route path="*" element={<Alfred />} />
       </Routes>
     </BrowserRouter>
