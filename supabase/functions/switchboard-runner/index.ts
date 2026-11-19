@@ -5,7 +5,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import postgres from "npm:postgres@3.4.5";
 import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts";
 import {
-  type Action, type Deps, handle, HELPER_KINDS, type Picked, type PickedAction, type RunOutcome, type Statement, type StatementResult,
+  type Action, type Deps, handle, HELPER_KINDS, LONG_PICK_KINDS, type Picked, type PickedAction, type RunOutcome, type Statement, type StatementResult,
 } from "./core.ts";
 
 // switchboard-runner: the only code that executes queued SQL, and the only code using SUPABASE_DB_URL.
@@ -20,16 +20,20 @@ import {
 //                  unless it's a test action, whose one run this is.
 //   POST /approve  Alex's JWT. { token, fingerprint } -> { run_id, summary, conformance, counts }. Needs a clean latest dry run.
 //   POST /cancel   Alex's JWT. { token, reason? } -> { run_id, cancelled, reason }. Spends the link; runs nothing.
-//   A git, sf_check (s86pa), sb_setup, sf_read or sf_dataop link: /preview adds kind and payload; /approve only spends
-//   the link, so the action is consumed for the helper, and runs nothing here; /cancel needs no dry run; /dry-run is refused.
+//   A git, sf_check (s86pa), sb_setup, sf_read, sf_dataop or sf_dataquery link: /preview adds kind and payload; /approve
+//   only spends the link, so the action is consumed for the helper, and runs nothing here; /cancel needs no dry run;
+//   /dry-run is refused.
 //   POST /pickup   x-switchboard-pickup-key. { kinds? } -> { action (with kind) | null, timed_out }. The desktop helper.
-//                  No kinds: git only, by switchboard_pickup_git. All five, sf_dataop included: switchboard_pickup_helper
-//                  with p_kinds. The four without sf_dataop, or the older three (a helper before s89c): the same, with
-//                  no p_kinds, so never an sf_dataop (dataops_alfred-d4x O3). A pick with no result is failed after 30
-//                  minutes, an sf_dataop's after 4 hours.
-//   POST /result   x-switchboard-pickup-key. { action_id, run_id, ok, summary, exit_code?, output? } -> { status }. Any helper kind.
-//                  An sf_read's or sf_dataop's run keeps no output (O8): a read's rows went to /sf-result, a data run's
-//                  receipt is a clip push.
+//                  No kinds: git only, by switchboard_pickup_git. All six, sf_dataquery included, or the five of
+//                  dataops_alfred-d4x: switchboard_pickup_helper with p_kinds (the five never get an sf_dataquery). The
+//                  four without sf_dataop, or the older three (a helper before s89c): the same, with no p_kinds, so
+//                  never a production kind (dataops_alfred-d4x O3). A pick with no result is failed after 30 minutes,
+//                  an sf_dataop's or sf_dataquery's after 4 hours.
+//   POST /result   x-switchboard-pickup-key. { action_id, run_id, ok, summary, exit_code?, output?, query_counts?, pass? }
+//                  -> { status }. Any helper kind. An sf_read's or sf_dataop's run keeps no output (O8): a read's rows
+//                  went to /sf-result, a data run's receipt is a clip push. An sf_dataquery's keeps only ok, exit_code,
+//                  query_counts (one whole number per query) and pass, with Ids scrubbed from its summary; a report that
+//                  doesn't fit is refused and closes the run as failed (dataop_link-k7d).
 //   POST /sf-result x-switchboard-pickup-key. { action_id, run_id, ok, summary, level, object, production_full_data, count,
 //                  rows, query? } or { ..., ok: false, reason } -> { stored }. An sf_read's rows, before its /result (s89e):
 //                  into switchboard_sf_results for at most 10 minutes, plus a switchboard_sf_read_log row. The run is untouched.
@@ -113,11 +117,12 @@ function deps(): Deps {
     pickupHelper: async (userId, kinds) =>
       must(await db.rpc("switchboard_pickup_helper", kinds ? { p_user: userId, p_kinds: kinds } : { p_user: userId })) as PickedAction | null,
     stalePicks: async (userId, before, dataopBefore) => {
-      const others = HELPER_KINDS.filter((k) => k !== "sf_dataop");
+      // sf_dataop and sf_dataquery (LONG_PICK_KINDS) get 4 hours; every other helper kind 30 minutes.
+      const others = HELPER_KINDS.filter((k) => !LONG_PICK_KINDS.includes(k));
       const actions = [
         ...must(await db.from("switchboard_actions").select("id").eq("user_id", userId).in("kind", others)
           .eq("status", "consumed").lt("picked_up_at", before)) as { id: string }[],
-        ...must(await db.from("switchboard_actions").select("id").eq("user_id", userId).eq("kind", "sf_dataop")
+        ...must(await db.from("switchboard_actions").select("id").eq("user_id", userId).in("kind", LONG_PICK_KINDS)
           .eq("status", "consumed").lt("picked_up_at", dataopBefore)) as { id: string }[],
       ];
       if (!actions.length) return [];

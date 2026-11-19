@@ -6,6 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadTool } from "./test-platform.mjs";
+import { createHash } from "node:crypto";
 
 const m = await loadTool("switchboard.ts");
 
@@ -1279,5 +1280,157 @@ test("sf_dataop: the database's refusal and a link refusal are reported, not ret
   await assert.rejects(queueDataop({ project_code: "p-x", ...DATAOP },
     helperDb({ queue: { data: null, error: { code: "23514", message: "violates check constraint" } } })), /refused: violates/);
   await assert.rejects(queueDataop({ project_code: "p-x", ...DATAOP },
+    helperDb({ link: { data: null, error: { code: "55000", message: "another link is live" } } })), new RegExp(`queued as ${ACTION_ID}, but no link`));
+});
+
+// --- dataop_link-k7d A1: queue_switchboard_sf_dataquery -----------------------------------------------------------
+
+const DQ_CODE = "cd_fixc-q8d";
+const hex = (s) => createHash("sha256").update(s, "utf8").digest("hex");
+const SEL = "SELECT Id, GiftCommitmentId FROM GiftTransaction WHERE Source__c = 'ActBlue' AND CreatedDate < 2026-11-18T00:00:00Z\n";
+const BROAD = "SELECT Id, GiftCommitmentId, Amount FROM GiftTransaction WHERE Source__c = 'ActBlue'";
+const R1 = "SELECT COUNT() FROM GiftTransaction WHERE Source__c = 'ActBlue' AND GiftCommitmentId = null";
+const R2 = "SELECT COUNT() FROM GiftCommitment WHERE Rollup_Pending__c = true";
+const exp = (step, soql, src) => ({ step, soql, sha256: hex(soql), ...src });
+const DQ_BASE = { alias: "cd-prod", repo: "C:\\Users\\Alex\\projects\\common-defense", run: `data-ops/${DQ_CODE}/fixc-2026-11-19`,
+  run_tag: `${DQ_CODE}-s4-ab12`, request_sha256: "0123456789abcdef".repeat(4) };
+const DQ_EXPORT = { ...DQ_BASE, queries: [exp("manifest", SEL, { file: "selection.soql" }), exp("before", BROAD, { label: "broad snapshot" })] };
+const DQ_COUNT = { ...DQ_BASE, queries: [exp("rules", R1, { label: "Installments with no gift commitment" }),
+  exp("rules", R2, { label: "Commitments whose totals are still updating" })] };
+const dq = (p) => m.sfDataqueryPayload(DQ_CODE, p);
+const queueDq = (args, db = helperDb()) => m.queueSwitchboardSfDataqueryTool.handler(args, { db });
+const withQuery = (base, i, patch) => ({ ...base, queries: base.queries.map((q, j) => (j === i ? { ...q, ...patch } : q)) });
+const countOf = (soql, label = "A rule") => ({ ...DQ_BASE, queries: [exp("rules", soql, { label })] });
+
+test("sf_dataquery: sha256Hex is the SHA-256 of the UTF-8 bytes, as node and Postgres compute it", async () => {
+  for (const s of ["", SEL, "SELECT COUNT() FROM Contact WHERE Name = 'Zoë'", "\r\n\tSELECT"]) assert.equal(await m.sha256Hex(s), hex(s));
+});
+
+test("sf_dataquery: jsonbTextLength counts as Postgres prints jsonb", () => {
+  assert.equal(m.jsonbTextLength({}), 2);
+  assert.equal(m.jsonbTextLength([]), 2);
+  assert.equal(m.jsonbTextLength({ a: 1, b: [1, 2] }), '{"a": 1, "b": [1, 2]}'.length);
+  assert.equal(m.jsonbTextLength({ s: "x\ny\"" }), '{"s": "x\\ny\\""}'.length);
+});
+
+test("sf_dataquery: tier 2; queued as sf_dataquery with its project code, then the link; nothing else", async () => {
+  assert.equal(m.queueSwitchboardSfDataqueryTool.tier, 2);
+  assert.deepEqual(m.queueSwitchboardSfDataqueryTool.tables, { reads: ["switchboard_actions", "switchboard_settings"], writes: ["switchboard_actions"] });
+  const db = helperDb();
+  const out = await queueDq({ project_code: DQ_CODE, chat_url: "x", ...DQ_EXPORT }, db);
+  assert.deepEqual(db.calls.map((c) => c[0]), ["switchboard_queue_helper", "switchboard_issue_link"]);
+  const [, params] = db.calls[0];
+  assert.equal(params.p_kind, "sf_dataquery");
+  assert.equal(params.p_project_code, DQ_CODE);
+  assert.deepEqual(params.p_payload, DQ_EXPORT);
+  assert.equal(params.p_chat_url, null);
+  assert.equal(params.p_headline, `PRODUCTION EXPORT ${DQ_CODE} ON cd-prod: 2 QUERIES (manifest, before), READ ONLY`);
+  assert.equal(out.url, LINK.url);
+  assert.equal(out.action_id, ACTION_ID);
+  assert.match(out.next, /ONLY HIS CLICK ON APPROVE RUNS THESE PRODUCTION QUERIES/);
+  assert.match(out.next, /run\.result\.query_counts/);
+});
+
+test("sf_dataquery: count links, an undo export, a file with no request hash, and leading blank space are accepted", async () => {
+  const long = `SELECT COUNT() FROM Contact WHERE Name != '${"x".repeat(8000 - 44)}'`;
+  assert.equal(long.length, 8000);
+  const forty = { ...DQ_BASE, queries: Array.from({ length: 40 }, (_, i) =>
+    exp("preflight-counts", `SELECT COUNT() FROM Contact WHERE Name != 'n${i}'`, { label: `Rule ${i}` })) };
+  const { request_sha256: _h, ...noHash } = DQ_BASE;
+  for (const p of [
+    DQ_COUNT,
+    countOf(long),
+    forty,
+    { ...DQ_BASE, queries: [exp("undo", SEL, { file: "selection.soql" })] },
+    { ...noHash, queries: [exp("manifest", SEL, { file: "selection.soql" })] },
+    { ...DQ_EXPORT, run: `data-ops\\${DQ_CODE}\\fixc-2026-11-19` },
+    { ...DQ_BASE, queries: [exp("manifest", `\n\t  ${SEL}`, { file: "selection.soql" })] },
+    countOf(`\r\n${R2}`),
+  ]) {
+    assert.deepEqual(await dq(p), { payload: p }, JSON.stringify(p).slice(0, 160));
+  }
+  assert.equal(m.sfDataqueryHeadline(DQ_CODE, DQ_COUNT), `PRODUCTION COUNTS ${DQ_CODE} ON cd-prod: 2 QUERIES (rules), READ ONLY`);
+  assert.equal(m.sfDataqueryHeadline(DQ_CODE, countOf(R1)), `PRODUCTION COUNTS ${DQ_CODE} ON cd-prod: 1 QUERY (rules), READ ONLY`);
+});
+
+test("sf_dataquery: every refusal says why, and nothing is queued", async () => {
+  const { repo: _r, ...noRepo } = DQ_EXPORT;
+  const { run: _u, ...noRun } = DQ_EXPORT;
+  const { run_tag: _t, ...noTag } = DQ_EXPORT;
+  const { request_sha256: _h, ...noHash } = DQ_COUNT;
+  const { file: _f, ...noSource } = DQ_EXPORT.queries[0];
+  const forty1 = { ...DQ_BASE, queries: Array.from({ length: 41 }, (_, i) =>
+    exp("rules", `SELECT COUNT() FROM Contact WHERE Name != 'n${i}'`, { label: `Rule ${i}` })) };
+  const bad = [
+    [forty1, /1 to 40 queries/],
+    [{ ...DQ_EXPORT, queries: [] }, /1 to 40 queries/],
+    [{ ...DQ_EXPORT, queries: [...DQ_EXPORT.queries, DQ_COUNT.queries[0]] }, /all exports .* or all counts/],
+    [withQuery(DQ_COUNT, 1, { step: "preflight-counts" }), /a count link is one step/],
+    [withQuery(DQ_COUNT, 1, { step: "undo" }), /all exports .* or all counts/],
+    [{ ...DQ_BASE, queries: [exp("undo", R1, { label: "Undo as a count" })] }, /is an export/],
+    [withQuery(DQ_COUNT, 0, { sha256: "0".repeat(64) }), /isn't the SHA-256/],
+    [withQuery(DQ_COUNT, 0, { sha256: hex(R1).toUpperCase() }), /isn't the SHA-256/],
+    [withQuery(DQ_COUNT, 0, { soql: `\n${R1}` }), /isn't the SHA-256/],
+    [countOf("SELECT COUNT() FROM Contact WHERE Name != null; DELETE"), /semicolon/],
+    [countOf("SELECT COUNT() FROM Contact WHERE Name != null GROUP BY Name"), /no GROUP BY/],
+    [countOf(`SELECT COUNT() FROM Contact WHERE Name != '${"x".repeat(8000 - 43)}'`), /over 8,000 characters/],
+    [countOf("SELECT Id FROM Contact WHERE Name != null"), /is a count/],
+    [countOf("SELECT COUNT(Id) FROM Contact WHERE Name != null"), /is a count/],
+    [countOf(`-- note\n${R2}`), /is a count/],
+    [countOf(`\u00a0${R2}`), /is a count/],
+    [{ ...DQ_BASE, queries: [exp("manifest", "SELECT Id, (SELECT COUNT() FROM Contacts) FROM Account WHERE Name != null", { file: "selection.soql" })] }, /no COUNT\(/],
+    [{ ...DQ_BASE, queries: [exp("manifest", "SELECT Name, Id FROM Contact WHERE Name != null", { file: "selection.soql" })] }, /is an export/],
+    [{ ...DQ_BASE, queries: [exp("manifest", `SELECT Id FROM Contact WHERE Name != '${"x".repeat(100000)}'`, { file: "selection.soql" })] }, /over 100,000 characters/],
+    [noRepo, /missing repo/],
+    [noRun, /missing run/],
+    [noTag, /missing run_tag/],
+    [{ ...DQ_EXPORT, ids: ["a0D000000000001AAA"] }, /does not take ids/],
+    [withQuery(DQ_COUNT, 0, { rows: [] }), /does not take rows/],
+    [{ ...DQ_EXPORT, alias: "-x" }, /`alias`/],
+    [{ ...DQ_EXPORT, repo: "projects\\common-defense" }, /`repo`/],
+    [{ ...DQ_EXPORT, run: "data-ops/other-code/fixc" }, /`run`/],
+    [{ ...DQ_EXPORT, run: `dataops/${DQ_CODE}/fixc` }, /`run`/],
+    [{ ...DQ_EXPORT, run: `data-ops/${DQ_CODE}/..` }, /`run`/],
+    [{ ...DQ_EXPORT, run: `data-ops/${DQ_CODE}/a/b` }, /`run`/],
+    [{ ...DQ_EXPORT, run: `data-ops/${DQ_CODE}` }, /`run`/],
+    [{ ...DQ_EXPORT, run: `data-ops/${DQ_CODE}/.` }, /`run`/],
+    [{ ...DQ_EXPORT, run_tag: "other-code-s4-ab12" }, /`run_tag`/],
+    [{ ...DQ_EXPORT, run_tag: `${DQ_CODE}-s4-ab1` }, /`run_tag`/],
+    [{ ...DQ_EXPORT, request_sha256: "abc" }, /`request_sha256`/],
+    [noHash, /needs `request_sha256`/],
+    [withQuery(DQ_EXPORT, 0, { label: "selection" }), /exactly one of file and label/],
+    [{ ...DQ_EXPORT, queries: [noSource] }, /exactly one of file and label/],
+    [withQuery(DQ_EXPORT, 0, { file: "../selection.soql" }), /one .soql file name/],
+    [withQuery(DQ_EXPORT, 0, { file: "selection.txt" }), /one .soql file name/],
+    [withQuery(DQ_COUNT, 1, { label: DQ_COUNT.queries[0].label }), /already used/],
+    [withQuery(DQ_COUNT, 0, { label: "two\nlines" }), /one line/],
+    [withQuery(DQ_COUNT, 0, { label: "   " }), /one line/],
+    [withQuery(DQ_COUNT, 0, { label: "x".repeat(201) }), /one line of 1 to 200/],
+    [withQuery(DQ_EXPORT, 1, { step: "gate" }), /step must be one of/],
+    [withQuery(DQ_COUNT, 0, { soql: 42 }), /exact text/],
+  ];
+  for (const [p, why] of bad) {
+    const r = await dq(p);
+    assert.ok("refused" in r, JSON.stringify(p).slice(0, 160));
+    assert.match(r.refused, why, JSON.stringify(p).slice(0, 160));
+  }
+  const db = helperDb();
+  await assert.rejects(queueDq({ project_code: DQ_CODE, ...countOf("SELECT COUNT() FROM X WHERE a = 1;") }, db), /refused: .*semicolon/);
+  await assert.rejects(queueDq({ ...DQ_EXPORT }, db), /`project_code`/);
+  assert.equal(db.calls.length, 0);
+});
+
+test("sf_dataquery: the payload cap is 220,000 characters as Postgres prints it", async () => {
+  const big = (n) => `SELECT Id FROM Contact WHERE Name != '${"x".repeat(n)}'`;
+  const near = { ...DQ_BASE, queries: [exp("manifest", big(99000), { file: "a.soql" }), exp("before", big(99000), { file: "b.soql" })] };
+  assert.ok("payload" in await dq(near));
+  const over = { ...near, queries: [...near.queries, exp("undo", big(30000), { file: "c.soql" })] };
+  assert.match((await dq(over)).refused, /over 220,000 characters/);
+});
+
+test("sf_dataquery: the database's refusal and a link refusal are reported, not retried", async () => {
+  await assert.rejects(queueDq({ project_code: DQ_CODE, ...DQ_COUNT },
+    helperDb({ queue: { data: null, error: { code: "23514", message: "violates check constraint" } } })), /refused: violates/);
+  await assert.rejects(queueDq({ project_code: DQ_CODE, ...DQ_COUNT },
     helperDb({ link: { data: null, error: { code: "55000", message: "another link is live" } } })), new RegExp(`queued as ${ACTION_ID}, but no link`));
 });

@@ -834,6 +834,159 @@ export const queueSwitchboardSfDataopTool = defineTool({
   },
 });
 
+// ---------------------------------------------------------------------------
+// queue_switchboard_sf_dataquery (dataop_link-k7d A1): production bulk exports or SELECT COUNT()s for Data run v2,
+// started only by Alex's click on its link; only whole-number counts and a pass flag come back. The payload is
+// docs/technical-spec-dataop_link-k7d.md parts 2 to 4, checked here with the same rules as the database's
+// switchboard_dataquery_payload_ok (so a refusal says why), then by it, then by the helper against the run folder.
+// ---------------------------------------------------------------------------
+
+const DATAQUERY_KEYS = ["alias", "repo", "run", "run_tag", "request_sha256", "queries"];
+const DATAQUERY_QUERY_KEYS = ["step", "soql", "sha256", "file", "label"];
+export const DATAQUERY_EXPORT_STEPS = ["manifest", "before", "undo"];
+export const DATAQUERY_COUNT_STEPS = ["preflight-counts", "rules"];
+export const DATAQUERY_MAX_QUERIES = 40;
+export const DATAQUERY_MAX_COUNT_CHARS = 8000;
+export const DATAQUERY_MAX_EXPORT_CHARS = 100_000;
+export const DATAQUERY_MAX_PAYLOAD = 220_000;
+const HEX64 = /^[0-9a-f]{64}$/;
+// Blank space is [ \t\r\n] exactly, as in the database function (not \s, whose set differs between the two).
+const EXPORT_SOQL = /^[ \t\r\n]*SELECT[ \t\r\n]+Id([ \t\r\n]*,|[ \t\r\n]+FROM[ \t\r\n])/i;
+const COUNT_SOQL = /^[ \t\r\n]*SELECT[ \t\r\n]+COUNT\(\)[ \t\r\n]+FROM[ \t\r\n]+[A-Za-z][A-Za-z0-9_]*[ \t\r\n]+WHERE[ \t\r\n]/i;
+const ANY_COUNT = /COUNT[ \t\r\n]*\(/i;
+const GROUP_BY = /GROUP[ \t\r\n]+BY/i;
+const SOQL_FILE = /^[A-Za-z0-9_.-]{1,80}\.soql$/;
+const RUN_FOLDER = /^[\\/][A-Za-z0-9_.-]{1,80}$/;
+const RUN_TAG_TAIL = /^[0-9]+[a-z]*-[a-z0-9]{4}$/;
+
+/** The SHA-256 of a string's UTF-8 bytes, lower-case hex: what the database computes with sha256(convert_to(...)). */
+export async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** The length of a value as Postgres prints jsonb (", " and ": " separators), so the payload cap means the same here. */
+export function jsonbTextLength(v: unknown): number {
+  if (Array.isArray(v)) return v.length ? 2 + v.reduce((n: number, x) => n + jsonbTextLength(x), 0) + 2 * (v.length - 1) : 2;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v as Record<string, unknown>).filter(([, x]) => x !== undefined);
+    if (!entries.length) return 2;
+    return 2 + entries.reduce((n, [k, x]) => n + JSON.stringify(k).length + 2 + jsonbTextLength(x), 0) + 2 * (entries.length - 1);
+  }
+  return JSON.stringify(v).length;
+}
+
+export async function sfDataqueryPayload(code: string, args: Record<string, unknown>):
+    Promise<{ payload: Record<string, unknown> } | { refused: string }> {
+  const r = (refused: string) => ({ refused });
+  const p = payloadOf(args);
+  const extra = Object.keys(p).filter((k) => !DATAQUERY_KEYS.includes(k));
+  if (extra.length) return r(`an sf_dataquery does not take ${extra.join(", ")}. Pass sb's printed arguments exactly as they are.`);
+  const missing = DATAQUERY_KEYS.filter((k) => k !== "request_sha256" && p[k] === undefined);
+  if (missing.length) return r(`missing ${missing.join(", ")}: pass every argument sb printed.`);
+  if (typeof p.alias !== "string" || !SF_ALIAS.test(p.alias)) return r("`alias` must be the production org's alias (letters, digits, _ . -).");
+  if (typeof p.repo !== "string" || p.repo.length > 240 || !GIT_REPO.test(p.repo) || p.repo.includes("..")) {
+    return r("`repo` must be the checkout's absolute path, e.g. C:\\Users\\Alex\\projects\\common-defense, with no ..");
+  }
+  const run = p.run;
+  const tail = typeof run === "string" ? run.slice(9 + code.length) : "";
+  if (typeof run !== "string" || run.length > 200 || run.includes("..") || !["data-ops/", "data-ops\\"].includes(run.slice(0, 9)) ||
+      run.slice(9, 9 + code.length) !== code || !RUN_FOLDER.test(tail) || /^[\\/]\.+$/.test(tail)) {
+    return r(`\`run\` must be the run folder inside repo: data-ops/${code}/<run>, one folder, with no ..`);
+  }
+  const tag = p.run_tag;
+  if (typeof tag !== "string" || tag.length > 60 || !tag.startsWith(`${code}-s`) || !RUN_TAG_TAIL.test(tag.slice(code.length + 2))) {
+    return r(`\`run_tag\` must be this project's run tag, e.g. ${code}-s4-ab12.`);
+  }
+  if (p.request_sha256 !== undefined && (typeof p.request_sha256 !== "string" || !HEX64.test(p.request_sha256))) {
+    return r("`request_sha256` must be request.json's SHA-256: 64 lower-case hex characters.");
+  }
+  const queries = p.queries;
+  if (!Array.isArray(queries) || queries.length < 1 || queries.length > DATAQUERY_MAX_QUERIES) {
+    return r(`\`queries\` must list 1 to ${DATAQUERY_MAX_QUERIES} queries.`);
+  }
+  let first: string | null = null;
+  const labels = new Set<string>();
+  for (const [i, q] of queries.entries()) {
+    const at = `query ${i + 1}`;
+    if (!isObject(q)) return r(`${at} must be {step, soql, sha256, file | label}.`);
+    const bad = Object.keys(q).filter((k) => !DATAQUERY_QUERY_KEYS.includes(k));
+    if (bad.length) return r(`${at} does not take ${bad.join(", ")}.`);
+    const step = q.step;
+    const isExport = typeof step === "string" && DATAQUERY_EXPORT_STEPS.includes(step);
+    if (typeof step !== "string" || !(isExport || DATAQUERY_COUNT_STEPS.includes(step))) {
+      return r(`${at}'s step must be one of ${[...DATAQUERY_EXPORT_STEPS, ...DATAQUERY_COUNT_STEPS].join(", ")}.`);
+    }
+    if (first === null) first = step;
+    else if (DATAQUERY_EXPORT_STEPS.includes(first) !== isExport) return r("a link is all exports (manifest, before, undo) or all counts, never both.");
+    else if (!isExport && step !== first) return r(`a count link is one step: ${at} is ${step}, the first is ${first}.`);
+    if (typeof q.soql !== "string") return r(`${at}'s soql must be the query's exact text.`);
+    const soql = q.soql;
+    if (soql.includes(";")) return r(`${at}'s soql has a semicolon: one query, no ;.`);
+    if (typeof q.sha256 !== "string" || q.sha256 !== await sha256Hex(soql)) {
+      return r(`${at}'s sha256 isn't the SHA-256 of its soql's exact bytes: pass both as sb printed them.`);
+    }
+    if (isExport) {
+      if (chars(soql) > DATAQUERY_MAX_EXPORT_CHARS) return r(`${at} is over ${DATAQUERY_MAX_EXPORT_CHARS.toLocaleString("en-US")} characters.`);
+      if (!EXPORT_SOQL.test(soql) || ANY_COUNT.test(soql)) return r(`${at} is an export: SELECT Id, ... FROM ..., with no COUNT(.`);
+    } else {
+      if (chars(soql) > DATAQUERY_MAX_COUNT_CHARS) return r(`${at} is over ${DATAQUERY_MAX_COUNT_CHARS.toLocaleString("en-US")} characters.`);
+      if (!COUNT_SOQL.test(soql) || GROUP_BY.test(soql)) return r(`${at} is a count: SELECT COUNT() FROM <object> WHERE ..., with no GROUP BY.`);
+    }
+    if (("file" in q) === ("label" in q)) return r(`${at} needs exactly one of file and label.`);
+    if ("file" in q) {
+      if (typeof q.file !== "string" || !SOQL_FILE.test(q.file)) return r(`${at}'s file must be one .soql file name in the run folder.`);
+    } else {
+      const label = q.label;
+      if (typeof label !== "string" || chars(label) < 1 || chars(label) > 200 || /^ *$/.test(label) || /[\r\n]/.test(label)) {
+        return r(`${at}'s label must be one line of 1 to 200 characters.`);
+      }
+      if (labels.has(label)) return r(`${at}'s label "${label}" is already used in this link.`);
+      labels.add(label);
+    }
+  }
+  if (labels.size && p.request_sha256 === undefined) return r("a query with a label needs `request_sha256`, the request it was built from.");
+  if (jsonbTextLength(p) > DATAQUERY_MAX_PAYLOAD) return r(`the payload is over ${DATAQUERY_MAX_PAYLOAD.toLocaleString("en-US")} characters.`);
+  return { payload: p };
+}
+
+export function sfDataqueryHeadline(code: string, p: Record<string, unknown>): string {
+  const queries = p.queries as { step: string }[];
+  const steps = [...new Set(queries.map((q) => q.step))];
+  const what = DATAQUERY_EXPORT_STEPS.includes(steps[0]) ? "EXPORT" : "COUNTS";
+  const n = queries.length;
+  return `PRODUCTION ${what} ${code} ON ${p.alias}: ${n} QUER${n === 1 ? "Y" : "IES"} (${steps.join(", ")}), READ ONLY`;
+}
+
+export const queueSwitchboardSfDataqueryTool = defineTool({
+  name: "queue_switchboard_sf_dataquery",
+  tier: 2,
+  tables: { reads: ["switchboard_actions", "switchboard_settings"], writes: ["switchboard_actions"] },
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "queue_switchboard_sf_dataquery";
+    const code = typeof args.project_code === "string" ? args.project_code.trim() : "";
+    if (!PROJECT_CODE.test(code)) throw fail(tool, "`project_code` must be the data operation's project code, as sb printed it.");
+    const checked = await sfDataqueryPayload(code, args);
+    if ("refused" in checked) throw fail(tool, `refused: ${checked.refused}`);
+    const headline = sfDataqueryHeadline(code, checked.payload);
+    // needs_click is always true for this kind, whoever queues it (the database sets it and refuses false).
+    const actionId = await queueHelper(tool, ctx, "sf_dataquery", code, checked.payload, headline, chatOf(args));
+    const { data, error } = await ctx.db.rpc("switchboard_issue_link", { p_action_id: actionId });
+    if (error) {
+      if (REFUSALS.has(error.code ?? "")) throw fail(tool, `queued as ${actionId}, but no link: ${error.message}`);
+      throw dbError(tool, `issuing the link for ${actionId}`, error);
+    }
+    return {
+      ...(data as Record<string, unknown>), action_id: actionId, headline, payload: checked.payload,
+      next: "Give Alex the url whole, in its own reply; it lasts 30 minutes. ONLY HIS CLICK ON APPROVE RUNS THESE PRODUCTION " +
+        "QUERIES. The page shows the PRODUCTION banner and each SOQL in full with its step and hash. After the click the desktop " +
+        "helper must pick it up within 15 minutes or it fails unrun; it checks every hash against the run folder first. The " +
+        "exported files stay on Alex's PC. When the result line arrives, read the counts with get_switchboard_run: " +
+        "run.result.query_counts, one per query in this order, and run.result.pass.",
+    };
+  },
+});
+
 export const getSwitchboardSfResultTool = defineTool({
   name: "get_switchboard_sf_result",
   tier: 1,

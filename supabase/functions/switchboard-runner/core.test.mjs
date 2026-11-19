@@ -1095,3 +1095,132 @@ test("queue: the CLI's route never makes an sf_dataop, whatever the body says", 
   assert.equal("needs_click" in calls.inserted[0], false);
   assert.deepEqual(Object.keys(calls.inserted[0].payload).sort(), ["description", "sql"]);
 });
+
+// --- dataop_link-k7d: sf_dataquery, production exports and counts by link ---
+
+const SIX = [...FIVE, "sf_dataquery"];
+const DQ_PAYLOAD = { alias: "cd-prod", repo: "C:\\Users\\Alex\\projects\\common-defense", run: "data-ops/cd_fixc-q8d/fixc",
+  run_tag: "cd_fixc-q8d-s4-ab12", request_sha256: "0".repeat(64),
+  queries: [{ step: "rules", soql: "SELECT COUNT() FROM Contact WHERE A = 1", sha256: "1".repeat(64), label: "One" },
+            { step: "rules", soql: "SELECT COUNT() FROM Contact WHERE A = 2", sha256: "2".repeat(64), label: "Two" }] };
+const dqFakes = () => fakes({
+  findPicked: async (a, r) => (a === "dq-1" && r === "run-q" ? {
+    action: { id: "dq-1", user_id: USER, kind: "sf_dataquery", status: "consumed", picked_up_at: "t", payload: DQ_PAYLOAD },
+    run: { id: "run-q", action_id: "dq-1", mode: "real", finished_at: null },
+  } : null),
+});
+const dqResult = (body) => helper("result", { action_id: "dq-1", run_id: "run-q", summary: "counts done", ...body });
+
+test("pickup: six kinds are passed on whole; five still get sf_dataop as today; four and three get the default", async () => {
+  const six = kindsFakes();
+  assert.equal((await handle(helper("pickup", { kinds: [...SIX].reverse() }), six.deps)).status, 200);
+  assert.deepEqual(six.deps.args, [USER, SIX]);
+  const five = kindsFakes();
+  const body = await (await handle(helper("pickup", { kinds: FIVE }), five.deps)).json();
+  assert.equal(body.action.kind, "sf_dataop");
+  assert.deepEqual(five.deps.args, [USER, FIVE]);
+  assert.ok(!five.deps.args[1].includes("sf_dataquery"));
+  for (const kinds of [["git", "sf_check", "sb_setup", "sf_read"], ["git", "sf_check", "sb_setup"]]) {
+    const older = kindsFakes();
+    assert.equal((await handle(helper("pickup", { kinds }), older.deps)).status, 200, JSON.stringify(kinds));
+    assert.deepEqual(older.deps.args, [USER, undefined], JSON.stringify(kinds));
+  }
+});
+
+test("pickup: sf_dataquery with only some of the kinds is refused and picks nothing", async () => {
+  for (const kinds of [["sf_dataquery"], ["git", "sf_dataquery"], [...FIVE.filter((k) => k !== "sf_dataop"), "sf_dataquery"]]) {
+    const { deps, calls } = fakes({ stalePicks: async () => { throw new Error("not reached"); } });
+    const res = await handle(helper("pickup", { kinds }), deps);
+    assert.equal(res.status, 400, JSON.stringify(kinds));
+    assert.equal(calls.pickedHelper, undefined);
+  }
+});
+
+test("pickup: the 4-hour limit covers sf_dataop and sf_dataquery only; the stale query in index.ts uses LONG_PICK_KINDS", async () => {
+  const core = await import("./core.ts");
+  assert.deepEqual(core.LONG_PICK_KINDS, ["sf_dataop", "sf_dataquery"]);
+  assert.equal(core.DATAOP_PICK_TIMEOUT_MS, 4 * 60 * 60 * 1000);
+  assert.equal(core.PICK_TIMEOUT_MS, 30 * 60 * 1000);
+  const now = Date.parse("2026-11-19T12:00:00Z");
+  const { deps, calls } = fakes({ stalePicks: async (u, before, dataopBefore) => (calls.stale = { before, dataopBefore }, []) });
+  await handle(helper("pickup", { kinds: SIX }), deps, now);
+  assert.deepEqual(calls.stale, { before: "2026-11-19T11:30:00.000Z", dataopBefore: "2026-11-19T08:00:00.000Z" });
+  const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  assert.match(src, /HELPER_KINDS\.filter\(\(k\) => !LONG_PICK_KINDS\.includes\(k\)\)/);
+  assert.match(src, /\.in\("kind", LONG_PICK_KINDS\)\s*\.eq\("status", "consumed"\)\.lt\("picked_up_at", dataopBefore\)/);
+});
+
+test("result: an sf_dataquery keeps only ok, exit_code, query_counts and pass; output dropped; summary scrubbed", async () => {
+  const { deps, calls } = dqFakes();
+  const res = await handle(dqResult({ ok: true, exit_code: 0, query_counts: [26440, 0], pass: true,
+    summary: "2 counts, first record 003000000000001AAA, by alex@example.com", output: "Id,Name\n003000000000001AAA,Jo",
+    rows: [{ Id: "003000000000001AAA" }] }), deps);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, action_id: "dq-1", run_id: "run-q", status: "succeeded" });
+  assert.deepEqual(calls.finished[0].result, { ok: true, exit_code: 0, query_counts: [26440, 0], pass: true });
+  assert.equal(calls.finished[0].summary, "2 counts, first record [id], by [email]");
+  assert.deepEqual(calls.status, [{ id: "dq-1", status: "succeeded" }]);
+});
+
+test("result: a failed sf_dataquery may leave out query_counts; it keeps pass if sent", async () => {
+  for (const [body, want] of [
+    [{ ok: false, exit_code: 2 }, { ok: false, exit_code: 2 }],
+    [{ ok: false, query_counts: [1, 2], pass: false }, { ok: false, query_counts: [1, 2], pass: false }],
+  ]) {
+    const { deps, calls } = dqFakes();
+    assert.equal((await handle(dqResult(body), deps)).status, 200, JSON.stringify(body));
+    assert.deepEqual(calls.finished[0].result, want);
+    assert.deepEqual(calls.status, [{ id: "dq-1", status: "failed" }]);
+  }
+});
+
+test("result: an sf_dataquery report that doesn't fit is refused, and the run closes as failed saying why", async () => {
+  for (const [body, why] of [
+    [{ ok: true, pass: true }, /must report query_counts/],
+    [{ ok: true, query_counts: [1], pass: true }, /1 entries for 2 queries/],
+    [{ ok: true, query_counts: [1, 2, 3], pass: true }, /3 entries for 2 queries/],
+    [{ ok: true, query_counts: [1, "2"], pass: true }, /whole number/],
+    [{ ok: true, query_counts: [1, 2.5], pass: true }, /whole number/],
+    [{ ok: true, query_counts: [1, -1], pass: true }, /whole number/],
+    [{ ok: true, query_counts: [1, 1e10], pass: true }, /whole number/],
+    [{ ok: true, query_counts: [1, { Name: "x" }], pass: true }, /whole number/],
+    [{ ok: true, query_counts: "1,2", pass: true }, /a list of whole numbers/],
+    [{ ok: true, query_counts: [1, 2] }, /must report pass/],
+    [{ ok: true, query_counts: [1, 2], pass: "PASS" }, /must report pass/],
+    [{ ok: false, query_counts: [1] }, /1 entries for 2 queries/],
+    [{ ok: false, query_counts: [1, 2], pass: "no" }, /pass must be true or false/],
+  ]) {
+    const { deps, calls } = dqFakes();
+    const res = await handle(dqResult(body), deps);
+    assert.equal(res.status, 400, JSON.stringify(body));
+    assert.match((await res.json()).error, why, JSON.stringify(body));
+    assert.deepEqual(calls.finished[0].result, { ok: false }, JSON.stringify(body));
+    assert.match(calls.finished[0].summary, /^refused by the runner: /);
+    assert.match(calls.finished[0].summary, why);
+    assert.deepEqual(calls.status, [{ id: "dq-1", status: "failed" }]);
+  }
+});
+
+test("result: sf_dataop's and sf_read's runs are unchanged by sf_dataquery (no query_counts, no scrub)", async () => {
+  const { deps, calls } = fakes({
+    findPicked: async () => ({
+      action: { id: "dop-1", user_id: USER, kind: "sf_dataop", status: "consumed", picked_up_at: "t", payload: DATAOP_PAYLOAD },
+      run: { id: "run-d", action_id: "dop-1", mode: "real", finished_at: null },
+    }),
+  });
+  await handle(helper("result", { action_id: "dop-1", run_id: "run-d", ok: true, summary: "done 003000000000001AAA",
+    exit_code: 0, query_counts: [1], pass: true }), deps);
+  assert.deepEqual(calls.finished[0].result, { ok: true, exit_code: 0 });
+  assert.equal(calls.finished[0].summary, "done 003000000000001AAA");
+});
+
+test("sf_dataquery link: preview shows the payload; approve only spends the link", async () => {
+  const { deps, calls, action } = gitFakes();
+  Object.assign(action, { kind: "sf_dataquery", payload: DQ_PAYLOAD });
+  const preview = await (await handle(post("preview", { token: TOKEN }, jwt()), deps)).json();
+  assert.equal(preview.kind, "sf_dataquery");
+  assert.deepEqual(preview.payload, DQ_PAYLOAD);
+  const res = await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), deps);
+  assert.deepEqual(await res.json(), { ok: true, action_id: "act-1", sent: true });
+  nothingRan(calls);
+});

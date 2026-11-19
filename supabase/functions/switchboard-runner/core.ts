@@ -37,8 +37,15 @@ export type PickedAction = {
   action_id: string; run_id: string; kind?: string; project_code: string; payload: Record<string, unknown>;
   fingerprint: string; headline: string; chat_url: string | null;
 };
-/** The kinds the desktop helper runs (spec 10, 11.3-11.6). sf_read since s89e; sf_dataop since dataops_alfred-d4x. */
-export const HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop"] as const;
+/**
+ * The kinds the desktop helper runs (spec 10, 11.3-11.6). sf_read since s89e; sf_dataop since dataops_alfred-d4x;
+ * sf_dataquery since dataop_link-k7d.
+ */
+export const HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop", "sf_dataquery"] as const;
+/** What a helper from dataops_alfred-d4x asks for; still handed an sf_dataop, never an sf_dataquery (dataop_link-k7d). */
+const D4X_HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop"];
+/** The kinds whose picks get the 4-hour limit: a data run's batch and waits, or a large export, take that long. */
+export const LONG_PICK_KINDS = ["sf_dataop", "sf_dataquery"];
 /** What a helper from before dataops_alfred-d4x asks for; still served, and never handed an sf_dataop (O3). */
 const S89_HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read"];
 /** What a helper from before s89c asks for; still served, so an older install keeps picking up. */
@@ -60,8 +67,8 @@ export type Deps = {
    */
   pickupHelper(userId: string, kinds?: string[]): Promise<PickedAction | null>;
   /**
-   * Helper-kind actions still consumed with their open real run if any: picked before `before`, or for an sf_dataop
-   * (a production data run, which may take hours) before `dataopBefore`.
+   * Helper-kind actions still consumed with their open real run if any: picked before `before`, or for a
+   * LONG_PICK_KINDS action (an sf_dataop or sf_dataquery, which may take hours) before `dataopBefore`.
    */
   stalePicks(userId: string, before: string, dataopBefore: string): Promise<{ action_id: string; run_id: string | null }[]>;
   findPicked(actionId: string, runId: string): Promise<Picked | null>;
@@ -547,7 +554,10 @@ async function handleHelperRun(
 
 /** A picked action with no result after this long is marked failed at the next pickup, so its project's queue moves. */
 export const PICK_TIMEOUT_MS = 30 * 60 * 1000;
-/** An sf_dataop's own limit: a production data run's batch and waits can take far longer than 30 minutes. */
+/**
+ * The LONG_PICK_KINDS limit: a production data run's batch and waits, or an sf_dataquery's export, can take far
+ * longer than 30 minutes.
+ */
 export const DATAOP_PICK_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 const MAX_SUMMARY = 300;
 const MAX_OUTPUT = 8000;
@@ -560,8 +570,9 @@ const isHelperKind = (k: unknown): k is string => typeof k === "string" && (HELP
 
 /**
  * The kinds the helper says it runs: body `kinds`, an array. None given means git only, the helper before s86e.
- * Served exactly: git alone, every helper kind, or one of the older full sets. Only a helper naming every kind,
- * sf_dataop included, has its kinds passed on, so only it can be handed an sf_dataop (O3).
+ * Served exactly: git alone, every helper kind, or one of the older full sets. Only a helper naming a production kind
+ * has its kinds passed on, so only it can be handed one (O3): all six get sf_dataquery and sf_dataop; the five of
+ * dataops_alfred-d4x still get sf_dataop, never sf_dataquery (dataop_link-k7d).
  */
 function pickupKinds(body: Record<string, unknown> | null): { pick?: "git" | "helper"; kinds?: string[]; error?: string } {
   const kinds = body?.kinds;
@@ -573,10 +584,11 @@ function pickupKinds(body: Record<string, unknown> | null): { pick?: "git" | "he
   const exactly = (list: readonly string[]) => set.size === list.length && list.every((k) => set.has(k));
   if (set.size === 1 && set.has("git")) return { pick: "git" };
   if (exactly(HELPER_KINDS)) return { pick: "helper", kinds: [...HELPER_KINDS] };
+  if (exactly(D4X_HELPER_KINDS)) return { pick: "helper", kinds: [...D4X_HELPER_KINDS] };
   // A helper from before dataops_alfred-d4x, and one from before s89c (which refuses an sf_read it is handed, and that
   // refusal closes the run). Neither is ever handed an sf_dataop: the pickup's default leaves it out.
   if (exactly(S89_HELPER_KINDS) || exactly(OLDER_HELPER_KINDS)) return { pick: "helper" };
-  return { error: `kinds must be ["git"] or all of ${HELPER_KINDS.join(", ")}; the pickup cannot serve a part of them.` };
+  return { error: `kinds must be ["git"], all of ${HELPER_KINDS.join(", ")}, or one of the older full sets; the pickup cannot serve a part of them.` };
 }
 
 /** Fail every pick older than the timeout, then hand out the next ready action of a kind the helper asked for, or null. */
@@ -627,6 +639,8 @@ async function handleResult(req: Request, deps: Deps, now: number): Promise<Resp
   if (a.status !== "consumed" || !a.picked_up_at || r.mode !== "real" || r.finished_at) {
     return json({ ok: false, error: `this action is ${a.status} and no longer waiting for a result.` }, 409);
   }
+  // dataop_link-k7d: an sf_dataquery's run keeps only {ok, exit_code?, query_counts, pass}, its summary scrubbed.
+  if (a.kind === "sf_dataquery") return dataqueryResult(a, r.id, body, summary, exitCode, deps, now);
   // s89e: a read's rows went to /sf-result; its run keeps the summary only, never the window's output. An sf_dataop
   // likewise (O8): its receipt goes to Alfred as a clip push (D6).
   if (a.kind === "sf_read" || a.kind === "sf_dataop") output = undefined;
@@ -636,6 +650,55 @@ async function handleResult(req: Request, deps: Deps, now: number): Promise<Resp
   });
   await deps.setStatus(a.id, body.ok ? "succeeded" : "failed");
   return json({ ok: true, action_id: a.id, run_id: r.id, status: body.ok ? "succeeded" : "failed" });
+}
+
+/** The largest count an sf_dataquery reports, as the database's switchboard_runs_dataquery_result allows. */
+export const MAX_QUERY_COUNT = 999_999_999;
+const isQueryCount = (v: unknown) => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= MAX_QUERY_COUNT;
+
+/**
+ * Why an sf_dataquery report can't be kept, or null. query_counts: one whole number per payload query, in order;
+ * required when ok, optional when not. pass: a boolean, required when ok.
+ */
+export function dataqueryReportProblem(payload: Record<string, unknown> | null | undefined, body: Record<string, unknown>): string | null {
+  const queries = Array.isArray(payload?.queries) ? payload.queries.length : 0;
+  const counts = body.query_counts;
+  if (counts === undefined || counts === null) {
+    return body.ok === true ? "an sf_dataquery that succeeded must report query_counts, one per query." : null;
+  }
+  if (!Array.isArray(counts)) return "query_counts must be a list of whole numbers, one per query.";
+  if (counts.length !== queries) return `query_counts has ${counts.length} entries for ${queries} quer${queries === 1 ? "y" : "ies"}.`;
+  if (!counts.every(isQueryCount)) return `every entry of query_counts must be a whole number from 0 to ${MAX_QUERY_COUNT.toLocaleString("en-US")}.`;
+  if (body.ok === true && typeof body.pass !== "boolean") return "an sf_dataquery that succeeded must report pass, true or false.";
+  if (body.pass !== undefined && body.pass !== null && typeof body.pass !== "boolean") return "pass must be true or false.";
+  return null;
+}
+
+/**
+ * The run of an sf_dataquery: only {ok, exit_code?, query_counts, pass} is kept, never output or anything else the
+ * helper sent, and the summary loses any Ids or emails (blankIds). A report that doesn't fit closes the run as failed,
+ * saying why, and is refused.
+ */
+async function dataqueryResult(
+  a: Picked["action"], runId: string, body: Record<string, unknown>, summary: string, exitCode: unknown, deps: Deps, now: number,
+): Promise<Response> {
+  const finished_at = new Date(now).toISOString();
+  const problem = dataqueryReportProblem(a.payload, body);
+  if (problem) {
+    await deps.finishRun(runId, {
+      summary: `refused by the runner: ${problem}`.slice(0, MAX_SUMMARY),
+      result: { ok: false, ...(exitCode === undefined ? {} : { exit_code: exitCode }) }, finished_at,
+    });
+    await deps.setStatus(a.id, "failed");
+    return json({ ok: false, error: problem, action_id: a.id, run_id: runId, status: "failed" }, 400);
+  }
+  const counts = Array.isArray(body.query_counts) ? body.query_counts : undefined;
+  const result: Record<string, unknown> = { ok: body.ok, ...(exitCode === undefined ? {} : { exit_code: exitCode }) };
+  if (counts) result.query_counts = counts;
+  if (typeof body.pass === "boolean") result.pass = body.pass;
+  await deps.finishRun(runId, { summary: blankIds(summary).slice(0, MAX_SUMMARY), result, finished_at });
+  await deps.setStatus(a.id, body.ok ? "succeeded" : "failed");
+  return json({ ok: true, action_id: a.id, run_id: runId, status: body.ok ? "succeeded" : "failed" });
 }
 
 // ---------------------------------------------------------------------------

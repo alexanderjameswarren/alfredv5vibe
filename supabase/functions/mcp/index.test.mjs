@@ -242,6 +242,17 @@ test("switchboard s90d: queue_switchboard_git takes then_send and says what a ch
   assert.match(g.cfg.description, /git <id> done; prompt sent/);
 });
 
+test("dataop_link-k7d: queue_switchboard_sf_dataquery takes sb's arguments, says only the click runs it and where counts are", () => {
+  const q = registered.find((r) => r.name === "queue_switchboard_sf_dataquery");
+  assert.deepEqual(Object.keys(q.cfg.inputSchema).sort(),
+    ["alias", "chat_url", "project_code", "queries", "repo", "request_sha256", "run", "run_tag"]);
+  assert.match(q.cfg.description, /ONLY ALEX'S CLICK ON APPROVE RUNS THEM/);
+  assert.match(q.cfg.description, /THE ARGUMENTS COME FROM SB/);
+  assert.match(q.cfg.description, /manifest, before, undo/);
+  assert.match(q.cfg.description, /run\.result\.query_counts/);
+  assert.match(q.cfg.description, /Tier 2\.$/);
+});
+
 test("switchboard s89e: the Salesforce read tools say ask the least, never SOQL, rows once, never to a CLI", () => {
   const q = registered.find((r) => r.name === "queue_switchboard_sf_read");
   assert.deepEqual(Object.keys(q.cfg.inputSchema).sort(),
@@ -460,7 +471,9 @@ test("the tool count is 72 after the job-search tools", () => {
   const EXPECTED_ADDED_JOB_HEALTH_8 = ["get_job_health"];
   // dataops_alfred-d4x A1, +1 (the production data run by link).
   const EXPECTED_ADDED_DATAOPS_A1 = ["queue_switchboard_sf_dataop"];
-  for (const name of [...EXPECTED_ADDED_DATAOPS_A1, ...EXPECTED_ADDED_JOB_HEALTH_8,...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
+  // dataop_link-k7d A1, +1 (production exports and counts by link).
+  const EXPECTED_ADDED_DATAQUERY_A1 = ["queue_switchboard_sf_dataquery"];
+  for (const name of [...EXPECTED_ADDED_DATAQUERY_A1, ...EXPECTED_ADDED_DATAOPS_A1,...EXPECTED_ADDED_JOB_HEALTH_8,...EXPECTED_ADDED_2026_09_23, ...EXPECTED_ADDED_2026_09_30, ...EXPECTED_ADDED_2026_10_07,
                       ...EXPECTED_ADDED_DRIVE_MIX, ...EXPECTED_ADDED_2026_10_09, ...EXPECTED_ADDED_WB_P2,
                       ...EXPECTED_ADDED_WB_SUBS, ...EXPECTED_ADDED_P3, ...EXPECTED_ADDED_WB_8A, ...EXPECTED_ADDED_WB_10,
                       ...EXPECTED_ADDED_WB_PHASE3, ...EXPECTED_ADDED_WB_8B, ...EXPECTED_ADDED_WB_9C, ...EXPECTED_ADDED_P5,
@@ -486,9 +499,10 @@ test("the tool count is 72 after the job-search tools", () => {
   // 2026-11-08, +2: queue_switchboard_sf_check, queue_switchboard_sb_setup. 2026-11-10, +11: Homer's read tools; +12: its writes.
   // 2026-11-11, +1: get_claim_state. +2: queue_switchboard_sf_read, get_switchboard_sf_result.
   // 2026-11-17, +1: get_job_health (job_health-t4m s8). 2026-11-18, +1: queue_switchboard_sf_dataop (dataops_alfred-d4x A1).
+  // 2026-11-19, +1: queue_switchboard_sf_dataquery (dataop_link-k7d A1).
   assert.ok(registered.some((r) => r.name === "record_wb_subscription_review"), "record_wb_subscription_review is not registered");
-  assert.equal(registered.length, 228,
-    `expected 228 registered tools, found ${registered.length}: ` +
+  assert.equal(registered.length, 229,
+    `expected 229 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
