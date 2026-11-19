@@ -1292,7 +1292,7 @@ const BROAD = "SELECT Id, GiftCommitmentId, Amount FROM GiftTransaction WHERE So
 const R1 = "SELECT COUNT() FROM GiftTransaction WHERE Source__c = 'ActBlue' AND GiftCommitmentId = null";
 const R2 = "SELECT COUNT() FROM GiftCommitment WHERE Rollup_Pending__c = true";
 const exp = (step, soql, src) => ({ step, soql, sha256: hex(soql), ...src });
-const DQ_BASE = { alias: "cd-prod", repo: "C:\\Users\\Alex\\projects\\common-defense", run: `data-ops/${DQ_CODE}/fixc-2026-11-19`,
+const DQ_BASE = { alias: "cd-prod", org_type: "production", repo: "C:\\Users\\Alex\\projects\\common-defense", run: `data-ops/${DQ_CODE}/fixc-2026-11-19`,
   run_tag: `${DQ_CODE}-s4-ab12`, request_sha256: "0123456789abcdef".repeat(4) };
 const DQ_EXPORT = { ...DQ_BASE, queries: [exp("manifest", SEL, { file: "selection.soql" }), exp("before", BROAD, { label: "broad snapshot" })] };
 const DQ_COUNT = { ...DQ_BASE, queries: [exp("rules", R1, { label: "Installments with no gift commitment" }),
@@ -1351,6 +1351,36 @@ test("sf_dataquery: count links, an undo export, a file with no request hash, an
   }
   assert.equal(m.sfDataqueryHeadline(DQ_CODE, DQ_COUNT), `PRODUCTION COUNTS ${DQ_CODE} ON cd-prod: 2 QUERIES (rules), READ ONLY`);
   assert.equal(m.sfDataqueryHeadline(DQ_CODE, countOf(R1)), `PRODUCTION COUNTS ${DQ_CODE} ON cd-prod: 1 QUERY (rules), READ ONLY`);
+});
+
+// dataquery_fixes-v3n: org_type, required, sandbox or production; the headline and next text follow it.
+test("sf_dataquery org_type: a sandbox link is queued with SANDBOX in its headline and next text, never PRODUCTION", async () => {
+  const sbx = { ...DQ_COUNT, alias: "actblue", org_type: "sandbox" };
+  assert.deepEqual(await dq(sbx), { payload: sbx });
+  assert.equal(m.sfDataqueryHeadline(DQ_CODE, sbx), `SANDBOX COUNTS ${DQ_CODE} ON actblue: 2 QUERIES (rules), READ ONLY`);
+  assert.equal(m.sfDataqueryHeadline(DQ_CODE, { ...DQ_EXPORT, org_type: "sandbox" }),
+    `SANDBOX EXPORT ${DQ_CODE} ON cd-prod: 2 QUERIES (manifest, before), READ ONLY`);
+  assert.equal(m.sfDataqueryHeadline(DQ_CODE, DQ_EXPORT), `PRODUCTION EXPORT ${DQ_CODE} ON cd-prod: 2 QUERIES (manifest, before), READ ONLY`);
+  const db = helperDb();
+  const out = await queueDq({ project_code: DQ_CODE, ...sbx }, db);
+  assert.equal(db.calls[0][1].p_payload.org_type, "sandbox");
+  assert.match(out.headline, /^SANDBOX COUNTS /);
+  assert.match(out.next, /RUNS THESE SANDBOX QUERIES\. The page shows the SANDBOX banner/);
+  assert.doesNotMatch(`${out.headline} ${out.next}`, /PRODUCTION/);
+});
+
+test("sf_dataquery org_type: missing or any other value is refused, naming the field and both values; nothing is queued", async () => {
+  const { org_type: _o, ...noType } = DQ_EXPORT;
+  for (const p of [noType, { ...DQ_EXPORT, org_type: "Sandbox" }, { ...DQ_EXPORT, org_type: "prod" },
+    { ...DQ_EXPORT, org_type: "" }, { ...DQ_EXPORT, org_type: true }, { ...DQ_EXPORT, org_type: null }]) {
+    const r = await dq(p);
+    assert.ok("refused" in r, JSON.stringify(p.org_type));
+    assert.match(r.refused, /`org_type` must be exactly "sandbox" or "production"/);
+  }
+  assert.match((await dq({ ...DQ_EXPORT, org_type: "prod" })).refused, /not "prod"/);
+  const db = helperDb();
+  await assert.rejects(queueDq({ project_code: DQ_CODE, ...noType }, db), /refused: `org_type` must be exactly "sandbox" or "production"/);
+  assert.equal(db.calls.length, 0);
 });
 
 test("sf_dataquery: every refusal says why, and nothing is queued", async () => {

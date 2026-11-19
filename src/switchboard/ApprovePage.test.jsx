@@ -783,7 +783,7 @@ const H1 = 'a'.repeat(64);
 const H2 = 'b'.repeat(64);
 const REQ = 'c'.repeat(64);
 const SEL = "SELECT Id, GiftCommitmentId FROM GiftTransaction\nWHERE Source__c = 'ActBlue'\n";
-const DQ_BASE = { alias: 'cd-prod', repo: 'C:\\Users\\Alex\\projects\\common-defense', run: 'data-ops/cd_fixc-q8d/fixc-2026-11-19',
+const DQ_BASE = { alias: 'cd-prod', org_type: 'production', repo: 'C:\\Users\\Alex\\projects\\common-defense', run: 'data-ops/cd_fixc-q8d/fixc-2026-11-19',
   run_tag: 'cd_fixc-q8d-s4-ab12', request_sha256: REQ };
 const DQ_EXPORT = { ...DQ_BASE, queries: [{ step: 'manifest', soql: SEL, sha256: H1, file: 'selection.soql' },
   { step: 'undo', soql: `\n\t  ${SEL}`, sha256: H2, file: 'selection.soql' }] };
@@ -815,6 +815,8 @@ test('sf_dataquery: orange PRODUCTION, READ ONLY banner saying exports; org, rep
   expect(screen.getByTestId('approve-dataquery-returns')).toHaveTextContent(/one count per query \(the rows exported\) and a pass or fail/);
   expect(screen.getByTestId('approve-dataquery-returns')).toHaveTextContent(/No rows, Ids or field values reach Alfred/);
   expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'sf_dataquery');
+  expect(screen.queryByTestId('approve-sandbox-read')).toBeNull();
+  expect(screen.queryByTestId('approve-org-type-missing')).toBeNull();
   expect(screen.getByTestId('approve-stakes-change')).toBeInTheDocument();
   expect(screen.getByText(/A production read has no dry run/)).toBeInTheDocument();
   expect(called('dry-run')).toHaveLength(0);
@@ -895,6 +897,44 @@ test('sf_dataquery: Don\'t run gives the dataquery cancelled line; an expired li
   expect(await screen.findByText(/This link has expired\. Links last 30 minutes\. Nothing ran\./)).toBeInTheDocument();
 });
 
+// dataquery_fixes-v3n: the banner follows org_type.
+test('sf_dataquery org_type sandbox: a sky-blue SANDBOX, READ ONLY banner, never orange, red or the word production', async () => {
+  runner({ preview: reply({ ...DQ({ ...DQ_COUNT, alias: 'actblue', org_type: 'sandbox' }),
+    headline: 'SANDBOX COUNTS cd_fixc-q8d ON actblue: 1 QUERY (rules), READ ONLY' }) });
+  open();
+  const banner = await screen.findByTestId('approve-sandbox-read');
+  expect(banner).toHaveTextContent(/sandbox, read only/i);
+  expect(banner).toHaveTextContent(/counts/i);
+  expect(banner).toHaveClass('bg-sky-700', 'text-white');
+  expect(banner.className).not.toMatch(/orange|red/);
+  expect(banner).not.toHaveTextContent(/production/i);
+  expect(screen.getByTestId('approve-sandbox-read-mode')).toHaveTextContent('Counts');
+  expect(screen.queryByTestId('approve-production-read')).toBeNull();
+  expect(screen.queryByTestId('approve-production')).toBeNull();
+  expect(screen.queryByTestId('approve-org-type-missing')).toBeNull();
+  expect(screen.getByText('SANDBOX COUNTS cd_fixc-q8d ON actblue: 1 QUERY (rules), READ ONLY')).toBeInTheDocument();
+  expect(screen.getByTestId('approve-dataquery')).toHaveAttribute('data-dataquery-mode', 'counts');
+});
+
+test('sf_dataquery with no org_type (an old link): the orange PRODUCTION banner plus "org type not recorded"', async () => {
+  const { org_type: _o, ...old } = DQ_EXPORT;
+  runner({ preview: reply(DQ(old)) });
+  open();
+  const banner = await screen.findByTestId('approve-production-read');
+  expect(banner).toHaveTextContent(/production, read only/i);
+  expect(banner).toHaveClass('bg-orange-400', 'text-black');
+  expect(screen.getByTestId('approve-org-type-missing')).toHaveTextContent(/org type not recorded/i);
+  expect(banner).toContainElement(screen.getByTestId('approve-org-type-missing'));
+  expect(screen.queryByTestId('approve-sandbox-read')).toBeNull();
+});
+
+test('sf_dataquery: dataqueryOrgType takes only the two values', () => {
+  const { dataqueryOrgType } = jest.requireActual('./ApprovePage');
+  expect(dataqueryOrgType({ org_type: 'sandbox' })).toBe('sandbox');
+  expect(dataqueryOrgType({ org_type: 'production' })).toBe('production');
+  for (const p of [{}, null, undefined, { org_type: 'Sandbox' }, { org_type: '' }, { org_type: true }]) expect(dataqueryOrgType(p)).toBeNull();
+});
+
 test('sf_dataquery: helpers for the mode and the short hash', () => {
   const { dataqueryMode, shortHash } = jest.requireActual('./ApprovePage');
   expect(dataqueryMode(DQ_EXPORT)).toBe('exports');
@@ -911,6 +951,7 @@ test('the other kinds have no read-only banner and no dataquery panel; sf_dataop
     const { unmount } = open();
     await screen.findByTestId(preview.kind === 'sf_read' ? 'approve-sf-read' : preview.kind === 'sf_dataop' ? 'approve-dataop' : 'approve-git');
     expect(screen.queryByTestId('approve-production-read')).toBeNull();
+    expect(screen.queryByTestId('approve-sandbox-read')).toBeNull();
     expect(screen.queryByTestId('approve-dataquery')).toBeNull();
     unmount();
   }

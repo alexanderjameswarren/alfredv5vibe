@@ -47,7 +47,7 @@ const DQ_CODE = 'demo_link_installments-x1y';
 const DQ_SELECTION = "SELECT Id, Demo_Plan__c, Paid__c\nFROM Demo_Installment__c\nWHERE Source__c = 'Demo Import'\n" +
   '  AND CreatedDate >= 2026-10-01T00:00:00Z\n  AND CreatedDate < 2026-11-18T00:00:00Z\n  AND Demo_Plan__c = null\n';
 const DQ_BASE = {
-  alias: 'demo-prod', repo: 'C:\\Users\\Alex\\projects\\demo-client', run: `data-ops/${DQ_CODE}/link-2026-11-19`,
+  alias: 'demo-prod', org_type: 'production', repo: 'C:\\Users\\Alex\\projects\\demo-client', run: `data-ops/${DQ_CODE}/link-2026-11-19`,
   run_tag: `${DQ_CODE}-s6-k2p9`, request_sha256: '9b1e4c07d2a35f68e0c4b19a7d3e52f6a81c0d4e97b2f35a6c8d01e4b7a29f53',
 };
 const hashOf = (n) => `${String(n).repeat(4)}a7c19e04d8b2f6`.repeat(4).slice(0, 64);
@@ -72,10 +72,13 @@ export const SAMPLE_DATAQUERIES = {
     { step: 'before', soql: `SELECT Id, Name FROM Demo_Installment__c WHERE Name != '${'x'.repeat(100000 - 61)}'`, sha256: hashOf(6), label: 'broad snapshot' },
   ] },
 };
+// dataquery_fixes-v3n: a sandbox count link, and an old link with no org_type.
+SAMPLE_DATAQUERIES.sandbox = { ...SAMPLE_DATAQUERIES.count, alias: 'demo-sandbox', org_type: 'sandbox' };
+SAMPLE_DATAQUERIES.untyped = (({ org_type: _o, ...p }) => p)(SAMPLE_DATAQUERIES.export);
 const dqHeadline = (p) => {
   const steps = [...new Set(p.queries.map((q) => q.step))];
   const n = p.queries.length;
-  return `PRODUCTION ${['manifest', 'before', 'undo'].includes(steps[0]) ? 'EXPORT' : 'COUNTS'} ${DQ_CODE} ON ${p.alias}: ` +
+  return `${p.org_type === 'sandbox' ? 'SANDBOX' : 'PRODUCTION'} ${['manifest', 'before', 'undo'].includes(steps[0]) ? 'EXPORT' : 'COUNTS'} ${DQ_CODE} ON ${p.alias}: ` +
     `${n} QUER${n === 1 ? 'Y' : 'IES'} (${steps.join(', ')}), READ ONLY`;
 };
 
@@ -103,7 +106,7 @@ const runnerFor = (key, payload, kind) => {
 };
 
 const DQ_CHOICES = [['export', 'Export: manifest and undo'], ['newline', 'Export: leading newline'], ['count', 'Count link'],
-  ['long', 'Export: 100,000 characters']];
+  ['long', 'Export: 100,000 characters'], ['sandbox', 'Sandbox count link'], ['untyped', 'Old link: no org type']];
 
 function DataqueryFixture() {
   const [which, setWhich] = useState('export');

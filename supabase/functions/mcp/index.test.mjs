@@ -245,7 +245,18 @@ test("switchboard s90d: queue_switchboard_git takes then_send and says what a ch
 test("dataop_link-k7d: queue_switchboard_sf_dataquery takes sb's arguments, says only the click runs it and where counts are", () => {
   const q = registered.find((r) => r.name === "queue_switchboard_sf_dataquery");
   assert.deepEqual(Object.keys(q.cfg.inputSchema).sort(),
-    ["alias", "chat_url", "project_code", "queries", "repo", "request_sha256", "run", "run_tag"]);
+    ["alias", "chat_url", "org_type", "project_code", "queries", "repo", "request_sha256", "run", "run_tag"]);
+  // dataquery_fixes-v3n: org_type is required, exactly sandbox or production; the banner follows it. zod is stubbed,
+  // so read the registration source.
+  const src = readFileSync(join(HERE, "index.ts"), "utf-8");
+  const block = src.split(`server.registerTool(\n    "queue_switchboard_sf_dataquery",`)[1].split("server.registerTool(")[0];
+  const line = block.split("\n").find((l) => l.trim().startsWith("org_type:"));
+  assert.ok(line);
+  assert.match(line, /z\.enum\(\["sandbox", "production"\]\)/);
+  assert.ok(!line.includes(".optional()"));
+  assert.match(line, /As sb printed it: the org's type/);
+  assert.match(q.cfg.description, /a PRODUCTION or SANDBOX banner from org_type/);
+  assert.doesNotMatch(q.cfg.description, /shows the PRODUCTION banner/);
   assert.match(q.cfg.description, /ONLY ALEX'S CLICK ON APPROVE RUNS THEM/);
   assert.match(q.cfg.description, /THE ARGUMENTS COME FROM SB/);
   assert.match(q.cfg.description, /manifest, before, undo/);
