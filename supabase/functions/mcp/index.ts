@@ -105,7 +105,7 @@ import {
 import {
   getClaimStateTool, getSqlReadTool, getSwitchboardRunTool, getSwitchboardSfResultTool, issueSwitchboardLinkTool,
   queueSwitchboardGitTool, queueSwitchboardSbSetupTool, queueSwitchboardSfCheckTool, queueSwitchboardSfDataopTool,
-  queueSwitchboardSfReadTool,
+  queueSwitchboardSfDataqueryTool, queueSwitchboardSfReadTool,
 } from "../_shared/tools/switchboard.ts";
 import {
   getClaudeNotificationSettingsTool,
@@ -3733,6 +3733,37 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardSfDataopTool, args, token),
+  );
+
+  // dataop_link-k7d A1: production exports and COUNT()s by link, for Data run v2.
+  server.registerTool(
+    "queue_switchboard_sf_dataquery",
+    {
+      title: "Queue Switchboard Sf Dataquery",
+      description:
+        "Queue PRODUCTION Salesforce bulk exports or SELECT COUNT() queries for a Data run v2 step, and issue the single-use approval link in the same call. ONLY ALEX'S CLICK ON APPROVE RUNS THEM: no tool, CLI or Claude session can approve or run it. " +
+        "THE ARGUMENTS COME FROM SB: pass every argument sb printed, verbatim, SOQL included; never write, edit, trim, round or reorder one. Each query's sha256 must be the SHA-256 of its soql's exact bytes, and the desktop helper checks every query against the run folder before anything runs. " +
+        "A link is all exports (steps manifest, before, undo) or all counts of one step (preflight-counts or rules), 1 to 40 queries. Counts are SELECT COUNT() FROM <object> WHERE ..., at most 8,000 characters, no GROUP BY; exports SELECT Id ..., at most 100,000; no semicolons. " +
+        "The approve page shows the PRODUCTION banner and each SOQL in full with its step and hash. After the click the helper must pick it up within 15 minutes or it fails unrun. The exported files stay on Alex's PC; only whole-number counts and a pass flag come back. " +
+        "One live link per project code. Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole; it lasts 30 minutes. After the result line, read the counts with get_switchboard_run: run.result.query_counts (one per query, in order) and run.result.pass. Tier 2.",
+      inputSchema: {
+        project_code: z.string().describe("The data operation's project code, as sb printed it."),
+        alias: z.string().describe("As sb printed it: the production org's alias."),
+        repo: z.string().describe("As sb printed it: the client checkout's absolute path."),
+        run: z.string().describe("As sb printed it: the run folder inside repo, data-ops/<project code>/<run>."),
+        run_tag: z.string().describe("As sb printed it: the run tag of the CLI step that asked for the link."),
+        request_sha256: z.string().optional().describe("As sb printed it: request.json's SHA-256; needed when any query has a label."),
+        queries: z.array(z.object({
+          step: z.enum(["manifest", "before", "undo", "preflight-counts", "rules"]),
+          soql: z.string(),
+          sha256: z.string(),
+          file: z.string().optional(),
+          label: z.string().optional(),
+        })).describe("As sb printed it: 1 to 40 queries, each {step, soql, sha256, and file or label}."),
+        chat_url: z.string().optional().describe("Optional; don't guess it. Only a https://claude.ai/chat/<uuid> address is used."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardSfDataqueryTool, args, token),
   );
 
   server.registerTool(
