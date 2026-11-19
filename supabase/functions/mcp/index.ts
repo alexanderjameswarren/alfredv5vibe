@@ -3741,14 +3741,15 @@ export function createMcpServer(token: string) {
     {
       title: "Queue Switchboard Sf Dataquery",
       description:
-        "Queue PRODUCTION Salesforce bulk exports or SELECT COUNT() queries for a Data run v2 step, and issue the single-use approval link in the same call. ONLY ALEX'S CLICK ON APPROVE RUNS THEM: no tool, CLI or Claude session can approve or run it. " +
+        "Queue Salesforce bulk exports or SELECT COUNT() queries (a production or sandbox org) for a Data run v2 step, and issue the single-use approval link in the same call. ONLY ALEX'S CLICK ON APPROVE RUNS THEM: no tool, CLI or Claude session can approve or run it. " +
         "THE ARGUMENTS COME FROM SB: pass every argument sb printed, verbatim, SOQL included; never write, edit, trim, round or reorder one. Each query's sha256 must be the SHA-256 of its soql's exact bytes, and the desktop helper checks every query against the run folder before anything runs. " +
         "A link is all exports (steps manifest, before, undo) or all counts of one step (preflight-counts or rules), 1 to 40 queries. Counts are SELECT COUNT() FROM <object> WHERE ..., at most 8,000 characters, no GROUP BY; exports SELECT Id ..., at most 100,000; no semicolons. " +
-        "The approve page shows the PRODUCTION banner and each SOQL in full with its step and hash. After the click the helper must pick it up within 15 minutes or it fails unrun. The exported files stay on Alex's PC; only whole-number counts and a pass flag come back. " +
+        "The approve page shows a PRODUCTION or SANDBOX banner from org_type, and each SOQL in full with its step and hash. After the click the helper must pick it up within 15 minutes or it fails unrun. The exported files stay on Alex's PC; only whole-number counts and a pass flag come back. " +
         "One live link per project code. Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole; it lasts 30 minutes. After the result line, read the counts with get_switchboard_run: run.result.query_counts (one per query, in order) and run.result.pass. Tier 2.",
       inputSchema: {
         project_code: z.string().describe("The data operation's project code, as sb printed it."),
-        alias: z.string().describe("As sb printed it: the production org's alias."),
+        alias: z.string().describe("As sb printed it: the org's alias."),
+        org_type: z.enum(["sandbox", "production"]).describe("As sb printed it: the org's type, sandbox or production."),
         repo: z.string().describe("As sb printed it: the client checkout's absolute path."),
         run: z.string().describe("As sb printed it: the run folder inside repo, data-ops/<project code>/<run>."),
         run_tag: z.string().describe("As sb printed it: the run tag of the CLI step that asked for the link."),

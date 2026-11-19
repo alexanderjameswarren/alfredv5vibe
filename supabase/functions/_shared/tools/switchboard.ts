@@ -841,7 +841,9 @@ export const queueSwitchboardSfDataopTool = defineTool({
 // switchboard_dataquery_payload_ok (so a refusal says why), then by it, then by the helper against the run folder.
 // ---------------------------------------------------------------------------
 
-const DATAQUERY_KEYS = ["alias", "repo", "run", "run_tag", "request_sha256", "queries"];
+const DATAQUERY_KEYS = ["alias", "org_type", "repo", "run", "run_tag", "request_sha256", "queries"];
+// dataquery_fixes-v3n: the org's type, as sb prints it from orgs.json; the helper refuses a mismatch.
+export const DATAQUERY_ORG_TYPES = ["sandbox", "production"];
 const DATAQUERY_QUERY_KEYS = ["step", "soql", "sha256", "file", "label"];
 export const DATAQUERY_EXPORT_STEPS = ["manifest", "before", "undo"];
 export const DATAQUERY_COUNT_STEPS = ["preflight-counts", "rules"];
@@ -883,8 +885,11 @@ export async function sfDataqueryPayload(code: string, args: Record<string, unkn
   const extra = Object.keys(p).filter((k) => !DATAQUERY_KEYS.includes(k));
   if (extra.length) return r(`an sf_dataquery does not take ${extra.join(", ")}. Pass sb's printed arguments exactly as they are.`);
   const missing = DATAQUERY_KEYS.filter((k) => k !== "request_sha256" && p[k] === undefined);
+  if (typeof p.org_type !== "string" || !DATAQUERY_ORG_TYPES.includes(p.org_type)) {
+    return r(`\`org_type\` must be exactly "sandbox" or "production", as sb printed it${p.org_type === undefined ? "" : `, not ${JSON.stringify(p.org_type)}`}.`);
+  }
   if (missing.length) return r(`missing ${missing.join(", ")}: pass every argument sb printed.`);
-  if (typeof p.alias !== "string" || !SF_ALIAS.test(p.alias)) return r("`alias` must be the production org's alias (letters, digits, _ . -).");
+  if (typeof p.alias !== "string" || !SF_ALIAS.test(p.alias)) return r("`alias` must be the org's alias (letters, digits, _ . -).");
   if (typeof p.repo !== "string" || p.repo.length > 240 || !GIT_REPO.test(p.repo) || p.repo.includes("..")) {
     return r("`repo` must be the checkout's absolute path, e.g. C:\\Users\\Alex\\projects\\common-defense, with no ..");
   }
@@ -955,7 +960,8 @@ export function sfDataqueryHeadline(code: string, p: Record<string, unknown>): s
   const steps = [...new Set(queries.map((q) => q.step))];
   const what = DATAQUERY_EXPORT_STEPS.includes(steps[0]) ? "EXPORT" : "COUNTS";
   const n = queries.length;
-  return `PRODUCTION ${what} ${code} ON ${p.alias}: ${n} QUER${n === 1 ? "Y" : "IES"} (${steps.join(", ")}), READ ONLY`;
+  const org = p.org_type === "sandbox" ? "SANDBOX" : "PRODUCTION";
+  return `${org} ${what} ${code} ON ${p.alias}: ${n} QUER${n === 1 ? "Y" : "IES"} (${steps.join(", ")}), READ ONLY`;
 }
 
 export const queueSwitchboardSfDataqueryTool = defineTool({
@@ -976,10 +982,11 @@ export const queueSwitchboardSfDataqueryTool = defineTool({
       if (REFUSALS.has(error.code ?? "")) throw fail(tool, `queued as ${actionId}, but no link: ${error.message}`);
       throw dbError(tool, `issuing the link for ${actionId}`, error);
     }
+    const org = checked.payload.org_type === "sandbox" ? "SANDBOX" : "PRODUCTION";
     return {
       ...(data as Record<string, unknown>), action_id: actionId, headline, payload: checked.payload,
-      next: "Give Alex the url whole, in its own reply; it lasts 30 minutes. ONLY HIS CLICK ON APPROVE RUNS THESE PRODUCTION " +
-        "QUERIES. The page shows the PRODUCTION banner and each SOQL in full with its step and hash. After the click the desktop " +
+      next: `Give Alex the url whole, in its own reply; it lasts 30 minutes. ONLY HIS CLICK ON APPROVE RUNS THESE ${org} ` +
+        `QUERIES. The page shows the ${org} banner and each SOQL in full with its step and hash. After the click the desktop ` +
         "helper must pick it up within 15 minutes or it fails unrun; it checks every hash against the run folder first. The " +
         "exported files stay on Alex's PC. When the result line arrives, read the counts with get_switchboard_run: " +
         "run.result.query_counts, one per query in this order, and run.result.pass.",

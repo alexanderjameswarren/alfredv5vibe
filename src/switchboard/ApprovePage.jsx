@@ -225,6 +225,15 @@ export function dataqueryMode(payload) {
   return DATAQUERY_EXPORT_STEPS.includes(first?.step) ? 'exports' : 'counts';
 }
 
+/**
+ * dataquery_fixes-v3n: 'sandbox' or 'production' from the payload's org_type, or null for a link from before it
+ * (shown as production, the louder side, with "org type not recorded").
+ */
+export function dataqueryOrgType(payload) {
+  const t = payload?.org_type;
+  return t === 'sandbox' || t === 'production' ? t : null;
+}
+
 /** A sha256 as the page shows it first: its first 12 characters. */
 export const shortHash = (h) => String(h ?? '').slice(0, 12);
 
@@ -542,13 +551,28 @@ export default function ApprovePage({ runner = callRunner, session = realSession
             Production, live client data
           </div>
         )}
-        {isDataquery && (
+        {/* dataquery_fixes-v3n: orange PRODUCTION, or a sky-blue SANDBOX that never says production; no org_type is production. */}
+        {isDataquery && dataqueryOrgType(preview.payload) === 'sandbox' && (
+          <div data-testid="approve-sandbox-read" role="alert"
+            className="mb-4 w-full bg-sky-700 text-white text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
+            Sandbox, read only
+            <span data-testid="approve-sandbox-read-mode" className="block text-lg sm:text-xl normal-case tracking-normal mt-1">
+              {dataqueryMode(preview.payload) === 'exports' ? 'Bulk exports' : 'Counts'}
+            </span>
+          </div>
+        )}
+        {isDataquery && dataqueryOrgType(preview.payload) !== 'sandbox' && (
           <div data-testid="approve-production-read" role="alert"
             className="mb-4 w-full bg-orange-400 text-black text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
             Production, read only
             <span data-testid="approve-production-read-mode" className="block text-lg sm:text-xl normal-case tracking-normal mt-1">
               {dataqueryMode(preview.payload) === 'exports' ? 'Bulk exports' : 'Counts'}
             </span>
+            {dataqueryOrgType(preview.payload) === null && (
+              <span data-testid="approve-org-type-missing" className="block text-base sm:text-lg normal-case tracking-normal mt-1">
+                Org type not recorded
+              </span>
+            )}
           </div>
         )}
         {isSfRead && isProductionFullData(preview.payload) && (

@@ -107,6 +107,24 @@ test('the sf_dataquery choices: a leading newline kept, a count link, and the 10
   expect(global.fetch).not.toHaveBeenCalled();
 });
 
+// dataquery_fixes-v3n: the sandbox and no-org-type choices.
+test('the sf_dataquery fixture: a sandbox link has the SANDBOX banner and headline; an old link says org type not recorded', async () => {
+  appAt('/approve-fixture/sf_dataquery');
+  await screen.findByTestId('approve-production-read');
+  expect(screen.queryByTestId('approve-org-type-missing')).toBeNull();
+  fireEvent.change(screen.getByTestId('approve-fixture-dataquery'), { target: { value: 'sandbox' } });
+  const banner = await screen.findByTestId('approve-sandbox-read');
+  expect(banner).toHaveTextContent(/sandbox, read only/i);
+  expect(banner).toHaveClass('bg-sky-700');
+  expect(screen.queryByTestId('approve-production-read')).toBeNull();
+  expect(screen.getByText(/^SANDBOX COUNTS demo_link_installments-x1y ON demo-sandbox: 3 QUERIES \(rules\), READ ONLY$/)).toBeInTheDocument();
+  fireEvent.change(screen.getByTestId('approve-fixture-dataquery'), { target: { value: 'untyped' } });
+  expect(await screen.findByTestId('approve-org-type-missing')).toHaveTextContent(/org type not recorded/i);
+  expect(screen.getByTestId('approve-production-read')).toHaveClass('bg-orange-400');
+  expect(screen.queryByTestId('approve-sandbox-read')).toBeNull();
+  expect(global.fetch).not.toHaveBeenCalled();
+});
+
 test('sf_dataquery fixture: Approve and Don\'t run answer locally', async () => {
   appAt('/approve-fixture/sf_dataquery');
   fireEvent.click(await screen.findByRole('button', { name: /^approve and run$/i }));

@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-19 10:40, through migration 242 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-19 12:53, through migration 244 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -9282,6 +9282,13 @@ CREATE OR REPLACE FUNCTION "public"."switchboard_actions_guard"() RETURNS "trigg
     AS $$
 begin
   if tg_op = 'INSERT' then
+    -- dataquery_fixes-v3n: required on a new row only, so older rows without it can still change status.
+    if new.kind = 'sf_dataquery'
+       and (jsonb_typeof(new.payload->'org_type') is distinct from 'string'
+            or new.payload->>'org_type' not in ('sandbox', 'production')) then
+      raise exception 'switchboard_actions: a new sf_dataquery needs payload.org_type, exactly "sandbox" or "production", as sb prints it.'
+        using errcode = '23514';
+    end if;
     new.fingerprint     := public.switchboard_fingerprint(new.payload);
     new.status          := 'queued';
     new.link_hash       := null;
@@ -9318,7 +9325,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_actions_guard"() OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_actions_guard"() IS 'Switchboard: before insert or update on switchboard_actions. An insert gets its fingerprint and needs_click (switchboard_needs_click) and starts queued with no link. An update cannot change what will run or whether it needs a click, reopen a used link, or change picked_up_at once set, whoever makes it.';
+COMMENT ON FUNCTION "public"."switchboard_actions_guard"() IS 'Switchboard: before insert or update on switchboard_actions. An insert gets its fingerprint and needs_click (switchboard_needs_click) and starts queued with no link; a new sf_dataquery must have payload.org_type "sandbox" or "production" (dataquery_fixes-v3n). An update cannot change what will run or whether it needs a click, reopen a used link, or change picked_up_at once set, whoever makes it.';
 
 
 
@@ -9371,7 +9378,7 @@ CREATE OR REPLACE FUNCTION "public"."switchboard_dataquery_payload_ok"("p_payloa
     SET "search_path" TO 'public', 'pg_temp'
     AS $_$
 declare
-  c_keys   constant text[] := array['alias', 'repo', 'run', 'run_tag', 'request_sha256', 'queries'];
+  c_keys   constant text[] := array['alias', 'org_type', 'repo', 'run', 'run_tag', 'request_sha256', 'queries'];
   c_qkeys  constant text[] := array['step', 'soql', 'sha256', 'file', 'label'];
   v_code   text := p_project_code;
   v_run    text;
@@ -9392,6 +9399,12 @@ begin
 
   if jsonb_typeof(p_payload->'alias') is distinct from 'string'
      or p_payload->>'alias' !~ '^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$' then
+    return false;
+  end if;
+  -- org_type (dataquery_fixes-v3n): missing is allowed here, for rows from before it; present, exactly one of two.
+  if p_payload ? 'org_type'
+     and (jsonb_typeof(p_payload->'org_type') is distinct from 'string'
+          or p_payload->>'org_type' not in ('sandbox', 'production')) then
     return false;
   end if;
   -- repo: as sf_dataop's (240).
@@ -9489,7 +9502,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_dataquery_payload_ok"("p_payload" "jsonb", "p_project_code" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_dataquery_payload_ok"("p_payload" "jsonb", "p_project_code" "text") IS 'Switchboard: whether an sf_dataquery payload meets docs/technical-spec-dataop_link-k7d.md parts 2 to 4 for the action''s project code: alias, repo, run (data-ops/<code>/<run>), run_tag, request_sha256 (needed with any label), and 1 to 40 queries, all exports (manifest, before, undo) or all counts of one step (preflight-counts, rules); each {step, soql, sha256, file | label}, sha256 the SHA-256 of soql''s UTF-8 bytes, no semicolon; blank space allowed before SELECT; counts SELECT COUNT() FROM <object> WHERE ..., no GROUP BY, at most 8,000 characters; exports SELECT Id ..., no COUNT(, at most 100,000; the payload at most 220,000. Never raises. Used by switchboard_actions_sf_dataquery_payload.';
+COMMENT ON FUNCTION "public"."switchboard_dataquery_payload_ok"("p_payload" "jsonb", "p_project_code" "text") IS 'Switchboard: whether an sf_dataquery payload meets docs/technical-spec-dataop_link-k7d.md parts 2 to 4 for the action''s project code: alias, org_type (dataquery_fixes-v3n: "sandbox" or "production"; may be missing here, for rows from before it, and switchboard_actions_guard requires it on insert), repo, run (data-ops/<code>/<run>), run_tag, request_sha256 (needed with any label), and 1 to 40 queries, all exports (manifest, before, undo) or all counts of one step (preflight-counts, rules); each {step, soql, sha256, file | label}, sha256 the SHA-256 of soql''s UTF-8 bytes, no semicolon; blank space allowed before SELECT; counts SELECT COUNT() FROM <object> WHERE ..., no GROUP BY, at most 8,000 characters; exports SELECT Id ..., no COUNT(, at most 100,000; the payload at most 220,000. Never raises. Used by switchboard_actions_sf_dataquery_payload.';
 
 
 
@@ -19532,7 +19545,7 @@ COMMENT ON COLUMN "public"."switchboard_actions"."chat_url" IS 'Address of the c
 
 
 
-COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...}, and a gitnewtree may name its "repo", an absolute path (spec 11.3). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], "folder" with from_sandbox, ...} (spec 11.5). sf_read: {"alias", "production", "level": "objects|metadata|ids|data", "object" (or "objects", 1 to 20, at metadata), "count" or "fields" with "limit", "filters"}, never SOQL text (spec 10). sf_dataop: {"alias", "repo", "plan", "stamp", "preflight_at", "object", "problem", "expected", "write", "rows", "rehearsal"?} (docs/technical-spec-dataops_alfred-d4x.md). sf_dataquery: {"alias", "repo", "run", "run_tag", "request_sha256"?, "queries": [{"step", "soql", "sha256", "file" | "label"}]} (docs/technical-spec-dataop_link-k7d.md). Fixed after insert.';
+COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...}, and a gitnewtree may name its "repo", an absolute path (spec 11.3). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], "folder" with from_sandbox, ...} (spec 11.5). sf_read: {"alias", "production", "level": "objects|metadata|ids|data", "object" (or "objects", 1 to 20, at metadata), "count" or "fields" with "limit", "filters"}, never SOQL text (spec 10). sf_dataop: {"alias", "repo", "plan", "stamp", "preflight_at", "object", "problem", "expected", "write", "rows", "rehearsal"?} (docs/technical-spec-dataops_alfred-d4x.md). sf_dataquery: {"alias", "org_type": "sandbox|production" (required on insert since dataquery_fixes-v3n), "repo", "run", "run_tag", "request_sha256"?, "queries": [{"step", "soql", "sha256", "file" | "label"}]} (docs/technical-spec-dataop_link-k7d.md). Fixed after insert.';
 
 
 
