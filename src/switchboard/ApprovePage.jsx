@@ -211,6 +211,82 @@ function DataopRun({ payload }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// dataop_link-k7d A1: production exports or counts (kind sf_dataquery), docs/technical-spec-dataop_link-k7d.md part 6.
+// Every query is shown whole, in payload order, as text: the helper checks each hash against the run folder before
+// anything runs, so the page shows exactly what will run. Orange is the PRODUCTION warning, as for sf_dataop.
+// ---------------------------------------------------------------------------
+
+export const DATAQUERY_EXPORT_STEPS = ['manifest', 'before', 'undo'];
+
+/** 'exports' or 'counts', from the first query's step (the database refuses a link that mixes them). */
+export function dataqueryMode(payload) {
+  const first = Array.isArray(payload?.queries) ? payload.queries[0] : null;
+  return DATAQUERY_EXPORT_STEPS.includes(first?.step) ? 'exports' : 'counts';
+}
+
+/** A sha256 as the page shows it first: its first 12 characters. */
+export const shortHash = (h) => String(h ?? '').slice(0, 12);
+
+function Hash({ value, testId }) {
+  return (
+    <details data-testid={testId} className="min-w-0">
+      <summary className="cursor-pointer font-mono" title={value}>{shortHash(value)}…</summary>
+      <span className="block font-mono text-xs break-all">{value}</span>
+    </details>
+  );
+}
+
+function DataqueryRun({ payload }) {
+  const p = payload ?? {};
+  const queries = Array.isArray(p.queries) ? p.queries : [];
+  const mode = dataqueryMode(p);
+  const n = queries.length;
+  return (
+    <div data-testid="approve-dataquery" data-dataquery-mode={mode} className="mb-4 min-w-0">
+      <p data-testid="approve-dataquery-mode" className="text-2xl font-bold text-dark mb-3 break-words">
+        {mode === 'exports'
+          ? `Exports ${n} ${n === 1 ? 'query' : 'queries'} to files on your computer`
+          : `Counts ${n} ${n === 1 ? 'query' : 'queries'}`}
+      </p>
+      <dl className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2">
+        <dt className="font-medium">Org</dt><dd data-testid="approve-dataquery-alias" className="font-mono break-all">{p.alias}</dd>
+        <dt className="font-medium">Repo</dt><dd data-testid="approve-dataquery-repo" className="font-mono text-xs break-all">{p.repo}</dd>
+        <dt className="font-medium">Run folder</dt><dd data-testid="approve-dataquery-run" className="font-mono text-xs break-all">{p.run}</dd>
+        <dt className="font-medium">Run tag</dt><dd data-testid="approve-dataquery-run-tag" className="font-mono break-all">{p.run_tag}</dd>
+        {p.request_sha256 && (
+          <>
+            <dt className="font-medium">Request</dt>
+            <dd className="min-w-0"><Hash value={p.request_sha256} testId="approve-dataquery-request" /></dd>
+          </>
+        )}
+      </dl>
+      <ol data-testid="approve-dataquery-queries" className="mb-4 space-y-4 list-none p-0">
+        {queries.map((q, i) => (
+          <li key={i} data-testid="approve-dataquery-query" data-step={q.step}
+            className="min-w-0 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-2">
+              <span className="font-bold">{i + 1}.</span>
+              <span data-testid="approve-dataquery-step" className="px-2 py-0.5 rounded bg-orange-100 text-black font-mono">{q.step}</span>
+              <span data-testid="approve-dataquery-source" className="break-all">
+                {q.file !== undefined ? <>File <span className="font-mono">{q.file}</span></> : <>Rule <span className="font-medium">{q.label}</span></>}
+              </span>
+            </div>
+            <div className="mb-2 flex flex-wrap items-baseline gap-x-2"><span>SHA-256</span><Hash value={q.sha256} testId="approve-dataquery-sha" /></div>
+            <pre data-testid="approve-dataquery-soql"
+              className="m-0 p-3 bg-white rounded border border-border font-mono text-xs text-dark whitespace-pre-wrap break-words max-w-full">{q.soql}</pre>
+          </li>
+        ))}
+      </ol>
+      <p data-testid="approve-dataquery-returns" className="text-sm text-dark mb-4 break-words">
+        Comes back to Alfred: one count per query ({mode === 'exports' ? 'the rows exported' : 'the COUNT()'}) and a pass or
+        fail. No rows, Ids or field values reach Alfred; {mode === 'exports' ? 'the exported files stay' : 'everything else stays'} in
+        the run folder on your computer.
+      </p>
+    </div>
+  );
+}
+
 /** The config files the click writes. */
 export function sbFiles(payload) {
   if (payload?.command === 'org add') return ['orgs.json'];
@@ -384,7 +460,8 @@ export default function ApprovePage({ runner = callRunner, session = realSession
   const isSf = preview?.kind === 'sf_check';
   const isSfRead = preview?.kind === 'sf_read';
   const isDataop = preview?.kind === 'sf_dataop';
-  const isGit = preview?.kind === 'git' || isSb || isSf || isSfRead || isDataop;
+  const isDataquery = preview?.kind === 'sf_dataquery';
+  const isGit = preview?.kind === 'git' || isSb || isSf || isSfRead || isDataop || isDataquery;
 
   useEffect(() => {
     if (!preview || dryStarted.current || isGit) return;
@@ -453,8 +530,8 @@ export default function ApprovePage({ runner = callRunner, session = realSession
     // The action id is the chat's handle: the helper's run row only exists once it picks the action up.
     const id = preview.action_id;
     // An sf_read's line is sf <id>, like a check's; a production data run's is dataop <id> (the helper's LINE_WORD).
-    const word = isSb ? 'sb' : isSf || isSfRead ? 'sf' : isDataop ? 'dataop' : 'git';
-    const lines = isDataop ? [] : isSb ? sbLines(preview.payload) : isSf ? sfLines(preview.payload)
+    const word = isSb ? 'sb' : isSf || isSfRead ? 'sf' : isDataop ? 'dataop' : isDataquery ? 'dataquery' : 'git';
+    const lines = isDataop || isDataquery ? [] : isSb ? sbLines(preview.payload) : isSf ? sfLines(preview.payload)
       : isSfRead ? sfReadLines(preview.payload) : gitLines(preview.payload, preview.project_code);
     return (
       <Shell preview={preview}>
@@ -463,6 +540,15 @@ export default function ApprovePage({ runner = callRunner, session = realSession
           <div data-testid="approve-production" role="alert"
             className="mb-4 w-full bg-orange-400 text-black text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
             Production, live client data
+          </div>
+        )}
+        {isDataquery && (
+          <div data-testid="approve-production-read" role="alert"
+            className="mb-4 w-full bg-orange-400 text-black text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
+            Production, read only
+            <span data-testid="approve-production-read-mode" className="block text-lg sm:text-xl normal-case tracking-normal mt-1">
+              {dataqueryMode(preview.payload) === 'exports' ? 'Bulk exports' : 'Counts'}
+            </span>
           </div>
         )}
         {isSfRead && isProductionFullData(preview.payload) && (
@@ -487,7 +573,7 @@ export default function ApprovePage({ runner = callRunner, session = realSession
         )}
         <p className="text-sm text-dark">Project</p>
         <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code} data-switchboard-kind={preview.kind}>{preview.project_code}</p>
-        {isDataop ? <DataopRun payload={preview.payload} /> : (
+        {isDataop ? <DataopRun payload={preview.payload} /> : isDataquery ? <DataqueryRun payload={preview.payload} /> : (
           <ul data-testid={`approve-${isSfRead ? 'sf-read' : word}`} className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">
             {lines.map((l) => <li key={l}>{l}</li>)}
           </ul>
@@ -522,6 +608,8 @@ export default function ApprovePage({ runner = callRunner, session = realSession
             <RunResult title="Sent to the desktop helper"
               summary={isDataop
                 ? 'It must pick it up within 15 minutes, or it fails unrun. It checks the stamp and the sandbox pass first, and pauses for your Enter before it writes. The result comes back to the chat when it finishes.'
+                : isDataquery
+                ? 'It must pick it up within 15 minutes, or it fails unrun. It checks every query\'s hash against the run folder first. Only the counts and a pass or fail come back to the chat.'
                 : 'It runs in a terminal window on your computer. The result comes back to the chat when it finishes.'}
               runId={id} />
             <ResultLine line={`${word} ${id}`} />
@@ -531,6 +619,8 @@ export default function ApprovePage({ runner = callRunner, session = realSession
             <p className="mb-4 text-sm text-dark">
               {isDataop
                 ? 'A production data run has no dry run here: its sandbox rehearsal was the dry run. Approve runs this once, on your computer, against the live org.'
+                : isDataquery
+                ? 'A production read has no dry run. Approve runs these queries once, on your computer, against the live org. Nothing here writes.'
                 : `${isSb ? 'An sb setup' : isSf ? 'An sf check' : isSfRead ? 'An sf read' : 'Git'} has no dry run. Approve runs this once, on your computer.`}
             </p>
             <div className="mb-4">
