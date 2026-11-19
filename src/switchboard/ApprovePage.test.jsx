@@ -777,6 +777,145 @@ test('the other kinds have no orange banner and no data-run panel', async () => 
   }
 });
 
+// --- dataop_link-k7d A1: production exports and counts (kind sf_dataquery) ---
+
+const H1 = 'a'.repeat(64);
+const H2 = 'b'.repeat(64);
+const REQ = 'c'.repeat(64);
+const SEL = "SELECT Id, GiftCommitmentId FROM GiftTransaction\nWHERE Source__c = 'ActBlue'\n";
+const DQ_BASE = { alias: 'cd-prod', repo: 'C:\\Users\\Alex\\projects\\common-defense', run: 'data-ops/cd_fixc-q8d/fixc-2026-11-19',
+  run_tag: 'cd_fixc-q8d-s4-ab12', request_sha256: REQ };
+const DQ_EXPORT = { ...DQ_BASE, queries: [{ step: 'manifest', soql: SEL, sha256: H1, file: 'selection.soql' },
+  { step: 'undo', soql: `\n\t  ${SEL}`, sha256: H2, file: 'selection.soql' }] };
+const DQ_COUNT = { ...DQ_BASE, queries: [
+  { step: 'rules', soql: "SELECT COUNT() FROM GiftTransaction WHERE Source__c = 'ActBlue' AND GiftCommitmentId = null", sha256: H1,
+    label: 'Installments with no gift commitment' }] };
+const DQ = (payload) => ({ ok: true, kind: 'sf_dataquery', action_id: 'q1', fingerprint: 'fpq', project_code: 'cd_fixc-q8d', payload,
+  headline: 'PRODUCTION EXPORT cd_fixc-q8d ON cd-prod: 2 QUERIES (manifest, undo), READ ONLY', expires_at: '2026-11-19T12:30:00Z' });
+
+test('sf_dataquery: orange PRODUCTION, READ ONLY banner saying exports; org, repo, run folder, run tag and request hash', async () => {
+  runner({ preview: reply(DQ(DQ_EXPORT)), approve: reply({ ok: true, action_id: 'q1', sent: true }) });
+  const { container } = open();
+  const banner = await screen.findByTestId('approve-production-read');
+  expect(banner).toHaveTextContent(/production, read only/i);
+  expect(banner).toHaveClass('bg-orange-400', 'text-black');
+  expect(screen.getByTestId('approve-production-read-mode')).toHaveTextContent('Bulk exports');
+  expect(screen.queryByTestId('approve-production')).toBeNull();
+  expect(screen.queryByTestId('approve-dataop')).toBeNull();
+  expect(screen.getByTestId('approve-dataquery')).toHaveAttribute('data-dataquery-mode', 'exports');
+  expect(screen.getByTestId('approve-dataquery-mode')).toHaveTextContent('Exports 2 queries to files on your computer');
+  expect(screen.getByTestId('approve-dataquery-alias')).toHaveTextContent('cd-prod');
+  expect(screen.getByTestId('approve-dataquery-repo')).toHaveTextContent('C:\\Users\\Alex\\projects\\common-defense');
+  expect(screen.getByTestId('approve-dataquery-run')).toHaveTextContent('data-ops/cd_fixc-q8d/fixc-2026-11-19');
+  expect(screen.getByTestId('approve-dataquery-run-tag')).toHaveTextContent('cd_fixc-q8d-s4-ab12');
+  const req = screen.getByTestId('approve-dataquery-request');
+  expect(req.querySelector('summary')).toHaveTextContent('cccccccccccc…');
+  expect(req.querySelector('summary')).toHaveAttribute('title', REQ);
+  expect(req).toHaveTextContent(REQ);
+  expect(screen.getByTestId('approve-dataquery-returns')).toHaveTextContent(/one count per query \(the rows exported\) and a pass or fail/);
+  expect(screen.getByTestId('approve-dataquery-returns')).toHaveTextContent(/No rows, Ids or field values reach Alfred/);
+  expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'sf_dataquery');
+  expect(screen.getByTestId('approve-stakes-change')).toBeInTheDocument();
+  expect(screen.getByText(/A production read has no dry run/)).toBeInTheDocument();
+  expect(called('dry-run')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: /^approve and run$/i }));
+  expect(await screen.findByText('Sent to the desktop helper')).toBeInTheDocument();
+  expect(screen.getByText(/within 15 minutes/)).toBeInTheDocument();
+  expect(JSON.parse(called('approve')[0][1].body)).toEqual({ token: 'tok1', fingerprint: 'fpq' });
+  expect(screen.getByText('dataquery q1')).toBeInTheDocument();
+});
+
+test('sf_dataquery: each query in order with its step, file or label, short and full hash, and its SOQL whole with blank space kept', async () => {
+  runner({ preview: reply(DQ(DQ_EXPORT)) });
+  open();
+  const items = await screen.findAllByTestId('approve-dataquery-query');
+  expect(items.map((li) => li.getAttribute('data-step'))).toEqual(['manifest', 'undo']);
+  expect(items[0].querySelector('[data-testid="approve-dataquery-source"]')).toHaveTextContent('File selection.soql');
+  const sha = items[1].querySelector('[data-testid="approve-dataquery-sha"]');
+  expect(sha.querySelector('summary')).toHaveTextContent('bbbbbbbbbbbb…');
+  expect(sha.querySelector('summary')).toHaveAttribute('title', H2);
+  expect(sha).toHaveTextContent(H2);
+  const soql = screen.getAllByTestId('approve-dataquery-soql');
+  expect(soql[0].textContent).toBe(SEL);
+  expect(soql[1].textContent).toBe(`\n\t  ${SEL}`);
+  expect(soql[1].tagName).toBe('PRE');
+  expect(soql[1]).toHaveClass('whitespace-pre-wrap', 'break-words', 'font-mono');
+});
+
+test('sf_dataquery: a count link says counts, shows the rule label, and keeps no request row without its hash', async () => {
+  const { request_sha256: _r, ...noReq } = DQ_COUNT;
+  runner({ preview: reply(DQ({ ...noReq, queries: [{ ...DQ_COUNT.queries[0], file: 'rules.soql', label: undefined }] })) });
+  const first = open();
+  await screen.findByTestId('approve-dataquery');
+  expect(screen.queryByTestId('approve-dataquery-request')).toBeNull();
+  first.unmount();
+  runner({ preview: reply(DQ(DQ_COUNT)) });
+  open();
+  expect(await screen.findByTestId('approve-production-read-mode')).toHaveTextContent('Counts');
+  expect(screen.getByTestId('approve-dataquery')).toHaveAttribute('data-dataquery-mode', 'counts');
+  expect(screen.getByTestId('approve-dataquery-mode')).toHaveTextContent('Counts 1 query');
+  expect(screen.getByTestId('approve-dataquery-source')).toHaveTextContent('Rule Installments with no gift commitment');
+  expect(screen.getByTestId('approve-dataquery-step')).toHaveTextContent('rules');
+  expect(screen.getByTestId('approve-dataquery-returns')).toHaveTextContent(/\(the COUNT\(\)\)/);
+});
+
+test('sf_dataquery: a 100,000-character export is shown whole, never cut', async () => {
+  const long = `SELECT Id FROM Contact WHERE Name != '${'x'.repeat(99950)}'`;
+  runner({ preview: reply(DQ({ ...DQ_BASE, queries: [{ step: 'before', soql: long, sha256: H1, label: 'broad snapshot' }] })) });
+  open();
+  const pre = await screen.findByTestId('approve-dataquery-soql');
+  expect(pre.textContent).toHaveLength(long.length);
+  expect(pre.textContent).toBe(long);
+  expect(pre).toHaveClass('break-words', 'max-w-full');
+});
+
+test('sf_dataquery: SOQL wraps between words (break-words, overflow-wrap), never mid-word by break-all; text kept whole', async () => {
+  const soql = "SELECT COUNT() FROM GiftTransaction WHERE Source__c = 'ActBlue' AND GiftCommitmentId = null AND CreatedDate > 2026-11-18T00:00:00Z";
+  runner({ preview: reply(DQ({ ...DQ_BASE, queries: [{ step: 'rules', soql: `\n  ${soql}\n`, sha256: H1, label: 'New since the freeze' }] })) });
+  open();
+  const pre = await screen.findByTestId('approve-dataquery-soql');
+  // whitespace-pre-wrap keeps blank space and line breaks and wraps at spaces; break-words (overflow-wrap: break-word)
+  // breaks inside a word only when that one word is wider than the box. break-all would split "AND" as "A" / "ND".
+  expect(pre).toHaveClass('whitespace-pre-wrap', 'break-words');
+  expect(pre).not.toHaveClass('break-all');
+  expect(pre.className).not.toMatch(/break-all|word-break|truncate|line-clamp|overflow-hidden|max-h-/);
+  expect(pre.textContent).toBe(`\n  ${soql}\n`);
+});
+
+test('sf_dataquery: Don\'t run gives the dataquery cancelled line; an expired link says so and runs nothing', async () => {
+  runner({ preview: reply(DQ(DQ_COUNT)), cancel: reply({ ok: true, cancelled: true, reason: 'wrong round' }) });
+  const first = open();
+  await screen.findByTestId('approve-dataquery');
+  fireEvent.change(screen.getByLabelText(/reason for not running/i), { target: { value: 'wrong round' } });
+  fireEvent.click(screen.getByRole('button', { name: /don't run/i }));
+  expect(await screen.findByText('dataquery q1 cancelled: wrong round')).toBeInTheDocument();
+  first.unmount();
+  runner({ preview: reply({ ok: false, error: 'this link has expired.' }, 409) });
+  open();
+  expect(await screen.findByText(/This link has expired\. Links last 30 minutes\. Nothing ran\./)).toBeInTheDocument();
+});
+
+test('sf_dataquery: helpers for the mode and the short hash', () => {
+  const { dataqueryMode, shortHash } = jest.requireActual('./ApprovePage');
+  expect(dataqueryMode(DQ_EXPORT)).toBe('exports');
+  expect(dataqueryMode({ queries: [{ step: 'undo' }] })).toBe('exports');
+  expect(dataqueryMode(DQ_COUNT)).toBe('counts');
+  expect(dataqueryMode({ queries: [{ step: 'preflight-counts' }] })).toBe('counts');
+  expect(shortHash(H1)).toBe('a'.repeat(12));
+  expect(shortHash(undefined)).toBe('');
+});
+
+test('the other kinds have no read-only banner and no dataquery panel; sf_dataop keeps its own', async () => {
+  for (const preview of [DOP, SFR, { ...PREVIEW, kind: 'git', payload: { command: 'gitsync' } }]) {
+    runner({ preview: reply(preview) });
+    const { unmount } = open();
+    await screen.findByTestId(preview.kind === 'sf_read' ? 'approve-sf-read' : preview.kind === 'sf_dataop' ? 'approve-dataop' : 'approve-git');
+    expect(screen.queryByTestId('approve-production-read')).toBeNull();
+    expect(screen.queryByTestId('approve-dataquery')).toBeNull();
+    unmount();
+  }
+});
+
 test('sf read: a metadata read of several objects lists them', () => {
   const { sfReadLines } = jest.requireActual('./ApprovePage');
   const lines = sfReadLines({ alias: 'cd-prod', production: true, level: 'metadata', objects: ['Contact', 'Account'] });

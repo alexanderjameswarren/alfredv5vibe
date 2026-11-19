@@ -80,6 +80,50 @@ test('Approve and Don\'t run answer locally', async () => {
   expect(global.fetch).not.toHaveBeenCalled();
 });
 
+// dataop_link-k7d s6: the sf_dataquery fixture.
+test('dev server: /approve-fixture/sf_dataquery shows the export link with manifest and undo, and nothing is fetched', async () => {
+  appAt('/approve-fixture/sf_dataquery');
+  expect(await screen.findByTestId('approve-production-read')).toHaveTextContent(/production, read only/i);
+  expect(screen.getByTestId('approve-production-read-mode')).toHaveTextContent('Bulk exports');
+  expect(screen.getAllByTestId('approve-dataquery-query').map((li) => li.getAttribute('data-step'))).toEqual(['manifest', 'undo']);
+  expect(screen.getByText(/EXPORT demo_link_installments-x1y ON demo-prod: 2 QUERIES \(manifest, undo\), READ ONLY/)).toBeInTheDocument();
+  expect(global.fetch).not.toHaveBeenCalled();
+  expect(supabase.auth.getSession).not.toHaveBeenCalled();
+});
+
+test('the sf_dataquery choices: a leading newline kept, a count link, and the 100,000-character export', async () => {
+  appAt('/approve-fixture/sf_dataquery');
+  await screen.findByTestId('approve-dataquery');
+  fireEvent.change(screen.getByTestId('approve-fixture-dataquery'), { target: { value: 'newline' } });
+  await waitFor(() => expect(screen.getAllByTestId('approve-dataquery-query')).toHaveLength(1));
+  expect(screen.getByTestId('approve-dataquery-soql').textContent.startsWith('\n\n    SELECT Id')).toBe(true);
+  fireEvent.change(screen.getByTestId('approve-fixture-dataquery'), { target: { value: 'count' } });
+  await waitFor(() => expect(screen.getByTestId('approve-production-read-mode')).toHaveTextContent('Counts'));
+  expect(screen.getAllByTestId('approve-dataquery-query')).toHaveLength(3);
+  expect(screen.getAllByTestId('approve-dataquery-source')[0]).toHaveTextContent('Rule Installments with no plan link');
+  fireEvent.change(screen.getByTestId('approve-fixture-dataquery'), { target: { value: 'long' } });
+  await waitFor(() => expect(screen.getByTestId('approve-dataquery-soql').textContent.length).toBeGreaterThan(99000));
+  expect(screen.getByTestId('approve-dataquery-soql').textContent.length).toBeLessThanOrEqual(100000);
+  expect(global.fetch).not.toHaveBeenCalled();
+});
+
+test('sf_dataquery fixture: Approve and Don\'t run answer locally', async () => {
+  appAt('/approve-fixture/sf_dataquery');
+  fireEvent.click(await screen.findByRole('button', { name: /^approve and run$/i }));
+  expect(await screen.findByText('dataquery fixture-action')).toBeInTheDocument();
+  fireEvent.change(screen.getByTestId('approve-fixture-dataquery'), { target: { value: 'count' } });
+  fireEvent.change(await screen.findByLabelText(/reason for not running/i), { target: { value: 'just looking' } });
+  fireEvent.click(screen.getByRole('button', { name: /don't run/i }));
+  expect(await screen.findByText('dataquery fixture-action cancelled: just looking')).toBeInTheDocument();
+  expect(global.fetch).not.toHaveBeenCalled();
+});
+
+test('production: the sf_dataquery fixture route is absent too', async () => {
+  appAt('/approve-fixture/sf_dataquery', 'production');
+  expect(await screen.findByText('ALFRED HOME')).toBeInTheDocument();
+  expect(screen.queryByTestId('approve-production-read')).toBeNull();
+});
+
 test('an unknown kind says there is no fixture for it', async () => {
   appAt('/approve-fixture/git');
   expect(await screen.findByText(/No fixture for git/)).toBeInTheDocument();

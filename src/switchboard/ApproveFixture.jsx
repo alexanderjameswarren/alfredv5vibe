@@ -42,17 +42,54 @@ export function samplePayload({ bulk = false, noRehearsal = false } = {}) {
 const headline = (p) => `PRODUCTION DATA RUN demo_link_installments-x1y ON ${p.alias}: ABOUT TO CHANGE ` +
   `${p.expected.toLocaleString('en-US')} LIVE RECORDS OF ${p.object} ${p.write.kind === 'batch' ? `BY BATCH ${p.write.class}` : 'BY BULK'}`;
 
-const FIXTURES = { sf_dataop: true };
+// dataop_link-k7d s6: sf_dataquery samples. Invented values; the hashes are placeholders, not real SHA-256s.
+const DQ_CODE = 'demo_link_installments-x1y';
+const DQ_SELECTION = "SELECT Id, Demo_Plan__c, Paid__c\nFROM Demo_Installment__c\nWHERE Source__c = 'Demo Import'\n" +
+  '  AND CreatedDate >= 2026-10-01T00:00:00Z\n  AND CreatedDate < 2026-11-18T00:00:00Z\n  AND Demo_Plan__c = null\n';
+const DQ_BASE = {
+  alias: 'demo-prod', repo: 'C:\\Users\\Alex\\projects\\demo-client', run: `data-ops/${DQ_CODE}/link-2026-11-19`,
+  run_tag: `${DQ_CODE}-s6-k2p9`, request_sha256: '9b1e4c07d2a35f68e0c4b19a7d3e52f6a81c0d4e97b2f35a6c8d01e4b7a29f53',
+};
+const hashOf = (n) => `${String(n).repeat(4)}a7c19e04d8b2f6`.repeat(4).slice(0, 64);
+export const SAMPLE_DATAQUERIES = {
+  export: { ...DQ_BASE, queries: [
+    { step: 'manifest', soql: DQ_SELECTION, sha256: hashOf(1), file: 'selection.soql' },
+    { step: 'undo', soql: DQ_SELECTION, sha256: hashOf(1), file: 'selection.soql' },
+  ] },
+  newline: { ...DQ_BASE, queries: [
+    { step: 'manifest', soql: `\n\n    ${DQ_SELECTION}`, sha256: hashOf(2), file: 'selection.soql' },
+  ] },
+  count: { ...DQ_BASE, queries: [
+    { step: 'rules', soql: "SELECT COUNT() FROM Demo_Installment__c WHERE Source__c = 'Demo Import' AND Demo_Plan__c = null",
+      sha256: hashOf(3), label: 'Installments with no plan link' },
+    { step: 'rules', soql: 'SELECT COUNT() FROM Demo_Plan__c WHERE Rollup_Pending__c = true', sha256: hashOf(4),
+      label: 'Plans whose totals are still updating' },
+    { step: 'rules', soql: "SELECT COUNT() FROM Demo_Installment__c WHERE Source__c = 'Demo Import' AND Demo_Plan__c = null AND CreatedDate > 2026-11-18T00:00:00Z",
+      sha256: hashOf(5), label: 'Installments with no plan link: new since the freeze' },
+  ] },
+  // The export cap: one query of 100,000 characters, to check the layout holds.
+  long: { ...DQ_BASE, queries: [
+    { step: 'before', soql: `SELECT Id, Name FROM Demo_Installment__c WHERE Name != '${'x'.repeat(100000 - 61)}'`, sha256: hashOf(6), label: 'broad snapshot' },
+  ] },
+};
+const dqHeadline = (p) => {
+  const steps = [...new Set(p.queries.map((q) => q.step))];
+  const n = p.queries.length;
+  return `PRODUCTION ${['manifest', 'before', 'undo'].includes(steps[0]) ? 'EXPORT' : 'COUNTS'} ${DQ_CODE} ON ${p.alias}: ` +
+    `${n} QUER${n === 1 ? 'Y' : 'IES'} (${steps.join(', ')}), READ ONLY`;
+};
+
+const FIXTURES = { sf_dataop: true, sf_dataquery: true };
 
 // Module-level, so ApprovePage's load effect sees the same functions on every render.
 const fakeSession = () => Promise.resolve({ data: { session: { access_token: 'fixture' } } });
 
-function fakeRunnerFor(payload) {
+function fakeRunnerFor(payload, kind = 'sf_dataop') {
   return async (route, body) => {
     if (route === 'preview') {
-      return { status: 200, body: { ok: true, kind: 'sf_dataop', action_id: 'fixture-action', fingerprint: 'fixture-fp',
-        project_code: 'demo_link_installments-x1y', expires_at: new Date(Date.now() + 30 * 60000).toISOString(),
-        headline: headline(payload), payload } };
+      return { status: 200, body: { ok: true, kind, action_id: 'fixture-action', fingerprint: 'fixture-fp',
+        project_code: DQ_CODE, expires_at: new Date(Date.now() + 30 * 60000).toISOString(),
+        headline: kind === 'sf_dataquery' ? dqHeadline(payload) : headline(payload), payload } };
     }
     if (route === 'approve') return { status: 200, body: { ok: true, action_id: 'fixture-action', sent: true } };
     if (route === 'cancel') return { status: 200, body: { ok: true, action_id: 'fixture-action', cancelled: true, reason: body?.reason ?? '' } };
@@ -60,18 +97,41 @@ function fakeRunnerFor(payload) {
   };
 }
 const RUNNERS = new Map();
-const runnerFor = (key, payload) => {
-  if (!RUNNERS.has(key)) RUNNERS.set(key, fakeRunnerFor(payload));
+const runnerFor = (key, payload, kind) => {
+  if (!RUNNERS.has(key)) RUNNERS.set(key, fakeRunnerFor(payload, kind));
   return RUNNERS.get(key);
 };
+
+const DQ_CHOICES = [['export', 'Export: manifest and undo'], ['newline', 'Export: leading newline'], ['count', 'Count link'],
+  ['long', 'Export: 100,000 characters']];
+
+function DataqueryFixture() {
+  const [which, setWhich] = useState('export');
+  return (
+    <div>
+      <div data-testid="approve-fixture-bar" className="bg-gray-800 text-white text-sm px-4 py-2 flex flex-wrap gap-x-4 gap-y-1 items-center">
+        <span className="font-bold">Dev fixture: nothing here reaches Supabase or the runner.</span>
+        <label className="inline-flex items-center gap-2 min-h-[44px]">
+          Link
+          <select data-testid="approve-fixture-dataquery" value={which} onChange={(e) => setWhich(e.target.value)}
+            className="text-black rounded px-2 py-1 min-h-[36px]">
+            {DQ_CHOICES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+          </select>
+        </label>
+      </div>
+      <ApprovePage key={`dq-${which}`} runner={runnerFor(`dq-${which}`, SAMPLE_DATAQUERIES[which], 'sf_dataquery')} session={fakeSession} />
+    </div>
+  );
+}
 
 export default function ApproveFixture() {
   const { kind } = useParams();
   const [bulk, setBulk] = useState(false);
   const [noRehearsal, setNoRehearsal] = useState(false);
   if (!FIXTURES[kind]) {
-    return <p className="p-4 text-dark">No fixture for {kind}. Try /approve-fixture/sf_dataop.</p>;
+    return <p className="p-4 text-dark">No fixture for {kind}. Try /approve-fixture/sf_dataop or /approve-fixture/sf_dataquery.</p>;
   }
+  if (kind === 'sf_dataquery') return <DataqueryFixture />;
   const key = `${bulk ? 'bulk' : 'batch'}-${noRehearsal ? 'none' : 'rehearsed'}`;
   return (
     <div>
