@@ -5,7 +5,7 @@ description: "The rules every Alfred scheduled-task prompt follows: signals only
 
 # Task prompts
 
-Skill version: 2026-11-17b (the Alert wording section)
+Skill version: 2026-11-19a (the Job health check is no longer an exception)
 
 A scheduled task (DJ daily, Ken seed check, Money cleanup and the rest) runs the text pasted into
 claude.ai. That text lives in a repo file in `docs/`. These rules come from the ten prompts at
@@ -22,7 +22,7 @@ that breaks one is flagged by Overwatch's weekly run (Step 8b).
    `log_claude_notification`, and never send a Claude app push. Say so in the prompt's rules, as a
    prohibition ("Never call …"). The prompt's allowed-writes rule ("THE ONLY WRITES ALLOWED are …")
    must not list any of them: that list is what the weekly check reads as use. The two named
-   exceptions are in rule 10.
+   exceptions, neither of them a task's own alert, are in rule 10.
 3. **subject_key with no date**, lower case, `<app>:<job>:<what>`, so tomorrow's repeat folds into
    today's open item. The exception: a weekly report is new each week, so its key carries the date
    (`dj:weekly_review:report:<YYYY-MM-DD>`, `warren_buffet:wb_weekly_cleanup:week:<date>`), or this
@@ -48,17 +48,15 @@ that breaks one is flagged by Overwatch's weekly run (Step 8b).
 10. **The two exceptions.** No other task, and no other Overwatch item, is excepted.
     - Overwatch's nightly dispatcher checks (count 13) write straight to the inbox with
       `create_inbox_item`, because the dispatcher may be what is broken.
-    - **The Job health check** (`docs/claude-health-check-task-prompt.md`) notifies through its own
-      Claude notification, the only task with it on. It raises no signals, not even for its own
-      failure (rule 4 does not apply), and writes no inbox items. Its final message is the alert.
-      The reason: it checks that Claude can reach Alfred and that Alfred's watchdog runs, so it must
-      work when Alfred, and the signal path through the dispatcher, is down. Its allowed writes are
-      `create_platform_run` and `update_platform_run` only. Its healthy final message is one line,
-      `Job health: all clear (watchdog ran <n> min ago).`, with no version (the version goes in the
-      run's details). Overwatch's weekly Step 8b must not flag it: its notification is this rule
-      working, not a finding.
-    - The Alfred watchdog (`job_health_watchdog`, a database job, not a task) also writes outage,
-      recovery and stuck-dispatcher items directly, for the same reason.
+    - The Alfred watchdog (`job_health_watchdog`, a database job, not a task) writes outage,
+      recovery and stuck-dispatcher inbox items and reminders directly, for the same reason.
+
+    **The Job health check** (`docs/claude-health-check-task-prompt.md`) is not an exception (it was
+    until 2026-11-19a). It follows rules 1 to 9: its one alert, the watchdog being down, is a high
+    failure signal. Its push notification in claude.ai is off, like every task's. The one thing it
+    cannot do is alert that Claude can't reach Alfred (it can write nothing then): it ends silently,
+    and the watchdog alerts that from its side. Nothing in Alfred can alert while Supabase itself is
+    down; Alex's status.supabase.com email covers that.
 
 Severity is the task's judgment, not a channel: `high` for what should reach Alex now (failures, a
 nudge the plan says to send), `normal` for what can wait in the inbox, `low` for what is only worth
@@ -78,14 +76,15 @@ Then it says which case it is:
 - **fix needed:** no outage, something of ours is broken. Start a thread (a Fast track prompt when it
   is urgent).
 
-The worked example is `docs/claude-health-check-task-prompt.md` (cases A and B). The full wording is
-spec `docs/technical-spec-job_health-t4m.md` §9.
+The worked example is `docs/claude-health-check-task-prompt.md` (Case B's `details.item`). The full
+wording is spec `docs/history/technical-spec-job_health-t4m.md` §9.
 
 ## Checklist
 
 - [ ] No `create_inbox_item`, `send_alfred_push`, `create_reminder` or `log_claude_notification`
-      outside a "never" sentence; none in the allowed-writes rule. (The rule 10 exceptions aside: the
-      Job health check's notification is allowed.)
+      outside a "never" sentence; none in the allowed-writes rule. No task is excepted (rule 10's two
+      exceptions are Overwatch's nightly dispatcher checks and the watchdog, a database job).
+- [ ] The task's push notification in claude.ai is off.
 - [ ] Every `raise_signal` has `app`, `job`, `severity`, `subject_key` (no date unless a weekly
       report), `title`, `started_by: "task:<slug>"`, `source_ref`, and `details.kind` (+ `item`).
 - [ ] A failure path: high, `kind: "failure"`, stable key, verbatim error, raised every time.
