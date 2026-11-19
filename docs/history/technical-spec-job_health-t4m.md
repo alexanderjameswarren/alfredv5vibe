@@ -1,6 +1,8 @@
 # Job health — technical spec
 
-Project code: `job_health-t4m`. Progress: `docs/progress-job_health-t4m.md`.
+Project code: `job_health-t4m`. Progress: `docs/history/progress-job_health-t4m.md`.
+The health check's alerting was changed by health_alerts-v7p (`docs/progress-health_alerts-v7p.md`):
+see the "Superseded" notes in 8.2, 9.4 and 10.
 Written 2026-11-16 (s2), from the s1 plan (run tag `job_health-t4m-s1-q8vd`), which Alex approved together with every recommendation in its section 6.
 
 ## 1. Why
@@ -269,6 +271,17 @@ It is backed by the RPC `public.get_job_health(p_since timestamptz default null)
 - **Allowed writes:** `create_platform_run` and `update_platform_run` only.
 - **Schedule row** (migration from `_pending_job_health-t4m_health_check_schedule.sql`): `alfred/job_health_check`, daily, expected_by 06:00, grace 2, max_run_minutes 10, catch_up null (not §4's `skip`: a missed check is not made up and not listed as missed), failure_subject and failure_severity null, started_by `task:job-health-check`. Its notes name the prompt file and version.
 
+**Superseded by health_alerts-v7p (2026-11-19a).** Why: the task's own push notification fired on every finished run, healthy ones included ("Nothing to report."), and no prompt wording stops it. O2's test (one quiet healthy run) did not hold up in daily use. What changed:
+- The task's push is **off** in claude.ai. The task is no longer a task-prompts exception: it follows rules 1 to 9.
+- **Case B (the watchdog is down)** raises ONE `raise_signal`: app `alfred`, job `job_health_check`, `started_by "task:job-health-check"`, severity high, `subject_key alfred:job_health_check:failure:watchdog_down` (no date), `source_ref` = the key plus the Pacific date (so at most one a day), `details.kind "failure"`, and `details.item` carrying the Case B text unchanged.
+- **Case A (Claude can't reach Alfred)** and **Case C (healthy)** end silently, with a one-line report nobody is sent. Case A can write nothing, so it relies on the watchdog (§6).
+- The schedule row gets `failure_subject alfred:job_health_check:failure:{kind}` and `failure_severity high` (so a stuck health-check run gets the watchdog's signal too), and new notes.
+
+**The alert paths after the change, in plain words:**
+- **Watchdog down:** the health check's signal. The hourly dispatcher pops it: an inbox item plus a notification. The dispatcher runs about 5:09 AM to 7:09 PM and the delivery window is 5 AM to 8 PM, so the 8:07 PM check's signal waits for the 5:09 AM run.
+- **Claude can't reach Alfred:** the watchdog's outage inbox item plus reminder (pushed by notify-dispatch within a minute). It comes about 1 to 2¼ hours after the break, and only from 5 AM to 8 PM; an outage that starts after about 5:45 PM is alerted at the 7:30 AM tick.
+- **Supabase down:** no Alfred alert at all, because the watchdog, the inbox and notify-dispatch all run in Supabase. The status.supabase.com email (Alex is subscribed; Alfred is in us-west-2) is the alert. When Supabase's resolved email arrives, Alex pastes "Overwatch: connections are back. Review missed jobs since <time> and give me the recovery plan." with the incident's start time from Supabase's first email.
+
 ## 9. Part F — Alert wording (in full)
 
 ### 9.1 The rule (task-prompts and overwatch skills)
@@ -367,6 +380,8 @@ The stuck dispatcher's push: `The hourly dispatcher hung at <time>. Fix needed: 
   ```
 - **c. Stuck or missed runs** (fix needed): one line each, `<app>/<job> run <run id>: <what happened>. Error: "<verbatim>"`, then a single `Fast track: diagnose …` prompt naming them all.
 
+**Superseded by health_alerts-v7p (2026-11-19a).** There is no final-message alert any more: the task's push is off, because it fired on every healthy run. **b** (the watchdog is silent) is now the `details.item` of the Case B signal (§8.2), in the 17a wording unchanged. **a** (Alfred unreachable) is no longer sent: the task can't write then, and the watchdog's outage item (§9.2) covers it, or, when Supabase itself is down, the status.supabase.com email. **c** was already dropped at s9.
+
 ## 10. Skill changes (s9, s10)
 
 - **task-prompts:**
@@ -383,6 +398,11 @@ The stuck dispatcher's push: `The hourly dispatcher hung at <time>. Fix needed: 
 - **Done at s10 (overwatch 2026-11-17a, task-prompts 2026-11-17b):**
   - overwatch: the chat flow `"Review missed jobs since <time>" (after an outage)`, under In chat (run_now first, then self and skip, the stuck runs with their error_message, whether the outage closed, one recovery plan, nothing written without Alex's yes); the "Every alert" rule in the note's wording (outage or fix needed); the allowed exceptions in Step 8b; the opening paragraph names the job-health alerts as exceptions;
   - task-prompts: the "Alert wording" section, pointing to the health-check prompt as the worked example, and its checklist line.
+
+**Superseded by health_alerts-v7p (2026-11-19a):** the Job health check's own-notification exception is gone everywhere, because its push fired on every healthy run.
+- **task-prompts 2026-11-19a:** rule 10's two exceptions are now Overwatch's nightly dispatcher checks and the watchdog (a database job). A note says the health check follows rules 1 to 9, and that its Case A relies on the watchdog. The checklist allows no task exception and adds "push off". The Alert wording example points at Case B's item.
+- **overwatch 2026-11-19a:** the opening paragraph no longer names the health check's notification. Step 8b's allowed exceptions keep only the watchdog. "Review missed jobs since <time>" names the three alert paths, including Supabase down (§8.2).
+- `docs/overwatch-weekly-task-prompt.md` needed no change: its Step 8b never named the exception.
 
 ## 11. Open items
 

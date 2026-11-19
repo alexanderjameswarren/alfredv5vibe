@@ -5,7 +5,7 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
-Skill version: 2026-11-17a
+Skill version: 2026-11-19a
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
@@ -14,8 +14,8 @@ raise one signal per item (`raise_signal`, with the item in `details.item` and i
 as the severity); the dispatcher writes the item, folds repeats into the open one, and decides
 what reaches Alex under the `delivery` section of Overwatch's own plan. The exceptions are the
 nightly's dispatcher checks, written straight to the inbox because the dispatcher may be what is
-broken, and the job-health alerts (the Job health check's notification and the watchdog's direct
-items), for the same reason. Every other app's task only raises signals too. Overwatch never calls `create_reminder`
+broken, and the job-health watchdog's direct items and reminders (a database job), for the same
+reason. The Job health check task raises a signal like any other. Every other app's task only raises signals too. Overwatch never calls `create_reminder`
 or `send_alfred_push` from those runs, and `pushes_per_day` and `push_time` are no longer read.
 
 Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
@@ -56,9 +56,20 @@ Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
 
 ### "Review missed jobs since <time>" (after an outage)
 
-Alex pastes this after an outage ends: it is the recovery prompt in the Job health check's alert and in
-the watchdog's outage and recovery items ("Overwatch: connections are back. Review missed jobs since
-<time> and give me the recovery plan.").
+Alex pastes this after an outage ends: it is the recovery prompt in the watchdog's outage and recovery
+items ("Overwatch: connections are back. Review missed jobs since <time> and give me the recovery plan.").
+
+Where his alert came from, by case:
+- **Alfred's watchdog is down:** the Job health check's high failure signal, popped by the hourly
+  dispatcher (inbox item and notification). That one's recovery is a Fast track prompt, not this flow.
+- **Claude can't reach Alfred:** the watchdog's outage inbox item and reminder, about 1 to 2¼ hours
+  after the break, 5 AM to 8 PM only; then its recovery item when Claude runs again.
+- **Supabase is down:** no Alfred alert can arrive, because the watchdog, the inbox and the push all
+  run in Supabase. Alex's outside alert is the status.supabase.com email (he is subscribed; Alfred's
+  project is in us-west-2). When Supabase's resolved email arrives, he pastes this prompt with the
+  incident's start time from Supabase's first email. Treat it like any other: the watchdog may also
+  write an outage and recovery pair once Supabase is back, for the same gap.
+
 1. **Read.** `get_job_health` with `since` set to his time, as an ISO timestamp with a time zone. A
    plain time ("9:40 AM", "this morning at 6") is Pacific.
 2. **Missed runs**, from `missed_runs`, one line each in plain words: the job (its `task_name` when it
@@ -335,7 +346,7 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
       ("Overwatch: connections are back. Review missed jobs since <time> …");
     - **fix needed:** no outage, something of ours is broken, so start a thread, possibly the
       emergency fix lane (a Fast track prompt).
-    The full wording is spec `docs/technical-spec-job_health-t4m.md` §9.
+    The full wording is spec `docs/history/technical-spec-job_health-t4m.md` §9.
 
 ## Writing or changing a scheduled-task prompt
 
@@ -352,9 +363,9 @@ The procedure is `docs/overwatch-weekly-task-prompt.md`. The judgment it asks fo
   `log_claude_notification`) named in a "never" sentence is the rule working; named in an instruction to
   call it, or in the allowed-writes list, is a finding. Unsure counts as a finding, quoted. The inventory
   only says which tools a file names, so it narrows the list but cannot decide.
-  **Allowed exceptions, never flag them:** the Job health check task's own Claude notification (its
-  final message is the alert, by task-prompts rule 10), and the job-health watchdog's direct inbox
-  items and reminders (a database job, not a task: outage, recovery and stuck-dispatcher alerts).
+  **Allowed exception, never flag it:** the job-health watchdog's direct inbox items and reminders (a
+  database job, not a task: outage, recovery and stuck-dispatcher alerts). The Job health check task
+  is no longer excepted (since 2026-11-19a): judge it like any other task.
 
 - **The week.** Say what moved, by project and app: shipped first, then progress, then
   what was used. Group many small rows into one line ("12 SAM practice passes"). A
