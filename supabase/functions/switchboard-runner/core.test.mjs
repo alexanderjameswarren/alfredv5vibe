@@ -1308,6 +1308,25 @@ test("result: a good sf_datawrite for each write kind keeps only ok, exit_code, 
   }
 });
 
+// s11c: excluded counts only the manifest records the gate left out. Records added at the gate are left out too
+// (exclude.csv holds them) but were never in expected, so they are never counted, and nothing compares excluded with
+// exclude.csv's rows or the payload's uploads.
+test("result: a gate that left out 2 manifest records and found 4 added reports excluded 2 and passes", async () => {
+  const payload = { ...DW_PAYLOADS.batch, uploads: [{ purpose: "exclude", file: "exclude.csv", sha256: "e".repeat(64), rows: 6 }] };
+  const { deps, calls } = dwFakes(payload);
+  const datawrite = { ...DW_DONE(payload.queries.length), gate: { added: 4, dropped: 0, edited: 2 },
+    write: { expected: 45, changed: 41, failed: 2, excluded: 2 } };
+  const res = await handle(dwResult({ ok: true, pass: true, datawrite }), deps);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, action_id: "dw-1", run_id: "run-w", status: "succeeded", line: "datawrite dw-1 done: PASS" });
+  assert.deepEqual(calls.finished[0].result, { ok: true, pass: true, datawrite });
+  // Counting the 4 added records as well (excluded 6) breaks the sum, and that is the only check on excluded.
+  const bad = dwFakes(payload);
+  const refused = await handle(dwResult({ ok: true, pass: true, datawrite: { ...datawrite, write: { ...datawrite.write, excluded: 6 } } }), bad.deps);
+  assert.equal(refused.status, 400);
+  assert.match((await refused.json()).error ?? "", /changed \+ failed \+ excluded is 49, not the expected 45/);
+});
+
 test("result: a step 5 FAIL is ok with pass false; the line says done: FAIL", async () => {
   const { deps, calls } = dwFakes();
   const datawrite = { ...DW_DONE(4), write: { expected: 45, changed: 40, failed: 2, excluded: 1 }, check: { problems: 2, extras: 1, new_records: 0 } };

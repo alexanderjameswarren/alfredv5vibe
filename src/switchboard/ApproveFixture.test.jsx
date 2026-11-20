@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { supabase } from '../supabaseClient';
 import App from '../App';
+import { DW_136_IDS } from './ApproveFixture';
 
 // dataops_alfred-d4x s6b: the dev-only fixture route. It renders the real ApprovePage with a sample sf_dataop, never
 // calls fetch or Supabase, and is absent when NODE_ENV is production.
@@ -192,7 +193,22 @@ test('dev server: ?sample=undo opens the production undo, its Id file and a broa
   expect(screen.getByTestId('approve-datawrite-upload-title')).toHaveTextContent('dataop-undo:DemoLinkInstallmentsUndoBatch');
   const ids = screen.getAllByTestId('approve-datawrite-ids');
   expect(ids).toHaveLength(2);
-  for (const n of ids) expect(n).toHaveTextContent('This snapshot lists 12 record Ids.');
+  for (const n of ids) expect(n).toHaveTextContent('This query lists 12 record Ids.');
+  expect(screen.getByTestId('approve-datawrite-failures-title')).toHaveTextContent('dataop-failures:DemoLinkInstallmentsUndoBatch:<18-character job Id>');
+  expect(global.fetch).not.toHaveBeenCalled();
+});
+
+// s10: any query that lists Ids says how many, not only a broad snapshot.
+test('dev server: ?sample=ids opens a batch whose selection, after: selection and two counts each list 136 Ids', async () => {
+  appAt('/approve-fixture/sf_datawrite?sample=ids');
+  await screen.findByTestId('approve-production-write');
+  expect(screen.getByTestId('approve-datawrite-sentence')).toHaveTextContent('This changes 136 live records of Demo_Installment__c in demo-prod.');
+  const queries = screen.getAllByTestId('approve-datawrite-query');
+  const listed = queries.map((q) => q.querySelector('[data-testid="approve-datawrite-ids"]')?.textContent ?? null);
+  expect(listed).toEqual(['This query lists 136 record Ids.', null, null, 'This query lists 136 record Ids.',
+    'This query lists 136 record Ids.', 'This query lists 136 record Ids.']);
+  expect(screen.getByTestId('approve-datawrite-failures-title')).toHaveTextContent('dataop-failures:DemoLinkInstallmentsBatch:<18-character job Id>');
+  expect(screen.getAllByTestId('approve-datawrite-soql')[0].textContent).toContain(`'${DW_136_IDS[135]}'`);
   expect(global.fetch).not.toHaveBeenCalled();
 });
 

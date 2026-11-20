@@ -1497,6 +1497,15 @@ const DW_UNDO = { ...DW_BASE, write: { kind: "undo", class: "FixCUndoBatch", ids
 const idList = (n) => Array.from({ length: n }, (_, i) => `'a0D${String(i + 1).padStart(12, "0")}AAA'`).join(",");
 const broadIds = (n) => `SELECT Id, Amount, LastModifiedById FROM GiftTransaction WHERE Id IN (${idList(n)})`;
 const setQ = (p, i, query) => ({ ...p, queries: p.queries.map((x, j) => (j === i ? query : x)) });
+// s10: Fix C's shape. selection.soql and "after: selection" name n Ids, and so do four rule counts.
+const selIds = (n) => `SELECT Id, GiftCommitmentId FROM GiftTransaction WHERE Id IN (${idList(n)})`;
+const countIds = (n, label) => q("after-counts", `SELECT COUNT() FROM GiftTransaction WHERE GiftCommitmentId = null AND Id IN (${idList(n)})`, { label });
+const fixC = (n) => ({ ...DW_BATCH, selection_sha256: hex(selIds(n)), queries: [
+  q("gate", selIds(n), { file: "selection.soql" }), Q_GBROAD, Q_ABROAD, q("after", selIds(n), { label: "after: selection" }),
+  countIds(n, "Rule 1"), countIds(n, "Rule 2"), countIds(n, "Rule 3"), countIds(n, "Rule 4")] });
+const ID_OVER = (name) => `the query '${name}' lists 201 Ids; a Salesforce query takes at most 200. Select by criteria instead, or split the run.`;
+const ID_WHERE = (name, n) =>
+  `the query '${name}' lists ${n} Id${n === 1 ? "" : "s"}; Ids go only in selection.soql, "after: selection", an after-count or an export labelled "... broad snapshot". Select by criteria instead.`;
 const dwProblem = (p) => m.sfDatawriteProblem(DW_CODE, p);
 const queueDw = (args, db = helperDb()) => m.queueSwitchboardSfDatawriteTool.handler(args, { db });
 const longExport = (n, label, step) => q(step, `SELECT Id, Name FROM GiftTransaction WHERE Name != '${"x".repeat(n)}'`, { label });
@@ -1558,6 +1567,12 @@ test("sf_datawrite: valid batch, bulk and undo payloads, and the edges of every 
     DW_BATCH, DW_BULK, DW_UNDO, DW_BATCHX, noProblem, under,
     setQ(DW_BATCH, 1, q("gate", broadIds(200), { label: "gate: broad snapshot" })),
     setQ(DW_UNDO, 0, q("gate", broadIds(200), { label: "gate: broad snapshot" })),
+    setQ(DW_BATCH, 2, q("after", broadIds(200), { label: "after: broad snapshot" })),
+    fixC(136), fixC(200),
+    setQ(DW_BATCH, 4, countIds(136, "One record")),
+    // s11c: exclude.csv also holds records added at the gate, so its rows may reach or pass expected.
+    { ...DW_BATCH, uploads: [{ ...EXCLUDE, rows: 45 }] },
+    { ...DW_BATCH, uploads: [{ ...EXCLUDE, rows: 46 }] },
     { ...DW_BATCH, queries: [Q_SEL, Q_ABROAD] },
     { ...DW_BATCH, queries: [Q_SEL, Q_ABROAD, ...counts(40)] },
     { ...DW_BATCH, queries: [Q_SEL, Q_ABROAD, ...waits(3, 60, 60)] },
@@ -1598,16 +1613,18 @@ test("sf_datawrite: every refusal gives the database's sentence, and nothing is 
       "the query 'selection.soql' (gate) comes after a later step: list the gate first, then after, then after-counts."],
     [{ ...DW_BATCH, queries: [Q_SEL, Q_GBROAD, Q_ABROAD, Q_R1, Q_R1] },
       "the label 'Installments with no gift commitment' is used twice: labels are unique within a link."],
-    [setQ(DW_BATCH, 1, q("gate", broadIds(201), { label: "gate: broad snapshot" })),
-      "the query 'gate: broad snapshot' lists 201 Ids; the limit is 200. Select by criteria instead, or split the run."],
-    [setQ(DW_BATCH, 4, q("after-counts", oneId, { label: "One record" })),
-      "the query 'One record' lists 1 Id; only an export labelled \"... broad snapshot\" may list Ids (at most 200). Select by criteria instead."],
-    [setQ(DW_BATCH, 4, q("after-counts", "SELECT COUNT() FROM GiftTransaction WHERE Id = 'a0D000000000001'", { label: "One record" })),
-      "the query 'One record' lists 1 Id; only an export labelled \"... broad snapshot\" may list Ids (at most 200). Select by criteria instead."],
-    [{ ...setQ(DW_BATCH, 0, q("gate", idSel, { file: "selection.soql" })), selection_sha256: hex(idSel) },
-      "the query 'selection.soql' lists 1 Id; only an export labelled \"... broad snapshot\" may list Ids (at most 200). Select by criteria instead."],
+    [setQ(DW_BATCH, 1, q("gate", broadIds(201), { label: "gate: broad snapshot" })), ID_OVER("gate: broad snapshot")],
+    [setQ(DW_BATCH, 2, q("after", broadIds(201), { label: "after: broad snapshot" })), ID_OVER("after: broad snapshot")],
+    [setQ(fixC(200), 0, q("gate", selIds(201), { file: "selection.soql" })), // its sha256 no longer matches selection_sha256
+      'the gate\'s first export must be selection.soql (file "selection.soql"), with its sha256 equal to selection_sha256.'],
+    [{ ...fixC(201), queries: fixC(201).queries.slice(0, 1).concat([Q_ABROAD]) }, ID_OVER("selection.soql")],
+    [{ ...fixC(201), queries: [Q_SEL, Q_ABROAD, q("after", selIds(201), { label: "after: selection" })], selection_sha256: hex(SEL) },
+      "the query 'after: selection' is selection.soql run again: its sha256 must equal selection_sha256."],
+    [setQ(DW_BATCH, 4, countIds(201, "One record")), ID_OVER("One record")],
     [setQ(DW_BULK, 1, q("gate", "SELECT Id FROM GiftCommitment WHERE Id = 'a0E000000000001AAA'", { label: "gate: gift commitments" })),
-      "the query 'gate: gift commitments' lists 1 Id; only an export labelled \"... broad snapshot\" may list Ids (at most 200). Select by criteria instead."],
+      ID_WHERE("gate: gift commitments", 1)],
+    [setQ(DW_BULK, 1, q("gate", `SELECT Id FROM GiftCommitment WHERE Id IN (${idList(3)})`, { label: "gate: gift commitments" })),
+      ID_WHERE("gate: gift commitments", 3)],
     [big, `the payload is ${bigLen.toLocaleString("en-US")} characters; the limit is 200,000. Select by criteria instead of long lists, or split the run.`],
     [{ ...DW_UNDO, uploads: [{ ...DW_UNDO.uploads[0], rows: 44 }] },
       "the undo Id file has 44 rows but expected is 45: they must be equal, since expected is the Id file's row count."],
@@ -1619,8 +1636,6 @@ test("sf_datawrite: every refusal gives the database's sentence, and nothing is 
       'an undo needs its Id file in uploads: {purpose: "undo-ids", file: <ids_file>, sha256: <ids_sha256>, rows: <expected>}.'],
     [{ ...DW_BATCH, uploads: [{ purpose: "undo-ids", file: "undo-ids.csv", sha256: HEX2, rows: 45 }] },
       "only an undo uploads an Id file: leave the undo-ids upload out."],
-    [{ ...DW_BATCH, uploads: [{ ...EXCLUDE, rows: 45 }] },
-      "the exclude upload leaves out 45 records, not fewer than the 45 the write changes. Leave out fewer, or go back to diagnosis."],
     [{ ...DW_BATCH, uploads: [EXCLUDE, EXCLUDE] }, "there are two exclude uploads: list each purpose once."],
     [{ ...DW_UNDO, uploads: [DW_UNDO.uploads[0], EXCLUDE, EXCLUDE] },
       "uploads must list at most 2 files, each {purpose, file, sha256, rows}, or be left out."],

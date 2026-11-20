@@ -1128,9 +1128,7 @@ export async function sfDatawriteProblem(code: string, p: Record<string, unknown
       if (typeof u.file !== "string" || !CSV_FILE.test(u.file)) return `the ${purpose} upload's file must be one .csv file name in the run folder.`;
       if (typeof u.sha256 !== "string" || !HEX64.test(u.sha256)) return `the ${purpose} upload's sha256 must be 64 lower-case hex characters.`;
       if (!isWhole(u.rows)) return `the ${purpose} upload's rows must be its row count, 1 to 999,999,999.`;
-      if (purpose === "exclude" && (u.rows as number) >= expected) {
-        return `the exclude upload leaves out ${u.rows} records, not fewer than the ${expected} the write changes. Leave out fewer, or go back to diagnosis.`;
-      }
+      // s11c: no rows-versus-expected rule for exclude (exclude.csv also holds records added at the gate).
       if (purpose === "undo-ids") undoUpload = u;
     }
   }
@@ -1244,12 +1242,18 @@ export async function sfDatawriteProblem(code: string, p: Record<string, unknown
       waits += wt.limit_minutes as number;
     }
 
-    // Ids: criteria only, except an export labelled "... broad snapshot", at most 200 (D1, never split).
+    // Ids (s10): a Salesforce query takes at most 200 listed Ids, so each query that may list them (selection.soql,
+    // "after: selection", every after-count, every export labelled "... broad snapshot") lists at most 200. Every
+    // other export lists none. There is no cap across the link; the 200,000-character payload cap still applies.
     const ids = datawriteIdCount(soql);
-    if ((step === "gate" || step === "after") && label !== null && /broad snapshot$/.test(label)) {
-      if (ids > DATAWRITE_MAX_IDS) return `the query ${name} lists ${ids} Ids; the limit is 200. Select by criteria instead, or split the run.`;
+    const mayListIds = step === "after-counts" || (step === "gate" && q.file === "selection.soql")
+      || label === "after: selection" || (label !== null && /broad snapshot$/.test(label));
+    if (mayListIds) {
+      if (ids > DATAWRITE_MAX_IDS) {
+        return `the query ${name} lists ${ids} Ids; a Salesforce query takes at most 200. Select by criteria instead, or split the run.`;
+      }
     } else if (ids > 0) {
-      return `the query ${name} lists ${ids} Id${ids === 1 ? "" : "s"}; only an export labelled "... broad snapshot" may list Ids (at most 200). Select by criteria instead.`;
+      return `the query ${name} lists ${ids} Id${ids === 1 ? "" : "s"}; Ids go only in selection.soql, "after: selection", an after-count or an export labelled "... broad snapshot". Select by criteria instead.`;
     }
   }
 

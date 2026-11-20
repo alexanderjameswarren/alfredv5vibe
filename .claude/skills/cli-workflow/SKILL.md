@@ -5,7 +5,7 @@ description: "Runs both halves of the CLI loop for Alex's personal projects. Use
 
 # CLI Workflow
 
-Skill version: 2026-11-18
+Skill version: 2026-11-20b
 
 This skill helps transition from planning sessions in claude.ai to execution in CLI by generating properly formatted instruction sets.
 
@@ -1042,6 +1042,12 @@ deliberate final error. The rules are in alfred-v5's `CLAUDE.md`.
   its rows once with `get_switchboard_sf_result`.
 - `dataop <action id> done` or `failed`: a production data run. Read it with
   `get_switchboard_run`; its receipt arrives as a clip. See "Salesforce data runs".
+- `datawrite <action id> done: PASS`, `datawrite <action id> done: FAIL` or
+  `datawrite <action id> failed`: a Data run v2 production write (`sf_datawrite`).
+  Read it with `get_switchboard_run`; only counts and PASS or FAIL come back, never
+  rows. A FAIL means records were written but the per-record check failed: pass it
+  on as a FAIL, never as done. `failed` means the run stopped or its report was
+  refused.
 
 **The SQL editor is the fallback, for two things only:** what the runner refused, and
 anything holding a secret such as a password, which never goes in the queue.
@@ -1085,7 +1091,8 @@ prompt, reply and report rules for it.
 
 - **Prompts.**
   - The CLI may run `sb preflight`, `sb rehearse` (not for a plan with a manual
-    pause), `sb prod dataop-link` (it prints the link's arguments), and
+    pause), `sb prod dataop-link` and `sb prod datawrite-link` (each prints its
+    link's arguments), and
     `sb closeout --dry-run` or `sb prod record --dry-run`.
   - It never runs any other `sb prod`, never runs `sb closeout` for real, and
     never runs anything against production.
@@ -1103,6 +1110,19 @@ prompt, reply and report rules for it.
   - that the helper must pick the run up within 15 minutes of his click;
   - that the window asks for Enter only before the write (and at a manual pause
     the plan has), and q stops it with nothing changed.
+- **A Data run v2 production reply carries the `queue_switchboard_sf_datawrite`
+  link instead of `sf_dataop`**, in its own reply with nothing else in it. Its
+  sandbox step is usually `sb rehearse`; a sandbox write link
+  (`org_type: "sandbox"`) is allowed but not required. Its arguments are copied verbatim from the
+  output of `sb prod datawrite-link <code> --run <folder> --tag <run tag> [--undo]`
+  in the CLI's report (the CLI may run it; it reads files only). v1's
+  `sf_dataop` stays as above until s9 retires it. The reply tells Alex:
+  - what the page shows: the PRODUCTION or SANDBOX banner, "This changes N live
+    records", the full queries, and the files it uploads;
+  - that the helper must pick the run up within 15 minutes of his click;
+  - that the window asks for Enter before the write and before any upload, and q
+    stops it with nothing changed;
+  - that the run is stopped after 4 hours.
 - **Reports carry the runner's own table.** Before, Goal, After and PASS or FAIL,
   with the knock-on rows.
   - Claude reports the runner's verdict line and every FAIL row by its label.

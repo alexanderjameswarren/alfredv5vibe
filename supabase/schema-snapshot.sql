@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-20 06:51, through migration 245 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-20 07:52, through migration 246 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -9705,10 +9705,8 @@ begin
       if jsonb_typeof(v_u->'rows') is distinct from 'number' or v_u->>'rows' !~ c_int then
         return format('the %s upload''s rows must be its row count, 1 to 999,999,999.', v_purpose);
       end if;
-      if v_purpose = 'exclude' and (v_u->>'rows')::bigint >= v_expected then
-        return format('the exclude upload leaves out %s records, not fewer than the %s the write changes. Leave out fewer, or go back to diagnosis.',
-                      v_u->>'rows', v_expected);
-      end if;
+      -- s11c: no rows-versus-expected rule for exclude. exclude.csv also holds records added at the gate, which were
+      -- never in expected, so it may legitimately have more rows than the manifest records it leaves out.
       if v_purpose = 'undo-ids' then v_undo_up := v_u; end if;
     end loop;
   end if;
@@ -9851,14 +9849,18 @@ begin
       v_waits := v_waits + (v_wait->>'limit_minutes')::integer;
     end if;
 
-    -- Ids: criteria only, except an export labelled "... broad snapshot", at most 200 (D1, never split).
+    -- Ids (s10): a Salesforce query takes at most 200 listed Ids, so each query that may list them (selection.soql,
+    -- "after: selection", every after-count, every export labelled "... broad snapshot") lists at most 200. Every
+    -- other export lists none. There is no cap across the link; the 200,000-character payload cap still applies.
     select count(*) into v_ids from regexp_matches(v_soql, c_id, 'g');
-    if v_step in ('gate', 'after') and v_label ~ 'broad snapshot$' then
+    if v_step = 'after-counts' or (v_step = 'gate' and v_q->>'file' = 'selection.soql')
+       or v_label = 'after: selection' or v_label ~ 'broad snapshot$' then
       if v_ids > 200 then
-        return format('the query %s lists %s Ids; the limit is 200. Select by criteria instead, or split the run.', v_name, v_ids);
+        return format('the query %s lists %s Ids; a Salesforce query takes at most 200. Select by criteria instead, or split the run.',
+                      v_name, v_ids);
       end if;
     elsif v_ids > 0 then
-      return format('the query %s lists %s Id%s; only an export labelled "... broad snapshot" may list Ids (at most 200). Select by criteria instead.',
+      return format('the query %s lists %s Id%s; Ids go only in selection.soql, "after: selection", an after-count or an export labelled "... broad snapshot". Select by criteria instead.',
                     v_name, v_ids, case when v_ids = 1 then '' else 's' end);
     end if;
   end loop;
@@ -9886,7 +9888,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_datawrite_payload_problem"("p_payload" "jsonb", "p_project_code" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_datawrite_payload_problem"("p_payload" "jsonb", "p_project_code" "text") IS 'Switchboard: why an sf_datawrite payload does not meet docs/technical-spec-dataop_write-j5w.md part 2 for the action''s project code, as one sentence saying what to do, or null when it does. alias, org_type ("sandbox" or "production", required), repo, run, run_tag (A1''s rules), request_sha256, selection_sha256, object, problem?, expected (1 to 999,999,999), write (batch {class}, bulk {operation: update, csv, csv_sha256} or undo {class, ids_file, ids_sha256}), uploads? (0 to 2, exclude and undo-ids; an undo''s equals its write; none on a bulk write), queries (2 to 44: gate 1-2 exports, the first selection.soql, or one broad snapshot for an undo; after with "after: broad snapshot" and optionally "after: selection"; 0 to 40 after-counts; labels unique; waits only on "...: wait", at most 180 minutes in all); Ids only in an export labelled "... broad snapshot", at most 200; the payload at most 200,000 characters. Never raises. Used by switchboard_datawrite_payload_ok and switchboard_queue_helper.';
+COMMENT ON FUNCTION "public"."switchboard_datawrite_payload_problem"("p_payload" "jsonb", "p_project_code" "text") IS 'Switchboard: why an sf_datawrite payload does not meet docs/technical-spec-dataop_write-j5w.md part 2 for the action''s project code, as one sentence saying what to do, or null when it does. alias, org_type ("sandbox" or "production", required), repo, run, run_tag (A1''s rules), request_sha256, selection_sha256, object, problem?, expected (1 to 999,999,999), write (batch {class}, bulk {operation: update, csv, csv_sha256} or undo {class, ids_file, ids_sha256}), uploads? (0 to 2, exclude and undo-ids; an undo''s equals its write; none on a bulk write), queries (2 to 44: gate 1-2 exports, the first selection.soql, or one broad snapshot for an undo; after with "after: broad snapshot" and optionally "after: selection"; 0 to 40 after-counts; labels unique; waits only on "...: wait", at most 180 minutes in all); Ids (a Salesforce query takes at most 200) only in selection.soql, "after: selection", an after-count or an export labelled "... broad snapshot", at most 200 per query and no limit across the link; the payload at most 200,000 characters. Never raises. Used by switchboard_datawrite_payload_ok and switchboard_queue_helper.';
 
 
 

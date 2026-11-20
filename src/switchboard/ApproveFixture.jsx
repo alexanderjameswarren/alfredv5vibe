@@ -127,6 +127,22 @@ export const SAMPLE_DATAWRITES = {
       { step: 'after', soql: DW_BROAD_IDS, sha256: hashOf(5), label: 'after: broad snapshot' },
     ] },
 };
+// s10: Fix C's shape. selection.soql, "after: selection" and two rule counts each list 136 Ids, as the new Id rule
+// allows (at most 200 per query).
+export const DW_136_IDS = Array.from({ length: 136 }, (_, i) => `a0D5e00001${String(i + 1).padStart(5, '0')}AAA`);
+const DW_IN_136 = `Id IN (\n  ${DW_136_IDS.map((id) => `'${id}'`).join(',\n  ')}\n)`;
+const DW_SEL_136 = `SELECT Id, Demo_Plan__c\nFROM Demo_Installment__c\nWHERE ${DW_IN_136}`;
+SAMPLE_DATAWRITES.ids = { ...DW_BASE, expected: 136, selection_sha256: hashOf(6), write: { kind: 'batch', class: 'DemoLinkInstallmentsBatch' },
+  queries: [
+    { step: 'gate', soql: DW_SEL_136, sha256: hashOf(6), file: 'selection.soql' },
+    { step: 'gate', soql: DW_BROAD, sha256: hashOf(2), label: 'gate: broad snapshot' },
+    { step: 'after', soql: DW_BROAD, sha256: hashOf(2), label: 'after: broad snapshot' },
+    { step: 'after', soql: DW_SEL_136, sha256: hashOf(6), label: 'after: selection' },
+    { step: 'after-counts', soql: `SELECT COUNT() FROM Demo_Installment__c WHERE Demo_Plan__c = null AND ${DW_IN_136}`, sha256: hashOf(7),
+      label: 'Selected installments with no plan link' },
+    { step: 'after-counts', soql: `SELECT COUNT() FROM Demo_Installment__c WHERE Paid__c = null AND ${DW_IN_136}`, sha256: hashOf(8),
+      label: 'Selected installments with no paid amount' },
+  ] };
 const dwHeadline = (p) => {
   const sandbox = p.org_type === 'sandbox';
   const how = p.write.kind === 'batch' ? `BY BATCH ${p.write.class}` : p.write.kind === 'undo' ? `BY UNDO ${p.write.class}` : 'BY BULK UPDATE';
@@ -180,9 +196,10 @@ function DataqueryFixture() {
   );
 }
 
-const DW_CHOICES = [['batch', 'Production batch'], ['bulk', 'Sandbox bulk update'], ['undo', 'Production undo, 12 Ids']];
+const DW_CHOICES = [['batch', 'Production batch'], ['bulk', 'Sandbox bulk update'], ['undo', 'Production undo, 12 Ids'],
+  ['ids', 'Production batch, 136 Ids']];
 
-/** /approve-fixture/sf_datawrite?sample=batch|bulk|undo opens that sample; the select switches between them. */
+/** /approve-fixture/sf_datawrite?sample=batch|bulk|undo|ids opens that sample; the select switches between them. */
 function DatawriteFixture() {
   const [params] = useSearchParams();
   const asked = params.get('sample');
