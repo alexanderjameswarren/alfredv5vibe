@@ -20,20 +20,25 @@ import {
 //                  unless it's a test action, whose one run this is.
 //   POST /approve  Alex's JWT. { token, fingerprint } -> { run_id, summary, conformance, counts }. Needs a clean latest dry run.
 //   POST /cancel   Alex's JWT. { token, reason? } -> { run_id, cancelled, reason }. Spends the link; runs nothing.
-//   A git, sf_check (s86pa), sb_setup, sf_read, sf_dataop or sf_dataquery link: /preview adds kind and payload; /approve
+//   A git, sf_check (s86pa), sb_setup, sf_read, sf_dataop, sf_dataquery or sf_datawrite link: /preview adds kind and payload; /approve
 //   only spends the link, so the action is consumed for the helper, and runs nothing here; /cancel needs no dry run;
 //   /dry-run is refused.
 //   POST /pickup   x-switchboard-pickup-key. { kinds? } -> { action (with kind) | null, timed_out }. The desktop helper.
-//                  No kinds: git only, by switchboard_pickup_git. All six, sf_dataquery included, or the five of
-//                  dataops_alfred-d4x: switchboard_pickup_helper with p_kinds (the five never get an sf_dataquery). The
+//                  No kinds: git only, by switchboard_pickup_git. All seven, sf_datawrite included, the six of
+//                  dataop_link-k7d or the five of dataops_alfred-d4x: switchboard_pickup_helper with p_kinds (the six
+//                  never get an sf_datawrite, the five never an sf_dataquery). The
 //                  four without sf_dataop, or the older three (a helper before s89c): the same, with no p_kinds, so
 //                  never a production kind (dataops_alfred-d4x O3). A pick with no result is failed after 30 minutes,
-//                  an sf_dataop's or sf_dataquery's after 4 hours.
-//   POST /result   x-switchboard-pickup-key. { action_id, run_id, ok, summary, exit_code?, output?, query_counts?, pass? }
+//                  an sf_dataop's, sf_dataquery's or sf_datawrite's (LONG_PICK_KINDS) after 4 hours.
+//   POST /result   x-switchboard-pickup-key. { action_id, run_id, ok, summary, exit_code?, output?, query_counts?, pass?,
+//                  datawrite? }
 //                  -> { status }. Any helper kind. An sf_read's or sf_dataop's run keeps no output (O8): a read's rows
 //                  went to /sf-result, a data run's receipt is a clip push. An sf_dataquery's keeps only ok, exit_code,
 //                  query_counts (one whole number per query) and pass, with Ids scrubbed from its summary; a report that
-//                  doesn't fit is refused and closes the run as failed (dataop_link-k7d).
+//                  doesn't fit is refused and closes the run as failed (dataop_link-k7d). An sf_datawrite's keeps only
+//                  ok, exit_code, pass and datawrite {stage, query_counts, gate, write, check}, every number checked
+//                  against the payload, and the reply carries the line "datawrite <id> done|failed"; any other key,
+//                  output included, is refused (dataop_write-j5w).
 //   POST /sf-result x-switchboard-pickup-key. { action_id, run_id, ok, summary, level, object, production_full_data, count,
 //                  rows, query? } or { ..., ok: false, reason } -> { stored }. An sf_read's rows, before its /result (s89e):
 //                  into switchboard_sf_results for at most 10 minutes, plus a switchboard_sf_read_log row. The run is untouched.
@@ -117,7 +122,7 @@ function deps(): Deps {
     pickupHelper: async (userId, kinds) =>
       must(await db.rpc("switchboard_pickup_helper", kinds ? { p_user: userId, p_kinds: kinds } : { p_user: userId })) as PickedAction | null,
     stalePicks: async (userId, before, dataopBefore) => {
-      // sf_dataop and sf_dataquery (LONG_PICK_KINDS) get 4 hours; every other helper kind 30 minutes.
+      // sf_dataop, sf_dataquery and sf_datawrite (LONG_PICK_KINDS) get 4 hours; every other helper kind 30 minutes.
       const others = HELPER_KINDS.filter((k) => !LONG_PICK_KINDS.includes(k));
       const actions = [
         ...must(await db.from("switchboard_actions").select("id").eq("user_id", userId).in("kind", others)

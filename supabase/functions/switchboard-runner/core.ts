@@ -39,13 +39,15 @@ export type PickedAction = {
 };
 /**
  * The kinds the desktop helper runs (spec 10, 11.3-11.6). sf_read since s89e; sf_dataop since dataops_alfred-d4x;
- * sf_dataquery since dataop_link-k7d.
+ * sf_dataquery since dataop_link-k7d; sf_datawrite since dataop_write-j5w.
  */
-export const HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop", "sf_dataquery"] as const;
+export const HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop", "sf_dataquery", "sf_datawrite"] as const;
+/** What a helper from dataop_link-k7d asks for; served as today, never handed an sf_datawrite (dataop_write-j5w). */
+const K7D_HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop", "sf_dataquery"];
 /** What a helper from dataops_alfred-d4x asks for; still handed an sf_dataop, never an sf_dataquery (dataop_link-k7d). */
 const D4X_HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop"];
 /** The kinds whose picks get the 4-hour limit: a data run's batch and waits, or a large export, take that long. */
-export const LONG_PICK_KINDS = ["sf_dataop", "sf_dataquery"];
+export const LONG_PICK_KINDS = ["sf_dataop", "sf_dataquery", "sf_datawrite"];
 /** What a helper from before dataops_alfred-d4x asks for; still served, and never handed an sf_dataop (O3). */
 const S89_HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read"];
 /** What a helper from before s89c asks for; still served, so an older install keeps picking up. */
@@ -571,7 +573,8 @@ const isHelperKind = (k: unknown): k is string => typeof k === "string" && (HELP
 /**
  * The kinds the helper says it runs: body `kinds`, an array. None given means git only, the helper before s86e.
  * Served exactly: git alone, every helper kind, or one of the older full sets. Only a helper naming a production kind
- * has its kinds passed on, so only it can be handed one (O3): all six get sf_dataquery and sf_dataop; the five of
+ * has its kinds passed on, so only it can be handed one (O3): all seven get every production kind; the six of
+ * dataop_link-k7d get sf_dataquery and sf_dataop, never sf_datawrite (dataop_write-j5w); the five of
  * dataops_alfred-d4x still get sf_dataop, never sf_dataquery (dataop_link-k7d).
  */
 function pickupKinds(body: Record<string, unknown> | null): { pick?: "git" | "helper"; kinds?: string[]; error?: string } {
@@ -584,6 +587,7 @@ function pickupKinds(body: Record<string, unknown> | null): { pick?: "git" | "he
   const exactly = (list: readonly string[]) => set.size === list.length && list.every((k) => set.has(k));
   if (set.size === 1 && set.has("git")) return { pick: "git" };
   if (exactly(HELPER_KINDS)) return { pick: "helper", kinds: [...HELPER_KINDS] };
+  if (exactly(K7D_HELPER_KINDS)) return { pick: "helper", kinds: [...K7D_HELPER_KINDS] };
   if (exactly(D4X_HELPER_KINDS)) return { pick: "helper", kinds: [...D4X_HELPER_KINDS] };
   // A helper from before dataops_alfred-d4x, and one from before s89c (which refuses an sf_read it is handed, and that
   // refusal closes the run). Neither is ever handed an sf_dataop: the pickup's default leaves it out.
@@ -641,6 +645,8 @@ async function handleResult(req: Request, deps: Deps, now: number): Promise<Resp
   }
   // dataop_link-k7d: an sf_dataquery's run keeps only {ok, exit_code?, query_counts, pass}, its summary scrubbed.
   if (a.kind === "sf_dataquery") return dataqueryResult(a, r.id, body, summary, exitCode, deps, now);
+  // dataop_write-j5w: an sf_datawrite's run keeps only {ok, exit_code?, pass?, datawrite?}, every number checked.
+  if (a.kind === "sf_datawrite") return datawriteResult(a, r.id, body, summary, exitCode, deps, now);
   // s89e: a read's rows went to /sf-result; its run keeps the summary only, never the window's output. An sf_dataop
   // likewise (O8): its receipt goes to Alfred as a clip push (D6).
   if (a.kind === "sf_read" || a.kind === "sf_dataop") output = undefined;
@@ -699,6 +705,112 @@ async function dataqueryResult(
   await deps.finishRun(runId, { summary: blankIds(summary).slice(0, MAX_SUMMARY), result, finished_at });
   await deps.setStatus(a.id, body.ok ? "succeeded" : "failed");
   return json({ ok: true, action_id: a.id, run_id: runId, status: body.ok ? "succeeded" : "failed" });
+}
+
+// ---------------------------------------------------------------------------
+// dataop_write-j5w: an sf_datawrite's result (docs/technical-spec-dataop_write-j5w.md part 3). Counts only: the same
+// rules as the database's switchboard_runs_datawrite_result, plus the two it can't see (the payload's expected and its
+// number of queries). The reply's `line` is the chat line, and the helper posts it exactly as returned:
+// "datawrite <id> done: PASS", "datawrite <id> done: FAIL" or "datawrite <id> failed".
+// ---------------------------------------------------------------------------
+
+/** What the helper may send for an sf_datawrite at /result; anything else is refused, never dropped. */
+const DATAWRITE_BODY_KEYS = ["action_id", "run_id", "ok", "summary", "exit_code", "pass", "datawrite"];
+const DATAWRITE_KEYS = ["stage", "query_counts", "gate", "write", "check"];
+export const DATAWRITE_STAGES = ["gate", "write", "after", "counts", "done"];
+const DATAWRITE_PARTS: Record<string, string[]> = {
+  gate: ["added", "dropped", "edited"],
+  write: ["expected", "changed", "failed", "excluded"],
+  check: ["problems", "extras", "new_records"],
+};
+const isPlain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * The chat line the helper posts for an sf_datawrite, exactly as returned (Alex, s6): "done: PASS" or "done: FAIL" from
+ * step 5's pass when ok; "failed" when not ok or when the report was refused.
+ */
+export const datawriteLine = (actionId: string, ok: boolean, pass?: unknown) =>
+  `datawrite ${actionId} ${ok ? (pass === true ? "done: PASS" : "done: FAIL") : "failed"}`;
+
+/**
+ * Why an sf_datawrite report can't be kept, or null. Only counts, a stage and pass: no rows, Ids, text or output.
+ */
+export function datawriteReportProblem(payload: Record<string, unknown> | null | undefined, body: Record<string, unknown>): string | null {
+  const extra = Object.keys(body).filter((k) => !DATAWRITE_BODY_KEYS.includes(k)).sort();
+  if (extra.length) return `an sf_datawrite report takes no ${extra.join(", ")}: only counts, the stage and pass come back.`;
+  const queries = Array.isArray(payload?.queries) ? payload.queries.length : 0;
+  if (body.pass !== undefined && typeof body.pass !== "boolean") return "pass must be true or false.";
+  const d = body.datawrite;
+  if (d === undefined) {
+    if (body.ok === true) return "an sf_datawrite that succeeded must report pass and datawrite.";
+    if (body.pass === true) return "pass can be true only when ok is true.";
+    return null;
+  }
+  if (!isPlain(d)) return "datawrite must be {stage, query_counts, gate, write, check}.";
+  const bad = Object.keys(d).filter((k) => !DATAWRITE_KEYS.includes(k)).sort();
+  if (bad.length) return `datawrite takes no ${bad.join(", ")}: only stage, query_counts, gate, write and check.`;
+  if (typeof d.stage !== "string" || !DATAWRITE_STAGES.includes(d.stage)) return `datawrite.stage must be one of ${DATAWRITE_STAGES.join(", ")}.`;
+  if (d.query_counts !== undefined) {
+    if (!Array.isArray(d.query_counts) || !d.query_counts.every(isQueryCount)) {
+      return `datawrite.query_counts must be a list of whole numbers from 0 to ${MAX_QUERY_COUNT.toLocaleString("en-US")}.`;
+    }
+    const n = d.query_counts.length;
+    if (body.ok === true ? n !== queries : n > queries) {
+      return `datawrite.query_counts has ${n} entries for ${queries} quer${queries === 1 ? "y" : "ies"}.`;
+    }
+  }
+  for (const [part, keys] of Object.entries(DATAWRITE_PARTS)) {
+    if (d[part] === undefined) continue;
+    const v = d[part];
+    if (!isPlain(v) || Object.keys(v).length !== keys.length || !keys.every((k) => isQueryCount(v[k]))) {
+      return `datawrite.${part} must be {${keys.join(", ")}}, each a whole number from 0 to ${MAX_QUERY_COUNT.toLocaleString("en-US")}.`;
+    }
+  }
+  const w = d.write as Record<string, number> | undefined;
+  if (w && w.expected !== payload?.expected) {
+    return `datawrite.write.expected is ${w.expected}, but the link's expected is ${payload?.expected}.`;
+  }
+  if (body.ok === true) {
+    if (typeof body.pass !== "boolean") return "an sf_datawrite that succeeded must report pass and datawrite.";
+    if (d.stage !== "done") return `an sf_datawrite that succeeded has stage done, not ${d.stage}.`;
+    const missing = ["query_counts", "gate", "write", "check"].filter((k) => d[k] === undefined);
+    if (missing.length) return `an sf_datawrite that succeeded must report ${missing.join(", ")}.`;
+  }
+  if (body.pass === true) {
+    if (body.ok !== true) return "pass can be true only when ok is true.";
+    const c = d.check as Record<string, number>;
+    if (w!.changed + w!.failed + w!.excluded !== w!.expected) {
+      return `pass is true, but changed + failed + excluded is ${w!.changed + w!.failed + w!.excluded}, not the expected ${w!.expected}.`;
+    }
+    if (c.problems !== 0) return `pass is true, but step 5 found ${c.problems} problem${c.problems === 1 ? "" : "s"}.`;
+  }
+  return null;
+}
+
+/**
+ * The run of an sf_datawrite: only {ok, exit_code?, pass?, datawrite?} is kept, and the summary loses any Ids or emails.
+ * A report that doesn't fit closes the run as failed, saying why, and is refused (400).
+ */
+async function datawriteResult(
+  a: Picked["action"], runId: string, body: Record<string, unknown>, summary: string, exitCode: unknown, deps: Deps, now: number,
+): Promise<Response> {
+  const finished_at = new Date(now).toISOString();
+  const problem = datawriteReportProblem(a.payload, body);
+  if (problem) {
+    await deps.finishRun(runId, {
+      summary: `refused by the runner: ${problem}`.slice(0, MAX_SUMMARY),
+      result: { ok: false, ...(exitCode === undefined ? {} : { exit_code: exitCode }) }, finished_at,
+    });
+    await deps.setStatus(a.id, "failed");
+    return json({ ok: false, error: problem, action_id: a.id, run_id: runId, status: "failed", line: datawriteLine(a.id, false) }, 400);
+  }
+  const result: Record<string, unknown> = { ok: body.ok, ...(exitCode === undefined ? {} : { exit_code: exitCode }) };
+  if (typeof body.pass === "boolean") result.pass = body.pass;
+  if (isPlain(body.datawrite)) result.datawrite = body.datawrite;
+  await deps.finishRun(runId, { summary: blankIds(summary).slice(0, MAX_SUMMARY), result, finished_at });
+  const ok = body.ok === true;
+  await deps.setStatus(a.id, ok ? "succeeded" : "failed");
+  return json({ ok: true, action_id: a.id, run_id: runId, status: ok ? "succeeded" : "failed", line: datawriteLine(a.id, ok, body.pass) });
 }
 
 // ---------------------------------------------------------------------------
