@@ -5,7 +5,7 @@ description: "Runs Salesforce client work (Team IMPACT, ActBlue, any client org)
 
 # Salesforce workflow (with Switchboard)
 
-Skill version: 2026-11-18
+Skill version: 2026-11-20
 
 Client work is real work on someone else's system. Alex cares most about the
 **code changes**: he must always be able to say exactly what changed, and nothing
@@ -23,8 +23,9 @@ for a Salesforce client repo.
    scheduling. Production steps are Alex's, in his own terminal or in Setup, from
    steps this chat writes. The guard refuses anything aimed at production anyway.
    **The one way production data changes is Alex's click** on an `sf_dataop`
-   approval link (see "Data operations"). No Claude session, chat or CLI, ever
-   starts a production run.
+   approval link, or, for a Data run v2, on an `sf_datawrite` approval link (see
+   "Data operations"). No Claude session, chat or CLI, ever starts a production
+   run.
 2. **Claude never runs anonymous Apex, never writes records, and never schedules
    or aborts a job.** Claude reads records only through Switchboard reads by link
    (see "Salesforce reads"), never through a CLI. Scheduling is always a step for
@@ -596,6 +597,21 @@ preflight runs every time.
 
 `sb prod dataop <code> --plan <file> --dry-run` (Alex's terminal) runs every
 gate and both reads with no write, if he wants to see it first.
+
+### Production for a Data run v2: the write link (`sf_datawrite`)
+
+- **The same rules as the v1 link above:** only after a sandbox PASS, in its own
+  reply, and started only by Alex's click. The CLI runs
+  `sb prod datawrite-link <code> --run <folder> --tag <run tag> [--undo]`, which
+  reads only files and prints `queue_switchboard_sf_datawrite`'s arguments;
+  Claude passes them verbatim. An undo by link is a reverse batch only.
+- **One approval covers the whole run:** the gate, the write (a batch class, a
+  bulk update or an undo), and the after export and counts.
+- **Only counts come back,** with PASS or FAIL, never records. The result arrives
+  as `datawrite <id> done: PASS`, `datawrite <id> done: FAIL` or
+  `datawrite <id> failed` (see cli-workflow's "What comes back in the chat").
+- **v1's `sf_dataop` link stays** as written above until Switchboard's s9 retires
+  it.
 
 ### The tables
 

@@ -321,6 +321,9 @@ export function datawriteUploadTitle(purpose, write) {
   return purpose === 'undo-ids' ? `dataop-undo:${cls}` : `dataop-exclude:${cls}`;
 }
 
+/** The failure file's full title (s10): the class, then the batch's 18-character job Id, known only once it starts. */
+export const datawriteFailureTitle = (write) => `dataop-failures:${write?.class ?? '<Class>'}:<18-character job Id>`;
+
 /** The one plain sentence at the top. */
 export function datawriteSentence(payload) {
   const p = payload ?? {};
@@ -411,7 +414,7 @@ function DatawriteRun({ payload }) {
                     </div>
                     {ids > 0 && (
                       <p data-testid="approve-datawrite-ids" className="mb-2 font-bold break-words">
-                        This snapshot lists {count(ids)} record Id{ids === 1 ? '' : 's'}.
+                        This query lists {count(ids)} record Id{ids === 1 ? '' : 's'}.
                       </p>
                     )}
                     {q.wait && (
@@ -464,7 +467,8 @@ function DatawriteRun({ payload }) {
           )}
           {hasBatch && (
             <li data-testid="approve-datawrite-failures" className="break-words">
-              Creates the failure file, a ContentVersion titled with the batch&apos;s job Id
+              Creates the failure file, a ContentVersion titled{' '}
+              <span data-testid="approve-datawrite-failures-title" className="font-mono font-bold break-all">{datawriteFailureTitle(w)}</span>
             </li>
           )}
         </ul>
@@ -484,7 +488,7 @@ function DatawriteRun({ payload }) {
             {w.kind === 'bulk' ? '' : ' and before any upload'}; q stops it with nothing changed.
           </li>
           <li>The run is limited to 4 hours.</li>
-          <li>Only counts and PASS or FAIL come back to Alfred. No rows, Ids, names, emails or amounts.</li>
+          <li>Only counts and PASS or FAIL come back to Alfred, never records.</li>
         </ul>
       </section>
     </div>

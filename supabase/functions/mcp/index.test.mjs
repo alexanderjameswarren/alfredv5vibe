@@ -288,7 +288,9 @@ test("dataop_write-j5w: queue_switchboard_sf_datawrite takes sb's arguments, say
   assert.match(q.cfg.description, /datawrite <action id> done or failed\) arrives in this chat by itself/);
   assert.match(q.cfg.description, /Only counts and pass or fail come back/);
   assert.match(q.cfg.description, /a PRODUCTION or SANDBOX banner from org_type/);
-  assert.match(q.cfg.description, /at most 200/);
+  assert.match(q.cfg.description, /A Salesforce query takes at most 200 listed Ids/);
+  assert.match(q.cfg.description, /selection\.soql, "after: selection", each after-count and each export labelled "\.\.\. broad snapshot" may list up to 200 Ids each; every other export lists none/);
+  assert.doesNotMatch(q.cfg.description, /Only an export labelled/);
   assert.doesNotMatch(q.cfg.description, /do not retry/i);
   assert.match(q.cfg.description, /Tier 2\.$/);
   // v1 is unchanged.

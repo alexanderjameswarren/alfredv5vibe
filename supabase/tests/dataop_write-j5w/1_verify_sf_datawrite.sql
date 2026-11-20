@@ -3,6 +3,9 @@
 -- queue and pickup functions, the grants, and that sf_dataop and sf_dataquery are unchanged. Run after the migration,
 -- through the queue with --test. Throwaway rows; everything is undone, including any real action a pickup call touches.
 -- Result: one row, with all_passed, failed and checks.
+-- s11: brought in line with 246's Id rule (up to 200 Ids in selection.soql, "after: selection", each after-count and
+-- each broad snapshot; none in other exports), and at s11c with 246's dropped exclude-rows rule. Passes only once 246
+-- has run.
 -- supabase/tests/dataop_write-j5w/1_verify_sf_datawrite.sql
 
 do $$
@@ -165,7 +168,20 @@ begin
                                'label', 'Rule ' || g || ': wait', 'wait', jsonb_build_object('stable_minutes', 60, 'limit_minutes', 60)))
                                from generate_series(1, 3) g))),
       ('no_problem_no_uploads', v_batch - 'problem'),
-      ('run_backslash',      jsonb_set(v_batch, '{run}', to_jsonb('data-ops\' || c_code || '\fixc-2026-11-19')))
+      ('run_backslash',      jsonb_set(v_batch, '{run}', to_jsonb('data-ops\' || c_code || '\fixc-2026-11-19'))),
+      -- s10's Id rule (246): an after-count and selection.soql may list Ids, up to 200 each.
+      ('after_count_one_id', jsonb_set(v_batch, '{queries,4}', (select jsonb_build_object('step', 'after-counts', 'soql', s,
+                               'sha256', encode(sha256(convert_to(s, 'UTF8')), 'hex'), 'label', 'One record')
+                               from (select 'SELECT COUNT() FROM GiftTransaction WHERE Id = ''a0D000000000001AAA''' as s) x))),
+      ('after_count_15_char_id', jsonb_set(v_batch, '{queries,4}', (select jsonb_build_object('step', 'after-counts', 'soql', s,
+                               'sha256', encode(sha256(convert_to(s, 'UTF8')), 'hex'), 'label', 'One record')
+                               from (select 'SELECT COUNT() FROM GiftTransaction WHERE Id = ''a0D000000000001''' as s) x))),
+      ('selection_with_id',  (select jsonb_set(jsonb_set(v_batch, '{queries,0}', jsonb_build_object('step', 'gate', 'soql', s,
+                               'sha256', encode(sha256(convert_to(s, 'UTF8')), 'hex'), 'file', 'selection.soql')),
+                               '{selection_sha256}', to_jsonb(encode(sha256(convert_to(s, 'UTF8')), 'hex'))) #- '{queries,3}'
+                               from (select 'SELECT Id FROM GiftTransaction WHERE Id = ''a0D000000000001AAA''' as s) x)),
+      -- s11c (246): exclude.csv also holds records added at the gate, so its rows may pass expected.
+      ('exclude_rows_over_expected', jsonb_set(v_batchx, '{uploads,0,rows}', '46'))
     ) as t(key, value) loop
       begin
         insert into public.switchboard_actions (user_id, kind, project_code, payload, headline, created_by)
@@ -203,16 +219,6 @@ begin
       ('order_after_first',  jsonb_set(v_batch, '{queries}', jsonb_build_array(q_abroad, q_sel, q_r1))),
       ('duplicate_label',    jsonb_set(v_batch, '{queries}', jsonb_build_array(q_sel, q_gbroad, q_abroad, q_r1, q_r1))),
       ('broad_201_ids',      v_201),
-      ('after_count_one_id', jsonb_set(v_batch, '{queries,4}', (select jsonb_build_object('step', 'after-counts', 'soql', s,
-                               'sha256', encode(sha256(convert_to(s, 'UTF8')), 'hex'), 'label', 'One record')
-                               from (select 'SELECT COUNT() FROM GiftTransaction WHERE Id = ''a0D000000000001AAA''' as s) x))),
-      ('after_count_15_char_id', jsonb_set(v_batch, '{queries,4}', (select jsonb_build_object('step', 'after-counts', 'soql', s,
-                               'sha256', encode(sha256(convert_to(s, 'UTF8')), 'hex'), 'label', 'One record')
-                               from (select 'SELECT COUNT() FROM GiftTransaction WHERE Id = ''a0D000000000001''' as s) x))),
-      ('selection_with_id',  (select jsonb_set(jsonb_set(v_batch, '{queries,0}', jsonb_build_object('step', 'gate', 'soql', s,
-                               'sha256', encode(sha256(convert_to(s, 'UTF8')), 'hex'), 'file', 'selection.soql')),
-                               '{selection_sha256}', to_jsonb(encode(sha256(convert_to(s, 'UTF8')), 'hex'))) #- '{queries,3}'
-                               from (select 'SELECT Id FROM GiftTransaction WHERE Id = ''a0D000000000001AAA''' as s) x)),
       ('other_export_with_id', jsonb_set(v_bulk, '{queries,1}', (select jsonb_build_object('step', 'gate', 'soql', s,
                                'sha256', encode(sha256(convert_to(s, 'UTF8')), 'hex'), 'label', 'gate: gift commitments')
                                from (select 'SELECT Id FROM GiftCommitment WHERE Id = ''a0E000000000001AAA''' as s) x))),
@@ -223,7 +229,6 @@ begin
       ('undo_no_upload',     v_undo - 'uploads'),
       ('undo_ids_on_batch',  v_batch || jsonb_build_object('uploads', jsonb_build_array(jsonb_build_object('purpose', 'undo-ids',
                                'file', 'undo-ids.csv', 'sha256', c_hex2, 'rows', 45)))),
-      ('exclude_not_fewer',  jsonb_set(v_batchx, '{uploads,0,rows}', '45')),
       ('two_exclude_uploads', jsonb_set(v_batchx, '{uploads}', (v_batchx->'uploads') || (v_batchx->'uploads'))),
       ('three_uploads',      jsonb_set(v_undo, '{uploads}', (v_undo->'uploads') || (v_batchx->'uploads') || (v_batchx->'uploads'))),
       ('bulk_with_uploads',  v_bulk || jsonb_build_object('uploads', v_batchx->'uploads')),
@@ -280,11 +285,11 @@ begin
     -- ---- the sentences say what to do ----
     v_checks := v_checks || jsonb_build_object(
       'message_201_ids', public.switchboard_datawrite_payload_problem(v_201, c_code)
-        = 'the query ''gate: broad snapshot'' lists 201 Ids; the limit is 200. Select by criteria instead, or split the run.',
-      'message_after_count_id', coalesce(public.switchboard_datawrite_payload_problem(jsonb_set(v_batch, '{queries,4}',
-        (select jsonb_build_object('step', 'after-counts', 'soql', s, 'sha256', encode(sha256(convert_to(s, 'UTF8')), 'hex'), 'label', 'One record')
-         from (select 'SELECT COUNT() FROM GiftTransaction WHERE Id = ''a0D000000000001AAA''' as s) x)), c_code)
-        like 'the query ''One record'' lists 1 Id; only an export labelled "... broad snapshot" may list Ids%', false),
+        = 'the query ''gate: broad snapshot'' lists 201 Ids; a Salesforce query takes at most 200. Select by criteria instead, or split the run.',
+      'message_other_export_id', coalesce(public.switchboard_datawrite_payload_problem(jsonb_set(v_bulk, '{queries,1}',
+        (select jsonb_build_object('step', 'gate', 'soql', s, 'sha256', encode(sha256(convert_to(s, 'UTF8')), 'hex'), 'label', 'gate: gift commitments')
+         from (select 'SELECT Id FROM GiftCommitment WHERE Id = ''a0E000000000001AAA''' as s) x)), c_code)
+        = 'the query ''gate: gift commitments'' lists 1 Id; Ids go only in selection.soql, "after: selection", an after-count or an export labelled "... broad snapshot". Select by criteria instead.', false),
       'message_over_cap', coalesce(public.switchboard_datawrite_payload_problem(v_big, c_code) like '%the limit is 200,000.%', false),
       'message_extra_key', coalesce(public.switchboard_datawrite_payload_problem(v_batch || '{"ids":[]}', c_code)
         like 'the payload does not take ids.%', false),
@@ -347,7 +352,7 @@ begin
       v_msg := sqlerrm;
     end;
     v_checks := v_checks || jsonb_build_object('queue_helper_says_why',
-      coalesce(v_msg like '%refused: the query ''gate: broad snapshot'' lists 201 Ids; the limit is 200. Select by criteria instead, or split the run.', false));
+      coalesce(v_msg like '%refused: the query ''gate: broad snapshot'' lists 201 Ids; a Salesforce query takes at most 200. Select by criteria instead, or split the run.', false));
     begin
       perform public.switchboard_queue_helper('sf_datawrite', null, v_batch, 'PRODUCTION DATA WRITE TEST', null);
       v_ok := false;

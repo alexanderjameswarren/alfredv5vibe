@@ -1057,7 +1057,8 @@ test('sf_datawrite: the files it writes to production, with the fixed titles, an
   // s6b: exclude.csv once. The upload is listed, so the "if you leave records out" line is not.
   expect(screen.queryByTestId('approve-datawrite-exclude')).toBeNull();
   expect(screen.getByTestId('approve-datawrite-files').textContent.match(/exclude\.csv/g)).toHaveLength(1);
-  expect(text('approve-datawrite-failures')).toBe("Creates the failure file, a ContentVersion titled with the batch's job Id");
+  expect(text('approve-datawrite-failures')).toBe('Creates the failure file, a ContentVersion titled dataop-failures:FixCLinkBatch:<18-character job Id>');
+  expect(text('approve-datawrite-failures-title')).toBe('dataop-failures:FixCLinkBatch:<18-character job Id>');
   expect(text('approve-datawrite-leftover')).toBe("A file left over from a run that wasn't closed out makes the helper refuse to start; sb closeout clears it.");
   const after = screen.getByTestId('approve-datawrite-after');
   for (const line of [/pick the run up within 15 minutes/, /runs the gate first/, /asks for Enter before the live write and before any upload; q stops it with nothing changed/,
@@ -1124,11 +1125,24 @@ test('sf_datawrite undo: the reverse class, the Id file with its hash and rows, 
   expect(up).toHaveAttribute('data-purpose', 'undo-ids');
   expect(up.querySelector('[data-testid="approve-datawrite-upload-title"]').textContent).toBe('dataop-undo:FixCUndoBatch');
   expect(screen.queryByTestId('approve-datawrite-exclude')).toBeNull();
-  expect(text('approve-datawrite-failures')).toMatch(/batch's job Id/);
+  expect(text('approve-datawrite-failures-title')).toBe('dataop-failures:FixCUndoBatch:<18-character job Id>');
   const ids = screen.getAllByTestId('approve-datawrite-ids');
   expect(ids).toHaveLength(2);
-  for (const n of ids) expect(n.textContent).toBe('This snapshot lists 12 record Ids.');
+  for (const n of ids) expect(n.textContent).toBe('This query lists 12 record Ids.');
   expect(screen.getAllByTestId('approve-datawrite-soql')[0].textContent).toBe(BROAD12);
+});
+
+// s10: any query that lists Ids says how many, an after-count included; one with none says nothing.
+test('sf_datawrite: an after-count that lists Ids says "This query lists N record Ids."', async () => {
+  const withIds = { ...DW_BATCH, queries: DW_BATCH.queries.map((q) => (q.step === 'after-counts' && !q.wait
+    ? { ...q, soql: "SELECT COUNT() FROM GiftTransaction WHERE Id IN ('a0D000000000001AAA','a0D000000000002AAA')" } : q)) };
+  runner({ preview: reply(DW(withIds)) });
+  open();
+  await screen.findByTestId('approve-datawrite');
+  const ids = screen.getAllByTestId('approve-datawrite-ids');
+  expect(ids).toHaveLength(1);
+  expect(ids[0].textContent).toBe('This query lists 2 record Ids.');
+  expect(ids[0].closest('[data-testid="approve-datawrite-query"]')).toHaveAttribute('data-step', 'after-counts');
 });
 
 test('sf_datawrite: Don\'t run gives the datawrite cancelled line', async () => {
