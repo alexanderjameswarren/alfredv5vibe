@@ -28,6 +28,7 @@ Markers: ✱ a migration link, ⚙ a function deploy, ⛳ a checkpoint.
 | s11b | Write 246 from the `_pending_` file, delete the `_pending_` one, queue it | ✱ | 5m | done 2026-11-20: `246_ids_rule.sql` written (differs from the `_pending_` file only in header lines 1 and 6); `_pending_` deleted; 246 the only file with the new rule (245 keeps its original); queued, action 36135bf4-1a9c-4521-9eb9-883f5cd55e1e; not applied until a run id shows it |
 | s11c | Amend 246 before it runs: drop the exclude-rows rule (SQL and tool), runner confirmed, tests, spec; queue again | ✱ | 15m | done 2026-11-20: 246 and switchboard.ts drop "the exclude upload has fewer rows than expected"; core.ts unchanged (excluded is checked only through the sum), new core.test case (2 left out, 4 added, excluded 2, PASS); switchboard.test 112 of 112, core.test 107 of 107; 1_verify and 2_verify accept exclude rows = expected + 1; spec defines write.excluded as manifest records the gate left out; 246 queued again, action 72972fd8-1dd3-41a5-8029-550364d21426. The s11b action 36135bf4 is superseded, left queued and not to be approved |
 | s11d | After 246 (72972fd8) has run: deploy mcp holding db:deploy, conformance, queue both `--test` scripts | ⚙ | 10m | done 2026-11-20: 246 ran (run 39246c00, CONFORMANT); switchboard.test 112, mcp/index.test 53, tables.test 1, core.test 107, none failed; mcp deployed ("Deployed Functions."); switchboard-runner not redeployed (core.ts unchanged); queued --test: 2_verify 7aa9a8ce-4e36-48ab-a0ed-38ba168674bd, 1_verify 62186f06-5152-47ec-9164-9fa283eab2c7, results not seen yet; db claims held for the Checkpoint |
+| s12 | Read only: both skills checked against main (37e0961) and put in full in the report for the update cards | | 5m | done 2026-11-20: identical to main; both blocks checked identical to disk; tree clean; noted that salesforce-workflow's v2 section still says "only after a sandbox PASS" |
 | s9 | Full suites, spec marked live; Finish is Alex's | | 10m | done 2026-11-20: switchboard.test 112, mcp/index.test 53, mcp/tables.test 1, core.test 106, ApprovePage and ApproveFixture 93; all pass, none fail; uncommitted: the two skills and this file only; both skills' full text in the s9 report, checked identical to disk. Finish is Alex's |
 
 The total estimate is 4h17 (s1 to s9; s3 to s9 are 3h45).
@@ -65,7 +66,7 @@ rule set, kept together by the same payload list in switchboard.test.mjs and the
 
 ## Next step's scope
 
-None: the Checkpoint is next (Alex), once both test runs pass.
+None: Finish is next, and it is Alex's (gitpush Finish for dataop_write-j5w).
 
 ## Timing log
 
@@ -102,3 +103,4 @@ None: the Checkpoint is next (Alex), once both test runs pass.
 | s11b | Write 246, compare, delete, check, queue, progress file (07:36:27–07:37:49) | 1m22s |
 | s11c | Rule dropped in SQL and tool, runner check, tests, SQL tests, spec, queue, progress file (07:39:19–07:41:09) | 1m50s |
 | s11d | Tests, deploy mcp, queue two test scripts, progress file (07:46:24–07:46:52) | 0m28s |
+| s12 | Git checks, both skills into the report, comparison, progress file (07:53:55–08:00:07) | 6m12s |
