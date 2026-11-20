@@ -1136,9 +1136,10 @@ test("pickup: sf_dataquery with only some of the kinds is refused and picks noth
   }
 });
 
-test("pickup: the 4-hour limit covers sf_dataop and sf_dataquery only; the stale query in index.ts uses LONG_PICK_KINDS", async () => {
+test("pickup: the 4-hour limit covers sf_dataop, sf_dataquery and sf_datawrite only; the stale query in index.ts uses LONG_PICK_KINDS", async () => {
   const core = await import("./core.ts");
-  assert.deepEqual(core.LONG_PICK_KINDS, ["sf_dataop", "sf_dataquery"]);
+  // dataop_write-j5w added sf_datawrite.
+  assert.deepEqual(core.LONG_PICK_KINDS, ["sf_dataop", "sf_dataquery", "sf_datawrite"]);
   assert.equal(core.DATAOP_PICK_TIMEOUT_MS, 4 * 60 * 60 * 1000);
   assert.equal(core.PICK_TIMEOUT_MS, 30 * 60 * 1000);
   const now = Date.parse("2026-11-19T12:00:00Z");
@@ -1220,6 +1221,216 @@ test("sf_dataquery link: preview shows the payload; approve only spends the link
   const preview = await (await handle(post("preview", { token: TOKEN }, jwt()), deps)).json();
   assert.equal(preview.kind, "sf_dataquery");
   assert.deepEqual(preview.payload, DQ_PAYLOAD);
+  const res = await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), deps);
+  assert.deepEqual(await res.json(), { ok: true, action_id: "act-1", sent: true });
+  nothingRan(calls);
+});
+
+// --- dataop_write-j5w: sf_datawrite, Data run v2's write link ---
+
+const SEVEN = [...SIX, "sf_datawrite"];
+const DW_QUERY = (step, label) => ({ step, soql: "SELECT Id FROM Contact WHERE A = 1", sha256: "1".repeat(64), label });
+const DW_BASE = { alias: "cd-prod", org_type: "production", repo: "C:\\Users\\Alex\\projects\\common-defense", run: "data-ops/cd_fixc-q8d/fixc",
+  run_tag: "cd_fixc-q8d-s9-ab12", request_sha256: "0".repeat(64), selection_sha256: "1".repeat(64), object: "GiftTransaction", expected: 45,
+  queries: [{ step: "gate", soql: "SELECT Id FROM GiftTransaction WHERE A = 1", sha256: "1".repeat(64), file: "selection.soql" },
+            DW_QUERY("gate", "gate: broad snapshot"), DW_QUERY("after", "after: broad snapshot"),
+            { step: "after-counts", soql: "SELECT COUNT() FROM Contact WHERE A = 1", sha256: "2".repeat(64), label: "One" }] };
+const DW_PAYLOADS = {
+  batch: { ...DW_BASE, write: { kind: "batch", class: "FixCLinkBatch" } },
+  bulk: { ...DW_BASE, org_type: "sandbox", write: { kind: "bulk", operation: "update", csv: "update.csv", csv_sha256: "3".repeat(64) } },
+  undo: { ...DW_BASE, write: { kind: "undo", class: "FixCUndoBatch", ids_file: "undo-ids.csv", ids_sha256: "4".repeat(64) },
+    uploads: [{ purpose: "undo-ids", file: "undo-ids.csv", sha256: "4".repeat(64), rows: 45 }],
+    queries: [DW_QUERY("gate", "gate: broad snapshot"), DW_QUERY("after", "after: broad snapshot")] },
+};
+const dwFakes = (payload = DW_PAYLOADS.batch) => fakes({
+  findPicked: async (a, r) => (a === "dw-1" && r === "run-w" ? {
+    action: { id: "dw-1", user_id: USER, kind: "sf_datawrite", status: "consumed", picked_up_at: "t", payload },
+    run: { id: "run-w", action_id: "dw-1", mode: "real", finished_at: null },
+  } : null),
+});
+const dwResult = (body) => helper("result", { action_id: "dw-1", run_id: "run-w", summary: "write done", ...body });
+const DW_DONE = (n) => ({ stage: "done", query_counts: Array.from({ length: n }, (_, i) => i * 10),
+  gate: { added: 0, dropped: 0, edited: 0 }, write: { expected: 45, changed: 42, failed: 2, excluded: 1 },
+  check: { problems: 0, extras: 0, new_records: 3 } });
+
+test("pickup: seven kinds are passed on whole and may get an sf_datawrite; six, five, four and three carry on as now", async () => {
+  const seven = kindsFakes();
+  assert.equal((await handle(helper("pickup", { kinds: [...SEVEN].reverse() }), seven.deps)).status, 200);
+  assert.deepEqual(seven.deps.args, [USER, SEVEN]);
+  const six = kindsFakes();
+  assert.equal((await handle(helper("pickup", { kinds: SIX }), six.deps)).status, 200);
+  assert.deepEqual(six.deps.args, [USER, SIX]);
+  assert.ok(!six.deps.args[1].includes("sf_datawrite"));
+  const five = kindsFakes();
+  assert.equal((await handle(helper("pickup", { kinds: FIVE }), five.deps)).status, 200);
+  assert.deepEqual(five.deps.args, [USER, FIVE]);
+  for (const kinds of [["git", "sf_check", "sb_setup", "sf_read"], ["git", "sf_check", "sb_setup"]]) {
+    const older = kindsFakes();
+    assert.equal((await handle(helper("pickup", { kinds }), older.deps)).status, 200, JSON.stringify(kinds));
+    assert.deepEqual(older.deps.args, [USER, undefined], JSON.stringify(kinds));
+  }
+});
+
+test("pickup: sf_datawrite with only some of the kinds is refused and picks nothing", async () => {
+  for (const kinds of [["sf_datawrite"], ["git", "sf_datawrite"], [...FIVE, "sf_datawrite"], [...SIX.filter((k) => k !== "sf_dataop"), "sf_datawrite"]]) {
+    const { deps, calls } = fakes({ stalePicks: async () => { throw new Error("not reached"); } });
+    const res = await handle(helper("pickup", { kinds }), deps);
+    assert.equal(res.status, 400, JSON.stringify(kinds));
+    assert.equal(calls.pickedHelper, undefined);
+  }
+});
+
+test("pickup: a picked sf_datawrite gets 4 hours before it is failed (LONG_PICK_KINDS), every other kind 30 minutes", async () => {
+  const core = await import("./core.ts");
+  assert.ok(core.LONG_PICK_KINDS.includes("sf_datawrite"));
+  assert.ok(core.HELPER_KINDS.includes("sf_datawrite"));
+  const now = Date.parse("2026-11-19T15:00:00Z");
+  const { deps, calls } = fakes({ stalePicks: async (u, before, dataopBefore) => (calls.stale = { before, dataopBefore },
+    [{ action_id: "dw-1", run_id: "run-w" }]) });
+  const body = await (await handle(helper("pickup", { kinds: SEVEN }), deps, now)).json();
+  assert.deepEqual(calls.stale, { before: "2026-11-19T14:30:00.000Z", dataopBefore: "2026-11-19T11:00:00.000Z" });
+  assert.deepEqual(body.timed_out, ["dw-1"]);
+  assert.deepEqual(calls.finished[0].result, { ok: false, timed_out: true });
+  assert.deepEqual(calls.status, [{ id: "dw-1", status: "failed" }]);
+});
+
+test("result: a good sf_datawrite for each write kind keeps only ok, exit_code, pass and datawrite; the line says done: PASS", async () => {
+  for (const [kind, payload] of Object.entries(DW_PAYLOADS)) {
+    const { deps, calls } = dwFakes(payload);
+    const datawrite = DW_DONE(payload.queries.length);
+    const res = await handle(dwResult({ ok: true, exit_code: 0, pass: true, datawrite,
+      summary: "wrote 42 of 45, first 003000000000001AAA, by alex@example.com" }), deps);
+    assert.equal(res.status, 200, kind);
+    assert.deepEqual(await res.json(), { ok: true, action_id: "dw-1", run_id: "run-w", status: "succeeded", line: "datawrite dw-1 done: PASS" }, kind);
+    assert.deepEqual(calls.finished[0].result, { ok: true, exit_code: 0, pass: true, datawrite }, kind);
+    assert.equal(calls.finished[0].summary, "wrote 42 of 45, first [id], by [email]", kind);
+    assert.deepEqual(calls.status, [{ id: "dw-1", status: "succeeded" }], kind);
+  }
+});
+
+test("result: a step 5 FAIL is ok with pass false; the line says done: FAIL", async () => {
+  const { deps, calls } = dwFakes();
+  const datawrite = { ...DW_DONE(4), write: { expected: 45, changed: 40, failed: 2, excluded: 1 }, check: { problems: 2, extras: 1, new_records: 0 } };
+  const res = await handle(dwResult({ ok: true, pass: false, datawrite }), deps);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, action_id: "dw-1", run_id: "run-w", status: "succeeded", line: "datawrite dw-1 done: FAIL" });
+  assert.deepEqual(calls.finished[0].result, { ok: true, pass: false, datawrite });
+});
+
+test("result: the three lines, exactly: done: PASS, done: FAIL, failed (not ok, or refused)", async () => {
+  const core = await import("./core.ts");
+  assert.equal(core.datawriteLine("dw-1", true, true), "datawrite dw-1 done: PASS");
+  assert.equal(core.datawriteLine("dw-1", true, false), "datawrite dw-1 done: FAIL");
+  assert.equal(core.datawriteLine("dw-1", false, true), "datawrite dw-1 failed");
+  assert.equal(core.datawriteLine("dw-1", false), "datawrite dw-1 failed");
+  const lines = [];
+  for (const body of [{ ok: true, pass: true, datawrite: DW_DONE(4) }, { ok: true, pass: false, datawrite: DW_DONE(4) },
+                      { ok: false, datawrite: { stage: "gate" } }, { ok: true, pass: true, datawrite: DW_DONE(4), output: "x" }]) {
+    const { deps } = dwFakes();
+    lines.push((await (await handle(dwResult(body), deps)).json()).line);
+  }
+  assert.deepEqual(lines, ["datawrite dw-1 done: PASS", "datawrite dw-1 done: FAIL", "datawrite dw-1 failed", "datawrite dw-1 failed"]);
+});
+
+test("result: a gate stop and a declined Enter are ok false; nothing written; the line says failed", async () => {
+  for (const datawrite of [
+    { stage: "gate", query_counts: [45, 31200], gate: { added: 1, dropped: 0, edited: 2 } },
+    { stage: "write", query_counts: [45, 31200], gate: { added: 0, dropped: 0, edited: 0 } },
+    { stage: "write" },
+  ]) {
+    const { deps, calls } = dwFakes();
+    const res = await handle(dwResult({ ok: false, exit_code: 3, summary: `stopped at the ${datawrite.stage}`, datawrite }), deps);
+    assert.equal(res.status, 200, JSON.stringify(datawrite));
+    assert.deepEqual(await res.json(), { ok: true, action_id: "dw-1", run_id: "run-w", status: "failed", line: "datawrite dw-1 failed" });
+    assert.deepEqual(calls.finished[0].result, { ok: false, exit_code: 3, datawrite });
+    assert.deepEqual(calls.status, [{ id: "dw-1", status: "failed" }]);
+  }
+  const bare = dwFakes();
+  assert.equal((await handle(dwResult({ ok: false }), bare.deps)).status, 200);
+  assert.deepEqual(bare.calls.finished[0].result, { ok: false });
+});
+
+test("result: an sf_datawrite report that doesn't fit is refused (400), and the run closes as failed saying why", async () => {
+  const done = DW_DONE(4);
+  const withPart = (part, v) => ({ ...done, [part]: v });
+  for (const [body, why] of [
+    [{ ok: true, pass: true, datawrite: done, output: "Id,Name\n003000000000001AAA,Jo" }, /takes no output/],
+    [{ ok: true, pass: true, datawrite: done, rows: [{ Id: "003000000000001AAA" }] }, /takes no rows/],
+    [{ ok: true, pass: true, datawrite: done, query_counts: [1] }, /takes no query_counts/],
+    [{ ok: true, pass: true, datawrite: { ...done, ids: ["003000000000001AAA"] } }, /datawrite takes no ids/],
+    [{ ok: true, pass: true, datawrite: withPart("write", { ...done.write, names: "Jo" }) }, /datawrite\.write must be/],
+    [{ ok: true, pass: true, datawrite: withPart("check", { ...done.check, why: "Amount was 20.50" }) }, /datawrite\.check must be/],
+    [{ ok: true, pass: true, datawrite: withPart("write", { ...done.write, changed: "42" }) }, /datawrite\.write must be/],
+    [{ ok: true, pass: true, datawrite: withPart("gate", { added: -1, dropped: 0, edited: 0 }) }, /datawrite\.gate must be/],
+    [{ ok: true, pass: true, datawrite: withPart("gate", { added: 0.5, dropped: 0, edited: 0 }) }, /datawrite\.gate must be/],
+    [{ ok: true, pass: true, datawrite: withPart("check", { problems: 0, extras: 0, new_records: 1e9 }) }, /datawrite\.check must be/],
+    [{ ok: true, pass: true, datawrite: withPart("gate", { added: 0, dropped: 0 }) }, /datawrite\.gate must be/],
+    [{ ok: true, pass: true, datawrite: { ...done, stage: "finished" } }, /stage must be one of gate, write, after, counts, done/],
+    [{ ok: true, pass: true, datawrite: (({ stage: _s, ...r }) => r)(done) }, /stage must be one of/],
+    [{ ok: true, pass: true, datawrite: { ...done, stage: "after" } }, /has stage done, not after/],
+    [{ ok: true, pass: true, datawrite: withPart("write", { ...done.write, expected: 44, changed: 41 }) }, /write\.expected is 44, but the link's expected is 45/],
+    [{ ok: true, pass: true, datawrite: withPart("query_counts", [1, 2, 3]) }, /3 entries for 4 queries/],
+    [{ ok: true, pass: true, datawrite: withPart("query_counts", [1, 2, 3, 4, 5]) }, /5 entries for 4 queries/],
+    [{ ok: false, datawrite: { stage: "gate", query_counts: [1, 2, 3, 4, 5] } }, /5 entries for 4 queries/],
+    [{ ok: true, pass: true, datawrite: withPart("query_counts", [1, 2, 3, "4"]) }, /query_counts must be a list of whole numbers/],
+    [{ ok: true, pass: true, datawrite: withPart("write", { ...done.write, changed: 41 }) }, /changed \+ failed \+ excluded is 44, not the expected 45/],
+    [{ ok: true, pass: true, datawrite: withPart("check", { ...done.check, problems: 1 }) }, /step 5 found 1 problem/],
+    [{ ok: false, pass: true, datawrite: { stage: "write" } }, /pass can be true only when ok is true/],
+    [{ ok: false, pass: true }, /pass can be true only when ok is true/],
+    [{ ok: true, datawrite: done }, /must report pass and datawrite/],
+    [{ ok: true, pass: true }, /must report pass and datawrite/],
+    [{ ok: true, pass: "PASS", datawrite: done }, /pass must be true or false/],
+    [{ ok: true, pass: true, datawrite: (({ check: _c, ...r }) => r)(done) }, /must report check/],
+    [{ ok: true, pass: true, datawrite: "stopped at the gate" }, /datawrite must be/],
+  ]) {
+    const { deps, calls } = dwFakes();
+    const res = await handle(dwResult(body), deps);
+    assert.equal(res.status, 400, JSON.stringify(body));
+    const out = await res.json();
+    assert.match(out.error, why, JSON.stringify(body));
+    assert.equal(out.status, "failed");
+    assert.equal(out.line, "datawrite dw-1 failed");
+    assert.deepEqual(calls.finished[0].result, { ok: false }, JSON.stringify(body));
+    assert.match(calls.finished[0].summary, /^refused by the runner: /);
+    assert.match(calls.finished[0].summary, why);
+    assert.deepEqual(calls.status, [{ id: "dw-1", status: "failed" }]);
+  }
+});
+
+test("result: an over-long or two-line summary is refused before anything is kept", async () => {
+  for (const summary of ["x".repeat(301), "two\nlines"]) {
+    const { deps, calls } = dwFakes();
+    const res = await handle(dwResult({ ok: true, pass: true, datawrite: DW_DONE(4), summary }), deps);
+    assert.equal(res.status, 400);
+    assert.equal(calls.finished, undefined);
+  }
+});
+
+test("result: sf_dataop and sf_dataquery are unchanged by sf_datawrite", async () => {
+  const dop = fakes({
+    findPicked: async () => ({
+      action: { id: "dop-1", user_id: USER, kind: "sf_dataop", status: "consumed", picked_up_at: "t", payload: DATAOP_PAYLOAD },
+      run: { id: "run-d", action_id: "dop-1", mode: "real", finished_at: null },
+    }),
+  });
+  const r1 = await handle(helper("result", { action_id: "dop-1", run_id: "run-d", ok: true, summary: "done 003000000000001AAA",
+    exit_code: 0, datawrite: DW_DONE(4), pass: true }), dop.deps);
+  assert.deepEqual(await r1.json(), { ok: true, action_id: "dop-1", run_id: "run-d", status: "succeeded" });
+  assert.deepEqual(dop.calls.finished[0].result, { ok: true, exit_code: 0 });
+  assert.equal(dop.calls.finished[0].summary, "done 003000000000001AAA");
+  const dq = dqFakes();
+  const r2 = await handle(dqResult({ ok: true, query_counts: [1, 2], pass: true, datawrite: DW_DONE(2) }), dq.deps);
+  assert.deepEqual(await r2.json(), { ok: true, action_id: "dq-1", run_id: "run-q", status: "succeeded" });
+  assert.deepEqual(dq.calls.finished[0].result, { ok: true, query_counts: [1, 2], pass: true });
+});
+
+test("sf_datawrite link: preview shows the payload; approve only spends the link", async () => {
+  const { deps, calls, action } = gitFakes();
+  Object.assign(action, { kind: "sf_datawrite", payload: DW_PAYLOADS.undo });
+  const preview = await (await handle(post("preview", { token: TOKEN }, jwt()), deps)).json();
+  assert.equal(preview.kind, "sf_datawrite");
+  assert.deepEqual(preview.payload, DW_PAYLOADS.undo);
+  assert.equal((await handle(post("dry-run", { token: TOKEN }, jwt()), deps)).status, 409);
   const res = await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), deps);
   assert.deepEqual(await res.json(), { ok: true, action_id: "act-1", sent: true });
   nothingRan(calls);

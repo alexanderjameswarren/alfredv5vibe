@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import ApprovePage from './ApprovePage';
 
 // DEV SERVER ONLY (dataops_alfred-d4x s6b). /approve-fixture/:kind renders the real ApprovePage with a sample payload
@@ -82,7 +82,60 @@ const dqHeadline = (p) => {
     `${n} QUER${n === 1 ? 'Y' : 'IES'} (${steps.join(', ')}), READ ONLY`;
 };
 
-const FIXTURES = { sf_dataop: true, sf_dataquery: true };
+// dataop_write-j5w s6: sf_datawrite samples, a production batch, a sandbox bulk update and a production undo whose
+// broad snapshot lists 12 Ids. Invented values; the hashes are placeholders, not real SHA-256s.
+const DW_CODE = 'demo_link_installments-x1y';
+const DW_BROAD = "SELECT Id, Demo_Plan__c, Paid__c, LastModifiedById\nFROM Demo_Installment__c\nWHERE Source__c = 'Demo Import'\n" +
+  '  AND CreatedDate >= 2026-10-01T00:00:00Z';
+export const DW_TWELVE_IDS = Array.from({ length: 12 }, (_, i) => `a0D5e00000${String(i + 1).padStart(5, '0')}AAA`);
+const DW_BROAD_IDS = `SELECT Id, Demo_Plan__c, Paid__c, LastModifiedById\nFROM Demo_Installment__c\nWHERE Id IN (\n  ${
+  DW_TWELVE_IDS.map((id) => `'${id}'`).join(',\n  ')}\n)`;
+const DW_BASE = {
+  alias: 'demo-prod', org_type: 'production', repo: 'C:\\Users\\Alex\\projects\\demo-client', run: `data-ops/${DW_CODE}/link-2026-11-19`,
+  run_tag: `${DW_CODE}-s9-k2p9`, request_sha256: '9b1e4c07d2a35f68e0c4b19a7d3e52f6a81c0d4e97b2f35a6c8d01e4b7a29f53',
+  selection_sha256: hashOf(1), object: 'Demo_Installment__c',
+  problem: 'Installments paid since the October import were never linked to their recurring plan, so each plan shows less paid than the donor gave.',
+  expected: 26571,
+};
+const DW_AFTER_COUNTS = [
+  { step: 'after-counts', soql: "SELECT COUNT() FROM Demo_Installment__c WHERE Source__c = 'Demo Import' AND Demo_Plan__c = null",
+    sha256: hashOf(3), label: 'Installments with no plan link' },
+  { step: 'after-counts', soql: 'SELECT COUNT() FROM Demo_Plan__c WHERE Rollup_Pending__c = true', sha256: hashOf(4),
+    label: 'Plans whose totals are still updating: wait', wait: { stable_minutes: 2, limit_minutes: 30 } },
+];
+export const SAMPLE_DATAWRITES = {
+  batch: { ...DW_BASE, write: { kind: 'batch', class: 'DemoLinkInstallmentsBatch' },
+    uploads: [{ purpose: 'exclude', file: 'exclude.csv', sha256: hashOf(7), rows: 3 }],
+    queries: [
+      { step: 'gate', soql: DQ_SELECTION, sha256: hashOf(1), file: 'selection.soql' },
+      { step: 'gate', soql: DW_BROAD, sha256: hashOf(2), label: 'gate: broad snapshot' },
+      { step: 'after', soql: DW_BROAD, sha256: hashOf(2), label: 'after: broad snapshot' },
+      { step: 'after', soql: DQ_SELECTION, sha256: hashOf(1), label: 'after: selection' },
+      ...DW_AFTER_COUNTS,
+    ] },
+  bulk: { ...DW_BASE, alias: 'demo-sandbox', org_type: 'sandbox', expected: 45,
+    write: { kind: 'bulk', operation: 'update', csv: 'update.csv', csv_sha256: hashOf(8) },
+    queries: [
+      { step: 'gate', soql: DQ_SELECTION, sha256: hashOf(1), file: 'selection.soql' },
+      { step: 'after', soql: DW_BROAD, sha256: hashOf(2), label: 'after: broad snapshot' },
+      DW_AFTER_COUNTS[0],
+    ] },
+  undo: { ...DW_BASE, expected: 12, write: { kind: 'undo', class: 'DemoLinkInstallmentsUndoBatch', ids_file: 'undo-ids.csv', ids_sha256: hashOf(9) },
+    uploads: [{ purpose: 'undo-ids', file: 'undo-ids.csv', sha256: hashOf(9), rows: 12 }],
+    queries: [
+      { step: 'gate', soql: DW_BROAD_IDS, sha256: hashOf(5), label: 'gate: broad snapshot' },
+      { step: 'after', soql: DW_BROAD_IDS, sha256: hashOf(5), label: 'after: broad snapshot' },
+    ] },
+};
+const dwHeadline = (p) => {
+  const sandbox = p.org_type === 'sandbox';
+  const how = p.write.kind === 'batch' ? `BY BATCH ${p.write.class}` : p.write.kind === 'undo' ? `BY UNDO ${p.write.class}` : 'BY BULK UPDATE';
+  return `${sandbox ? 'SANDBOX' : 'PRODUCTION'} DATA WRITE ${DW_CODE} ON ${p.alias}: ABOUT TO CHANGE ${p.expected.toLocaleString('en-US')} ` +
+    `${sandbox ? '' : 'LIVE '}RECORD${p.expected === 1 ? '' : 'S'} OF ${p.object} ${how}`;
+};
+const HEADLINES = { sf_dataquery: dqHeadline, sf_datawrite: dwHeadline };
+
+const FIXTURES = { sf_dataop: true, sf_dataquery: true, sf_datawrite: true };
 
 // Module-level, so ApprovePage's load effect sees the same functions on every render.
 const fakeSession = () => Promise.resolve({ data: { session: { access_token: 'fixture' } } });
@@ -92,7 +145,7 @@ function fakeRunnerFor(payload, kind = 'sf_dataop') {
     if (route === 'preview') {
       return { status: 200, body: { ok: true, kind, action_id: 'fixture-action', fingerprint: 'fixture-fp',
         project_code: DQ_CODE, expires_at: new Date(Date.now() + 30 * 60000).toISOString(),
-        headline: kind === 'sf_dataquery' ? dqHeadline(payload) : headline(payload), payload } };
+        headline: (HEADLINES[kind] ?? headline)(payload), payload } };
     }
     if (route === 'approve') return { status: 200, body: { ok: true, action_id: 'fixture-action', sent: true } };
     if (route === 'cancel') return { status: 200, body: { ok: true, action_id: 'fixture-action', cancelled: true, reason: body?.reason ?? '' } };
@@ -127,14 +180,39 @@ function DataqueryFixture() {
   );
 }
 
+const DW_CHOICES = [['batch', 'Production batch'], ['bulk', 'Sandbox bulk update'], ['undo', 'Production undo, 12 Ids']];
+
+/** /approve-fixture/sf_datawrite?sample=batch|bulk|undo opens that sample; the select switches between them. */
+function DatawriteFixture() {
+  const [params] = useSearchParams();
+  const asked = params.get('sample');
+  const [which, setWhich] = useState(SAMPLE_DATAWRITES[asked] ? asked : 'batch');
+  return (
+    <div>
+      <div data-testid="approve-fixture-bar" className="bg-gray-800 text-white text-sm px-4 py-2 flex flex-wrap gap-x-4 gap-y-1 items-center">
+        <span className="font-bold">Dev fixture: nothing here reaches Supabase or the runner.</span>
+        <label className="inline-flex items-center gap-2 min-h-[44px]">
+          Link
+          <select data-testid="approve-fixture-datawrite" value={which} onChange={(e) => setWhich(e.target.value)}
+            className="text-black rounded px-2 py-1 min-h-[36px]">
+            {DW_CHOICES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+          </select>
+        </label>
+      </div>
+      <ApprovePage key={`dw-${which}`} runner={runnerFor(`dw-${which}`, SAMPLE_DATAWRITES[which], 'sf_datawrite')} session={fakeSession} />
+    </div>
+  );
+}
+
 export default function ApproveFixture() {
   const { kind } = useParams();
   const [bulk, setBulk] = useState(false);
   const [noRehearsal, setNoRehearsal] = useState(false);
   if (!FIXTURES[kind]) {
-    return <p className="p-4 text-dark">No fixture for {kind}. Try /approve-fixture/sf_dataop or /approve-fixture/sf_dataquery.</p>;
+    return <p className="p-4 text-dark">No fixture for {kind}. Try /approve-fixture/sf_dataop, /approve-fixture/sf_dataquery or /approve-fixture/sf_datawrite.</p>;
   }
   if (kind === 'sf_dataquery') return <DataqueryFixture />;
+  if (kind === 'sf_datawrite') return <DatawriteFixture />;
   const key = `${bulk ? 'bulk' : 'batch'}-${noRehearsal ? 'none' : 'rehearsed'}`;
   return (
     <div>

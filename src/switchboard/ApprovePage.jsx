@@ -296,6 +296,201 @@ function DataqueryRun({ payload }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// dataop_write-j5w A2: Data run v2's write link (kind sf_datawrite), docs/technical-spec-dataop_write-j5w.md part 4.
+// Everything is shown in full and as text, nothing cut or folded away: the write, every query under its step, every
+// hash, and the files the run writes to the org. Orange is PRODUCTION, sky blue SANDBOX, from org_type.
+// ---------------------------------------------------------------------------
+
+export const DATAWRITE_STEPS = [
+  { step: 'gate', title: 'Gate', what: 'Fresh exports, compared on your computer before anything is written.' },
+  { step: 'after', title: 'After', what: 'The exports after the write, for the per-record check (PASS or FAIL).' },
+  { step: 'after-counts', title: 'After counts', what: 'The rule counts, reported and never judged.' },
+];
+
+/** 'sandbox' or 'production' (the database requires one); anything else is shown as production, the louder side. */
+export const datawriteOrgType = (payload) => (payload?.org_type === 'sandbox' ? 'sandbox' : 'production');
+
+/** Ids in a query, counted as the database counts them: quoted literals of exactly 15 or 18 letters and digits. */
+export const datawriteIdCount = (soql) => (String(soql ?? '').match(/'[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?'/g) ?? []).length;
+
+/** The fixed title a file gets in the org (s5): the batch can't know the action id, so it is named by class. */
+export function datawriteUploadTitle(purpose, write) {
+  const cls = write?.class;
+  if (!cls) return null;
+  return purpose === 'undo-ids' ? `dataop-undo:${cls}` : `dataop-exclude:${cls}`;
+}
+
+/** The one plain sentence at the top. */
+export function datawriteSentence(payload) {
+  const p = payload ?? {};
+  const kind = datawriteOrgType(p) === 'sandbox' ? 'sandbox' : 'live';
+  return `This changes ${count(p.expected)} ${kind} record${p.expected === 1 ? '' : 's'} of ${p.object} in ${p.alias}.`;
+}
+
+function FullHash({ value, testId }) {
+  return (
+    <span data-testid={testId} className="block min-w-0">
+      <span className="font-mono font-bold">{shortHash(value)}</span>
+      <span className="block font-mono text-xs break-all">{value}</span>
+    </span>
+  );
+}
+
+function DatawriteWrite({ write, expected }) {
+  const w = write ?? {};
+  if (w.kind === 'batch') {
+    return (
+      <dd data-testid="approve-datawrite-write" className="min-w-0 break-words">
+        Batch Apex class <span className="font-mono font-bold">{w.class}</span>:{' '}
+        <span className="font-mono">new {w.class}()</span>, runs SELECTION = selection.soql
+      </dd>
+    );
+  }
+  if (w.kind === 'bulk') {
+    return (
+      <dd data-testid="approve-datawrite-write" className="min-w-0 break-words">
+        Bulk <span className="font-mono font-bold">{w.operation}</span> from <span className="font-mono">{w.csv}</span>
+        <FullHash value={w.csv_sha256} testId="approve-datawrite-csv-sha" />
+      </dd>
+    );
+  }
+  if (w.kind === 'undo') {
+    return (
+      <dd data-testid="approve-datawrite-write" className="min-w-0 break-words">
+        Undo: reverse batch <span className="font-mono font-bold">{w.class}</span> reading{' '}
+        <span className="font-mono">{w.ids_file}</span>, <span data-testid="approve-datawrite-ids-rows">{count(expected)} rows</span>
+        <FullHash value={w.ids_sha256} testId="approve-datawrite-ids-sha" />
+      </dd>
+    );
+  }
+  return <dd data-testid="approve-datawrite-write" className="min-w-0 break-words">Unknown write: {String(w.kind)}</dd>;
+}
+
+function DatawriteRun({ payload }) {
+  const p = payload ?? {};
+  const queries = Array.isArray(p.queries) ? p.queries : [];
+  const uploads = Array.isArray(p.uploads) ? p.uploads : [];
+  const w = p.write ?? {};
+  const hasBatch = w.kind === 'batch' || w.kind === 'undo';
+  let n = 0;
+  return (
+    <div data-testid="approve-datawrite" data-write-kind={w.kind} className="mb-4 min-w-0">
+      <p data-testid="approve-datawrite-sentence" className="text-2xl font-bold text-dark mb-3 break-words">{datawriteSentence(p)}</p>
+      {p.problem && <p data-testid="approve-datawrite-problem" className="text-dark mb-4 break-words">{p.problem}</p>}
+      <dl className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2">
+        <dt className="font-medium">Org</dt><dd data-testid="approve-datawrite-alias" className="font-mono break-all">{p.alias}</dd>
+        <dt className="font-medium">Object</dt><dd data-testid="approve-datawrite-object" className="font-mono break-all">{p.object}</dd>
+        <dt className="font-medium">Write</dt><DatawriteWrite write={w} expected={p.expected} />
+        <dt className="font-medium">Repo</dt><dd data-testid="approve-datawrite-repo" className="font-mono text-xs break-all">{p.repo}</dd>
+        <dt className="font-medium">Run folder</dt><dd data-testid="approve-datawrite-run" className="font-mono text-xs break-all">{p.run}</dd>
+        <dt className="font-medium">Run tag</dt><dd data-testid="approve-datawrite-run-tag" className="font-mono break-all">{p.run_tag}</dd>
+        <dt className="font-medium">request.json</dt><dd className="min-w-0"><FullHash value={p.request_sha256} testId="approve-datawrite-request" /></dd>
+        <dt className="font-medium">selection.soql</dt><dd className="min-w-0"><FullHash value={p.selection_sha256} testId="approve-datawrite-selection" /></dd>
+      </dl>
+
+      {DATAWRITE_STEPS.map(({ step, title, what }) => {
+        const inStep = queries.filter((q) => q?.step === step);
+        if (!inStep.length) return null;
+        return (
+          <section key={step} data-testid="approve-datawrite-stage" data-step={step} className="mb-4 min-w-0">
+            <h2 className="text-lg font-bold text-dark mb-1">{title}</h2>
+            <p className="text-sm text-dark mb-2 break-words">{what}</p>
+            <ol className="space-y-4 list-none p-0 m-0">
+              {inStep.map((q) => {
+                n += 1;
+                const ids = datawriteIdCount(q.soql);
+                return (
+                  <li key={n} data-testid="approve-datawrite-query" data-step={q.step}
+                    className="min-w-0 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-2">
+                      <span className="font-bold">{n}.</span>
+                      <span data-testid="approve-datawrite-source" className="break-all">
+                        {q.file !== undefined ? <>File <span className="font-mono">{q.file}</span></> : <span className="font-medium">{q.label}</span>}
+                      </span>
+                    </div>
+                    {ids > 0 && (
+                      <p data-testid="approve-datawrite-ids" className="mb-2 font-bold break-words">
+                        This snapshot lists {count(ids)} record Id{ids === 1 ? '' : 's'}.
+                      </p>
+                    )}
+                    {q.wait && (
+                      <p data-testid="approve-datawrite-wait" className="mb-2 break-words">
+                        Waits until the count is steady for {q.wait.stable_minutes} minute{q.wait.stable_minutes === 1 ? '' : 's'},
+                        for at most {q.wait.limit_minutes} minute{q.wait.limit_minutes === 1 ? '' : 's'}.
+                      </p>
+                    )}
+                    <div className="mb-2"><span>SHA-256</span><FullHash value={q.sha256} testId="approve-datawrite-sha" /></div>
+                    <pre data-testid="approve-datawrite-soql"
+                      className="m-0 p-3 bg-white rounded border border-border font-mono text-xs text-dark whitespace-pre-wrap break-words max-w-full">{q.soql}</pre>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        );
+      })}
+
+      {w.kind === 'bulk' ? (
+        // s6b: a bulk write uploads nothing; left-out records come out of the CSV on Alex's PC.
+        <section data-testid="approve-datawrite-files" className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark min-w-0">
+          <h2 className="text-lg font-bold mb-2">Records left out at the gate</h2>
+          <p data-testid="approve-datawrite-bulk-exclude" className="m-0 break-words">
+            Records left out at the gate are removed from the CSV before the write.
+          </p>
+        </section>
+      ) : (
+      <section data-testid="approve-datawrite-files" className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark min-w-0">
+        <h2 className="text-lg font-bold mb-2">Files the run writes to {datawriteOrgType(p) === 'sandbox' ? 'the sandbox' : 'production'}</h2>
+        <ul className="list-disc pl-6 space-y-2 m-0">
+          {uploads.map((u, i) => {
+            const title = datawriteUploadTitle(u.purpose, w);
+            return (
+              <li key={i} data-testid="approve-datawrite-upload" data-purpose={u.purpose} className="min-w-0 break-words">
+                Uploads <span className="font-mono">{u.file}</span> ({count(u.rows)} rows), titled{' '}
+                <span data-testid="approve-datawrite-upload-title" className="font-mono font-bold break-all">{title ?? `${u.purpose} (no class to name it)`}</span>
+                <FullHash value={u.sha256} testId="approve-datawrite-upload-sha" />
+              </li>
+            );
+          })}
+          {/* s6b: once only. An exclude upload already in the payload is listed above. */}
+          {w.kind !== 'undo' && !uploads.some((u) => u?.purpose === 'exclude') && (
+            <li data-testid="approve-datawrite-exclude" className="break-words">
+              exclude.csv, if you leave records out at the gate
+              {datawriteUploadTitle('exclude', w) && (
+                <>, titled <span data-testid="approve-datawrite-exclude-title" className="font-mono font-bold break-all">{datawriteUploadTitle('exclude', w)}</span></>
+              )}
+            </li>
+          )}
+          {hasBatch && (
+            <li data-testid="approve-datawrite-failures" className="break-words">
+              Creates the failure file, a ContentVersion titled with the batch&apos;s job Id
+            </li>
+          )}
+        </ul>
+        <p data-testid="approve-datawrite-leftover" className="mt-2 mb-0 break-words">
+          A file left over from a run that wasn&apos;t closed out makes the helper refuse to start; <span className="font-mono">sb closeout</span> clears it.
+        </p>
+      </section>
+      )}
+
+      <section data-testid="approve-datawrite-after" className="mb-4 text-sm text-dark min-w-0">
+        <h2 className="text-lg font-bold mb-2">After you approve</h2>
+        <ul className="list-disc pl-6 space-y-1 m-0 break-words">
+          <li>The desktop helper must pick the run up within 15 minutes, or it fails unrun.</li>
+          <li>It runs the gate first.</li>
+          <li>
+            Its window asks for Enter before the {datawriteOrgType(p) === 'sandbox' ? 'write' : 'live write'}
+            {w.kind === 'bulk' ? '' : ' and before any upload'}; q stops it with nothing changed.
+          </li>
+          <li>The run is limited to 4 hours.</li>
+          <li>Only counts and PASS or FAIL come back to Alfred. No rows, Ids, names, emails or amounts.</li>
+        </ul>
+      </section>
+    </div>
+  );
+}
+
 /** The config files the click writes. */
 export function sbFiles(payload) {
   if (payload?.command === 'org add') return ['orgs.json'];
@@ -470,7 +665,8 @@ export default function ApprovePage({ runner = callRunner, session = realSession
   const isSfRead = preview?.kind === 'sf_read';
   const isDataop = preview?.kind === 'sf_dataop';
   const isDataquery = preview?.kind === 'sf_dataquery';
-  const isGit = preview?.kind === 'git' || isSb || isSf || isSfRead || isDataop || isDataquery;
+  const isDatawrite = preview?.kind === 'sf_datawrite';
+  const isGit = preview?.kind === 'git' || isSb || isSf || isSfRead || isDataop || isDataquery || isDatawrite;
 
   useEffect(() => {
     if (!preview || dryStarted.current || isGit) return;
@@ -539,8 +735,8 @@ export default function ApprovePage({ runner = callRunner, session = realSession
     // The action id is the chat's handle: the helper's run row only exists once it picks the action up.
     const id = preview.action_id;
     // An sf_read's line is sf <id>, like a check's; a production data run's is dataop <id> (the helper's LINE_WORD).
-    const word = isSb ? 'sb' : isSf || isSfRead ? 'sf' : isDataop ? 'dataop' : isDataquery ? 'dataquery' : 'git';
-    const lines = isDataop || isDataquery ? [] : isSb ? sbLines(preview.payload) : isSf ? sfLines(preview.payload)
+    const word = isSb ? 'sb' : isSf || isSfRead ? 'sf' : isDataop ? 'dataop' : isDataquery ? 'dataquery' : isDatawrite ? 'datawrite' : 'git';
+    const lines = isDataop || isDataquery || isDatawrite ? [] : isSb ? sbLines(preview.payload) : isSf ? sfLines(preview.payload)
       : isSfRead ? sfReadLines(preview.payload) : gitLines(preview.payload, preview.project_code);
     return (
       <Shell preview={preview}>
@@ -575,6 +771,19 @@ export default function ApprovePage({ runner = callRunner, session = realSession
             )}
           </div>
         )}
+        {/* dataop_write-j5w: orange PRODUCTION or sky-blue SANDBOX, from org_type. */}
+        {isDatawrite && datawriteOrgType(preview.payload) === 'sandbox' && (
+          <div data-testid="approve-sandbox-write" role="alert"
+            className="mb-4 w-full bg-sky-700 text-white text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
+            Sandbox, changes records
+          </div>
+        )}
+        {isDatawrite && datawriteOrgType(preview.payload) === 'production' && (
+          <div data-testid="approve-production-write" role="alert"
+            className="mb-4 w-full bg-orange-400 text-black text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
+            Production, changes live records
+          </div>
+        )}
         {isSfRead && isProductionFullData(preview.payload) && (
           <div data-testid="approve-production-full-data" role="alert"
             className="mb-4 w-full bg-red-700 text-white text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
@@ -597,7 +806,8 @@ export default function ApprovePage({ runner = callRunner, session = realSession
         )}
         <p className="text-sm text-dark">Project</p>
         <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={preview.project_code} data-switchboard-kind={preview.kind}>{preview.project_code}</p>
-        {isDataop ? <DataopRun payload={preview.payload} /> : isDataquery ? <DataqueryRun payload={preview.payload} /> : (
+        {isDataop ? <DataopRun payload={preview.payload} /> : isDataquery ? <DataqueryRun payload={preview.payload} />
+          : isDatawrite ? <DatawriteRun payload={preview.payload} /> : (
           <ul data-testid={`approve-${isSfRead ? 'sf-read' : word}`} className="mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark break-words list-disc pl-8">
             {lines.map((l) => <li key={l}>{l}</li>)}
           </ul>
@@ -634,6 +844,8 @@ export default function ApprovePage({ runner = callRunner, session = realSession
                 ? 'It must pick it up within 15 minutes, or it fails unrun. It checks the stamp and the sandbox pass first, and pauses for your Enter before it writes. The result comes back to the chat when it finishes.'
                 : isDataquery
                 ? 'It must pick it up within 15 minutes, or it fails unrun. It checks every query\'s hash against the run folder first. Only the counts and a pass or fail come back to the chat.'
+                : isDatawrite
+                ? `It must pick it up within 15 minutes, or it fails unrun. It runs the gate first, and its window asks for your Enter before the write${preview.payload?.write?.kind === 'bulk' ? '' : ' and before any upload'}; q stops it with nothing changed. Only counts and PASS or FAIL come back to the chat.`
                 : 'It runs in a terminal window on your computer. The result comes back to the chat when it finishes.'}
               runId={id} />
             <ResultLine line={`${word} ${id}`} />
@@ -645,6 +857,8 @@ export default function ApprovePage({ runner = callRunner, session = realSession
                 ? 'A production data run has no dry run here: its sandbox rehearsal was the dry run. Approve runs this once, on your computer, against the live org.'
                 : isDataquery
                 ? 'A production read has no dry run. Approve runs these queries once, on your computer, against the live org. Nothing here writes.'
+                : isDatawrite
+                ? `A data write has no dry run here: its sandbox rehearsal was the dry run. Approve starts this once, on your computer, against ${datawriteOrgType(preview.payload) === 'sandbox' ? 'the sandbox' : 'the live org'}.`
                 : `${isSb ? 'An sb setup' : isSf ? 'An sf check' : isSfRead ? 'An sf read' : 'Git'} has no dry run. Approve runs this once, on your computer.`}
             </p>
             <div className="mb-4">

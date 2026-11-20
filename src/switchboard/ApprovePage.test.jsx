@@ -957,6 +957,216 @@ test('the other kinds have no read-only banner and no dataquery panel; sf_dataop
   }
 });
 
+// --- dataop_write-j5w A2: Data run v2's write link (kind sf_datawrite) ---
+
+const H3 = 'd'.repeat(64);
+const H4 = 'e'.repeat(64);
+const SELSHA = 'f'.repeat(64);
+const BROAD = "SELECT Id, GiftCommitmentId, Amount, LastModifiedById FROM GiftTransaction\nWHERE Source__c = 'ActBlue'";
+const IDS12 = Array.from({ length: 12 }, (_, i) => `'a0D5e00000${String(i + 1).padStart(5, '0')}AAA'`).join(', ');
+const BROAD12 = `SELECT Id, Amount, LastModifiedById FROM GiftTransaction WHERE Id IN (${IDS12})`;
+const WAIT_SOQL = 'SELECT COUNT() FROM GiftCommitment WHERE Rollup_Pending__c = true';
+const DW_BASE = { alias: 'cd-prod', org_type: 'production', repo: 'C:\\Users\\Alex\\projects\\common-defense',
+  run: 'data-ops/cd_fixc-q8d/fixc-2026-11-19', run_tag: 'cd_fixc-q8d-s9-ab12', request_sha256: REQ, selection_sha256: SELSHA,
+  object: 'GiftTransaction', problem: 'Forty-five installments were saved without a link to their gift commitment.', expected: 45 };
+const DW_BATCH = { ...DW_BASE, write: { kind: 'batch', class: 'FixCLinkBatch' },
+  uploads: [{ purpose: 'exclude', file: 'exclude.csv', sha256: H3, rows: 3 }],
+  queries: [
+    { step: 'gate', soql: SEL, sha256: SELSHA, file: 'selection.soql' },
+    { step: 'gate', soql: BROAD, sha256: H1, label: 'gate: broad snapshot' },
+    { step: 'after', soql: BROAD, sha256: H1, label: 'after: broad snapshot' },
+    { step: 'after', soql: SEL, sha256: SELSHA, label: 'after: selection' },
+    { step: 'after-counts', soql: "SELECT COUNT() FROM GiftTransaction WHERE Source__c = 'ActBlue' AND GiftCommitmentId = null", sha256: H2,
+      label: 'Installments with no gift commitment' },
+    { step: 'after-counts', soql: WAIT_SOQL, sha256: H4, label: 'Commitments whose totals are updating: wait',
+      wait: { stable_minutes: 2, limit_minutes: 30 } },
+  ] };
+const DW_BULK = { ...DW_BASE, alias: 'actblue', org_type: 'sandbox', write: { kind: 'bulk', operation: 'update', csv: 'update.csv', csv_sha256: H3 },
+  queries: [{ step: 'gate', soql: SEL, sha256: SELSHA, file: 'selection.soql' },
+    { step: 'after', soql: BROAD, sha256: H1, label: 'after: broad snapshot' }] };
+const DW_UNDO = { ...DW_BASE, expected: 12, write: { kind: 'undo', class: 'FixCUndoBatch', ids_file: 'undo-ids.csv', ids_sha256: H4 },
+  uploads: [{ purpose: 'undo-ids', file: 'undo-ids.csv', sha256: H4, rows: 12 }],
+  queries: [{ step: 'gate', soql: BROAD12, sha256: H1, label: 'gate: broad snapshot' },
+    { step: 'after', soql: BROAD12, sha256: H1, label: 'after: broad snapshot' }] };
+const DW = (payload, headline = 'PRODUCTION DATA WRITE cd_fixc-q8d ON cd-prod: ABOUT TO CHANGE 45 LIVE RECORDS OF GiftTransaction BY BATCH FixCLinkBatch') =>
+  ({ ok: true, kind: 'sf_datawrite', action_id: 'w1', fingerprint: 'fpw', project_code: 'cd_fixc-q8d', payload, headline,
+    expires_at: '2026-11-19T12:30:00Z' });
+const text = (id) => screen.getByTestId(id).textContent;
+
+test('sf_datawrite production: orange PRODUCTION banner, the plain sentence, every field in full', async () => {
+  runner({ preview: reply(DW(DW_BATCH)), approve: reply({ ok: true, action_id: 'w1', sent: true }) });
+  const { container } = open();
+  const banner = await screen.findByTestId('approve-production-write');
+  expect(banner).toHaveTextContent(/production, changes live records/i);
+  expect(banner).toHaveClass('bg-orange-400', 'text-black');
+  expect(screen.queryByTestId('approve-sandbox-write')).toBeNull();
+  expect(screen.queryByTestId('approve-production')).toBeNull();
+  expect(screen.queryByTestId('approve-production-read')).toBeNull();
+  expect(text('approve-datawrite-sentence')).toBe('This changes 45 live records of GiftTransaction in cd-prod.');
+  expect(text('approve-datawrite-problem')).toBe(DW_BASE.problem);
+  expect(text('approve-datawrite-alias')).toBe('cd-prod');
+  expect(text('approve-datawrite-object')).toBe('GiftTransaction');
+  expect(text('approve-datawrite-repo')).toBe('C:\\Users\\Alex\\projects\\common-defense');
+  expect(text('approve-datawrite-run')).toBe('data-ops/cd_fixc-q8d/fixc-2026-11-19');
+  expect(text('approve-datawrite-run-tag')).toBe('cd_fixc-q8d-s9-ab12');
+  expect(text('approve-datawrite-request')).toContain(REQ);
+  expect(text('approve-datawrite-selection')).toContain(SELSHA);
+  expect(text('approve-datawrite-write')).toBe('Batch Apex class FixCLinkBatch: new FixCLinkBatch(), runs SELECTION = selection.soql');
+  // Nothing folded away: no <details> in the write panel.
+  expect(screen.getByTestId('approve-datawrite').querySelector('details')).toBeNull();
+  expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'sf_datawrite');
+  expect(screen.getByText(/A data write has no dry run here/)).toHaveTextContent(/against the live org/);
+  expect(called('dry-run')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: /^approve and run$/i }));
+  expect(await screen.findByText('Sent to the desktop helper')).toBeInTheDocument();
+  expect(JSON.parse(called('approve')[0][1].body)).toEqual({ token: 'tok1', fingerprint: 'fpw' });
+  expect(screen.getByText('datawrite w1')).toBeInTheDocument();
+});
+
+test('sf_datawrite: every query in order under its step, with its label or file, full SOQL, full hash and its wait', async () => {
+  runner({ preview: reply(DW(DW_BATCH)) });
+  open();
+  await screen.findByTestId('approve-datawrite');
+  const stages = screen.getAllByTestId('approve-datawrite-stage');
+  expect(stages.map((s) => s.getAttribute('data-step'))).toEqual(['gate', 'after', 'after-counts']);
+  expect(stages.map((s) => s.querySelector('h2').textContent)).toEqual(['Gate', 'After', 'After counts']);
+  const qs = screen.getAllByTestId('approve-datawrite-query');
+  expect(qs.map((q) => q.getAttribute('data-step'))).toEqual(DW_BATCH.queries.map((q) => q.step));
+  qs.forEach((q, i) => {
+    const want = DW_BATCH.queries[i];
+    expect(q.querySelector('[data-testid="approve-datawrite-soql"]').textContent).toBe(want.soql);
+    expect(q.querySelector('[data-testid="approve-datawrite-sha"]').textContent).toContain(want.sha256);
+    expect(q.querySelector('[data-testid="approve-datawrite-source"]').textContent).toBe(want.file ? `File ${want.file}` : want.label);
+    expect(q.textContent.startsWith(`${i + 1}.`)).toBe(true);
+  });
+  expect(screen.getAllByTestId('approve-datawrite-wait')).toHaveLength(1);
+  expect(text('approve-datawrite-wait')).toBe('Waits until the count is steady for 2 minutes, for at most 30 minutes.');
+  expect(screen.queryByTestId('approve-datawrite-ids')).toBeNull();
+});
+
+test('sf_datawrite: the files it writes to production, with the fixed titles, and the leftover line', async () => {
+  runner({ preview: reply(DW(DW_BATCH)) });
+  open();
+  await screen.findByTestId('approve-datawrite-files');
+  expect(screen.getByTestId('approve-datawrite-files').querySelector('h2')).toHaveTextContent('Files the run writes to production');
+  const up = screen.getByTestId('approve-datawrite-upload');
+  expect(up).toHaveAttribute('data-purpose', 'exclude');
+  expect(up.querySelector('[data-testid="approve-datawrite-upload-title"]').textContent).toBe('dataop-exclude:FixCLinkBatch');
+  expect(up).toHaveTextContent('exclude.csv (3 rows)');
+  expect(up.querySelector('[data-testid="approve-datawrite-upload-sha"]').textContent).toContain(H3);
+  // s6b: exclude.csv once. The upload is listed, so the "if you leave records out" line is not.
+  expect(screen.queryByTestId('approve-datawrite-exclude')).toBeNull();
+  expect(screen.getByTestId('approve-datawrite-files').textContent.match(/exclude\.csv/g)).toHaveLength(1);
+  expect(text('approve-datawrite-failures')).toBe("Creates the failure file, a ContentVersion titled with the batch's job Id");
+  expect(text('approve-datawrite-leftover')).toBe("A file left over from a run that wasn't closed out makes the helper refuse to start; sb closeout clears it.");
+  const after = screen.getByTestId('approve-datawrite-after');
+  for (const line of [/pick the run up within 15 minutes/, /runs the gate first/, /asks for Enter before the live write and before any upload; q stops it with nothing changed/,
+    /limited to 4 hours/, /Only counts and PASS or FAIL come back to Alfred/]) expect(after).toHaveTextContent(line);
+});
+
+test('sf_datawrite: with no exclude upload, the page says exclude.csv once, as "if you leave records out at the gate"', async () => {
+  const { uploads: _u, ...noUploads } = DW_BATCH;
+  runner({ preview: reply(DW(noUploads)) });
+  open();
+  await screen.findByTestId('approve-datawrite-files');
+  expect(screen.queryByTestId('approve-datawrite-upload')).toBeNull();
+  expect(text('approve-datawrite-exclude')).toBe('exclude.csv, if you leave records out at the gate, titled dataop-exclude:FixCLinkBatch');
+  expect(screen.getByTestId('approve-datawrite-files').textContent.match(/exclude\.csv/g)).toHaveLength(1);
+  expect(screen.getByTestId('approve-datawrite-leftover')).toBeInTheDocument();
+});
+
+test('sf_datawrite sandbox batch: Enter "before the write", never "live write"; uploads still named', async () => {
+  runner({ preview: reply(DW({ ...DW_BATCH, alias: 'actblue', org_type: 'sandbox' })) });
+  open();
+  const after = await screen.findByTestId('approve-datawrite-after');
+  expect(after).toHaveTextContent(/asks for Enter before the write and before any upload; q stops it with nothing changed/);
+  expect(after).not.toHaveTextContent(/live write/);
+  expect(screen.getByTestId('approve-datawrite-files').querySelector('h2')).toHaveTextContent('Files the run writes to the sandbox');
+});
+
+test('sf_datawrite sandbox: a sky-blue SANDBOX banner, "sandbox records", never orange or the word production', async () => {
+  runner({ preview: reply(DW(DW_BULK, 'SANDBOX DATA WRITE cd_fixc-q8d ON actblue: ABOUT TO CHANGE 45 RECORDS OF GiftTransaction BY BULK UPDATE')) });
+  open();
+  const banner = await screen.findByTestId('approve-sandbox-write');
+  expect(banner).toHaveTextContent(/sandbox, changes records/i);
+  expect(banner).toHaveClass('bg-sky-700', 'text-white');
+  expect(banner.className).not.toMatch(/orange|red/);
+  expect(banner).not.toHaveTextContent(/production/i);
+  expect(screen.queryByTestId('approve-production-write')).toBeNull();
+  expect(text('approve-datawrite-sentence')).toBe('This changes 45 sandbox records of GiftTransaction in actblue.');
+  expect(text('approve-datawrite-write')).toBe(`Bulk update from update.csv${'d'.repeat(12)}${H3}`);
+  expect(text('approve-datawrite-csv-sha')).toContain(H3);
+  // s6b: a bulk write uploads nothing. Left-out records come out of the CSV; no file lines, no leftover line, and a
+  // title that doesn't claim the run writes files.
+  const files = screen.getByTestId('approve-datawrite-files');
+  expect(files.querySelector('h2')).toHaveTextContent('Records left out at the gate');
+  expect(files).not.toHaveTextContent(/Files the run writes/);
+  expect(text('approve-datawrite-bulk-exclude')).toBe('Records left out at the gate are removed from the CSV before the write.');
+  for (const id of ['approve-datawrite-upload', 'approve-datawrite-exclude', 'approve-datawrite-failures', 'approve-datawrite-leftover']) {
+    expect(screen.queryByTestId(id)).toBeNull();
+  }
+  const after = screen.getByTestId('approve-datawrite-after');
+  expect(after).toHaveTextContent(/asks for Enter before the write; q stops it with nothing changed/);
+  expect(after).not.toHaveTextContent(/live write|upload/);
+  expect(screen.getByText(/against the sandbox/)).toBeInTheDocument();
+  expect(screen.queryByText(/live records/)).toBeNull();
+});
+
+test('sf_datawrite undo: the reverse class, the Id file with its hash and rows, dataop-undo:<Class>, and the 12 Ids', async () => {
+  runner({ preview: reply(DW(DW_UNDO, 'PRODUCTION DATA WRITE cd_fixc-q8d ON cd-prod: ABOUT TO CHANGE 12 LIVE RECORDS OF GiftTransaction BY UNDO FixCUndoBatch')) });
+  open();
+  await screen.findByTestId('approve-production-write');
+  expect(text('approve-datawrite-sentence')).toBe('This changes 12 live records of GiftTransaction in cd-prod.');
+  expect(text('approve-datawrite-write')).toContain('Undo: reverse batch FixCUndoBatch reading undo-ids.csv, 12 rows');
+  expect(text('approve-datawrite-ids-sha')).toContain(H4);
+  expect(text('approve-datawrite-ids-rows')).toBe('12 rows');
+  const up = screen.getByTestId('approve-datawrite-upload');
+  expect(up).toHaveAttribute('data-purpose', 'undo-ids');
+  expect(up.querySelector('[data-testid="approve-datawrite-upload-title"]').textContent).toBe('dataop-undo:FixCUndoBatch');
+  expect(screen.queryByTestId('approve-datawrite-exclude')).toBeNull();
+  expect(text('approve-datawrite-failures')).toMatch(/batch's job Id/);
+  const ids = screen.getAllByTestId('approve-datawrite-ids');
+  expect(ids).toHaveLength(2);
+  for (const n of ids) expect(n.textContent).toBe('This snapshot lists 12 record Ids.');
+  expect(screen.getAllByTestId('approve-datawrite-soql')[0].textContent).toBe(BROAD12);
+});
+
+test('sf_datawrite: Don\'t run gives the datawrite cancelled line', async () => {
+  runner({ preview: reply(DW(DW_BATCH)), cancel: reply({ ok: true, cancelled: true, reason: 'not today' }) });
+  open();
+  await screen.findByTestId('approve-datawrite');
+  fireEvent.change(screen.getByLabelText(/reason for not running/i), { target: { value: 'not today' } });
+  fireEvent.click(screen.getByRole('button', { name: /don't run/i }));
+  expect(await screen.findByText('datawrite w1 cancelled: not today')).toBeInTheDocument();
+});
+
+test('sf_datawrite: helpers for the org type, the Id count, the titles and the sentence', () => {
+  const { datawriteOrgType, datawriteIdCount, datawriteUploadTitle, datawriteSentence } = jest.requireActual('./ApprovePage');
+  expect(datawriteOrgType({ org_type: 'sandbox' })).toBe('sandbox');
+  for (const p of [{ org_type: 'production' }, {}, null, { org_type: 'Sandbox' }]) expect(datawriteOrgType(p)).toBe('production');
+  expect(datawriteIdCount(BROAD12)).toBe(12);
+  expect(datawriteIdCount("WHERE Id = 'a0D000000000001' OR Name = 'Closed Won' OR Name = 'a0D0000000000012'")).toBe(1);
+  expect(datawriteUploadTitle('exclude', { kind: 'batch', class: 'X' })).toBe('dataop-exclude:X');
+  expect(datawriteUploadTitle('undo-ids', { kind: 'undo', class: 'Y' })).toBe('dataop-undo:Y');
+  expect(datawriteUploadTitle('exclude', { kind: 'bulk' })).toBeNull();
+  expect(datawriteSentence({ ...DW_BASE, expected: 1 })).toBe('This changes 1 live record of GiftTransaction in cd-prod.');
+  expect(datawriteSentence({ ...DW_BASE, expected: 26571 })).toBe('This changes 26,571 live records of GiftTransaction in cd-prod.');
+});
+
+test('sf_dataop and sf_dataquery pages are unchanged: no write banner or datawrite panel', async () => {
+  for (const preview of [DOP, DQ(DQ_EXPORT), DQ({ ...DQ_COUNT, org_type: 'sandbox' })]) {
+    runner({ preview: reply(preview) });
+    const { unmount } = open();
+    await screen.findByTestId(preview.kind === 'sf_dataop' ? 'approve-dataop' : 'approve-dataquery');
+    expect(screen.queryByTestId('approve-production-write')).toBeNull();
+    expect(screen.queryByTestId('approve-sandbox-write')).toBeNull();
+    expect(screen.queryByTestId('approve-datawrite')).toBeNull();
+    if (preview.kind === 'sf_dataop') expect(screen.getByTestId('approve-production')).toHaveTextContent('Production, live client data');
+    else expect(screen.getByTestId(preview.payload.org_type === 'sandbox' ? 'approve-sandbox-read' : 'approve-production-read')).toBeInTheDocument();
+    unmount();
+  }
+});
+
 test('sf read: a metadata read of several objects lists them', () => {
   const { sfReadLines } = jest.requireActual('./ApprovePage');
   const lines = sfReadLines({ alias: 'cd-prod', production: true, level: 'metadata', objects: ['Contact', 'Account'] });

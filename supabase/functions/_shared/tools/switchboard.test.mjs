@@ -1464,3 +1464,251 @@ test("sf_dataquery: the database's refusal and a link refusal are reported, not 
   await assert.rejects(queueDq({ project_code: DQ_CODE, ...DQ_COUNT },
     helperDb({ link: { data: null, error: { code: "55000", message: "another link is live" } } })), new RegExp(`queued as ${ACTION_ID}, but no link`));
 });
+
+// --- dataop_write-j5w A2: queue_switchboard_sf_datawrite -----------------------------------------------------------
+// The payloads and refusals are supabase/tests/dataop_write-j5w/1_verify_sf_datawrite.sql's, so the tool and the
+// database are checked against the same list.
+
+const DW_CODE = "dataop-verify-j5w";
+const HEX2 = "fedcba9876543210".repeat(4);
+const HEX3 = "aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbccccccccccccccccdddddddddddddddd";
+const DW_BROAD = "SELECT Id, GiftCommitmentId, Amount, LastModifiedById FROM GiftTransaction WHERE Source__c = 'ActBlue'";
+const DW_GC = "SELECT Id, ExpectedTotalAmount FROM GiftCommitment WHERE Source__c = 'ActBlue'";
+const q = (step, soql, src) => ({ step, soql, sha256: hex(soql), ...src });
+const Q_SEL = q("gate", SEL, { file: "selection.soql" });
+const Q_GBROAD = q("gate", DW_BROAD, { label: "gate: broad snapshot" });
+const Q_GGC = q("gate", DW_GC, { label: "gate: gift commitments" });
+const Q_ABROAD = q("after", DW_BROAD, { label: "after: broad snapshot" });
+const Q_ASEL = q("after", SEL, { label: "after: selection" });
+const Q_R1 = q("after-counts", R1, { label: "Installments with no gift commitment" });
+const Q_WAIT = q("after-counts", R2, { label: "Commitments whose totals are updating: wait", wait: { stable_minutes: 2, limit_minutes: 30 } });
+const DW_BASE = { alias: "cd-prod", org_type: "production", repo: "C:\\Users\\Alex\\projects\\common-defense",
+  run: `data-ops/${DW_CODE}/fixc-2026-11-19`, run_tag: `${DW_CODE}-s9-ab12`, request_sha256: "0123456789abcdef".repeat(4),
+  selection_sha256: hex(SEL), object: "GiftTransaction",
+  problem: "Forty-five installments were saved without a link to their gift commitment.", expected: 45 };
+const DW_BATCH = { ...DW_BASE, write: { kind: "batch", class: "FixCLinkBatch" }, queries: [Q_SEL, Q_GBROAD, Q_ABROAD, Q_ASEL, Q_R1, Q_WAIT] };
+// s6b: a bulk write uploads nothing; the exclude upload lives on a batch.
+const DW_BULK = { ...DW_BASE, org_type: "sandbox", write: { kind: "bulk", operation: "update", csv: "update.csv", csv_sha256: HEX2 },
+  queries: [Q_SEL, Q_GGC, Q_ABROAD, Q_R1] };
+const EXCLUDE = { purpose: "exclude", file: "exclude.csv", sha256: HEX3, rows: 3 };
+const DW_BATCHX = { ...DW_BATCH, uploads: [EXCLUDE] };
+const DW_UNDO = { ...DW_BASE, write: { kind: "undo", class: "FixCUndoBatch", ids_file: "undo-ids.csv", ids_sha256: HEX2 },
+  uploads: [{ purpose: "undo-ids", file: "undo-ids.csv", sha256: HEX2, rows: 45 }], queries: [Q_GBROAD, Q_ABROAD] };
+const idList = (n) => Array.from({ length: n }, (_, i) => `'a0D${String(i + 1).padStart(12, "0")}AAA'`).join(",");
+const broadIds = (n) => `SELECT Id, Amount, LastModifiedById FROM GiftTransaction WHERE Id IN (${idList(n)})`;
+const setQ = (p, i, query) => ({ ...p, queries: p.queries.map((x, j) => (j === i ? query : x)) });
+const dwProblem = (p) => m.sfDatawriteProblem(DW_CODE, p);
+const queueDw = (args, db = helperDb()) => m.queueSwitchboardSfDatawriteTool.handler(args, { db });
+const longExport = (n, label, step) => q(step, `SELECT Id, Name FROM GiftTransaction WHERE Name != '${"x".repeat(n)}'`, { label });
+const waits = (n, stable, limit) => Array.from({ length: n }, (_, i) =>
+  q("after-counts", R2, { label: `Rule ${i + 1}: wait`, wait: { stable_minutes: stable, limit_minutes: limit } }));
+const counts = (n) => Array.from({ length: n }, (_, i) =>
+  q("after-counts", `SELECT COUNT() FROM Contact WHERE Name != 'n${i + 1}'`, { label: `Rule ${i + 1}` }));
+
+test("sf_datawrite: the Id pattern counts 15- and 18-character quoted literals only", () => {
+  assert.equal(m.datawriteIdCount(broadIds(200)), 200);
+  assert.equal(m.datawriteIdCount("WHERE Id = 'a0D000000000001' OR Id = 'a0D000000000001AAA'"), 2);
+  assert.equal(m.datawriteIdCount("WHERE Name = 'a0D0000000000012' OR Name = 'Closed Won' OR Id = a0D000000000001AAA"), 0);
+});
+
+test("sf_datawrite: tier 2, literal tables; queued as sf_datawrite with its project code, then the link; nothing else", async () => {
+  assert.equal(m.queueSwitchboardSfDatawriteTool.tier, 2);
+  assert.deepEqual(m.queueSwitchboardSfDatawriteTool.tables, { reads: ["switchboard_actions", "switchboard_settings"], writes: ["switchboard_actions"] });
+  const db = helperDb();
+  const out = await queueDw({ project_code: DW_CODE, chat_url: "x", ...DW_BATCH }, db);
+  assert.deepEqual(db.calls.map((c) => c[0]), ["switchboard_queue_helper", "switchboard_issue_link"]);
+  const [, params] = db.calls[0];
+  assert.equal(params.p_kind, "sf_datawrite");
+  assert.equal(params.p_project_code, DW_CODE);
+  assert.deepEqual(params.p_payload, DW_BATCH);
+  assert.equal(params.p_chat_url, null);
+  assert.equal(params.p_headline, `PRODUCTION DATA WRITE ${DW_CODE} ON cd-prod: ABOUT TO CHANGE 45 LIVE RECORDS OF GiftTransaction BY BATCH FixCLinkBatch`);
+  assert.deepEqual(db.calls[1][1], { p_action_id: ACTION_ID });
+  assert.equal(out.url, LINK.url);
+  assert.equal(out.action_id, ACTION_ID);
+  assert.match(out.next, /Give Alex the url whole/);
+  assert.match(out.next, /ONLY HIS CLICK ON APPROVE STARTS THIS PRODUCTION WRITE/);
+  assert.match(out.next, /about to change 45 live records/);
+  assert.match(out.next, new RegExp(`datawrite ${ACTION_ID} done or failed\\) arrives in this chat by itself`));
+  assert.match(out.next, /Only counts and pass or fail come back/);
+});
+
+test("sf_datawrite: the headline says SANDBOX or PRODUCTION, how many, and how it writes", () => {
+  assert.equal(m.sfDatawriteHeadline("p-x", DW_BULK), "SANDBOX DATA WRITE p-x ON cd-prod: ABOUT TO CHANGE 45 RECORDS OF GiftTransaction BY BULK UPDATE");
+  assert.equal(m.sfDatawriteHeadline("p-x", DW_UNDO), "PRODUCTION DATA WRITE p-x ON cd-prod: ABOUT TO CHANGE 45 LIVE RECORDS OF GiftTransaction BY UNDO FixCUndoBatch");
+  assert.equal(m.sfDatawriteHeadline("p-x", { ...DW_BATCH, expected: 26571 }),
+    "PRODUCTION DATA WRITE p-x ON cd-prod: ABOUT TO CHANGE 26,571 LIVE RECORDS OF GiftTransaction BY BATCH FixCLinkBatch");
+  assert.equal(m.sfDatawriteHeadline("p-x", { ...DW_BULK, expected: 1 }), "SANDBOX DATA WRITE p-x ON cd-prod: ABOUT TO CHANGE 1 RECORD OF GiftTransaction BY BULK UPDATE");
+  assert.doesNotMatch(m.sfDatawriteHeadline("p-x", DW_BULK), /PRODUCTION|LIVE/);
+});
+
+test("sf_datawrite: a sandbox bulk link's next text says SANDBOX, never PRODUCTION", async () => {
+  const out = await queueDw({ project_code: DW_CODE, ...DW_BULK });
+  assert.match(out.next, /STARTS THIS SANDBOX WRITE/);
+  assert.match(out.next, /records in the sandbox/);
+  assert.doesNotMatch(out.next, /PRODUCTION|live records/);
+});
+
+test("sf_datawrite: valid batch, bulk and undo payloads, and the edges of every limit, are accepted", async () => {
+  const under = setQ(setQ(DW_BATCH, 1, longExport(95000, "gate: gift commitments", "gate")), 2, longExport(95000, "after: broad snapshot", "after"));
+  const len = m.jsonbTextLength(under);
+  assert.ok(len > 190000 && len <= 200000, String(len));
+  const { problem: _p, ...noProblem } = DW_BATCH;
+  for (const p of [
+    DW_BATCH, DW_BULK, DW_UNDO, DW_BATCHX, noProblem, under,
+    setQ(DW_BATCH, 1, q("gate", broadIds(200), { label: "gate: broad snapshot" })),
+    setQ(DW_UNDO, 0, q("gate", broadIds(200), { label: "gate: broad snapshot" })),
+    { ...DW_BATCH, queries: [Q_SEL, Q_ABROAD] },
+    { ...DW_BATCH, queries: [Q_SEL, Q_ABROAD, ...counts(40)] },
+    { ...DW_BATCH, queries: [Q_SEL, Q_ABROAD, ...waits(3, 60, 60)] },
+    { ...DW_BATCH, run: `data-ops\\${DW_CODE}\\fixc-2026-11-19` },
+  ]) {
+    assert.equal(await dwProblem(p), null, JSON.stringify(p).slice(0, 160));
+    assert.deepEqual(await m.sfDatawritePayload(DW_CODE, p), { payload: p });
+  }
+});
+
+test("sf_datawrite: every refusal gives the database's sentence, and nothing is queued", async () => {
+  const big = setQ(setQ(DW_BATCH, 1, longExport(99800, "gate: gift commitments", "gate")), 2, longExport(99800, "after: broad snapshot", "after"));
+  const bigLen = m.jsonbTextLength(big);
+  assert.ok(bigLen > 200000);
+  const idSel = "SELECT Id FROM GiftTransaction WHERE Id = 'a0D000000000001AAA'";
+  const oneId = "SELECT COUNT() FROM GiftTransaction WHERE Id = 'a0D000000000001AAA'";
+  const bad = [
+    [{ ...DW_BATCH, ids: ["a0D000000000001AAA"] }, "the payload does not take ids. Pass sb's printed arguments exactly as they are."],
+    [{ ...DW_BATCH, write: { ...DW_BATCH.write, ids: [] } },
+      "a batch write is {kind: batch, class} only: the class name, with no Ids or start arguments (production starts new <Class>())."],
+    [{ ...DW_BATCH, write: { ...DW_BATCH.write, query: SEL } },
+      "a batch write is {kind: batch, class} only: the class name, with no Ids or start arguments (production starts new <Class>())."],
+    [setQ(DW_BATCH, 0, { ...Q_SEL, rows: [] }), "the query 'selection.soql' does not take rows."],
+    [{ ...DW_BATCH, uploads: [{ ...EXCLUDE, ids: [] }] }, "each upload is {purpose, file, sha256, rows}, nothing more or less."],
+    [{ ...DW_BULK, uploads: [EXCLUDE] }, "a bulk write uploads nothing; remove uploads."],
+    [{ ...DW_BULK, uploads: [] }, "a bulk write uploads nothing; remove uploads."],
+    [{ ...DW_BATCH, org_type: "prod" }, 'org_type must be exactly "sandbox" or "production", as sb printed it from orgs.json.'],
+    [(({ org_type: _o, ...r }) => r)(DW_BATCH), "missing org_type: pass every argument sb printed."],
+    [(({ selection_sha256: _s, ...r }) => r)(DW_BATCH), "missing selection_sha256: pass every argument sb printed."],
+    [setQ(DW_BATCH, 1, { ...Q_GBROAD, sha256: "0".repeat(64) }),
+      "the query 'gate: broad snapshot' has a sha256 that isn't the SHA-256 of its soql's exact bytes: pass both as sb printed them."],
+    [{ ...DW_BATCH, request_sha256: "0123456789ABCDEF".repeat(4) }, "request_sha256 must be request.json's SHA-256: 64 lower-case hex characters."],
+    [{ ...DW_BATCH, selection_sha256: HEX3 },
+      'the gate\'s first export must be selection.soql (file "selection.soql"), with its sha256 equal to selection_sha256.'],
+    [{ ...DW_BATCH, queries: [Q_SEL, Q_GBROAD, Q_R1, Q_ABROAD] },
+      "the query 'after: broad snapshot' (after) comes after a later step: list the gate first, then after, then after-counts."],
+    [{ ...DW_BATCH, queries: [Q_ABROAD, Q_SEL, Q_R1] },
+      "the query 'selection.soql' (gate) comes after a later step: list the gate first, then after, then after-counts."],
+    [{ ...DW_BATCH, queries: [Q_SEL, Q_GBROAD, Q_ABROAD, Q_R1, Q_R1] },
+      "the label 'Installments with no gift commitment' is used twice: labels are unique within a link."],
+    [setQ(DW_BATCH, 1, q("gate", broadIds(201), { label: "gate: broad snapshot" })),
+      "the query 'gate: broad snapshot' lists 201 Ids; the limit is 200. Select by criteria instead, or split the run."],
+    [setQ(DW_BATCH, 4, q("after-counts", oneId, { label: "One record" })),
+      "the query 'One record' lists 1 Id; only an export labelled \"... broad snapshot\" may list Ids (at most 200). Select by criteria instead."],
+    [setQ(DW_BATCH, 4, q("after-counts", "SELECT COUNT() FROM GiftTransaction WHERE Id = 'a0D000000000001'", { label: "One record" })),
+      "the query 'One record' lists 1 Id; only an export labelled \"... broad snapshot\" may list Ids (at most 200). Select by criteria instead."],
+    [{ ...setQ(DW_BATCH, 0, q("gate", idSel, { file: "selection.soql" })), selection_sha256: hex(idSel) },
+      "the query 'selection.soql' lists 1 Id; only an export labelled \"... broad snapshot\" may list Ids (at most 200). Select by criteria instead."],
+    [setQ(DW_BULK, 1, q("gate", "SELECT Id FROM GiftCommitment WHERE Id = 'a0E000000000001AAA'", { label: "gate: gift commitments" })),
+      "the query 'gate: gift commitments' lists 1 Id; only an export labelled \"... broad snapshot\" may list Ids (at most 200). Select by criteria instead."],
+    [big, `the payload is ${bigLen.toLocaleString("en-US")} characters; the limit is 200,000. Select by criteria instead of long lists, or split the run.`],
+    [{ ...DW_UNDO, uploads: [{ ...DW_UNDO.uploads[0], rows: 44 }] },
+      "the undo Id file has 44 rows but expected is 45: they must be equal, since expected is the Id file's row count."],
+    [{ ...DW_UNDO, uploads: [{ ...DW_UNDO.uploads[0], sha256: HEX3 }] },
+      "the undo-ids upload must be the write's Id file: the same file and sha256 as write.ids_file and write.ids_sha256."],
+    [{ ...DW_UNDO, uploads: [{ ...DW_UNDO.uploads[0], file: "other.csv" }] },
+      "the undo-ids upload must be the write's Id file: the same file and sha256 as write.ids_file and write.ids_sha256."],
+    [(({ uploads: _u, ...r }) => r)(DW_UNDO),
+      'an undo needs its Id file in uploads: {purpose: "undo-ids", file: <ids_file>, sha256: <ids_sha256>, rows: <expected>}.'],
+    [{ ...DW_BATCH, uploads: [{ purpose: "undo-ids", file: "undo-ids.csv", sha256: HEX2, rows: 45 }] },
+      "only an undo uploads an Id file: leave the undo-ids upload out."],
+    [{ ...DW_BATCH, uploads: [{ ...EXCLUDE, rows: 45 }] },
+      "the exclude upload leaves out 45 records, not fewer than the 45 the write changes. Leave out fewer, or go back to diagnosis."],
+    [{ ...DW_BATCH, uploads: [EXCLUDE, EXCLUDE] }, "there are two exclude uploads: list each purpose once."],
+    [{ ...DW_UNDO, uploads: [DW_UNDO.uploads[0], EXCLUDE, EXCLUDE] },
+      "uploads must list at most 2 files, each {purpose, file, sha256, rows}, or be left out."],
+    [{ ...DW_BULK, write: { ...DW_BULK.write, operation: "insert" } }, 'a bulk write is an update only: operation must be "update".'],
+    [{ ...DW_BULK, write: (({ csv_sha256: _c, ...r }) => r)(DW_BULK.write) },
+      "a bulk write is {kind: bulk, operation: update, csv, csv_sha256}, nothing more or less."],
+    [{ ...DW_BATCH, write: { kind: "delete", class: "X" } }, "write.kind must be batch, bulk or undo."],
+    [{ ...DW_BATCH, queries: [Q_SEL, Q_GBROAD, Q_ASEL, Q_R1] },
+      'the after step needs "after: broad snapshot", the same fields as the before broad snapshot.'],
+    [setQ(DW_BATCH, 2, { ...Q_ABROAD, label: "after: other" }),
+      'an after export is labelled "after: broad snapshot" (required) or "after: selection" (optional).'],
+    [setQ(DW_BATCH, 3, q("after", DW_BROAD, { label: "after: selection" })),
+      "the query 'after: selection' is selection.soql run again: its sha256 must equal selection_sha256."],
+    [{ ...DW_BATCH, queries: [Q_GBROAD, Q_ABROAD] },
+      'the gate\'s first export must be selection.soql (file "selection.soql"), with its sha256 equal to selection_sha256.'],
+    [{ ...DW_BATCH, queries: [Q_SEL, Q_GBROAD, Q_GGC, Q_ABROAD] }, "the gate has 3 exports; it takes 1 or 2 (an undo, exactly 1)."],
+    [{ ...DW_UNDO, queries: [Q_SEL, Q_ABROAD] },
+      'an undo\'s gate is a fresh export of the broad snapshot, labelled e.g. "gate: broad snapshot".'],
+    [{ ...DW_UNDO, queries: [Q_GBROAD, Q_GGC, Q_ABROAD] }, "an undo's gate is exactly one export: a fresh export of the broad snapshot."],
+    [{ ...DW_UNDO, queries: [Q_GBROAD, Q_ABROAD, Q_ASEL] }, 'an undo\'s after is only "after: broad snapshot": leave "after: selection" out.'],
+    [setQ(DW_BATCH, 4, { ...Q_R1, wait: { stable_minutes: 2, limit_minutes: 30 } }),
+      "the query 'Installments with no gift commitment' takes no wait: only an after-count labelled \"...: wait\" does."],
+    [setQ(DW_BATCH, 5, { ...Q_WAIT, wait: { stable_minutes: 0, limit_minutes: 30 } }),
+      "the query 'Commitments whose totals are updating: wait''s wait must be {stable_minutes: 1 to 60, limit_minutes: 1 to 240}."],
+    [setQ(DW_BATCH, 5, { ...Q_WAIT, wait: { stable_minutes: 2, limit_minutes: 30, every: 1 } }),
+      "the query 'Commitments whose totals are updating: wait''s wait must be {stable_minutes: 1 to 60, limit_minutes: 1 to 240}."],
+    [{ ...DW_BATCH, queries: [Q_SEL, Q_ABROAD, ...waits(4, 2, 50)] },
+      "the waits add up to 200 minutes; the limit is 180, so the run fits its 4 hours. Shorten the waits, or move a rule to a count link."],
+    [{ ...DW_BATCH, queries: [Q_SEL, Q_ABROAD, ...counts(41)] }, "there are 41 after-counts; the limit is 40. Move the rest to a count link."],
+    [{ ...DW_BATCH, queries: [Q_SEL] }, "queries must list 2 to 44 queries: the gate, the after export, then the after counts."],
+    [{ ...DW_BATCH, expected: 0 }, "expected must be the whole number of records the write changes, 1 to 999,999,999."],
+    [{ ...DW_BATCH, expected: "45" }, "expected must be the whole number of records the write changes, 1 to 999,999,999."],
+    [{ ...DW_BATCH, expected: 45.5 }, "expected must be the whole number of records the write changes, 1 to 999,999,999."],
+    [{ ...DW_BATCH, problem: "Too short" }, "problem must be the request's problem sentence: one line of 20 to 600 characters, or left out."],
+    [setQ(DW_BATCH, 1, q("gate", R1, { label: "gate: a count" })),
+      "the query 'gate: a count' is an export: SELECT Id, ... FROM ..., with no COUNT(."],
+    [setQ(DW_BATCH, 4, q("after-counts", DW_GC, { label: "An export" })),
+      "the query 'An export' is a count: SELECT COUNT() FROM <object> WHERE ..., with no GROUP BY."],
+    [setQ(DW_BATCH, 4, q("after-counts", "SELECT COUNT() FROM Contact WHERE Name != null; DELETE", { label: "Semi" })),
+      "the query 'Semi' has a semicolon: one query, no ;."],
+    [setQ(DW_BATCH, 1, { ...Q_GBROAD, step: "before" }), "the query 'gate: broad snapshot' needs a step: gate, after or after-counts."],
+    [setQ(DW_BATCH, 0, { ...Q_SEL, label: "selection" }), "the query 'selection' needs exactly one of file and label."],
+    [{ ...DW_BATCH, run: "data-ops/other-code/fixc-2026-11-19" },
+      `run must be the run folder inside repo: data-ops/${DW_CODE}/<run>, one folder, with no ..`],
+    [{ ...DW_BATCH, run_tag: "other-code-s9-ab12" }, `run_tag must be this project's run tag, e.g. ${DW_CODE}-s4-ab12.`],
+  ];
+  for (const [p, sentence] of bad) {
+    assert.equal(await dwProblem(p), sentence, JSON.stringify(p).slice(0, 160));
+    assert.deepEqual(await m.sfDatawritePayload(DW_CODE, p), { refused: sentence });
+  }
+  const db = helperDb();
+  await assert.rejects(queueDw({ project_code: DW_CODE, ...DW_BATCH, org_type: "prod" }, db),
+    /^Error: queue_switchboard_sf_datawrite: refused: org_type must be exactly "sandbox" or "production"/);
+  await assert.rejects(queueDw({ ...DW_BATCH }, db), /`project_code`/);
+  assert.equal(db.calls.length, 0);
+});
+
+test("sf_datawrite: a label with a quote or backslash is named as Postgres quote_literal names it", async () => {
+  assert.equal(await dwProblem(setQ(DW_BATCH, 4, { ...Q_R1, label: "Bob's rule", wait: { stable_minutes: 2, limit_minutes: 3 } })),
+    "the query 'Bob''s rule' takes no wait: only an after-count labelled \"...: wait\" does.");
+  assert.equal(await dwProblem(setQ(DW_BATCH, 4, { ...Q_R1, label: "a\\b", wait: { stable_minutes: 2, limit_minutes: 3 } })),
+    "the query E'a\\\\b' takes no wait: only an after-count labelled \"...: wait\" does.");
+});
+
+test("sf_datawrite: refusals say what to fix; operational failures say the call can be made again; neither says do not retry", async () => {
+  await assert.rejects(queueDw({ project_code: DW_CODE, ...DW_BATCH },
+    helperDb({ queue: { data: null, error: { code: "23514", message: "switchboard_queue_helper: refused: the query 'x' lists 1 Id" } } })),
+    /refused: switchboard_queue_helper: refused: the query 'x' lists 1 Id/);
+  const opQueue = await queueDw({ project_code: DW_CODE, ...DW_BATCH },
+    helperDb({ queue: { data: null, error: { code: "57014", message: "canceling statement due to statement timeout" } } })).catch((e) => e);
+  assert.match(opQueue.message, /queueing the write link failed: canceling statement due to statement timeout \[57014\]\. Nothing was queued; the same call can be made again\./);
+  await assert.rejects(queueDw({ project_code: DW_CODE, ...DW_BATCH },
+    helperDb({ link: { data: null, error: { code: "55000", message: "another link is live" } } })), new RegExp(`queued as ${ACTION_ID}, but no link: another link is live`));
+  const opLink = await queueDw({ project_code: DW_CODE, ...DW_BATCH },
+    helperDb({ link: { data: null, error: { code: "08006", message: "connection failure" } } })).catch((e) => e);
+  assert.match(opLink.message, new RegExp(`queued as ${ACTION_ID}, but issuing its link failed: connection failure \\[08006\\]\\. Issue it again with issue_switchboard_link for ${ACTION_ID}\\.`));
+  for (const e of [opQueue, opLink]) assert.doesNotMatch(e.message, /not retry|don't retry|do not/i);
+});
+
+test("sf_datawrite: v1 sf_dataop is untouched: its payload, headline and next text are as before", async () => {
+  assert.deepEqual(m.sfDataopPayload(DATAOP), { payload: DATAOP });
+  assert.match(m.sfDataopPayload({ ...DATAOP, queries: DW_BATCH.queries }).refused, /does not take queries/);
+  assert.equal(m.sfDataopHeadline("p-x", DATAOP),
+    "PRODUCTION DATA RUN p-x ON cd-prod: ABOUT TO CHANGE 26,571 LIVE RECORDS OF Demo_Gift__c BY BATCH FixCLinkBatch");
+  const db = helperDb();
+  const out = await queueDataop({ project_code: "p-x", ...DATAOP }, db);
+  assert.equal(db.calls[0][1].p_kind, "sf_dataop");
+  assert.match(out.next, new RegExp(`dataop ${ACTION_ID} done or failed`));
+  // And a v1 payload is no sf_datawrite.
+  assert.match(await dwProblem(DATAOP), /^the payload does not take plan, preflight_at, rehearsal, rows, stamp\./);
+});

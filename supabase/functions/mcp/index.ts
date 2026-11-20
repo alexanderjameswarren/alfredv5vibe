@@ -105,7 +105,7 @@ import {
 import {
   getClaimStateTool, getSqlReadTool, getSwitchboardRunTool, getSwitchboardSfResultTool, issueSwitchboardLinkTool,
   queueSwitchboardGitTool, queueSwitchboardSbSetupTool, queueSwitchboardSfCheckTool, queueSwitchboardSfDataopTool,
-  queueSwitchboardSfDataqueryTool, queueSwitchboardSfReadTool,
+  queueSwitchboardSfDataqueryTool, queueSwitchboardSfDatawriteTool, queueSwitchboardSfReadTool,
 } from "../_shared/tools/switchboard.ts";
 import {
   getClaudeNotificationSettingsTool,
@@ -3765,6 +3765,58 @@ export function createMcpServer(token: string) {
       },
     },
     async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardSfDataqueryTool, args, token),
+  );
+
+  // dataop_write-j5w A2: Data run v2's write link (gate, write, after export and after counts under one approval).
+  server.registerTool(
+    "queue_switchboard_sf_datawrite",
+    {
+      title: "Queue Switchboard Sf Datawrite",
+      description:
+        "Queue a Data run v2 WRITE link (a production or sandbox org): the gate, the write (a Batch class, a bulk update or an undo), the after export and the after counts, all under one approval, and issue its single-use link in the same call. ONLY ALEX'S CLICK ON APPROVE STARTS IT: no tool, CLI or Claude session can approve or run it, and the desktop helper asks him for Enter before the live write and before any upload. " +
+        "THE ARGUMENTS COME FROM SB: pass every argument sb printed, verbatim, SOQL included; never write, edit, trim, round or reorder one. Each query's sha256 must be the SHA-256 of its soql's exact bytes. " +
+        "Queries go gate, then after, then after-counts. Only an export labelled \"... broad snapshot\" may list Ids, at most 200; every other query selects by criteria. The payload is at most 200,000 characters. A refusal says what to fix. " +
+        "The approve page shows a PRODUCTION or SANDBOX banner from org_type, how many records the run changes (expected), the write, every query in full and the files it uploads. After the click the helper must pick it up within 15 minutes or it fails unrun. " +
+        "One live link per project code. Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole; it lasts 30 minutes. The result line (datawrite <action id> done or failed) arrives in this chat by itself. Only counts and pass or fail come back, never rows or Ids: read them with get_switchboard_run, run.result.pass and run.result.datawrite. Tier 2.",
+      inputSchema: {
+        project_code: z.string().describe("The data operation's project code, as sb printed it."),
+        alias: z.string().describe("As sb printed it: the org's alias."),
+        org_type: z.enum(["sandbox", "production"]).describe("As sb printed it: the org's type, sandbox or production."),
+        repo: z.string().describe("As sb printed it: the client checkout's absolute path."),
+        run: z.string().describe("As sb printed it: the run folder inside repo, data-ops/<project code>/<run>."),
+        run_tag: z.string().describe("As sb printed it: the run tag of the CLI step that asked for the link."),
+        request_sha256: z.string().describe("As sb printed it: request.json's SHA-256."),
+        selection_sha256: z.string().describe("As sb printed it: selection.soql's SHA-256."),
+        object: z.string().describe("As sb printed it: the object the write changes."),
+        problem: z.string().optional().describe("As sb printed it, if it printed one: the request's problem sentence."),
+        expected: z.number().int().describe("As sb printed it: how many records the write changes."),
+        write: z.object({
+          kind: z.enum(["batch", "bulk", "undo"]),
+          class: z.string().optional(),
+          operation: z.string().optional(),
+          csv: z.string().optional(),
+          csv_sha256: z.string().optional(),
+          ids_file: z.string().optional(),
+          ids_sha256: z.string().optional(),
+        }).passthrough().describe("As sb printed it: {kind: batch, class}, {kind: bulk, operation: update, csv, csv_sha256} or {kind: undo, class, ids_file, ids_sha256}."),
+        uploads: z.array(z.object({
+          purpose: z.enum(["exclude", "undo-ids"]),
+          file: z.string(),
+          sha256: z.string(),
+          rows: z.number().int(),
+        }).passthrough()).optional().describe("As sb printed it, if it printed any: the files the run uploads, each {purpose, file, sha256, rows}."),
+        queries: z.array(z.object({
+          step: z.enum(["gate", "after", "after-counts"]),
+          soql: z.string(),
+          sha256: z.string(),
+          file: z.string().optional(),
+          label: z.string().optional(),
+          wait: z.object({ stable_minutes: z.number().int(), limit_minutes: z.number().int() }).passthrough().optional(),
+        }).passthrough()).describe("As sb printed it: 2 to 44 queries, each {step, soql, sha256, file or label, wait?}."),
+        chat_url: z.string().optional().describe("Optional; don't guess it. Only a https://claude.ai/chat/<uuid> address is used."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardSfDatawriteTool, args, token),
   );
 
   server.registerTool(

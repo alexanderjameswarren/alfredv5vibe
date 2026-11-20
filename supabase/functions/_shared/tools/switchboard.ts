@@ -13,6 +13,7 @@
 //   queue_switchboard_sf_read   tier 2  queue one Salesforce read and issue its link (§10)
 //   get_switchboard_sf_result   tier 1  take a Salesforce read's rows, once (§10)
 //   queue_switchboard_sf_dataop tier 2  queue a production data run and issue its link (dataops_alfred-d4x)
+//   queue_switchboard_sf_datawrite tier 2  queue a Data run v2 write link and issue it (dataop_write-j5w)
 //
 // Database access ONLY through ctx.db, except get_sql_read's query itself: see readerSeam.
 // ============================================================================
@@ -990,6 +991,335 @@ export const queueSwitchboardSfDataqueryTool = defineTool({
         "helper must pick it up within 15 minutes or it fails unrun; it checks every hash against the run folder first. The " +
         "exported files stay on Alex's PC. When the result line arrives, read the counts with get_switchboard_run: " +
         "run.result.query_counts, one per query in this order, and run.result.pass.",
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// queue_switchboard_sf_datawrite (dataop_write-j5w A2): Data run v2's write link, the gate, the write (batch, bulk
+// update or undo), the after export and the after counts under one approval, started only by Alex's click. The payload
+// is docs/technical-spec-dataop_write-j5w.md part 2. sfDatawriteProblem is the database's
+// switchboard_datawrite_payload_problem rule for rule, check for check, in the same order and with the same sentences,
+// so a refusal here is the refusal the database would give. Change the two together.
+// ---------------------------------------------------------------------------
+
+const DATAWRITE_KEYS = ["alias", "org_type", "repo", "run", "run_tag", "request_sha256", "selection_sha256", "object", "problem",
+  "expected", "write", "uploads", "queries"];
+const DATAWRITE_REQUIRED = ["alias", "org_type", "repo", "run", "run_tag", "request_sha256", "selection_sha256", "object",
+  "expected", "write", "queries"];
+const DATAWRITE_QUERY_KEYS = ["step", "soql", "sha256", "file", "label", "wait"];
+export const DATAWRITE_MAX_PAYLOAD = 200_000;
+export const DATAWRITE_MAX_IDS = 200;
+export const DATAWRITE_MAX_COUNTS = 40;
+export const DATAWRITE_MAX_WAIT_MINUTES = 180;
+/** An Id, as the database counts it: a quoted literal of exactly 15 or 18 letters and digits. Conservative. */
+export const DATAWRITE_ID = /'[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?'/g;
+const CSV_FILE = /^[A-Za-z0-9_.-]{1,80}\.csv$/;
+const WHOLE = /^[1-9][0-9]{0,8}$/;
+// The database's repo pattern uses [:cntrl:]; \x7f is added here so DEL is refused on both sides.
+const DATAWRITE_REPO = /^[A-Za-z]:(\\[^\\/:*?"<>|\x00-\x1f\x7f]+)+$/;
+const STEP_RANK: Record<string, number> = { gate: 1, after: 2, "after-counts": 3 };
+
+/** A positive whole number as jsonb prints one, 1 to 999,999,999 (the database's '^[1-9][0-9]{0,8}$'). */
+const isWhole = (v: unknown) => typeof v === "number" && Number.isInteger(v) && WHOLE.test(String(v));
+/** Postgres quote_literal: '' for ', and E'' with \\ when there is a backslash. */
+const quoteLiteral = (s: string) => (s.includes("\\") ? `E'${s.replace(/\\/g, "\\\\").replace(/'/g, "''")}'` : `'${s.replace(/'/g, "''")}'`);
+const fmt = (n: number) => n.toLocaleString("en-US");
+/** Keys in v that aren't in allowed, sorted. */
+const extraKeys = (v: Record<string, unknown>, allowed: string[]) => Object.keys(v).filter((k) => !allowed.includes(k)).sort();
+/** Postgres jsonb `-` then `= '{}'`: v has no key outside allowed. */
+const onlyKeys = (v: Record<string, unknown>, allowed: string[]) => Object.keys(v).every((k) => allowed.includes(k));
+const hasAll = (v: Record<string, unknown>, keys: string[]) => keys.every((k) => k in v);
+export const datawriteIdCount = (soql: string) => (soql.match(DATAWRITE_ID) ?? []).length;
+
+/**
+ * Why an sf_datawrite payload fails the contract, as one sentence saying what to do, or null when it passes: the
+ * database's switchboard_datawrite_payload_problem, in the same order with the same sentences.
+ */
+export async function sfDatawriteProblem(code: string, p: Record<string, unknown>): Promise<string | null> {
+  if (!isObject(p)) return "the payload must be a JSON object: pass sb's printed arguments exactly as they are.";
+  if (!PROJECT_CODE.test(code)) return "the action needs the data operation's project code, as sb printed it.";
+  const extra = extraKeys(p, DATAWRITE_KEYS);
+  if (extra.length) return `the payload does not take ${extra.join(", ")}. Pass sb's printed arguments exactly as they are.`;
+  const missing = DATAWRITE_REQUIRED.filter((k) => !(k in p));
+  if (missing.length) return `missing ${missing.join(", ")}: pass every argument sb printed.`;
+  const len = jsonbTextLength(p);
+  if (len > DATAWRITE_MAX_PAYLOAD) {
+    return `the payload is ${fmt(len)} characters; the limit is 200,000. Select by criteria instead of long lists, or split the run.`;
+  }
+
+  // ---- the run's identity (A1's rules, with org_type required) ----
+  if (typeof p.alias !== "string" || !SF_ALIAS.test(p.alias)) return "alias must be the org's alias (letters, digits, _ . -).";
+  if (typeof p.org_type !== "string" || !DATAQUERY_ORG_TYPES.includes(p.org_type)) {
+    return 'org_type must be exactly "sandbox" or "production", as sb printed it from orgs.json.';
+  }
+  if (typeof p.repo !== "string" || chars(p.repo) > 240 || !DATAWRITE_REPO.test(p.repo) || p.repo.includes("..")) {
+    return "repo must be the checkout's absolute path, e.g. C:\\Users\\Alex\\projects\\common-defense, with no ..";
+  }
+  const run = p.run;
+  const runTail = typeof run === "string" ? run.slice(9 + code.length) : "";
+  if (typeof run !== "string" || chars(run) > 200 || run.includes("..") || !["data-ops/", "data-ops\\"].includes(run.slice(0, 9)) ||
+      run.slice(9, 9 + code.length) !== code || !RUN_FOLDER.test(runTail) || /^[\\/]\.+$/.test(runTail)) {
+    return `run must be the run folder inside repo: data-ops/${code}/<run>, one folder, with no ..`;
+  }
+  const tag = p.run_tag;
+  if (typeof tag !== "string" || chars(tag) > 60 || !tag.startsWith(`${code}-s`) || !RUN_TAG_TAIL.test(tag.slice(code.length + 2))) {
+    return `run_tag must be this project's run tag, e.g. ${code}-s4-ab12.`;
+  }
+  if (typeof p.request_sha256 !== "string" || !HEX64.test(p.request_sha256)) {
+    return "request_sha256 must be request.json's SHA-256: 64 lower-case hex characters.";
+  }
+  if (typeof p.selection_sha256 !== "string" || !HEX64.test(p.selection_sha256)) {
+    return "selection_sha256 must be selection.soql's SHA-256: 64 lower-case hex characters.";
+  }
+  const sel = p.selection_sha256;
+  if (typeof p.object !== "string" || !SF_NAME.test(p.object)) return "object must be one API name, e.g. GiftTransaction or Donation__c.";
+  if ("problem" in p && (typeof p.problem !== "string" || chars(p.problem) < 20 || chars(p.problem) > 600 || /[\r\n]/.test(p.problem))) {
+    return "problem must be the request's problem sentence: one line of 20 to 600 characters, or left out.";
+  }
+  if (!isWhole(p.expected)) return "expected must be the whole number of records the write changes, 1 to 999,999,999.";
+  const expected = p.expected as number;
+
+  // ---- the write: batch, bulk update or undo ----
+  const w = p.write;
+  if (!isObject(w)) {
+    return "write must be {kind: batch, class}, {kind: bulk, operation: update, csv, csv_sha256} or {kind: undo, class, ids_file, ids_sha256}.";
+  }
+  const wkind = typeof w.kind === "string" ? w.kind : null;
+  if (wkind === "batch") {
+    if (!onlyKeys(w, ["kind", "class"]) || !("class" in w)) {
+      return "a batch write is {kind: batch, class} only: the class name, with no Ids or start arguments (production starts new <Class>()).";
+    }
+  } else if (wkind === "bulk") {
+    if (!onlyKeys(w, ["kind", "operation", "csv", "csv_sha256"]) || !hasAll(w, ["operation", "csv", "csv_sha256"])) {
+      return "a bulk write is {kind: bulk, operation: update, csv, csv_sha256}, nothing more or less.";
+    }
+    if (w.operation !== "update") return 'a bulk write is an update only: operation must be "update".';
+    if (typeof w.csv !== "string" || !CSV_FILE.test(w.csv)) return "write.csv must be one .csv file name in the run folder.";
+    if (typeof w.csv_sha256 !== "string" || !HEX64.test(w.csv_sha256)) return "write.csv_sha256 must be the CSV's SHA-256: 64 lower-case hex characters.";
+  } else if (wkind === "undo") {
+    if (!onlyKeys(w, ["kind", "class", "ids_file", "ids_sha256"]) || !hasAll(w, ["class", "ids_file", "ids_sha256"])) {
+      return "an undo write is {kind: undo, class, ids_file, ids_sha256}, nothing more or less.";
+    }
+    if (typeof w.ids_file !== "string" || !CSV_FILE.test(w.ids_file)) return "write.ids_file must be one .csv file name in the run folder.";
+    if (typeof w.ids_sha256 !== "string" || !HEX64.test(w.ids_sha256)) return "write.ids_sha256 must be the Id file's SHA-256: 64 lower-case hex characters.";
+  } else {
+    return "write.kind must be batch, bulk or undo.";
+  }
+  if ((wkind === "batch" || wkind === "undo") && (typeof w.class !== "string" || !SF_NAME.test(w.class))) {
+    return "write.class must be the deployed Batch class's name (letters, digits, _).";
+  }
+
+  // ---- uploads: the files known before the run that it uploads after Alex's Enter ----
+  let undoUpload: Record<string, unknown> | null = null;
+  // s6b: a bulk write uploads nothing (left-out records come out of the CSV; failures are the Bulk API job's own).
+  if (wkind === "bulk" && "uploads" in p) return "a bulk write uploads nothing; remove uploads.";
+  if ("uploads" in p) {
+    if (!Array.isArray(p.uploads) || p.uploads.length > 2) return "uploads must list at most 2 files, each {purpose, file, sha256, rows}, or be left out.";
+    const purposes: string[] = [];
+    for (const u of p.uploads) {
+      if (!isObject(u) || !onlyKeys(u, ["purpose", "file", "sha256", "rows"]) || !hasAll(u, ["purpose", "file", "sha256", "rows"])) {
+        return "each upload is {purpose, file, sha256, rows}, nothing more or less.";
+      }
+      const purpose = u.purpose;
+      if (purpose !== "exclude" && purpose !== "undo-ids") return 'an upload\'s purpose must be "exclude" or "undo-ids".';
+      if (purposes.includes(purpose)) return `there are two ${purpose} uploads: list each purpose once.`;
+      purposes.push(purpose);
+      if (typeof u.file !== "string" || !CSV_FILE.test(u.file)) return `the ${purpose} upload's file must be one .csv file name in the run folder.`;
+      if (typeof u.sha256 !== "string" || !HEX64.test(u.sha256)) return `the ${purpose} upload's sha256 must be 64 lower-case hex characters.`;
+      if (!isWhole(u.rows)) return `the ${purpose} upload's rows must be its row count, 1 to 999,999,999.`;
+      if (purpose === "exclude" && (u.rows as number) >= expected) {
+        return `the exclude upload leaves out ${u.rows} records, not fewer than the ${expected} the write changes. Leave out fewer, or go back to diagnosis.`;
+      }
+      if (purpose === "undo-ids") undoUpload = u;
+    }
+  }
+  if (wkind === "undo") {
+    if (!undoUpload) {
+      return 'an undo needs its Id file in uploads: {purpose: "undo-ids", file: <ids_file>, sha256: <ids_sha256>, rows: <expected>}.';
+    }
+    if (undoUpload.file !== w.ids_file || undoUpload.sha256 !== w.ids_sha256) {
+      return "the undo-ids upload must be the write's Id file: the same file and sha256 as write.ids_file and write.ids_sha256.";
+    }
+    if (undoUpload.rows !== expected) {
+      return `the undo Id file has ${undoUpload.rows} rows but expected is ${expected}: they must be equal, since expected is the Id file's row count.`;
+    }
+  } else if (undoUpload) {
+    return "only an undo uploads an Id file: leave the undo-ids upload out.";
+  }
+
+  // ---- queries: the gate, the after export, the after counts, in that order ----
+  const queries = p.queries;
+  if (!Array.isArray(queries) || queries.length < 2 || queries.length > 44) {
+    return "queries must list 2 to 44 queries: the gate, the after export, then the after counts.";
+  }
+  let last = 0;
+  let nGate = 0;
+  let nCounts = 0;
+  let waits = 0;
+  let broad = false;
+  const labels: string[] = [];
+  for (const [i, q] of queries.entries()) {
+    if (!isObject(q)) return `query ${i + 1} must be {step, soql, sha256, file | label, wait?}.`;
+    const label = typeof q.label === "string" ? q.label : null;
+    const name = label !== null ? quoteLiteral(label) : typeof q.file === "string" ? quoteLiteral(q.file) : `number ${i + 1}`;
+    const bad = extraKeys(q, DATAWRITE_QUERY_KEYS);
+    if (bad.length) return `the query ${name} does not take ${bad.join(", ")}.`;
+    const step = typeof q.step === "string" ? q.step : "";
+    const rank = STEP_RANK[step];
+    if (!rank) return `the query ${name} needs a step: gate, after or after-counts.`;
+    if (rank < last) return `the query ${name} (${step}) comes after a later step: list the gate first, then after, then after-counts.`;
+    last = rank;
+
+    if (typeof q.soql !== "string") return `the query ${name} needs its soql, the exact text.`;
+    const soql = q.soql;
+    if (soql.includes(";")) return `the query ${name} has a semicolon: one query, no ;.`;
+    const sha = await sha256Hex(soql);
+    if (typeof q.sha256 !== "string" || q.sha256 !== sha) {
+      return `the query ${name} has a sha256 that isn't the SHA-256 of its soql's exact bytes: pass both as sb printed them.`;
+    }
+    if (step === "gate" || step === "after") {
+      if (chars(soql) > DATAQUERY_MAX_EXPORT_CHARS) {
+        return `the query ${name} is ${fmt(chars(soql))} characters; an export is at most 100,000. Select by criteria instead, or split the run.`;
+      }
+      if (!EXPORT_SOQL.test(soql) || ANY_COUNT.test(soql)) return `the query ${name} is an export: SELECT Id, ... FROM ..., with no COUNT(.`;
+    } else {
+      if (chars(soql) > DATAQUERY_MAX_COUNT_CHARS) return `the query ${name} is ${fmt(chars(soql))} characters; a count is at most 8,000.`;
+      if (!COUNT_SOQL.test(soql) || GROUP_BY.test(soql)) return `the query ${name} is a count: SELECT COUNT() FROM <object> WHERE ..., with no GROUP BY.`;
+    }
+
+    // Exactly one of file and label; labels unique within the payload.
+    if (("file" in q) === ("label" in q)) return `the query ${name} needs exactly one of file and label.`;
+    if ("file" in q) {
+      if (typeof q.file !== "string" || !SOQL_FILE.test(q.file)) return `the query ${name}'s file must be one .soql file name in the run folder.`;
+    } else {
+      if (label === null || chars(label) < 1 || chars(label) > 200 || /^ *$/.test(label) || /[\r\n]/.test(label)) {
+        return `the query ${name}'s label must be one line of 1 to 200 characters.`;
+      }
+      if (labels.includes(label)) return `the label ${name} is used twice: labels are unique within a link.`;
+      labels.push(label);
+    }
+
+    // What each step holds.
+    if (step === "gate") {
+      nGate++;
+      if (wkind === "undo") {
+        if (nGate > 1) return "an undo's gate is exactly one export: a fresh export of the broad snapshot.";
+        if (label === null || !/broad snapshot$/.test(label)) {
+          return 'an undo\'s gate is a fresh export of the broad snapshot, labelled e.g. "gate: broad snapshot".';
+        }
+      } else if (nGate === 1) {
+        if (q.file !== "selection.soql" || sha !== sel) {
+          return 'the gate\'s first export must be selection.soql (file "selection.soql"), with its sha256 equal to selection_sha256.';
+        }
+      } else if (label === null) {
+        return 'the gate\'s second export must be labelled, e.g. "gate: broad snapshot".';
+      }
+    } else if (step === "after") {
+      if (label !== "after: broad snapshot" && label !== "after: selection") {
+        return 'an after export is labelled "after: broad snapshot" (required) or "after: selection" (optional).';
+      }
+      if (label === "after: selection") {
+        if (wkind === "undo") return 'an undo\'s after is only "after: broad snapshot": leave "after: selection" out.';
+        if (sha !== sel) return "the query 'after: selection' is selection.soql run again: its sha256 must equal selection_sha256.";
+      } else {
+        broad = true;
+      }
+    } else {
+      nCounts++;
+    }
+
+    // A wait only on an after-count labelled "...: wait".
+    if ("wait" in q) {
+      if (step !== "after-counts" || label === null || !/: wait$/.test(label)) {
+        return `the query ${name} takes no wait: only an after-count labelled "...: wait" does.`;
+      }
+      const wt = q.wait;
+      if (!isObject(wt) || !onlyKeys(wt, ["stable_minutes", "limit_minutes"])
+          || typeof wt.stable_minutes !== "number" || !/^[1-9][0-9]?$/.test(String(wt.stable_minutes))
+          || typeof wt.limit_minutes !== "number" || !/^[1-9][0-9]{0,2}$/.test(String(wt.limit_minutes))
+          || (wt.stable_minutes as number) > 60 || (wt.limit_minutes as number) > 240) {
+        return `the query ${name}'s wait must be {stable_minutes: 1 to 60, limit_minutes: 1 to 240}.`;
+      }
+      waits += wt.limit_minutes as number;
+    }
+
+    // Ids: criteria only, except an export labelled "... broad snapshot", at most 200 (D1, never split).
+    const ids = datawriteIdCount(soql);
+    if ((step === "gate" || step === "after") && label !== null && /broad snapshot$/.test(label)) {
+      if (ids > DATAWRITE_MAX_IDS) return `the query ${name} lists ${ids} Ids; the limit is 200. Select by criteria instead, or split the run.`;
+    } else if (ids > 0) {
+      return `the query ${name} lists ${ids} Id${ids === 1 ? "" : "s"}; only an export labelled "... broad snapshot" may list Ids (at most 200). Select by criteria instead.`;
+    }
+  }
+
+  if (nGate === 0 || nGate > 2) return `the gate has ${nGate} exports; it takes 1 or 2 (an undo, exactly 1).`;
+  if (!broad) return 'the after step needs "after: broad snapshot", the same fields as the before broad snapshot.';
+  if (nCounts > DATAWRITE_MAX_COUNTS) return `there are ${nCounts} after-counts; the limit is 40. Move the rest to a count link.`;
+  if (waits > DATAWRITE_MAX_WAIT_MINUTES) {
+    return `the waits add up to ${waits} minutes; the limit is 180, so the run fits its 4 hours. Shorten the waits, or move a rule to a count link.`;
+  }
+  return null;
+}
+
+/** The arguments as an sf_datawrite payload, or the sentence saying what to fix. */
+export async function sfDatawritePayload(code: string, args: Record<string, unknown>):
+    Promise<{ payload: Record<string, unknown> } | { refused: string }> {
+  const p = payloadOf(args);
+  const problem = await sfDatawriteProblem(code, p);
+  return problem === null ? { payload: p } : { refused: problem };
+}
+
+export function sfDatawriteHeadline(code: string, p: Record<string, unknown>): string {
+  const n = p.expected as number;
+  const w = p.write as { kind: string; class?: string };
+  const how = w.kind === "batch" ? `BY BATCH ${w.class}` : w.kind === "undo" ? `BY UNDO ${w.class}` : "BY BULK UPDATE";
+  const sandbox = p.org_type === "sandbox";
+  return `${sandbox ? "SANDBOX" : "PRODUCTION"} DATA WRITE ${code} ON ${p.alias}: ABOUT TO CHANGE ${fmt(n)} ` +
+    `${sandbox ? "" : "LIVE "}RECORD${n === 1 ? "" : "S"} OF ${p.object} ${how}`;
+}
+
+export const queueSwitchboardSfDatawriteTool = defineTool({
+  name: "queue_switchboard_sf_datawrite",
+  tier: 2,
+  tables: { reads: ["switchboard_actions", "switchboard_settings"], writes: ["switchboard_actions"] },
+  handler: async (args: Record<string, unknown>, ctx) => {
+    const tool = "queue_switchboard_sf_datawrite";
+    const code = typeof args.project_code === "string" ? args.project_code.trim() : "";
+    if (!PROJECT_CODE.test(code)) throw fail(tool, "`project_code` must be the data operation's project code, as sb printed it.");
+    const checked = await sfDatawritePayload(code, args);
+    if ("refused" in checked) throw fail(tool, `refused: ${checked.refused}`);
+    const p = checked.payload;
+    const headline = sfDatawriteHeadline(code, p);
+    // needs_click is always true for this kind, whoever queues it (the database sets it and refuses false).
+    const { data: queued, error: queueError } = await ctx.db.rpc("switchboard_queue_helper", {
+      p_kind: "sf_datawrite", p_project_code: code, p_payload: p, p_headline: headline, p_chat_url: chatOf(args),
+    });
+    if (queueError) {
+      if (REFUSALS.has(queueError.code ?? "") || queueError.code === "23514") throw fail(tool, `refused: ${queueError.message}`);
+      throw fail(tool, `queueing the write link failed: ${queueError.message ?? "(no message)"}` +
+        `${queueError.code ? ` [${queueError.code}]` : ""}. Nothing was queued; the same call can be made again.`);
+    }
+    const actionId = (queued as Record<string, unknown> | null)?.action_id as string | undefined;
+    if (!actionId) throw fail(tool, "the queue returned no action id; the same call can be made again.");
+    const { data, error } = await ctx.db.rpc("switchboard_issue_link", { p_action_id: actionId });
+    if (error) {
+      if (REFUSALS.has(error.code ?? "")) throw fail(tool, `queued as ${actionId}, but no link: ${error.message}`);
+      throw fail(tool, `queued as ${actionId}, but issuing its link failed: ${error.message ?? "(no message)"}` +
+        `${error.code ? ` [${error.code}]` : ""}. Issue it again with issue_switchboard_link for ${actionId}.`);
+    }
+    const sandbox = p.org_type === "sandbox";
+    const n = fmt(p.expected as number);
+    return {
+      ...(data as Record<string, unknown>), action_id: actionId, headline, payload: p,
+      next: "Give Alex the url whole, in its own reply; it lasts 30 minutes. ONLY HIS CLICK ON APPROVE STARTS THIS " +
+        `${sandbox ? "SANDBOX" : "PRODUCTION"} WRITE. The page shows the ${sandbox ? "SANDBOX" : "PRODUCTION"} banner, ` +
+        `"about to change ${n} ${sandbox ? "records in the sandbox" : "live records"}", the write, every query in full and the files ` +
+        "it uploads. After the click the desktop helper must pick it up within 15 minutes or it fails unrun; it asks Alex for " +
+        "Enter before the write and before any upload. " +
+        `The result line (datawrite ${actionId} done or failed) arrives in this chat by itself. Only counts and pass or fail come ` +
+        "back: read them with get_switchboard_run, run.result.pass and run.result.datawrite (query_counts in payload order, " +
+        "gate, write, check).",
     };
   },
 });
