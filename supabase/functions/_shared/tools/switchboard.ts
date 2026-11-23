@@ -160,7 +160,8 @@ export const issueSwitchboardLinkTool = defineTool({
 const GIT_KEYS: Record<string, string[]> = {
   gitcom: ["command", "message", "include_unclaimed"],
   gitsync: ["command", "then_send"],
-  gitnewtree: ["command", "install", "repo"],
+  // sb3 E2 (r6): client and lane register the project; main: true binds main instead of making a worktree.
+  gitnewtree: ["command", "install", "repo", "client", "lane", "main"],
   gitpush: ["command", "mode", "finish", "paths", "all", "db", "message", "include_unclaimed", "then_send", "no_prod_deploy"],
 };
 
@@ -185,6 +186,9 @@ const CHAT_URL = /^https:\/\/claude\.ai\/chat\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{
 const SEGMENT = /^[A-Za-z0-9_.-]+$/;
 /** A gitnewtree's repo, as the database check holds it: C:\... with no trailing backslash; ".." is refused separately. */
 export const GIT_REPO = /^[A-Za-z]:(\\[^\\/:*?"<>|\x00-\x1f]+)+$/;
+/** A gitnewtree's client slug and lanes, as the helper holds them (helper/lib/core.mjs, START_LANES). */
+const GIT_CLIENT = /^[a-z0-9][a-z0-9-]{0,40}$/;
+export const START_LANES = ["Fast track", "Main", "Side road", "Country road"];
 
 /** A repo-relative path: segments may start with a dot (.claude), never . or .., no leading -, empty segment or \ or :. */
 export function usablePath(x: unknown): boolean {
@@ -234,6 +238,14 @@ export function gitPayload(args: Record<string, unknown>): { payload: Record<str
   if (command === "gitnewtree" && p.install !== undefined && typeof p.install !== "boolean") {
     return r("`install` must be true or false.");
   }
+  // sb3 E2 (r6): as the helper refuses them (helper/lib/core.mjs, gitnewtree), so a bad link is never issued.
+  if (p.client !== undefined && (typeof p.client !== "string" || !GIT_CLIENT.test(p.client))) {
+    return r(`client must be a client slug (lowercase letters, digits and hyphens), not ${JSON.stringify(p.client)} — ask for a new link with the client's slug.`);
+  }
+  if (p.lane !== undefined && !START_LANES.includes(p.lane as string)) {
+    return r(`lane must be one of ${START_LANES.join(", ")}, not ${JSON.stringify(p.lane)} — ask for a new link with one of them.`);
+  }
+  if (p.main !== undefined && p.main !== true) return r("main takes only true; leave it out for a worktree.");
   if (p.repo !== undefined) {
     const repo = typeof p.repo === "string" ? p.repo.trim() : p.repo;
     if (typeof repo !== "string" || repo.length > 240 || !GIT_REPO.test(repo) || repo.includes("..")) {
@@ -287,7 +299,8 @@ function gitCommandHeadline(code: string, p: Record<string, unknown>): string {
     case "gitsync":
       return `GITSYNC ${code}: MERGES MAIN INTO THE WORKTREE`;
     case "gitnewtree":
-      return `GITNEWTREE ${code}: CREATES A WORKTREE FROM ORIGIN/MAIN${p.repo ? ` IN ${(p.repo as string).toUpperCase()}` : ""}`;
+      return `GITNEWTREE ${code}: ${p.main === true ? "BINDS MAIN TO THE PROJECT" : "CREATES A WORKTREE FROM ORIGIN/MAIN"}` +
+        (p.repo ? ` IN ${(p.repo as string).toUpperCase()}` : "");
     default: {
       if (p.mode === "push") return `GITPUSH PUSH ${code}: COMMITS AND PUSHES MAIN`;
       if (p.mode === "checkpoint") {
