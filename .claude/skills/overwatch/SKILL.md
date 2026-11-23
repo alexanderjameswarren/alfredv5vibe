@@ -5,7 +5,7 @@ description: "Overwatch, Alex's view across every Alfred app: what he did, is do
 
 # Overwatch
 
-Skill version: 2026-11-19a
+Skill version: 2026-11-23a
 
 Overwatch keeps Alex aware of his whole life in Alfred: what got done, what is moving,
 what is stalled, what is waiting on him, which apps have gone quiet, and what has drifted.
@@ -20,7 +20,7 @@ or `send_alfred_push` from those runs, and `pushes_per_day` and `push_time` are 
 
 Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
 
-## Four rules that hold everywhere
+## Five rules that hold everywhere
 
 1. **Read the lists, not a list in this file.** Apps come from `get_apps` and each app's
    profile (`activity_recipe`, `rhythm_days`, `current_state`, written with
@@ -34,6 +34,11 @@ Spec: `docs/technical-spec-overwatch-q4n.md` in the alfred-v5 repo.
    show him the proposal, and confirm only after he approves it.
 4. **Every inbox item has one owner app.** Each app's skill reads only its own items. You
    route; you do not do an app's work for it.
+5. **Re-read a flagged record before repeating its flag.** A note, an inbox item or the
+   nightly counts were true when they were written. Before any chat reply repeats a flag
+   from one of them, or suggests an action on it, read the record's current state. For an
+   intention: `get_intents`, then `get_events` with `intent_id`. It may already have a date,
+   sit in a dated Project, or be done. Say only what is still true.
 
 ## In chat
 
@@ -88,9 +93,6 @@ Where his alert came from, by case:
 
 ### Going through an Overwatch list
 
-- **Check each flagged record's current state before suggesting an action.** A note or item
-  was true when it was written. For an intention, read it and its events (`get_events` with
-  `intent_id`) first: it may already have a date or be done.
 - **When the last open line of an Overwatch inbox item is resolved, offer to archive it** in
   the same reply.
 - **A `skill_to_paste` follow-up:** the item's `Skill version:` line is the repo's. Compare it
@@ -114,6 +116,12 @@ Where his alert came from, by case:
   another Project holds is refused, naming it.
 - `update_project_plan` writes the plan: `where_now`, `next_step`, `waiting_on` and
   `waiting_on_kind`, `target_date`, `hurdle_kind` when parking it. Not the estimate.
+- **A `target_date` taken from a to-do's deadline dates the to-do too.** When a planning
+  chat sets a Project's `target_date` from the deadline of one of its to-dos, also give that
+  to-do its date (an event on it), so the to-do doesn't keep reading as undated.
+- **A Project's last sign of life** is the later of its last CLI report (`last_report_at`) and
+  its status line (`status_written_at`). The nightly's stall count uses that, so a new Project
+  with a fresh status line and no reports yet is not stalled.
 - `record_project_estimate` is the only way to change `effort_estimate` (`initial`,
   `scope_increase`, `scope_decrease`, `re_estimate`, `final`, each with a reason);
   `get_project_estimates` reads the history with original and scope-adjusted totals.
@@ -274,7 +282,8 @@ The procedure is `docs/overwatch-nightly-task-prompt.md`. The judgment it asks f
   "due", "renew", "cancel before", or a month, a date, a season or "end of the year". A bare
   time period with no cutoff ("for a month", "weekly") is not a deadline. Quote the words
   that make it one, and when they name a date, read it as the next such date ("by March"
-  in October is next March).
+  in October is next March). An intention in an active Project that has a `target_date`
+  counts as dated: the counts already leave it out, so don't add it back.
 - **The tables a finish summary touched** (count 11b). A migration's file name usually names
   its table (`180_overwatch_platform_inventory.sql` is platform_inventory): match the inventory's
   table names against the words in each migration path, longest name first, and take every

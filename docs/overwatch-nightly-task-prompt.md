@@ -42,9 +42,13 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 > version, and Step 10 echoes it. A report showing an older version, or none, means the task is
 > running stale text.
 >
-> ### `PROMPT VERSION: 2026-11-08a`
+> ### `PROMPT VERSION: 2026-11-23a`
 >
 > Bump the date-letter whenever this file changes below the line.
+>
+> 2026-11-23a: a Project's last sign of life is the later of its last report and its status line,
+> so a new Project with a fresh status line is not stalled. An intention in an active Project with
+> a target date counts as dated and is not a deadline candidate.
 >
 > 2026-11-08a: every limit comes from `counts.limits`, and none is written into the text. A missing
 > setting with a default uses it and shows as "<key> (used <n>)". Claim blocks are counted on
@@ -66,7 +70,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
    "THE PROMPT" line as its instructions.
 4. **Run it once by hand** (the task's "run now") and say in the chat that this run is manual.
    Check: a `platform_runs` row for `overwatch` / `nightly` closed `ok`; tonight's note in
-   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-11-08a`.
+   `get_overwatch_notes`; a final report that shows `PROMPT VERSION: 2026-11-23a`.
 
 ## The record, the note and the signals are SEPARATE
 
@@ -85,7 +89,7 @@ counts as a deadline mention, and the note's tone and wording. Each is written i
 ---
 
 You are running Overwatch's nightly check for Alex across every app in Alfred.
-`PROMPT VERSION: 2026-11-08a`. **First, load the `overwatch` skill.** It tells you how to read each
+`PROMPT VERSION: 2026-11-23a`. **First, load the `overwatch` skill.** It tells you how to read each
 app, what counts as fading, what counts as a deadline mention, what counts as a follow-up from a
 finish summary, and how to word the note. Follow
 these steps in order for everything else. **Where the skill and these steps disagree, these steps
@@ -223,7 +227,9 @@ Only counts 1, 4b, 6, 7, 9 and 11 need anything from you.
      `{ "app": "<app_id>", "last_used_on": "YYYY-MM-DD" | null, "days_since": <whole days from last_used_on to local_date> | "none", "rhythm_days": <n> }`.
      `days_since` is "none" exactly when `last_used_on` is null.
 2. **Projects:** `counts.projects` holds each active Project's row whole, for the note.
-   - a. **Stalled:** `counts.stalled`.
+   - a. **Stalled:** `counts.stalled`. A Project's last sign of life is the later of its last CLI
+     report and its status line (`last_sign_at`; `days` counts from it), so a Project whose status
+     line is newer than `stall_days` is not stalled, even with no reports.
    - b. **Waiting on Alex:** `counts.waiting_on_alex`.
    - c. **Overrun:** `counts.overruns`; `kind` says `steps` or `target`.
    - d. **Over the limit:** `counts.over_limit`.
@@ -267,7 +273,8 @@ Only counts 1, 4b, 6, 7, 9 and 11 need anything from you.
    - a. **Scheduled and missed:** `counts.overdue_intentions`.
    - b. **A deadline with no date:** `counts.deadline_candidates` are the active intentions with no
      event in the window, past or future, with their text and the first 200 characters of their
-     description. Which of them mention a deadline is the skill's call. Keep intention, id and the
+     description. An intention in an active Project that has a target date counts as dated and is
+     already left out. Which of them mention a deadline is the skill's call. Keep intention, id and the
      words that make it a deadline, and, when the words name a date, that date. **Urgent**
      (`urgent_within_days`) when that date is within `urgent_within_days` days of `local_date`; while
      the setting is missing, none is urgent.
@@ -559,7 +566,7 @@ A failed call here is SKIPPED, never STOP.
 
 Call `update_platform_run` with the run id, **once**.
 - **`status`:** `failed` if a step said STOP; `partial` if anything is in `skipped`; else `ok`.
-- **`details`**, always: `local_date`, `prompt_version: "2026-11-08a"`, `manual`, `plan_id`,
+- **`details`**, always: `local_date`, `prompt_version: "2026-11-23a"`, `manual`, `plan_id`,
   `counts` (an object with one key per flag, the same keys as Step 7's flags, and that flag's
   count; never `flag_counts`), `note_id`, `inbox_item_ids` (Step 6.8's), `signal_ids` and
   `signals_raised` (Step 6.1 to 6.7's), `apps_pulled`,
@@ -591,7 +598,7 @@ Run: <run id>
 ### Step 10 — Report
 
 Write a short report:
-- `PROMPT VERSION: 2026-11-08a`;
+- `PROMPT VERSION: 2026-11-23a`;
 - the finish summaries reviewed and the follow-ups raised, and whether the inventory is stale;
 - the dispatcher checks: important held, silent (hours and threshold), failures with no signal;
 - the run id and its status, and `manual: true` or `manual: false`; `duplicate_of` if it stopped;

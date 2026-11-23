@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-23 14:06, through migration 248 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-23 14:16, through migration 249 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -6123,13 +6123,17 @@ begin
   v_since := coalesce(v_since, ((v_local - 1)::timestamp at time zone c_tz));
 
   -- Projects: one read of the progress function, every project count from it.
-  with p as materialized (
+  -- The last sign of life is the later of the last CLI report and the status line (greatest skips a null).
+  with p0 as materialized (
+    select pr.*, greatest(pr.last_report_at, pr.status_written_at) as last_sign_at
+      from public.overwatch_project_progress(array['active'], null) pr
+  ), p as materialized (
     select pr.*, coalesce(pr.project_code, pr.name) as label,
-           v_local - (pr.last_report_at at time zone c_tz)::date as report_days,
+           v_local - (pr.last_sign_at at time zone c_tz)::date as sign_days,
            v_local - (pr.first_report_at at time zone c_tz)::date as first_days,
            v_local - (pr.status_written_at at time zone c_tz)::date as written_days,
            e.original_estimate, e.original_estimate + e.steps_added as scope_adjusted_estimate
-      from public.overwatch_project_progress(array['active'], null) pr
+      from p0 pr
       cross join lateral (
         select max(x.estimate) filter (where x.kind = 'initial') as original_estimate,
                coalesce(sum(x.steps_added), 0)::int as steps_added
@@ -6137,12 +6141,12 @@ begin
       ) e
   )
   select count(*)::int,
-         coalesce(jsonb_agg(to_jsonb(p) - 'label' - 'report_days' - 'first_days' - 'written_days'
+         coalesce(jsonb_agg(to_jsonb(p) - 'label' - 'sign_days' - 'first_days' - 'written_days' - 'last_sign_at'
                             order by p.last_report_at desc nulls last, p.name), '[]'::jsonb),
-         coalesce(jsonb_agg(jsonb_build_object('project', p.label, 'group_id', p.group_id, 'days', p.report_days,
-                                               'last_report_at', p.last_report_at))
+         coalesce(jsonb_agg(jsonb_build_object('project', p.label, 'group_id', p.group_id, 'days', p.sign_days,
+                                               'last_report_at', p.last_report_at, 'last_sign_at', p.last_sign_at))
                   filter (where p.waiting_on_kind is distinct from 'project'
-                            and (p.report_days > v_stall or (p.last_report_at is null and p.has_plan))), '[]'::jsonb),
+                            and (p.sign_days > v_stall or (p.last_sign_at is null and p.has_plan))), '[]'::jsonb),
          coalesce(jsonb_agg(jsonb_build_object('project', p.label, 'group_id', p.group_id, 'days', p.written_days,
                                                'waiting_on', p.waiting_on))
                   filter (where p.waiting_on_kind = 'alex' and p.written_days > v_wait), '[]'::jsonb),
@@ -6415,13 +6419,21 @@ begin
                  from (select * from cand order by cand.updated_at, cand.id limit 50) o)))
       into v_r;
 
+    -- An intention in an active Project with a target_date (its own group, or a live membership) counts as dated.
     v_r := v_r || jsonb_build_object('deadline_candidates', (
       select coalesce(jsonb_agg(jsonb_build_object('id', i.id, 'text', i.text, 'description', left(i.description, 200))
                                 order by i.id), '[]'::jsonb)
         from public.intents i
        where i.status = 'active' and i.archived is not true
          and not exists (select 1 from public.events e
-                          where e.intent_id = i.id and e.archived is not true and e.time >= v_local - v_fading)));
+                          where e.intent_id = i.id and e.archived is not true and e.time >= v_local - v_fading)
+         and not exists (select 1 from public.item_groups g
+                           join public.project_plans pl on pl.group_id = g.id and pl.target_date is not null
+                          where g.status = 'active' and g.archived = false
+                            and (g.id = i.group_id
+                                 or exists (select 1 from public.item_group_members m
+                                             where m.group_id = g.id and m.member_type = 'intention'
+                                               and m.member_id = i.id and m.removed_at is null)))));
 
     if v_overdue is not null then
       v_r := v_r || jsonb_build_object('overdue_intentions', (
@@ -6465,7 +6477,7 @@ $$;
 ALTER FUNCTION "public"."overwatch_nightly_counts"("p_as_of" timestamp with time zone) OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."overwatch_nightly_counts"("p_as_of" timestamp with time zone) IS 'Overwatch: most of the nightly counts as one JSON object, its flags keys matching overwatch_notes.flags. Reads the active plan itself and works in America/Los_Angeles days from p_as_of, which pins the clock and does not rewind the data. A count whose setting has no default and is missing is left out and named in settings_missing; a setting with a default that is missing or not a positive whole number uses the default and is named as "<key> (used <n>)". limits holds every effective value. Fading is one-off active intentions only: items never fade. Invoker: RLS decides the rows. Backs get_overwatch_nightly_counts. Spec: docs/technical-spec-overwatch_settings-t3k.md.';
+COMMENT ON FUNCTION "public"."overwatch_nightly_counts"("p_as_of" timestamp with time zone) IS 'Overwatch: most of the nightly counts as one JSON object, its flags keys matching overwatch_notes.flags. Reads the active plan itself and works in America/Los_Angeles days from p_as_of, which pins the clock and does not rewind the data. A count whose setting has no default and is missing is left out and named in settings_missing; a setting with a default that is missing or not a positive whole number uses the default and is named as "<key> (used <n>)". limits holds every effective value. Fading is one-off active intentions only: items never fade. A Project''s last sign of life is the later of its last CLI report and its status line. An intention in an active Project with a target_date counts as dated and is no deadline candidate. Invoker: RLS decides the rows. Backs get_overwatch_nightly_counts. Spec: docs/technical-spec-overwatch_settings-t3k.md; changes: docs/progress-overwatch_flags-k7d.md.';
 
 
 
