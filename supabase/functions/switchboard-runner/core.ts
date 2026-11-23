@@ -61,13 +61,24 @@ export type Deps = {
   /** The desktop helper's key, SWITCHBOARD_PICKUP_KEY. Separate from the queue key. */
   pickupKey: string;
   userId: string;
-  /** switchboard_pickup_git, with the service role: git only, for a helper that asks for no other kind. */
-  pickupGit(userId: string): Promise<PickedAction | null>;
+  /**
+   * switchboard_pickup_git, with the service role: git only, for a helper that asks for no other kind. `pickupId`
+   * (sb3_runner-r4q r4, migration 247) is passed only when the helper sent one: a repeat returns the same action.
+   */
+  pickupGit(userId: string, pickupId?: string): Promise<PickedAction | null>;
   /**
    * switchboard_pickup_helper, with the service role. `kinds` is passed only for a helper that runs sf_dataop; without
-   * it the function serves today's four and never hands one out (O3).
+   * it the function serves today's four and never hands one out (O3). `pickupId` as for pickupGit.
    */
-  pickupHelper(userId: string, kinds?: string[]): Promise<PickedAction | null>;
+  pickupHelper(userId: string, kinds?: string[], pickupId?: string): Promise<PickedAction | null>;
+  /**
+   * The pending route's rows (r4): the user's helper-kind actions ready and not picked up (consumed, or queued needing
+   * no click), and those picked up and still waiting for a result, each with its open real run if any. Read-only.
+   */
+  pendingActions(userId: string): Promise<{
+    unpicked: { id: string; kind: string; project_code: string; status: string; link_used_at: string | null; created_at: string }[];
+    picked: { id: string; kind: string; project_code: string; picked_up_at: string; run_id: string | null }[];
+  }>;
   /**
    * Helper-kind actions still consumed with their open real run if any: picked before `before`, or for a
    * LONG_PICK_KINDS action (an sf_dataop or sf_dataquery, which may take hours) before `dataopBefore`.
@@ -595,11 +606,63 @@ function pickupKinds(body: Record<string, unknown> | null): { pick?: "git" | "he
   return { error: `kinds must be ["git"], all of ${HELPER_KINDS.join(", ")}, or one of the older full sets; the pickup cannot serve a part of them.` };
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * r4: body `pickup_id`, one uuid per approve click that the helper sends again on every retry of that pickup, so a
+ * retry after a lost reply gets the same action (switchboard_pickup_* p_pickup_id, migration 247). Absent or null:
+ * none. Sent in lower case.
+ */
+function pickupIdOf(body: Record<string, unknown> | null): { pickupId?: string; error?: string } {
+  const id = body?.pickup_id;
+  if (id === undefined || id === null) return {};
+  if (typeof id !== "string" || !UUID.test(id)) {
+    return { error: "pickup_id: not a uuid — send one uuid per approve click, the same on every retry, or leave it out." };
+  }
+  return { pickupId: id.toLowerCase() };
+}
+
+/** An approved action not picked up within this long is failed by the next pickup (migration 247), so it never runs. */
+export const APPROVED_PICKUP_LIMIT_MS = 15 * 60 * 1000;
+
+/** A queued action needing no click and not picked up within this long is failed by the next pickup. */
+const QUEUED_PICKUP_LIMIT_MS = 10 * 60 * 1000;
+
+/**
+ * r4, for B's reinstall check, asked at Alex's click only: what the helper still owes. `unpicked` are actions ready
+ * for the helper and not yet picked up: approved (consumed), or queued needing no click. `stale` marks one the next
+ * pickup fails anyway (approved over 15 minutes ago, queued over 10), so it never runs and doesn't block.
+ * `unreported` are picked-up actions with no result yet. Their `stale` says the next pickup will mark them timed
+ * out (30 minutes, or 4 hours for LONG_PICK_KINDS), but the helper may still be running one, so every unreported
+ * entry blocks. `clear` is true when nothing blocks. Read-only: it fails nothing and picks nothing.
+ */
+async function handlePending(req: Request, deps: Deps, now: number): Promise<Response> {
+  if (!pickupAuthorised(req, deps)) return json({ ok: false, error: "unauthorized" }, 401);
+  const { unpicked, picked } = await deps.pendingActions(deps.userId);
+  const unpickedOut = unpicked.map((a) => {
+    const queued = a.status === "queued";
+    const approvedAt = queued ? a.created_at : a.link_used_at ?? a.created_at;
+    const limit = queued ? QUEUED_PICKUP_LIMIT_MS : APPROVED_PICKUP_LIMIT_MS;
+    return { action_id: a.id, kind: a.kind, project_code: a.project_code, status: a.status, approved_at: approvedAt,
+             stale: Date.parse(approvedAt) < now - limit };
+  });
+  const unreported = picked.map((a) => {
+    const limit = LONG_PICK_KINDS.includes(a.kind) ? DATAOP_PICK_TIMEOUT_MS : PICK_TIMEOUT_MS;
+    return { action_id: a.id, run_id: a.run_id, kind: a.kind, project_code: a.project_code, picked_up_at: a.picked_up_at,
+             stale: Date.parse(a.picked_up_at) < now - limit };
+  });
+  const clear = !unreported.length && !unpickedOut.some((e) => !e.stale);
+  return json({ ok: true, clear, unpicked: unpickedOut, unreported });
+}
+
 /** Fail every pick older than the timeout, then hand out the next ready action of a kind the helper asked for, or null. */
 async function handlePickup(req: Request, deps: Deps, now: number): Promise<Response> {
   if (!pickupAuthorised(req, deps)) return json({ ok: false, error: "unauthorized" }, 401);
-  const { pick, kinds, error } = pickupKinds(await readBody(req));
+  const body = await readBody(req);
+  const { pick, kinds, error } = pickupKinds(body);
   if (error) return json({ ok: false, error }, 400);
+  const { pickupId, error: idError } = pickupIdOf(body);
+  if (idError) return json({ ok: false, error: idError }, 400);
   const stale = await deps.stalePicks(deps.userId, new Date(now - PICK_TIMEOUT_MS).toISOString(),
     new Date(now - DATAOP_PICK_TIMEOUT_MS).toISOString());
   for (const s of stale) {
@@ -608,9 +671,11 @@ async function handlePickup(req: Request, deps: Deps, now: number): Promise<Resp
     }
     await deps.setStatus(s.action_id, "failed");
   }
+  // r4: the pickup id only when sent, so a helper without one calls exactly as before.
   const picked = pick === "helper"
-    ? await (kinds ? deps.pickupHelper(deps.userId, kinds) : deps.pickupHelper(deps.userId))
-    : await deps.pickupGit(deps.userId);
+    ? await (pickupId ? deps.pickupHelper(deps.userId, kinds, pickupId)
+      : kinds ? deps.pickupHelper(deps.userId, kinds) : deps.pickupHelper(deps.userId))
+    : await (pickupId ? deps.pickupGit(deps.userId, pickupId) : deps.pickupGit(deps.userId));
   // pickup_git returns no kind; everything it hands out is git.
   const action = picked && pick === "git" ? { ...picked, kind: "git" } : picked;
   return json({ ok: true, action, timed_out: stale.map((s) => s.action_id) });
@@ -902,7 +967,7 @@ async function handleSfResult(req: Request, deps: Deps): Promise<Response> {
   return json({ ok: true, action_id: a.id, stored: true, row_count: rowCount, truncated: all.length > MAX_SF_ROWS });
 }
 
-const HELPER_ROUTES = new Set(["pickup", "result", "sf-result"]);
+const HELPER_ROUTES = new Set(["pickup", "result", "sf-result", "pending"]);
 
 export async function handle(req: Request, deps: Deps, now = Date.now()): Promise<Response> {
   const route = new URL(req.url).pathname.replace(/\/+$/, "").split("/").pop() ?? "";
@@ -913,5 +978,6 @@ export async function handle(req: Request, deps: Deps, now = Date.now()): Promis
   if (route === "pickup") return handlePickup(req, deps, now);
   if (route === "result") return handleResult(req, deps, now);
   if (route === "sf-result") return handleSfResult(req, deps);
+  if (route === "pending") return handlePending(req, deps, now);
   return browser ? handleRun(route, req, deps) : handleQueue(req, deps);
 }

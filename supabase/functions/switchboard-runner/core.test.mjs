@@ -600,6 +600,151 @@ test("helper routes: POST only, and no browser preflight", async () => {
   assert.equal(pre.headers.get("access-control-allow-origin"), null);
 });
 
+// --- sb3_runner-r4q r4: the pickup id and the pending route ---
+
+const PID = "0b6c1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3";
+
+test("pickup: a pickup_id goes to pickup_git, and to the helper pickup with its kinds", async () => {
+  const git = fakes({ pickupGit: async (...args) => (git.calls.args = args, PICKED) });
+  await handle(helper("pickup", { pickup_id: PID }), git.deps);
+  assert.deepEqual(git.calls.args, [USER, PID]);
+  const all = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop", "sf_dataquery", "sf_datawrite"];
+  const h = fakes({ pickupHelper: async (...args) => (h.calls.args = args, { ...PICKED, kind: "sf_read" }) });
+  const body = await (await handle(helper("pickup", { kinds: all, pickup_id: PID }), h.deps)).json();
+  assert.deepEqual(h.calls.args, [USER, all, PID]);
+  assert.equal(body.action.kind, "sf_read");
+  // The older sets, whose kinds are not passed on, still get the id, written in lower case.
+  const old = fakes({ pickupHelper: async (...args) => (old.calls.args = args, { ...PICKED, kind: "git" }) });
+  await handle(helper("pickup", { kinds: ALL_KINDS, pickup_id: PID.toUpperCase() }), old.deps);
+  assert.deepEqual(old.calls.args, [USER, undefined, PID]);
+});
+
+test("pickup: no pickup_id, or null, calls both pickups as before", async () => {
+  for (const body of [{}, { pickup_id: null }]) {
+    const git = fakes({ pickupGit: async (...args) => (git.calls.args = args, PICKED) });
+    await handle(helper("pickup", body), git.deps);
+    assert.deepEqual(git.calls.args, [USER]);
+    const h = fakes({ pickupHelper: async (...args) => (h.calls.args = args, { ...PICKED, kind: "git" }) });
+    await handle(helper("pickup", { ...body, kinds: ALL_KINDS }), h.deps);
+    assert.deepEqual(h.calls.args, [USER]);
+  }
+});
+
+test("pickup: a pickup_id that is not a uuid is refused with its fix, before anything is failed or picked", async () => {
+  for (const pickup_id of ["", "abc", 42, true, [PID], { id: PID }, `${PID}x`, PID.replace(/-/g, "")]) {
+    const { deps, calls } = fakes({ stalePicks: async () => { throw new Error("not reached"); } });
+    const res = await handle(helper("pickup", { pickup_id }), deps);
+    assert.equal(res.status, 400, JSON.stringify(pickup_id));
+    const { error } = await res.json();
+    assert.match(error, /^pickup_id: .+ — .+/);
+    assert.equal(calls.picked, undefined);
+    assert.deepEqual(calls.status, []);
+  }
+});
+
+const PENDING_NOW = Date.parse("2026-11-23T12:00:00Z");
+const ago = (min) => new Date(PENDING_NOW - min * 60000).toISOString();
+const pendingFakes = (rows) => {
+  const f = fakes({
+    pendingActions: async (u) => (f.calls.pendingUser = u, rows),
+    stalePicks: async () => { throw new Error("pending must not fail picks"); },
+    pickupGit: async () => { throw new Error("pending must not pick"); },
+    pickupHelper: async () => { throw new Error("pending must not pick"); },
+  });
+  return f;
+};
+
+test("pending: refused without the pickup key, POST only", async () => {
+  for (const key of [null, "wrong", SECRET]) {
+    const { deps } = pendingFakes({ unpicked: [], picked: [] });
+    assert.equal((await handle(helper("pending", {}, key), deps)).status, 401);
+  }
+  const { deps } = pendingFakes({ unpicked: [], picked: [] });
+  assert.equal((await handle(new Request("https://x/switchboard-runner/pending", { method: "GET" }), deps)).status, 405);
+});
+
+test("pending: nothing approved or running is clear", async () => {
+  const { deps, calls } = pendingFakes({ unpicked: [], picked: [] });
+  const res = await handle(helper("pending"), deps, PENDING_NOW);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, clear: true, unpicked: [], unreported: [] });
+  assert.equal(calls.pendingUser, USER);
+  assert.deepEqual(calls.status, []);
+  assert.equal(calls.finished, undefined);
+});
+
+test("pending: lists unpicked links and unreported runs with ids and kinds", async () => {
+  const { deps, calls } = pendingFakes({
+    unpicked: [
+      { id: "a-new", kind: "git", project_code: "p-a", status: "consumed", link_used_at: ago(5), created_at: ago(20) },
+      { id: "a-old", kind: "sf_read", project_code: "sf-x", status: "consumed", link_used_at: ago(16), created_at: ago(30) },
+      { id: "a-nolink", kind: "git", project_code: "p-b", status: "consumed", link_used_at: null, created_at: ago(3) },
+    ],
+    picked: [
+      { id: "r-git", kind: "git", project_code: "p-c", picked_up_at: ago(10), run_id: "run-1" },
+      { id: "r-old", kind: "sb_setup", project_code: "sb-y", picked_up_at: ago(31), run_id: "run-2" },
+      { id: "r-dw", kind: "sf_datawrite", project_code: "p-d", picked_up_at: ago(120), run_id: null },
+    ],
+  });
+  const body = await (await handle(helper("pending"), deps, PENDING_NOW)).json();
+  assert.deepEqual(body, {
+    ok: true,
+    clear: false,
+    unpicked: [
+      { action_id: "a-new", kind: "git", project_code: "p-a", status: "consumed", approved_at: ago(5), stale: false },
+      { action_id: "a-old", kind: "sf_read", project_code: "sf-x", status: "consumed", approved_at: ago(16), stale: true },
+      { action_id: "a-nolink", kind: "git", project_code: "p-b", status: "consumed", approved_at: ago(3), stale: false },
+    ],
+    unreported: [
+      { action_id: "r-git", run_id: "run-1", kind: "git", project_code: "p-c", picked_up_at: ago(10), stale: false },
+      { action_id: "r-old", run_id: "run-2", kind: "sb_setup", project_code: "sb-y", picked_up_at: ago(31), stale: true },
+      { action_id: "r-dw", run_id: null, kind: "sf_datawrite", project_code: "p-d", picked_up_at: ago(120), stale: false },
+    ],
+  });
+  assert.deepEqual(calls.status, []);
+});
+
+test("pending: only stale unpicked links left is clear; any unreported run blocks, stale or not", async () => {
+  const stale = [
+    { id: "a-old", kind: "git", project_code: "p-a", status: "consumed", link_used_at: ago(15.5), created_at: ago(40) },
+    { id: "q-old", kind: "sf_check", project_code: "sf-q", status: "queued", link_used_at: null, created_at: ago(10.5) },
+  ];
+  const only = await (await handle(helper("pending"), pendingFakes({ unpicked: stale, picked: [] }).deps, PENDING_NOW)).json();
+  assert.equal(only.clear, true);
+  assert.deepEqual(only.unpicked.map((e) => e.stale), [true, true]);
+  // A pick past its 4-hour limit may still be running in the helper: it blocks.
+  const picked = [{ id: "r-old", kind: "sf_dataop", project_code: "p-d", picked_up_at: ago(241), run_id: "run-9" }];
+  const running = await (await handle(helper("pending"), pendingFakes({ unpicked: stale, picked }).deps, PENDING_NOW)).json();
+  assert.equal(running.clear, false);
+  assert.equal(running.unreported[0].stale, true);
+});
+
+test("pending: the limits match the server's, strictly past them", async () => {
+  const { deps } = pendingFakes({
+    unpicked: [
+      { id: "a-15", kind: "git", project_code: "p-a", status: "consumed", link_used_at: ago(15), created_at: ago(40) },
+      { id: "q-9", kind: "git", project_code: "p-q", status: "queued", link_used_at: null, created_at: ago(9) },
+    ],
+    picked: [
+      { id: "r-30", kind: "git", project_code: "p-c", picked_up_at: ago(30), run_id: "run-1" },
+      { id: "r-dq", kind: "sf_dataquery", project_code: "p-d", picked_up_at: ago(31), run_id: "run-2" },
+      { id: "r-dw", kind: "sf_datawrite", project_code: "p-e", picked_up_at: ago(240.5), run_id: "run-3" },
+    ],
+  });
+  const body = await (await handle(helper("pending"), deps, PENDING_NOW)).json();
+  assert.deepEqual(body.unpicked.map((e) => [e.action_id, e.stale]), [["a-15", false], ["q-9", false]]);
+  assert.equal(body.unpicked[1].approved_at, ago(9));
+  assert.deepEqual(body.unreported.map((e) => [e.action_id, e.stale]), [["r-30", false], ["r-dq", false], ["r-dw", true]]);
+  assert.equal(body.clear, false);
+});
+
+test("pickup: a bad kinds list is refused before a bad pickup_id", async () => {
+  const { deps } = fakes();
+  const res = await handle(helper("pickup", { kinds: ["nope"], pickup_id: "abc" }), deps);
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /^kinds must/);
+});
+
 // --- git links (spec 11.3) ---
 
 const GIT_PAYLOAD = { command: "gitpush", mode: "finish", finish: "phase" };
