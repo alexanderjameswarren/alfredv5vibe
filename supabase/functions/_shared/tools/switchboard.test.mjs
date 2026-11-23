@@ -604,6 +604,41 @@ test("git: every accepted shape", () => {
   assert.equal(m.gitHeadline("p-a1", nt), "GITNEWTREE p-a1: CREATES A WORKTREE FROM ORIGIN/MAIN IN C:\\USERS\\ALEX\\PROJECTS\\ALFRED-V5");
 });
 
+test("git: gitnewtree takes client, lane and main: true, as the helper's KEYS.gitnewtree (sb3 E2, r6)", () => {
+  const p = m.gitPayload({ command: "gitnewtree", client: "team-impact", lane: "Side road", main: true,
+    repo: "C:\\Users\\Alex\\projects\\ti" }).payload;
+  assert.deepEqual(p, { command: "gitnewtree", client: "team-impact", lane: "Side road", main: true, repo: "C:\\Users\\Alex\\projects\\ti" });
+  for (const lane of ["Fast track", "Main", "Side road", "Country road"]) {
+    assert.equal(m.gitPayload({ command: "gitnewtree", lane }).payload.lane, lane);
+  }
+  assert.equal(m.gitHeadline("p-a1", { command: "gitnewtree", main: true }), "GITNEWTREE p-a1: BINDS MAIN TO THE PROJECT");
+  assert.equal(m.gitHeadline("p-a1", { command: "gitnewtree", main: true, repo: "C:\\Users\\Alex\\projects\\ti" }),
+    "GITNEWTREE p-a1: BINDS MAIN TO THE PROJECT IN C:\\USERS\\ALEX\\PROJECTS\\TI");
+  assert.equal(m.gitHeadline("p-a1", { command: "gitnewtree", client: "acme", lane: "Main" }),
+    "GITNEWTREE p-a1: CREATES A WORKTREE FROM ORIGIN/MAIN");
+});
+
+test("git: gitnewtree's client, lane and main refused as the helper refuses them, and only on gitnewtree", async () => {
+  for (const [args, want] of [
+    [{ command: "gitnewtree", client: "Team_Impact" }, /client must be a client slug/],
+    [{ command: "gitnewtree", client: "-acme" }, /client must be a client slug/],
+    [{ command: "gitnewtree", client: "a".repeat(42) }, /client must be a client slug/],
+    [{ command: "gitnewtree", client: 5 }, /client must be a client slug/],
+    [{ command: "gitnewtree", lane: "main" }, /lane must be one of Fast track, Main, Side road, Country road/],
+    [{ command: "gitnewtree", lane: "" }, /lane must be one of/],
+    [{ command: "gitnewtree", main: false }, /main takes only true/],
+    [{ command: "gitnewtree", main: "true" }, /main takes only true/],
+    [{ command: "gitsync", client: "acme" }, /gitsync does not take client/],
+    [{ command: "gitcom", lane: "Main" }, /gitcom does not take lane/],
+    [{ command: "gitpush", mode: "push", main: true }, /does not take main/],
+  ]) {
+    const db = gitDb();
+    await assert.rejects(queueGit({ project_code: "p-a1", ...args }, db), want, JSON.stringify(args));
+    assert.equal(db.calls.length, 0);
+  }
+  assert.match(m.gitPayload({ command: "gitnewtree", client: "Acme" }).refused, / — ask for a new link with the client's slug\.$/);
+});
+
 test("git: refused keys and values, before anything is queued", async () => {
   for (const [args, want] of [
     [{ command: "rm" }, /command.*gitcom/],
