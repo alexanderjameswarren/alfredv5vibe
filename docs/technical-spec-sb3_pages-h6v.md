@@ -437,7 +437,8 @@ of a page open or a click; nothing runs on a clock.
 - RunShell draws the SIMULATION strip from the source's kind, not from the data, so a sample can't drop it. It fails
   closed: the strip shows unless the source's kind is exactly 'real'. The red bar follows RunShell's approvable prop;
   from A2, RunPage sets it from the same value that draws the Approve button. The real
-  source and the database both refuse anything marked simulation.
+  source refuses anything marked simulation. The database (B1, Q7, part 10a) accepts a request marked simulation and
+  spends its link, but never makes a helper action, a run or a sample for it.
 - Scenarios cover every page and state: pre-check (ids, filter, a different sandbox filter); data operation update,
   insert, upsert, delete, undelete and multi-object; undo (normal, after a stopped run, past the deadline); correction
   (each edit kind); not started; checks expired; check what happened; code review (open, superseded); and the desktop
@@ -468,6 +469,81 @@ All at Phase B; Phase A has none. Each is claimed at its step after gitsync and 
 | db:fn:switchboard_prune_sf_results (one added delete) | B1 |
 | db:table:switchboard_actions (insert through plumbing's kind) | B1 |
 | db:deploy | B2 and B3 |
+
+### 10a. B1 as drafted (s10, 2026-11-23)
+
+**Progress (s10b):** the draft is supabase/migrations/250_run_pages.sql (the _pending_ file with its header renumbered,
+nothing else changed; the _pending_ file is deleted), queued as action 9f97e4f0-7206-4b38-8155-2bd5a48d2af3.
+**250 is live (s10c):** applied by run 7b3d9c6f-cd30-4f9b-b8f8-1d5228aa31bb at 14:49 on 2026-11-23; its last statement
+returned CONFORMANT, 123 tables. The tests are queued with --test: 1_verify.sql as action
+ba3158d1-a9f6-492d-9f70-2f4c9089be05 and 2_failure_test.sql as action 5570a7b6-7fd1-4dab-ad8e-2b8275a1adec; both must
+say all_passed (1_verify conformant). A fix now is a new follow-up migration, never an edit of 250.
+**Results (s10d):** 1_verify passed 69 of 69, CONFORMANT (run 10e1cc34-87e8-44d8-9056-40dcd3db952b). 2_failure_test
+passed 61 of 62 (run e0ed0259-4bb3-44a7-adfc-5842946be2db); read_deleted_the_sample failed through a test bug, not the
+migration: its NOT EXISTS ran in the same statement as the switchboard_run_preview call that deleted the sample, on
+that statement's earlier snapshot. The preview now runs in its own statement; nothing else in the test changed.
+Requeued as action a1b57bfc-6aa1-46f8-9b05-a03e033faae1.
+
+**Drift check** (main through f0cd169: 247_pickup_expiry.sql, 248_sf_run.sql, switchboard-runner): matches plumbing's
+summary. sf_run is inserted by a security definer function or the service role; the guard stores it consumed with
+link_hash, link_expires_at and link_used_at null and created_at capped at now() (approval time = created_at).
+switchboard_actions_sf_run_payload needs a JSON object with link_id a lower-case uuid; switchboard_actions_sf_run_click
+and switchboard_needs_click keep needs_click true. switchboard_queue_helper refuses sf_run, and authenticated has no
+insert on switchboard_actions. switchboard_pickup_helper(p_user, p_kinds default null, p_pickup_id default null) hands
+it out only when sf_run is named, within 15 minutes of created_at; past that either pickup fails it (consumed to
+failed) with switchboard_runs.failure_reason 'expired_not_picked_up' (the column name is confirmed).
+switchboard_pickup_git(p_user, p_pickup_id default null). Nothing else on main touches this step's tables or functions.
+
+**Decisions in the draft** (supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql):
+- No B1 function calls a pickup function; consume and retry insert the sf_run directly, and the guard does the rest.
+  switchboard_actions is not altered (no index, no check), so db:table:switchboard_actions is not claimed.
+- **Payload is {link_id} only.** The link records which action is the approval (action_id) and which the rerun
+  (rerun_action_id), so the helper (data runs) reads what to run from the link id.
+- **The link rules are database checks** in switchboard_consume_run_link: caller's link, not voided, unused
+  (approve), request at the link's version, fingerprint = switchboard_fingerprint(request + version) as the page showed,
+  checks within 24 hours of the oldest evidence not voided (never for an undo), a data operation has evidence, a
+  delete's undo before its deadline, p_count = the request's total_count (dataop, undo), code rehearsed and reviewed at
+  its commit, p_desktop {answer: running, panel: true, helper: true} (stored on the link), and Q10 by a read.
+- **"The typed count"** at approval is p_count, the count the page showed and Alex approved; it must equal the
+  request's count. The count Alex types in the terminal is checked by the data runs thread.
+- **Simulation (Q7):** queued with simulation true, its link is spent by consume, but no sf_run action or run is ever
+  made, so switchboard_actions and switchboard_runs never see it; it can't hold a sample.
+- **Rerun:** only on expired checks; refused while a rerun waits (no check has passed since rerun_at). On a link
+  whose approval never started (s6b) the rerun fails that stale action and makes the link unused again, so the same
+  link approves the data operation once the rerun passes.
+- **Retry** fails a still-consumed stale action (consumed to failed, with its failed run) and inserts the same payload
+  again in one statement block; the link's action_id (or rerun_action_id) moves to the new action.
+- **Corrections:** a wording or allowance edit keeps the version (live links stay live; the page reloads as the
+  fingerprint changed); every other edit raises the version, makes the page a correction, voids its rerun evidence and
+  the live links, and a code edit supersedes older reviews, in one transaction.
+- **One live link per request**, version and review: issue refuses another until it is used or cancelled.
+- **Not in B1, for B2:** the evidence (the pre-check's passed checks) and Alex's code review answers (reviewed,
+  question, changes required, acks) are written by switchboard-run-pages with the service role; no function for them.
+- Samples are registered not audited (no audit copy outlives the 24 hours) and hidden from MCP reads (Q4).
+
+**After the cold review (s10):**
+- **Evidence never comes from the chat:** queue and correct refuse an evidence key; only the service role (B2) writes
+  it. A data operation's approval needs every pre-check check (count, login, automation, backup, rehearsal) passed and
+  not voided, and refuses any check dated in the future. Code: the rehearsal evidence must carry the commit, and a
+  review at that commit must say reviewed (code.rehearsed_at from the chat proves nothing).
+- **A request version is approved once:** issue refuses a new run link, and consume a second link, once a run link of
+  that version was used (s6b's freed link excepted).
+- **Q10 under a lock:** consume and retry take the same advisory lock as switchboard_issue_link (227) before the read,
+  and count a today's-kind action live from coalesce(link_used_at, created_at), as the pickup does. Only this link's own
+  stuck action is left out.
+- **Locks in one order:** consume and retry lock the request, then the link, as correct does, so they never deadlock.
+- **A stale action fails once:** only while still consumed and unpicked, and its failed run is written only then.
+- **Rerun waiting** means the last rerun's action is approved and unfinished (picked up, or within its 15 minutes); a
+  rerun that finished, passed or failed, leaves the way open.
+- **Corrections** never change operation.kind or operation.object, whatever kind is named; a wording or allowance
+  edit may change only the headline, side effects, problem wording and what diagnosis allows. A correction keeps
+  base_page (the page it was queued as); B2 sets page back to it once the reruns pass, and the write's checks apply
+  only on a dataop or undo page.
+- **Q4 held in the database:** a restrictive policy closes switchboard_run_samples to direct reads by any signed-in
+  session; only switchboard_run_preview (security definer) returns a sample. Links are not audited, so no token hash
+  reaches the audit log.
+- **Code review answers:** switchboard_code_reviews.answers keeps each answer's full text (up to 1000 characters) with
+  its kind (reviewed, question, changes_required); a question keeps the status open (B2 writes them).
 
 ## 11. Build order (CLI steps)
 
