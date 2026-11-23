@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-20 07:52, through migration 246 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-23 14:06, through migration 248 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -9290,7 +9290,13 @@ begin
         using errcode = '23514';
     end if;
     new.fingerprint     := public.switchboard_fingerprint(new.payload);
-    new.status          := 'queued';
+    -- sb3_runner-r4q: an sf_run is created by its run page's consume, after Alex's click, so it is approved at insert.
+    -- It has no switchboard link; its approval time is created_at, never later than now, so its 15 minutes can't be
+    -- stretched (an earlier time only makes it expire sooner).
+    new.status          := case when new.kind = 'sf_run' then 'consumed' else 'queued' end;
+    if new.kind = 'sf_run' then
+      new.created_at := least(coalesce(new.created_at, now()), now());
+    end if;
     new.link_hash       := null;
     new.link_expires_at := null;
     new.link_used_at    := null;
@@ -9325,7 +9331,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_actions_guard"() OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_actions_guard"() IS 'Switchboard: before insert or update on switchboard_actions. An insert gets its fingerprint and needs_click (switchboard_needs_click) and starts queued with no link; a new sf_dataquery must have payload.org_type "sandbox" or "production" (dataquery_fixes-v3n). An update cannot change what will run or whether it needs a click, reopen a used link, or change picked_up_at once set, whoever makes it.';
+COMMENT ON FUNCTION "public"."switchboard_actions_guard"() IS 'Switchboard: before insert or update on switchboard_actions. An insert gets its fingerprint and needs_click (switchboard_needs_click) and starts queued with no link, except an sf_run, which starts consumed with created_at at most now(): its run page''s consume creates it after Alex''s click (sb3_runner-r4q). A new sf_dataquery must have payload.org_type "sandbox" or "production" (dataquery_fixes-v3n). An update cannot change what will run or whether it needs a click, reopen a used link, or change picked_up_at once set, whoever makes it.';
 
 
 
@@ -9993,6 +9999,7 @@ CREATE OR REPLACE FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "
     when p_kind = 'sf_dataop' then true -- a production data run: always, by link only (D1). Never loosen this line.
     when p_kind = 'sf_dataquery' then true -- a production export or count: always, by link only. Never loosen this line.
     when p_kind = 'sf_datawrite' then true -- a data run's write link: always, by link only. Never loosen this line.
+    when p_kind = 'sf_run' then true    -- a run page's run: approved by Alex's click on the page. Never loosen this line.
     when p_kind = 'git' and p_payload->>'command' in ('gitpush', 'gitnewtree') then true  -- touches main: always
     when p_kind = 'git' then true       -- gitcom, gitsync: a click until the no-click project
     when p_kind = 'sf_check' then true  -- a link for now (s86pa); read-only, on a sandbox the helper proves first
@@ -10006,26 +10013,64 @@ $$;
 ALTER FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_payload" "jsonb", "p_created_by" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_payload" "jsonb", "p_created_by" "text") IS 'Switchboard: whether an action waits for Alex''s click, from its kind, payload and who queued it (spec 10, 11.1, 11.4). Every kind does for now. sf_dataop (dataops_alfred-d4x, D1), sf_dataquery (dataop_link-k7d) and sf_datawrite (dataop_write-j5w) always do, whoever queued them, and their _click checks hold that too. Called by the guard trigger, so a caller never sets needs_click.';
+COMMENT ON FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_payload" "jsonb", "p_created_by" "text") IS 'Switchboard: whether an action waits for Alex''s click, from its kind, payload and who queued it (spec 10, 11.1, 11.4). Every kind does for now. sf_dataop (dataops_alfred-d4x, D1), sf_dataquery (dataop_link-k7d), sf_datawrite (dataop_write-j5w) and sf_run (sb3_runner-r4q; the click is on its run page) always do, whoever queued them, and their _click checks hold that too. Called by the guard trigger, so a caller never sets needs_click.';
 
 
 
-CREATE OR REPLACE FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") RETURNS "jsonb"
+CREATE OR REPLACE FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid" DEFAULT NULL::"uuid") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public', 'pg_temp'
     AS $$
 declare
+  c_all    constant text[] := array['git', 'sf_check', 'sf_read', 'sb_setup', 'sf_dataop', 'sf_dataquery', 'sf_datawrite', 'sf_run'];
+  c_prod   constant text[] := array['sf_dataop', 'sf_dataquery', 'sf_datawrite'];
   v_action public.switchboard_actions;
   v_run    uuid;
+  v_again  uuid;
 begin
   if p_user is null then
     raise exception 'switchboard_pickup_git: no user.' using errcode = '22004';
   end if;
 
-  -- Ready: clicked (consumed), or queued and needing no click. Not while that project has one running.
+  -- r2: an approved action of any helper kind not picked up within 15 minutes of its approval never runs.
+  with stale as (
+    update public.switchboard_actions
+       set status = 'failed'
+     where user_id = p_user and kind = any(c_all) and status = 'consumed' and picked_up_at is null
+       and (coalesce(link_used_at, created_at) < now() - interval '15 minutes'
+            or (kind = any(c_prod) and link_used_at is null))
+    returning id
+  )
+  insert into public.switchboard_runs (user_id, action_id, mode, summary, result, failure_reason, finished_at)
+  select p_user, id, 'real', 'expired: approved over 15 minutes ago and never picked up, never run',
+         jsonb_build_object('ok', false, 'expired', true, 'reason', 'expired_not_picked_up'), 'expired_not_picked_up', now()
+    from stale;
+
+  -- r2: a repeat of a pickup whose reply was lost gets the same action and run, while that run is open. A repeat
+  -- sent while the first is still running waits for it here, so it sees the first one's run.
+  if p_pickup_id is not null then
+    perform pg_advisory_xact_lock(hashtextextended('switchboard_pickup:' || p_pickup_id::text, 0));
+    select r.id, a.id into v_run, v_again
+      from public.switchboard_runs r
+      join public.switchboard_actions a on a.id = r.action_id
+     where r.user_id = p_user and r.finished_at is null and r.mode = 'real'
+       and r.result is not null and r.result->>'pickup_id' = p_pickup_id::text
+       and a.user_id = p_user and a.kind = 'git' and a.status = 'consumed' and a.picked_up_at is not null
+     order by r.started_at desc
+     limit 1;
+    if v_again is not null then
+      select * into v_action from public.switchboard_actions where id = v_again;
+      return jsonb_build_object('action_id', v_action.id, 'run_id', v_run, 'project_code', v_action.project_code,
+                                'payload', v_action.payload, 'fingerprint', v_action.fingerprint,
+                                'headline', v_action.headline, 'chat_url', v_action.chat_url);
+    end if;
+  end if;
+
+  -- Ready: clicked (consumed) within 15 minutes, or queued and needing no click. Not while that project has one running.
   select a.* into v_action from public.switchboard_actions a
    where a.user_id = p_user and a.kind = 'git' and a.picked_up_at is null
-     and (a.status = 'consumed' or (a.status = 'queued' and not a.needs_click))
+     and ((a.status = 'consumed' and coalesce(a.link_used_at, a.created_at) >= now() - interval '15 minutes')
+          or (a.status = 'queued' and not a.needs_click))
      and not exists (select 1 from public.switchboard_actions b
                       where b.user_id = p_user and b.kind = 'git' and b.project_code = a.project_code
                         and b.picked_up_at is not null and b.status = 'consumed')
@@ -10039,8 +10084,9 @@ begin
   update public.switchboard_actions
      set picked_up_at = now(), status = 'consumed'
    where id = v_action.id;
-  insert into public.switchboard_runs (user_id, action_id, mode, summary)
-  values (p_user, v_action.id, 'real', 'picked up by the helper')
+  insert into public.switchboard_runs (user_id, action_id, mode, summary, result)
+  values (p_user, v_action.id, 'real', 'picked up by the helper',
+          case when p_pickup_id is null then null else jsonb_build_object('pickup_id', p_pickup_id) end)
   returning id into v_run;
 
   return jsonb_build_object('action_id', v_action.id, 'run_id', v_run, 'project_code', v_action.project_code,
@@ -10050,23 +10096,24 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") OWNER TO "postgres";
+ALTER FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") IS 'Switchboard: hand the helper the oldest git action of p_user that is ready to run: clicked, or queued and needing no click. One at a time per project code. Sets picked_up_at, marks it consumed and opens a real run row. Returns {action_id, run_id, project_code, payload, fingerprint, headline, chat_url}, or null when nothing is ready. Called by switchboard-runner with the service role after it checks the pickup key; no other role can call it.';
+COMMENT ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid") IS 'Switchboard: hand the helper the oldest git action of p_user that is ready to run: clicked within 15 minutes, or queued and needing no click. One at a time per project code. Any helper action, of any kind (sf_run included), approved (consumed) over 15 minutes ago, by coalesce(link_used_at, created_at), and never picked up is marked failed first, with a finished run, result {ok: false, expired: true, reason: expired_not_picked_up} and failure_reason expired_not_picked_up (sb3_runner-r4q r2). Sets picked_up_at, marks it consumed and opens a real run row. With p_pickup_id the run row carries result {pickup_id} until the helper''s result replaces it, and a repeat with the same id while that run is open returns the same action and run. Returns {action_id, run_id, project_code, payload, fingerprint, headline, chat_url}, or null when nothing is ready. Called by switchboard-runner with the service role after it checks the pickup key; no other role can call it.';
 
 
 
-CREATE OR REPLACE FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[] DEFAULT NULL::"text"[]) RETURNS "jsonb"
+CREATE OR REPLACE FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[] DEFAULT NULL::"text"[], "p_pickup_id" "uuid" DEFAULT NULL::"uuid") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public', 'pg_temp'
     AS $$
 declare
-  c_all    constant text[] := array['git', 'sf_check', 'sf_read', 'sb_setup', 'sf_dataop', 'sf_dataquery', 'sf_datawrite'];
+  c_all    constant text[] := array['git', 'sf_check', 'sf_read', 'sb_setup', 'sf_dataop', 'sf_dataquery', 'sf_datawrite', 'sf_run'];
   c_prod   constant text[] := array['sf_dataop', 'sf_dataquery', 'sf_datawrite'];
   v_kinds  text[];
   v_action public.switchboard_actions;
   v_run    uuid;
+  v_again  uuid;
 begin
   if p_user is null then
     raise exception 'switchboard_pickup_helper: no user.' using errcode = '22004';
@@ -10093,24 +10140,47 @@ begin
          jsonb_build_object('ok', false, 'expired', true), now()
     from expired;
 
-  -- O6: an approved production data run, export, count or write not picked up within 15 minutes of the click never runs.
+  -- r2: an approved action of any helper kind not picked up within 15 minutes of its approval never runs. A production
+  -- kind consumed without a click is failed at once, as before (O6).
   with stale as (
     update public.switchboard_actions
        set status = 'failed'
-     where user_id = p_user and kind = any(c_prod) and status = 'consumed' and picked_up_at is null
-       and (link_used_at is null or link_used_at < now() - interval '15 minutes')
+     where user_id = p_user and kind = any(c_all) and status = 'consumed' and picked_up_at is null
+       and (coalesce(link_used_at, created_at) < now() - interval '15 minutes'
+            or (kind = any(c_prod) and link_used_at is null))
     returning id
   )
-  insert into public.switchboard_runs (user_id, action_id, mode, summary, result, finished_at)
+  insert into public.switchboard_runs (user_id, action_id, mode, summary, result, failure_reason, finished_at)
   select p_user, id, 'real', 'expired: approved over 15 minutes ago and never picked up, never run',
-         jsonb_build_object('ok', false, 'expired', true), now()
+         jsonb_build_object('ok', false, 'expired', true, 'reason', 'expired_not_picked_up'), 'expired_not_picked_up', now()
     from stale;
 
-  -- Ready: clicked (consumed), or queued and needing no click. A production kind only clicked, by its link. Not while
-  -- that project has one running.
+  -- r2: a repeat of a pickup whose reply was lost gets the same action and run, while that run is open. A repeat
+  -- sent while the first is still running waits for it here, so it sees the first one's run.
+  if p_pickup_id is not null then
+    perform pg_advisory_xact_lock(hashtextextended('switchboard_pickup:' || p_pickup_id::text, 0));
+    select r.id, a.id into v_run, v_again
+      from public.switchboard_runs r
+      join public.switchboard_actions a on a.id = r.action_id
+     where r.user_id = p_user and r.finished_at is null and r.mode = 'real'
+       and r.result is not null and r.result->>'pickup_id' = p_pickup_id::text
+       and a.user_id = p_user and a.kind = any(v_kinds) and a.status = 'consumed' and a.picked_up_at is not null
+     order by r.started_at desc
+     limit 1;
+    if v_again is not null then
+      select * into v_action from public.switchboard_actions where id = v_again;
+      return jsonb_build_object('action_id', v_action.id, 'run_id', v_run, 'kind', v_action.kind,
+                                'project_code', v_action.project_code, 'payload', v_action.payload,
+                                'fingerprint', v_action.fingerprint, 'headline', v_action.headline, 'chat_url', v_action.chat_url);
+    end if;
+  end if;
+
+  -- Ready: clicked (consumed) within 15 minutes, or queued and needing no click. A production kind only clicked, by
+  -- its link. Not while that project has one running.
   select a.* into v_action from public.switchboard_actions a
    where a.user_id = p_user and a.kind = any(v_kinds) and a.picked_up_at is null
-     and (a.status = 'consumed' or (a.status = 'queued' and not a.needs_click))
+     and ((a.status = 'consumed' and coalesce(a.link_used_at, a.created_at) >= now() - interval '15 minutes')
+          or (a.status = 'queued' and not a.needs_click))
      and (not (a.kind = any(c_prod))
           or (a.status = 'consumed' and a.needs_click and a.link_used_at is not null
               and a.link_used_at >= now() - interval '15 minutes'))
@@ -10128,8 +10198,9 @@ begin
   update public.switchboard_actions
      set picked_up_at = now(), status = 'consumed'
    where id = v_action.id;
-  insert into public.switchboard_runs (user_id, action_id, mode, summary)
-  values (p_user, v_action.id, 'real', 'picked up by the helper')
+  insert into public.switchboard_runs (user_id, action_id, mode, summary, result)
+  values (p_user, v_action.id, 'real', 'picked up by the helper',
+          case when p_pickup_id is null then null else jsonb_build_object('pickup_id', p_pickup_id) end)
   returning id into v_run;
 
   return jsonb_build_object('action_id', v_action.id, 'run_id', v_run, 'kind', v_action.kind,
@@ -10139,10 +10210,10 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[]) OWNER TO "postgres";
+ALTER FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[], "p_pickup_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[]) IS 'Switchboard: hand the helper the oldest action of p_user, of a kind in p_kinds (default git, sf_check, sf_read, sb_setup; sf_dataop, sf_dataquery and sf_datawrite only when named), that is ready to run: clicked, or queued and needing no click. An sf_dataop, sf_dataquery or sf_datawrite only when consumed by Alex''s click on its link, within 15 minutes of the click; one approved longer ago is marked failed with a run saying it expired (O6). A queued no-click action over 10 minutes old is marked failed the same way. One running at a time per project code, across every helper kind. Sets picked_up_at, marks it consumed and opens a real run row. Returns {action_id, run_id, kind, project_code, payload, fingerprint, headline, chat_url}, or null. Called by switchboard-runner with the service role after it checks the pickup key (dataops_alfred-d4x; dataop_link-k7d; dataop_write-j5w).';
+COMMENT ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[], "p_pickup_id" "uuid") IS 'Switchboard: hand the helper the oldest action of p_user, of a kind in p_kinds (default git, sf_check, sf_read, sb_setup; sf_dataop, sf_dataquery, sf_datawrite and sf_run only when named), that is ready to run: clicked within 15 minutes, or queued and needing no click. An sf_dataop, sf_dataquery or sf_datawrite only when consumed by Alex''s click on its link; an sf_run is consumed at insert by its run page''s consume, so its 15 minutes count from created_at. Any helper action approved (consumed) over 15 minutes ago, by coalesce(link_used_at, created_at), and never picked up is marked failed with a finished run, result {ok: false, expired: true, reason: expired_not_picked_up} and failure_reason expired_not_picked_up (sb3_runner-r4q r2; O6). A queued no-click action over 10 minutes old is marked failed the same way, without the reason. One running at a time per project code, across every helper kind. Sets picked_up_at, marks it consumed and opens a real run row. With p_pickup_id the run row carries result {pickup_id} until the helper''s result replaces it, and a repeat with the same id while that run is open returns the same action and run. Returns {action_id, run_id, kind, project_code, payload, fingerprint, headline, chat_url}, or null. Called by switchboard-runner with the service role after it checks the pickup key (dataops_alfred-d4x; dataop_link-k7d; dataop_write-j5w; sb3_runner-r4q).';
 
 
 
@@ -19849,7 +19920,7 @@ CREATE TABLE IF NOT EXISTS "public"."switchboard_actions" (
     "picked_up_at" timestamp with time zone,
     CONSTRAINT "switchboard_actions_git_payload" CHECK ((("kind" <> 'git'::"text") OR COALESCE((((COALESCE(("payload" ->> 'command'::"text"), ''::"text") = ANY (ARRAY['gitcom'::"text", 'gitsync'::"text", 'gitnewtree'::"text"])) OR ((COALESCE(("payload" ->> 'command'::"text"), ''::"text") = 'gitpush'::"text") AND (COALESCE(("payload" ->> 'mode'::"text"), ''::"text") = ANY (ARRAY['push'::"text", 'checkpoint'::"text", 'finish'::"text"])))) AND ((NOT ("payload" ? 'then'::"text")) OR (((("payload" ->> 'command'::"text") = 'gitsync'::"text") OR ((("payload" ->> 'command'::"text") = 'gitpush'::"text") AND (("payload" ->> 'mode'::"text") = ANY (ARRAY['checkpoint'::"text", 'push'::"text"])))) AND ("jsonb_typeof"(("payload" -> 'then'::"text")) = 'object'::"text") AND ((("payload" -> 'then'::"text") - 'send'::"text") = '{}'::"jsonb") AND ("jsonb_typeof"((("payload" -> 'then'::"text") -> 'send'::"text")) = 'string'::"text") AND ("length"((("payload" -> 'then'::"text") ->> 'send'::"text")) <= 40) AND ((("payload" -> 'then'::"text") ->> 'send'::"text") ~ '^[a-z0-9_-]+$'::"text") AND ("left"((("payload" -> 'then'::"text") ->> 'send'::"text"), ("length"("project_code") + 2)) = ("project_code" || '-s'::"text")) AND ("substr"((("payload" -> 'then'::"text") ->> 'send'::"text"), ("length"("project_code") + 3)) ~ '^[0-9]+[a-z]*-[a-z0-9]{4}$'::"text")))), false))),
     CONSTRAINT "switchboard_actions_git_repo" CHECK ((("kind" <> 'git'::"text") OR (NOT COALESCE(("payload" ? 'repo'::"text"), false)) OR (COALESCE((("payload" ->> 'command'::"text") = 'gitnewtree'::"text"), false) AND COALESCE(("jsonb_typeof"(("payload" -> 'repo'::"text")) = 'string'::"text"), false) AND COALESCE(("length"(("payload" ->> 'repo'::"text")) <= 240), false) AND COALESCE((("payload" ->> 'repo'::"text") ~ '^[A-Za-z]:(\\[^\\/:*?"<>|[:cntrl:]]+)+$'::"text"), false) AND COALESCE(("strpos"(("payload" ->> 'repo'::"text"), '..'::"text") = 0), false)))),
-    CONSTRAINT "switchboard_actions_kind_valid" CHECK (("kind" = ANY (ARRAY['sql'::"text", 'git'::"text", 'sf_check'::"text", 'sb_setup'::"text", 'sf_read'::"text", 'sf_deploy'::"text", 'sf_test'::"text", 'sf_read_prod_data'::"text", 'docs'::"text", 'sf_dataop'::"text", 'sf_dataquery'::"text", 'sf_datawrite'::"text"]))),
+    CONSTRAINT "switchboard_actions_kind_valid" CHECK (("kind" = ANY (ARRAY['sql'::"text", 'git'::"text", 'sf_check'::"text", 'sb_setup'::"text", 'sf_read'::"text", 'sf_deploy'::"text", 'sf_test'::"text", 'sf_read_prod_data'::"text", 'docs'::"text", 'sf_dataop'::"text", 'sf_dataquery'::"text", 'sf_datawrite'::"text", 'sf_run'::"text"]))),
     CONSTRAINT "switchboard_actions_link_complete" CHECK ((("link_hash" IS NULL) = ("link_expires_at" IS NULL))),
     CONSTRAINT "switchboard_actions_project_format" CHECK (("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text")),
     CONSTRAINT "switchboard_actions_sb_setup_payload" CHECK ((("kind" <> 'sb_setup'::"text") OR ((COALESCE(("payload" ->> 'command'::"text"), ''::"text") = ANY (ARRAY['client start'::"text", 'org add'::"text"])) AND (COALESCE(("payload" ->> 'client'::"text"), ''::"text") ~ '^[a-z0-9][a-z0-9_-]{0,40}$'::"text") AND COALESCE((("payload" - ARRAY['command'::"text", 'client'::"text", 'repo'::"text", 'adopt'::"text", 'from_sandbox'::"text", 'folder'::"text", 'project'::"text", 'name'::"text", 'sandboxes'::"text", 'integration_ok'::"text", 'orgs'::"text"]) = '{}'::"jsonb"), false) AND
@@ -19910,6 +19981,8 @@ CASE
     WHEN ("jsonb_typeof"(("payload" -> 'filters'::"text")) = 'array'::"text") THEN ((("jsonb_array_length"(("payload" -> 'filters'::"text")) >= 1) AND ("jsonb_array_length"(("payload" -> 'filters'::"text")) <= 10)) AND ("jsonb_array_length"(("payload" -> 'filters'::"text")) = "jsonb_array_length"("jsonb_path_query_array"("payload", '$."filters"[*]?(((@.type() == "object" && @."field".type() == "string") && @."field" like_regex "^[A-Za-z][A-Za-z0-9_]{0,79}$") && ((((((@."op" == "=" || @."op" == "!=") || @."op" == "<") || @."op" == "<=") || @."op" == ">") || @."op" == ">=") && (((@."value".type() == "string" || @."value".type() == "number") || @."value".type() == "boolean") || @."value".type() == "null") || ((@."op" == "in" && @."value".type() == "array") && @."value".size() >= 1) && @."value".size() <= 100))'::"jsonpath"))))
     ELSE false
 END) AND (NOT COALESCE("jsonb_path_exists"("payload", '$."filters"[*].keyvalue()?(!((@."key" == "field" || @."key" == "op") || @."key" == "value"))'::"jsonpath", '{}'::"jsonb", true), true)) AND (NOT COALESCE("jsonb_path_exists"("payload", '$."filters"[*]?(@."op" == "in")."value"[*]?(@.type() == "object" || @.type() == "array")'::"jsonpath", '{}'::"jsonb", true), true)) AND ((("payload" ->> 'level'::"text") = 'data'::"text") OR (NOT COALESCE("jsonb_path_exists"("payload", '$."fields"[*]?(!((@ == "Id" || @ == "CreatedDate") || @ == "LastModifiedDate"))'::"jsonpath", '{}'::"jsonb", true), true)))))), false))),
+    CONSTRAINT "switchboard_actions_sf_run_click" CHECK ((("kind" <> 'sf_run'::"text") OR "needs_click")),
+    CONSTRAINT "switchboard_actions_sf_run_payload" CHECK ((("kind" <> 'sf_run'::"text") OR COALESCE((("jsonb_typeof"("payload") = 'object'::"text") AND ("jsonb_typeof"(("payload" -> 'link_id'::"text")) = 'string'::"text") AND (("payload" ->> 'link_id'::"text") ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::"text") AND ("octet_length"(("payload")::"text") <= 200000)), false))),
     CONSTRAINT "switchboard_actions_sql_payload" CHECK ((("kind" <> 'sql'::"text") OR ("jsonb_typeof"(("payload" -> 'sql'::"text")) = 'string'::"text"))),
     CONSTRAINT "switchboard_actions_status_valid" CHECK (("status" = ANY (ARRAY['queued'::"text", 'link_issued'::"text", 'consumed'::"text", 'succeeded'::"text", 'failed'::"text", 'cancelled'::"text"]))),
     CONSTRAINT "switchboard_actions_used_needs_link" CHECK ((("link_used_at" IS NULL) OR ("link_hash" IS NOT NULL)))
@@ -19943,7 +20016,7 @@ COMMENT ON COLUMN "public"."switchboard_actions"."chat_url" IS 'Address of the c
 
 
 
-COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...}, and a gitnewtree may name its "repo", an absolute path (spec 11.3). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], "folder" with from_sandbox, ...} (spec 11.5). sf_read: {"alias", "production", "level": "objects|metadata|ids|data", "object" (or "objects", 1 to 20, at metadata), "count" or "fields" with "limit", "filters"}, never SOQL text (spec 10). sf_dataop: {"alias", "repo", "plan", "stamp", "preflight_at", "object", "problem", "expected", "write", "rows", "rehearsal"?} (docs/technical-spec-dataops_alfred-d4x.md). sf_dataquery: {"alias", "org_type": "sandbox|production" (required on insert since dataquery_fixes-v3n), "repo", "run", "run_tag", "request_sha256"?, "queries": [{"step", "soql", "sha256", "file" | "label"}]} (docs/technical-spec-dataop_link-k7d.md). sf_datawrite: {"alias", "org_type", "repo", "run", "run_tag", "request_sha256", "selection_sha256", "object", "problem"?, "expected", "write": {"kind": "batch|bulk|undo", ...}, "uploads"?: [{"purpose", "file", "sha256", "rows"}], "queries": [{"step": "gate|after|after-counts", "soql", "sha256", "file" | "label", "wait"?}]} (docs/technical-spec-dataop_write-j5w.md). Fixed after insert.';
+COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...}, and a gitnewtree may name its "repo", an absolute path (spec 11.3). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], "folder" with from_sandbox, ...} (spec 11.5). sf_read: {"alias", "production", "level": "objects|metadata|ids|data", "object" (or "objects", 1 to 20, at metadata), "count" or "fields" with "limit", "filters"}, never SOQL text (spec 10). sf_dataop: {"alias", "repo", "plan", "stamp", "preflight_at", "object", "problem", "expected", "write", "rows", "rehearsal"?} (docs/technical-spec-dataops_alfred-d4x.md). sf_dataquery: {"alias", "org_type": "sandbox|production" (required on insert since dataquery_fixes-v3n), "repo", "run", "run_tag", "request_sha256"?, "queries": [{"step", "soql", "sha256", "file" | "label"}]} (docs/technical-spec-dataop_link-k7d.md). sf_run: {"link_id": "<run page link id, a uuid>", ...the data runs thread''s keys} (sb3_runner-r4q, for sb3_pages-h6v). Fixed after insert.';
 
 
 
@@ -20140,6 +20213,7 @@ CREATE TABLE IF NOT EXISTS "public"."switchboard_runs" (
     "result_pruned_at" timestamp with time zone,
     "started_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "finished_at" timestamp with time zone,
+    "failure_reason" "text",
     CONSTRAINT "switchboard_runs_dataquery_result" CHECK ((("result" IS NULL) OR (NOT ("result" ? 'query_counts'::"text")) OR COALESCE(((("result" - ARRAY['ok'::"text", 'exit_code'::"text", 'query_counts'::"text", 'pass'::"text"]) = '{}'::"jsonb") AND ("jsonb_typeof"(("result" -> 'ok'::"text")) = 'boolean'::"text") AND ((NOT ("result" ? 'exit_code'::"text")) OR ("jsonb_typeof"(("result" -> 'exit_code'::"text")) = 'number'::"text")) AND ((NOT ("result" ? 'pass'::"text")) OR ("jsonb_typeof"(("result" -> 'pass'::"text")) = 'boolean'::"text")) AND ((("result" -> 'ok'::"text") = 'false'::"jsonb") OR ("result" ? 'pass'::"text")) AND
 CASE
     WHEN ("jsonb_typeof"(("result" -> 'query_counts'::"text")) = 'array'::"text") THEN ((("jsonb_array_length"(("result" -> 'query_counts'::"text")) >= 1) AND ("jsonb_array_length"(("result" -> 'query_counts'::"text")) <= 40)) AND ("jsonb_array_length"(("result" -> 'query_counts'::"text")) = "jsonb_array_length"("jsonb_path_query_array"("result", '$."query_counts"[*]?(((@.type() == "number" && @ >= 0) && @ <= 999999999) && @ == @.floor())'::"jsonpath"))))
@@ -20214,6 +20288,10 @@ COMMENT ON COLUMN "public"."switchboard_runs"."started_at" IS 'When the run bega
 
 
 COMMENT ON COLUMN "public"."switchboard_runs"."finished_at" IS 'When it ended. Empty while running.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_runs"."failure_reason" IS 'Why the run failed, in a fixed word, kept when result is pruned. Only ''expired_not_picked_up'' so far: written by switchboard_pickup_helper and switchboard_pickup_git when an approved action was not picked up within 15 minutes (sb3_runner-r4q). Null for every other run, other failures and cancels included.';
 
 
 
@@ -28925,13 +29003,13 @@ GRANT ALL ON FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_pay
 
 
 
-REVOKE ALL ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") TO "service_role";
+REVOKE ALL ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid") TO "service_role";
 
 
 
-REVOKE ALL ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[]) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[]) TO "service_role";
+REVOKE ALL ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[], "p_pickup_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[], "p_pickup_id" "uuid") TO "service_role";
 
 
 
@@ -33769,6 +33847,10 @@ GRANT SELECT("started_at") ON TABLE "public"."switchboard_runs" TO "claude_reade
 
 
 GRANT SELECT("finished_at") ON TABLE "public"."switchboard_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("failure_reason") ON TABLE "public"."switchboard_runs" TO "claude_reader";
 
 
 
