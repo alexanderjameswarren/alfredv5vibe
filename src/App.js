@@ -8,6 +8,8 @@ import ApprovePage from './switchboard/ApprovePage';
 // Dev server only (dataops_alfred-d4x s6b): the approve page with a sample payload and a fake runner. CRA sets
 // NODE_ENV to "production" in a build, so webpack drops this branch and its import, and the build has no such route.
 const ApproveFixture = process.env.NODE_ENV !== 'production' ? lazy(() => import('./switchboard/ApproveFixture')) : null;
+// Dev server only (sb3_pages-h6v A2): the Switchboard 3 run page on made-up data. Dropped from a build the same way.
+const RunSimulation = process.env.NODE_ENV !== 'production' ? lazy(() => import('./switchboard/runs/RunSimulation')) : null;
 
 // Step 2 of docs/technical-spec-navigation-urls.md: mount the router and
 // change nothing else. This replaces the hard-coded
@@ -28,6 +30,9 @@ function App() {
         <Route path="/approve/:token" element={<ApprovePage />} />
         {ApproveFixture && process.env.NODE_ENV !== 'production' && (
           <Route path="/approve-fixture/:kind" element={<Suspense fallback={null}><ApproveFixture /></Suspense>} />
+        )}
+        {RunSimulation && process.env.NODE_ENV !== 'production' && (
+          <Route path="/run-sim/:scenario" element={<Suspense fallback={null}><RunSimulation /></Suspense>} />
         )}
         <Route path="*" element={<Alfred />} />
       </Routes>
