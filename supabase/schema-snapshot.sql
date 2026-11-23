@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-20 07:52, through migration 246 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-23 11:29, through migration 247 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -10010,22 +10010,60 @@ COMMENT ON FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_paylo
 
 
 
-CREATE OR REPLACE FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") RETURNS "jsonb"
+CREATE OR REPLACE FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid" DEFAULT NULL::"uuid") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public', 'pg_temp'
     AS $$
 declare
+  c_all    constant text[] := array['git', 'sf_check', 'sf_read', 'sb_setup', 'sf_dataop', 'sf_dataquery', 'sf_datawrite'];
+  c_prod   constant text[] := array['sf_dataop', 'sf_dataquery', 'sf_datawrite'];
   v_action public.switchboard_actions;
   v_run    uuid;
+  v_again  uuid;
 begin
   if p_user is null then
     raise exception 'switchboard_pickup_git: no user.' using errcode = '22004';
   end if;
 
-  -- Ready: clicked (consumed), or queued and needing no click. Not while that project has one running.
+  -- r2: an approved action of any helper kind not picked up within 15 minutes of its approval never runs.
+  with stale as (
+    update public.switchboard_actions
+       set status = 'failed'
+     where user_id = p_user and kind = any(c_all) and status = 'consumed' and picked_up_at is null
+       and (coalesce(link_used_at, created_at) < now() - interval '15 minutes'
+            or (kind = any(c_prod) and link_used_at is null))
+    returning id
+  )
+  insert into public.switchboard_runs (user_id, action_id, mode, summary, result, failure_reason, finished_at)
+  select p_user, id, 'real', 'expired: approved over 15 minutes ago and never picked up, never run',
+         jsonb_build_object('ok', false, 'expired', true, 'reason', 'expired_not_picked_up'), 'expired_not_picked_up', now()
+    from stale;
+
+  -- r2: a repeat of a pickup whose reply was lost gets the same action and run, while that run is open. A repeat
+  -- sent while the first is still running waits for it here, so it sees the first one's run.
+  if p_pickup_id is not null then
+    perform pg_advisory_xact_lock(hashtextextended('switchboard_pickup:' || p_pickup_id::text, 0));
+    select r.id, a.id into v_run, v_again
+      from public.switchboard_runs r
+      join public.switchboard_actions a on a.id = r.action_id
+     where r.user_id = p_user and r.finished_at is null and r.mode = 'real'
+       and r.result is not null and r.result->>'pickup_id' = p_pickup_id::text
+       and a.user_id = p_user and a.kind = 'git' and a.status = 'consumed' and a.picked_up_at is not null
+     order by r.started_at desc
+     limit 1;
+    if v_again is not null then
+      select * into v_action from public.switchboard_actions where id = v_again;
+      return jsonb_build_object('action_id', v_action.id, 'run_id', v_run, 'project_code', v_action.project_code,
+                                'payload', v_action.payload, 'fingerprint', v_action.fingerprint,
+                                'headline', v_action.headline, 'chat_url', v_action.chat_url);
+    end if;
+  end if;
+
+  -- Ready: clicked (consumed) within 15 minutes, or queued and needing no click. Not while that project has one running.
   select a.* into v_action from public.switchboard_actions a
    where a.user_id = p_user and a.kind = 'git' and a.picked_up_at is null
-     and (a.status = 'consumed' or (a.status = 'queued' and not a.needs_click))
+     and ((a.status = 'consumed' and coalesce(a.link_used_at, a.created_at) >= now() - interval '15 minutes')
+          or (a.status = 'queued' and not a.needs_click))
      and not exists (select 1 from public.switchboard_actions b
                       where b.user_id = p_user and b.kind = 'git' and b.project_code = a.project_code
                         and b.picked_up_at is not null and b.status = 'consumed')
@@ -10039,8 +10077,9 @@ begin
   update public.switchboard_actions
      set picked_up_at = now(), status = 'consumed'
    where id = v_action.id;
-  insert into public.switchboard_runs (user_id, action_id, mode, summary)
-  values (p_user, v_action.id, 'real', 'picked up by the helper')
+  insert into public.switchboard_runs (user_id, action_id, mode, summary, result)
+  values (p_user, v_action.id, 'real', 'picked up by the helper',
+          case when p_pickup_id is null then null else jsonb_build_object('pickup_id', p_pickup_id) end)
   returning id into v_run;
 
   return jsonb_build_object('action_id', v_action.id, 'run_id', v_run, 'project_code', v_action.project_code,
@@ -10050,14 +10089,14 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") OWNER TO "postgres";
+ALTER FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") IS 'Switchboard: hand the helper the oldest git action of p_user that is ready to run: clicked, or queued and needing no click. One at a time per project code. Sets picked_up_at, marks it consumed and opens a real run row. Returns {action_id, run_id, project_code, payload, fingerprint, headline, chat_url}, or null when nothing is ready. Called by switchboard-runner with the service role after it checks the pickup key; no other role can call it.';
+COMMENT ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid") IS 'Switchboard: hand the helper the oldest git action of p_user that is ready to run: clicked within 15 minutes, or queued and needing no click. One at a time per project code. Any helper action, of any kind, approved (consumed) over 15 minutes ago, by coalesce(link_used_at, created_at), and never picked up is marked failed first, with a finished run, result {ok: false, expired: true, reason: expired_not_picked_up} (sb3_runner-r4q r2). Sets picked_up_at, marks it consumed and opens a real run row. With p_pickup_id the run row carries result {pickup_id} until the helper''s result replaces it, and a repeat with the same id while that run is open returns the same action and run. Returns {action_id, run_id, project_code, payload, fingerprint, headline, chat_url}, or null when nothing is ready. Called by switchboard-runner with the service role after it checks the pickup key; no other role can call it.';
 
 
 
-CREATE OR REPLACE FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[] DEFAULT NULL::"text"[]) RETURNS "jsonb"
+CREATE OR REPLACE FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[] DEFAULT NULL::"text"[], "p_pickup_id" "uuid" DEFAULT NULL::"uuid") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public', 'pg_temp'
     AS $$
@@ -10067,6 +10106,7 @@ declare
   v_kinds  text[];
   v_action public.switchboard_actions;
   v_run    uuid;
+  v_again  uuid;
 begin
   if p_user is null then
     raise exception 'switchboard_pickup_helper: no user.' using errcode = '22004';
@@ -10093,24 +10133,47 @@ begin
          jsonb_build_object('ok', false, 'expired', true), now()
     from expired;
 
-  -- O6: an approved production data run, export, count or write not picked up within 15 minutes of the click never runs.
+  -- r2: an approved action of any helper kind not picked up within 15 minutes of its approval never runs. A production
+  -- kind consumed without a click is failed at once, as before (O6).
   with stale as (
     update public.switchboard_actions
        set status = 'failed'
-     where user_id = p_user and kind = any(c_prod) and status = 'consumed' and picked_up_at is null
-       and (link_used_at is null or link_used_at < now() - interval '15 minutes')
+     where user_id = p_user and kind = any(c_all) and status = 'consumed' and picked_up_at is null
+       and (coalesce(link_used_at, created_at) < now() - interval '15 minutes'
+            or (kind = any(c_prod) and link_used_at is null))
     returning id
   )
-  insert into public.switchboard_runs (user_id, action_id, mode, summary, result, finished_at)
+  insert into public.switchboard_runs (user_id, action_id, mode, summary, result, failure_reason, finished_at)
   select p_user, id, 'real', 'expired: approved over 15 minutes ago and never picked up, never run',
-         jsonb_build_object('ok', false, 'expired', true), now()
+         jsonb_build_object('ok', false, 'expired', true, 'reason', 'expired_not_picked_up'), 'expired_not_picked_up', now()
     from stale;
 
-  -- Ready: clicked (consumed), or queued and needing no click. A production kind only clicked, by its link. Not while
-  -- that project has one running.
+  -- r2: a repeat of a pickup whose reply was lost gets the same action and run, while that run is open. A repeat
+  -- sent while the first is still running waits for it here, so it sees the first one's run.
+  if p_pickup_id is not null then
+    perform pg_advisory_xact_lock(hashtextextended('switchboard_pickup:' || p_pickup_id::text, 0));
+    select r.id, a.id into v_run, v_again
+      from public.switchboard_runs r
+      join public.switchboard_actions a on a.id = r.action_id
+     where r.user_id = p_user and r.finished_at is null and r.mode = 'real'
+       and r.result is not null and r.result->>'pickup_id' = p_pickup_id::text
+       and a.user_id = p_user and a.kind = any(v_kinds) and a.status = 'consumed' and a.picked_up_at is not null
+     order by r.started_at desc
+     limit 1;
+    if v_again is not null then
+      select * into v_action from public.switchboard_actions where id = v_again;
+      return jsonb_build_object('action_id', v_action.id, 'run_id', v_run, 'kind', v_action.kind,
+                                'project_code', v_action.project_code, 'payload', v_action.payload,
+                                'fingerprint', v_action.fingerprint, 'headline', v_action.headline, 'chat_url', v_action.chat_url);
+    end if;
+  end if;
+
+  -- Ready: clicked (consumed) within 15 minutes, or queued and needing no click. A production kind only clicked, by
+  -- its link. Not while that project has one running.
   select a.* into v_action from public.switchboard_actions a
    where a.user_id = p_user and a.kind = any(v_kinds) and a.picked_up_at is null
-     and (a.status = 'consumed' or (a.status = 'queued' and not a.needs_click))
+     and ((a.status = 'consumed' and coalesce(a.link_used_at, a.created_at) >= now() - interval '15 minutes')
+          or (a.status = 'queued' and not a.needs_click))
      and (not (a.kind = any(c_prod))
           or (a.status = 'consumed' and a.needs_click and a.link_used_at is not null
               and a.link_used_at >= now() - interval '15 minutes'))
@@ -10128,8 +10191,9 @@ begin
   update public.switchboard_actions
      set picked_up_at = now(), status = 'consumed'
    where id = v_action.id;
-  insert into public.switchboard_runs (user_id, action_id, mode, summary)
-  values (p_user, v_action.id, 'real', 'picked up by the helper')
+  insert into public.switchboard_runs (user_id, action_id, mode, summary, result)
+  values (p_user, v_action.id, 'real', 'picked up by the helper',
+          case when p_pickup_id is null then null else jsonb_build_object('pickup_id', p_pickup_id) end)
   returning id into v_run;
 
   return jsonb_build_object('action_id', v_action.id, 'run_id', v_run, 'kind', v_action.kind,
@@ -10139,10 +10203,10 @@ end;
 $$;
 
 
-ALTER FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[]) OWNER TO "postgres";
+ALTER FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[], "p_pickup_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[]) IS 'Switchboard: hand the helper the oldest action of p_user, of a kind in p_kinds (default git, sf_check, sf_read, sb_setup; sf_dataop, sf_dataquery and sf_datawrite only when named), that is ready to run: clicked, or queued and needing no click. An sf_dataop, sf_dataquery or sf_datawrite only when consumed by Alex''s click on its link, within 15 minutes of the click; one approved longer ago is marked failed with a run saying it expired (O6). A queued no-click action over 10 minutes old is marked failed the same way. One running at a time per project code, across every helper kind. Sets picked_up_at, marks it consumed and opens a real run row. Returns {action_id, run_id, kind, project_code, payload, fingerprint, headline, chat_url}, or null. Called by switchboard-runner with the service role after it checks the pickup key (dataops_alfred-d4x; dataop_link-k7d; dataop_write-j5w).';
+COMMENT ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[], "p_pickup_id" "uuid") IS 'Switchboard: hand the helper the oldest action of p_user, of a kind in p_kinds (default git, sf_check, sf_read, sb_setup; sf_dataop, sf_dataquery and sf_datawrite only when named), that is ready to run: clicked within 15 minutes, or queued and needing no click. An sf_dataop, sf_dataquery or sf_datawrite only when consumed by Alex''s click on its link. Any helper action approved (consumed) over 15 minutes ago, by coalesce(link_used_at, created_at), and never picked up is marked failed with a finished run, result {ok: false, expired: true, reason: expired_not_picked_up} (sb3_runner-r4q r2; O6). A queued no-click action over 10 minutes old is marked failed the same way, without the reason. One running at a time per project code, across every helper kind. Sets picked_up_at, marks it consumed and opens a real run row. With p_pickup_id the run row carries result {pickup_id} until the helper''s result replaces it, and a repeat with the same id while that run is open returns the same action and run. Returns {action_id, run_id, kind, project_code, payload, fingerprint, headline, chat_url}, or null. Called by switchboard-runner with the service role after it checks the pickup key (dataops_alfred-d4x; dataop_link-k7d; dataop_write-j5w; sb3_runner-r4q).';
 
 
 
@@ -20140,6 +20204,7 @@ CREATE TABLE IF NOT EXISTS "public"."switchboard_runs" (
     "result_pruned_at" timestamp with time zone,
     "started_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "finished_at" timestamp with time zone,
+    "failure_reason" "text",
     CONSTRAINT "switchboard_runs_dataquery_result" CHECK ((("result" IS NULL) OR (NOT ("result" ? 'query_counts'::"text")) OR COALESCE(((("result" - ARRAY['ok'::"text", 'exit_code'::"text", 'query_counts'::"text", 'pass'::"text"]) = '{}'::"jsonb") AND ("jsonb_typeof"(("result" -> 'ok'::"text")) = 'boolean'::"text") AND ((NOT ("result" ? 'exit_code'::"text")) OR ("jsonb_typeof"(("result" -> 'exit_code'::"text")) = 'number'::"text")) AND ((NOT ("result" ? 'pass'::"text")) OR ("jsonb_typeof"(("result" -> 'pass'::"text")) = 'boolean'::"text")) AND ((("result" -> 'ok'::"text") = 'false'::"jsonb") OR ("result" ? 'pass'::"text")) AND
 CASE
     WHEN ("jsonb_typeof"(("result" -> 'query_counts'::"text")) = 'array'::"text") THEN ((("jsonb_array_length"(("result" -> 'query_counts'::"text")) >= 1) AND ("jsonb_array_length"(("result" -> 'query_counts'::"text")) <= 40)) AND ("jsonb_array_length"(("result" -> 'query_counts'::"text")) = "jsonb_array_length"("jsonb_path_query_array"("result", '$."query_counts"[*]?(((@.type() == "number" && @ >= 0) && @ <= 999999999) && @ == @.floor())'::"jsonpath"))))
@@ -20214,6 +20279,10 @@ COMMENT ON COLUMN "public"."switchboard_runs"."started_at" IS 'When the run bega
 
 
 COMMENT ON COLUMN "public"."switchboard_runs"."finished_at" IS 'When it ended. Empty while running.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_runs"."failure_reason" IS 'Why the run failed, in a fixed word, kept when result is pruned. Only ''expired_not_picked_up'' so far: written by switchboard_pickup_helper and switchboard_pickup_git when an approved action was not picked up within 15 minutes (sb3_runner-r4q). Null for every other run, other failures and cancels included.';
 
 
 
@@ -28925,13 +28994,13 @@ GRANT ALL ON FUNCTION "public"."switchboard_needs_click"("p_kind" "text", "p_pay
 
 
 
-REVOKE ALL ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid") TO "service_role";
+REVOKE ALL ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid") TO "service_role";
 
 
 
-REVOKE ALL ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[]) FROM PUBLIC;
-GRANT ALL ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[]) TO "service_role";
+REVOKE ALL ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[], "p_pickup_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[], "p_pickup_id" "uuid") TO "service_role";
 
 
 
@@ -33769,6 +33838,10 @@ GRANT SELECT("started_at") ON TABLE "public"."switchboard_runs" TO "claude_reade
 
 
 GRANT SELECT("finished_at") ON TABLE "public"."switchboard_runs" TO "claude_reader";
+
+
+
+GRANT SELECT("failure_reason") ON TABLE "public"."switchboard_runs" TO "claude_reader";
 
 
 
