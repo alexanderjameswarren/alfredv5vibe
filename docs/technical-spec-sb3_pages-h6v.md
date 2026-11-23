@@ -116,7 +116,7 @@ Which edit reruns what (EDIT_RERUNS in runContract.js):
 |---|---|
 | wording only, or what diagnosis allows | nothing: no page of its own; the next page carries the block |
 | the value or the file | rehearsal |
-| which field | rehearsal and the login check |
+| which field | rehearsal, the login check, the backup (Alex, s7) and the sample record (Alex, s8b) |
 | which records | count, backup and sample; plus the rehearsal for a filter |
 | the sandbox filter | rehearsal |
 | the code | rehearsal and code review |
@@ -211,6 +211,57 @@ without its text, duplicate finding ids, a note outside its file. At A6 a note m
 
 Until the extension's POST_LINE learns these (plumbing), the page shows the line to copy, as ResultLine does today.
 
+### 4.3a The code review page as built (A6, s7)
+
+- **jsdiff** (`diff`) pinned at exactly 5.2.0. codeDiff.js turns its diffLines output into numbered rows (added,
+  removed, unchanged) and hunks with 3 lines of context; CodeReviewPage.jsx draws them itself, inline, never side by
+  side. A missing final newline never shows the last line as changed.
+- **Review fields added to 4.3:** project_code, headline, simulation (sample data only), superseded_by (the newer
+  commit; the page shows "The code has changed since this review. A new review comes after the next rehearsal." and
+  no buttons), acknowledged {finding id: {note}} (ticks and notes kept across visits and questions).
+- **Refused** (codeReviewProblems), added at A6: a note whose lines aren't changed lines (an added line, or the new line
+  a removal sits before); a note on a new file that isn't one line; a note whose problem label isn't one of its file's
+  labels; a superseded_by that isn't a commit hash. A refused review shows "This review can't be shown" and no
+  buttons.
+- **Notes** sit directly above the change they explain, in both views: above its removed lines when a line was replaced
+  or deleted (noteAnchor), never between the removed and the added lines. A removal at the very end of a file counts
+  on the file's last line.
+- **A refused review** shows only its headline and why: no findings, no code, no buttons, no red bar.
+- **Ticks and notes** go with every answer (question, changes, reviewed), so the real source keeps them on the review;
+  they are locked while a click waits on the desktop. After "I reviewed" or "Changes required" the outcome panel takes
+  focus and is announced.
+- **Desktop:** "I reviewed this code" and the red bar come from one value and need the desktop ready, asked at page
+  open, on Check again and again at the click; otherwise the "Desktop not ready" section stands in. "Ask a question"
+  and "Not approved. Changes required." don't need it: their line is shown to copy until POST_LINE learns it.
+- **Result lines** as 4.4: the line carries the first 200 characters (lineText), the source receives the full text (up
+  to 1000).
+- Scenarios: review-logic-rerun (two new files), review-code-fix (one class, two places, P1a and P3),
+  review-superseded, review-all-acknowledged, on the same /run-sim/:scenario route.
+
+### 4.3b Fixes from Alex's testing (A7, s8)
+
+- **Closed undo:** "Undo: not offered, the deadline has passed." replaces the waiting "Undo" phase in the status line
+  (s8b), and "This run will:" and the "Undo: none…" line are left out, so the page has one "Undo:" line.
+- **New file notes** (s8b): always at the very top of the file, above line 1, whatever line range they name; the
+  label keeps the range ("line 2").
+- **An undo's login check** names what the undo does: a delete's undo "Confirm the login can still restore Gift
+  records."; an insert's (or undelete's) undo deletes; an upsert's "delete and update"; an update's undo updates the
+  same field.
+- **A used link:** the phase that was waiting reads "running, picked up <time>", "finished, <time>" or, with a
+  failure_reason, "stopped, <time>", from the stored run. The phase keeps its state (data-live carries the word).
+- **Check what happened** shows no "Checks valid until" or "nothing expires" line.
+- **Corrections:** one scenario per edit kind (field, value, records by Id list and by filter, sandbox filter, code),
+  each built from EDIT_RERUNS: its steps are rerunSteps(kind) with the count step that fits the selection, its
+  rerun checks' evidence voided, "Still valid" the rest. A correction's banners and Approve label name only the orgs
+  its steps run on (a value, sandbox filter or code edit: "Approve this run on SANDBOX").
+- **Code review page:** the full window width with today's side margins (run pages keep max-w-3xl). Code never
+  wraps; a long line scrolls only its own file's code box (a size container), and notes inside it stay in view at
+  the left, never wider than the box. Line numbers and "N unchanged lines" use the readable muted text colour. A new
+  file's notes sit at the top, above line 1. A note reads "line 2" or "lines 9-11". On a superseded review only, the
+  ticks and notes are visibly locked (greyed, dashed, not-allowed, "locked: this review is superseded"); an open
+  review's disabled note boxes just dim. A refused review is drawn at the run pages' width.
+- **Result lines:** text cut to 200 characters ends with "…", within the 200.
+
 ### 4.5 Agreed with plumbing (s5, 2026-11-23)
 
 1. **Not started.** "Not started. Nothing ran." shows when switchboard_runs.failure_reason is 'expired_not_picked_up'
@@ -281,7 +332,8 @@ Until the extension's POST_LINE learns these (plumbing), the page shows the line
   button, no expired note; a second rerun isn't offered (part 5). The rerun's result line is plain `run <link id>`.
 - **In rerun mode** the banners and "After you approve" describe the pre-check and rehearsal, not the write. A
   dataop request whose checks may expire carries its rehearsal org, so the rerun can rehearse (B3 to enforce).
-- **A used link** (picked up or finished): "Picked up …, running" or "Finished …", no buttons.
+- **A used link** (picked up or finished): a panel "Picked up …, running", "Finished …" or, with a failure_reason,
+  "Stopped …", and no buttons; the status line as in 4.3b.
 - **Not started with the checks expired** (decided by Alex, s6b): a link whose run failed as 'expired_not_picked_up'
   counts as unused for the rerun ("Run the pre-check and rehearsal again"), so it is no dead end. The page keeps the
   not-started panel, says it can't be resent and that the link counts as unused, and offers the rerun; once the

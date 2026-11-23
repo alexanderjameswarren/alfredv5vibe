@@ -2,8 +2,8 @@ import { createElement as h } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { requestProblems } from './runContract';
-import { DESKTOP_ANSWERS, SCENARIOS, scenarioNames, simSource } from './simulation';
+import { codeReviewProblems, requestProblems } from './runContract';
+import { DESKTOP_ANSWERS, SCENARIOS, reviewScenarioNames, reviewSimSource, scenarioNames, simSource } from './simulation';
 import { ANSWERS, simulatedState } from './desktopCheck';
 import RunSimulation from './RunSimulation';
 
@@ -41,7 +41,8 @@ describe('every scenario renders through /run-sim/:scenario', () => {
     await waitFor(() => expect(screen.getByTestId('run-headline')).toHaveAttribute('data-settled', 'true'));
     expect(screen.getByTestId('run-simulation')).toBeInTheDocument();
     expect(screen.getByTestId('run-problem')).toBeInTheDocument();
-    expect(screen.getByTestId('run-will')).toBeInTheDocument();
+    // "This run will:" on every page but a closed undo, which runs nothing and says why instead.
+    expect(Boolean(screen.queryByTestId('run-will')) || Boolean(screen.queryByTestId('run-undo-closed'))).toBe(true);
     // The action and the red bar together, or neither; with the desktop not ready, never an action.
     expect(Boolean(screen.queryByTestId('run-approval-required'))).toBe(hasAction());
     expect(Boolean(query) && hasAction()).toBe(false);
@@ -50,6 +51,25 @@ describe('every scenario renders through /run-sim/:scenario', () => {
   test('an unknown scenario shows the list', async () => {
     at('/run-sim/list');
     expect(await screen.findByTestId('run-sim-list')).toBeInTheDocument();
+    expect(screen.getByTestId('review-sim-list')).toBeInTheDocument();
+  });
+
+  test.each(reviewScenarioNames().flatMap((name) => [[name, ''], [name, '?desktop=not_running']]))('code review %s%s', async (name, query) => {
+    at(`/run-sim/${name}${query}`);
+    await waitFor(() => expect(screen.getByTestId('run-headline')).toHaveAttribute('data-settled', 'true'));
+    expect(screen.getByTestId('review-findings')).toBeInTheDocument();
+    expect(screen.getAllByTestId('review-file').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('review-problems')).toBeNull();
+    expect(Boolean(screen.queryByTestId('run-approval-required'))).toBe(hasAction());
+    expect(Boolean(query) && hasAction()).toBe(false);
+  });
+});
+
+describe('code review scenarios', () => {
+  test.each(reviewScenarioNames())('%s passes codeReviewProblems, every note on changed lines', async (name) => {
+    const { review } = await reviewSimSource(name).load();
+    expect(codeReviewProblems(review)).toEqual([]);
+    expect(review.simulation).toBe(true);
   });
 });
 

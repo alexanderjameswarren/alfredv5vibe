@@ -3,6 +3,9 @@ import '@testing-library/jest-dom';
 import RunPage from './RunPage';
 import { scenarioNames, simSource } from './simulation';
 import { BUTTON } from './look';
+import { STEPS } from './runContract';
+
+const STEPS_TEXT = (code, r) => STEPS[code].text({ code }, r);
 
 jest.mock('../../supabaseClient', () => ({ supabaseUrl: 'https://db.example', supabaseAnonKey: 'anon', supabase: { auth: {} } }));
 
@@ -511,8 +514,10 @@ describe('A5: screen d, the correction page', () => {
     expect(changed).toHaveTextContent('Campaign__c');
     expect(changed).toHaveTextContent('Appeal__c');
     expect(changed).toHaveTextContent("Why: The Spring appeal report reads Appeal__c, not Campaign__c; diagnosis named the wrong field.");
-    expect(screen.getAllByTestId('run-step').map((s) => s.dataset.code)).toEqual(['login_can_change', 'create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test']);
-    expect(screen.getAllByTestId('run-still-valid-check').map((e) => e.textContent.split(',')[0])).toEqual(['Count', 'Triggers and flows', 'Backup', 'Sample record']);
+    // A field edit reruns the rehearsal, the login check and the backup (Alex, s7).
+    expect(screen.getAllByTestId('run-step').map((s) => s.dataset.code)).toEqual(['login_can_change', 'save_backup', 'create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test']);
+    // ...and the sample record (Alex, s8b), so it leaves "Still valid".
+    expect(screen.getAllByTestId('run-still-valid-check').map((e) => e.textContent.split(',')[0])).toEqual(['Count', 'Triggers and flows']);
     // eslint-disable-next-line no-bitwise
     expect(screen.getByTestId('run-will').compareDocumentPosition(screen.getByTestId('run-still-valid')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByTestId('run-approve')).toHaveTextContent('Approve this run on PRODUCTION and SANDBOX');
@@ -673,5 +678,81 @@ describe('A5: not started, checks expired, check what happened', () => {
     expect(stepText('find_temp_code')[0]).toContain('Look for temporary code left in production.');
     expect(screen.getByTestId('run-after')).toHaveTextContent('Back to Alfred: the job state and three counts');
     expect(screen.getByTestId('run-approve')).toHaveTextContent('Check what happened on PRODUCTION');
+  });
+});
+
+describe('A7 fixes', () => {
+  const settled = async (name, opts) => {
+    render(<RunPage source={simSource(name, opts)} />);
+    await waitFor(() => expect(screen.getByTestId('run-headline')).toHaveAttribute('data-settled', 'true'));
+  };
+
+  test('closed undo: "Undo: not offered, the deadline has passed" in the status line, and no "This run will:"', async () => {
+    await settled('undo-closed');
+    expect(screen.getByTestId('run-status')).toHaveTextContent('Undo: not offered, the deadline has passed.');
+    // It replaces the waiting Undo phase: no "Undo: waiting" above it.
+    expect(screen.getByTestId('run-status')).not.toHaveTextContent('waiting');
+    expect(screen.getAllByTestId('run-phase').map((p) => p.textContent)).toEqual([expect.stringMatching(/^Data operation: passed/)]);
+    expect(screen.queryByTestId('run-will')).toBeNull();
+  });
+
+  test("a delete's undo: the login check is to restore", async () => {
+    await open('undo-delete');
+    expect(stepText('login_can_write')[0]).toBe('Production Confirm the login can still restore Gift records.');
+  });
+
+  test.each([['run-picked-up', 'running', 'Data operation: running, picked up'], ['run-finished', 'finished', 'Data operation: finished, ']])(
+    '%s: the status line says %s, not waiting', async (name, state, words) => {
+      await settled(name);
+      const phase = screen.getAllByTestId('run-phase').find((p) => p.textContent.startsWith('Data operation'));
+      // The phase keeps its state; data-live says what the stored run shows.
+      expect(phase).toHaveAttribute('data-live', state);
+      expect(phase).toHaveTextContent(words);
+      expect(screen.getByTestId('run-status')).not.toHaveTextContent('waiting');
+    },
+  );
+
+  test('a finished run with a failure reads "stopped", not "finished"', async () => {
+    const source = simSource('run-finished');
+    const load = source.load;
+    source.load = async () => { const p = await load(); return { ...p, run: { ...p.run, failure_reason: 'stopped_at_step' } }; };
+    render(<RunPage source={source} />);
+    await screen.findByTestId('run-used');
+    expect(screen.getByTestId('run-used')).toHaveTextContent(/^Stopped /);
+    expect(screen.getAllByTestId('run-phase').find((p) => p.textContent.startsWith('Data operation'))).toHaveAttribute('data-live', 'stopped');
+  });
+
+  test('a closed undo has one "Undo:" line, in the status line', async () => {
+    await settled('undo-closed');
+    expect(screen.queryByTestId('run-undo')).toBeNull();
+  });
+
+  test('run pages keep max-w-3xl', async () => {
+    await open('dataop-update');
+    expect(screen.getByTestId('run-card').className).toMatch(/max-w-3xl/);
+  });
+
+  test("an upsert's undo: the login check is to delete and update", () => {
+    expect(STEPS_TEXT('login_can_write', { page: 'undo', operation: { kind: 'upsert', object: 'Gift__c', object_label: 'Gift', external_id: 'Ref__c' } }))
+      .toBe('Confirm the login can still delete and update Gift records.');
+  });
+
+  test('check what happened: no "nothing expires" line', async () => {
+    await open('check');
+    expect(screen.queryByTestId('run-valid-until')).toBeNull();
+  });
+
+  test.each([
+    ['correction-value', ['create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test'], ['Count', 'Login check', 'Triggers and flows', 'Backup', 'Sample record'], 'Approve this run on SANDBOX'],
+    ['correction-records', ['count_listed', 'save_backup'], ['Login check', 'Triggers and flows', 'Sandbox rehearsal'], 'Approve this run on PRODUCTION'],
+    ['correction-records-filter', ['count_filter', 'save_backup', 'create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test'], ['Login check', 'Triggers and flows'], 'Approve this run on PRODUCTION and SANDBOX'],
+    ['correction-sandbox-filter', ['create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test'], ['Count', 'Login check', 'Triggers and flows', 'Backup', 'Sample record'], 'Approve this run on SANDBOX'],
+    ['correction-code', ['create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test'], ['Count', 'Login check', 'Triggers and flows', 'Backup', 'Sample record'], 'Approve this run on SANDBOX'],
+  ])('%s: only what the edit reruns, the rest still valid, and the button names the orgs it touches', async (name, steps, still, label) => {
+    await open(name);
+    expect(screen.getByTestId('run-changed')).toBeInTheDocument();
+    expect(screen.getAllByTestId('run-step').map((s) => s.dataset.code)).toEqual(steps);
+    expect(screen.getAllByTestId('run-still-valid-check').map((e) => e.textContent.split(',')[0])).toEqual(still);
+    expect(screen.getByTestId('run-approve')).toHaveTextContent(new RegExp(`^${label}$`));
   });
 });

@@ -84,17 +84,30 @@ function ProblemBox({ r, closed }) {
 }
 
 /** Part 8: the status line. */
-function StatusLine({ r }) {
+function StatusLine({ r, run, closed }) {
   const until = validUntil(r.evidence);
+  // A used link (A7): the phase being run reads running or finished, from the stored run, not "waiting".
+  // A run that finished with a failure_reason stopped; it didn't finish.
+  const live = run?.finished_at
+    ? { word: run.failure_reason ? 'stopped' : 'finished', at: run.finished_at }
+    : run?.picked_up_at ? { word: 'running', at: run.picked_up_at, lead: 'picked up ' } : null;
   return (
     <div data-testid="run-status" className="mb-4 text-sm text-dark break-words">
-      {(r.phases ?? []).map((p) => (
-        <p key={p.name} data-testid="run-phase" data-state={p.state} className="m-0">
-          {p.name}: <span className="font-medium">{phaseWord(p.state)}</span>{p.rerun ? ' (run again)' : ''}{p.at ? `, ${localTime(p.at)}` : ''}
-        </p>
-      ))}
-      {/* An undo has no 24-hour expiry, only its own deadline (Alex, s6). */}
-      {r.page !== 'undo' && (
+      {(r.phases ?? []).map((p) => {
+        // A closed undo: "Undo: not offered…" replaces the Undo phase, never sits below it (s8b).
+        if (closed && p.name === 'Undo') {
+          return <p key={p.name} data-testid="run-undo-not-offered" className="m-0 font-medium">Undo: not offered, the deadline has passed.</p>;
+        }
+        const shown = live && p.state === 'waiting' ? live : null;
+        return (
+          <p key={p.name} data-testid="run-phase" data-state={p.state} data-live={shown ? shown.word : undefined} className="m-0">
+            {p.name}: <span className="font-medium">{shown ? shown.word : phaseWord(p.state)}</span>{p.rerun ? ' (run again)' : ''}
+            {shown ? `, ${shown.lead ?? ''}${localTime(shown.at)}` : p.at ? `, ${localTime(p.at)}` : ''}
+          </p>
+        );
+      })}
+      {/* An undo has no 24-hour expiry, only its own deadline (Alex, s6); a check reads only, so nothing expires. */}
+      {r.page !== 'undo' && r.page !== 'check' && (
         <p data-testid="run-valid-until" className="m-0">
           {until ? `Checks valid until ${localTime(until)}.` : 'No checks have passed yet, so nothing expires.'}
         </p>
@@ -356,7 +369,8 @@ export default function RunPage({ source }) {
   // In rerun mode the action is the pre-check and rehearsal: its banners, not the write's.
   const banners = closed ? { ...bannerLines(r), production: 'Nothing changes: no undo is offered.' } : bannerLines(mode === 'rerun' ? rerunRequest(r) : r);
   const sentence = closed ? null : countSentence(r);
-  const undo = undoLine(r);
+  // A closed undo says "Undo: not offered" in its status line; a second "Undo:" line would only repeat it.
+  const undo = closed ? null : undoLine(r);
   const linkId = loaded.link_id;
 
   return (
@@ -370,11 +384,12 @@ export default function RunPage({ source }) {
       <p data-testid="run-client-org" className="text-dark mb-4 break-words">{clientOrgLine(r)}</p>
       {sentence && <p data-testid="run-count-sentence" className="text-2xl font-bold text-dark mb-3 break-words">{sentence}</p>}
       <ProblemBox r={r} closed={closed} />
-      <StatusLine r={r} />
+      <StatusLine r={r} run={used ? run : null} closed={closed} />
       <ChangedBlock changed={r.changed} />
       <SampleRecord r={r} sample={loaded.sample} />
       {undo && <p data-testid="run-undo" className="mb-4 text-dark font-medium break-words">{undo}</p>}
-      <RunWill r={r} />
+      {/* A closed undo will run nothing, so "This run will:" is left out (A7). */}
+      {!closed && <RunWill r={r} />}
       <StillValid r={r} />
 
       {!notReady && !closed && !quiet && (
@@ -409,7 +424,7 @@ export default function RunPage({ source }) {
       )}
       {used && (
         <div data-testid="run-used" className={PANEL}>
-          <p className="font-medium m-0 mb-1">{run.finished_at ? `Finished ${localTime(run.finished_at)}` : `Picked up ${localTime(run.picked_up_at)}, running`}</p>
+          <p className="font-medium m-0 mb-1">{run.finished_at ? `${run.failure_reason ? 'Stopped' : 'Finished'} ${localTime(run.finished_at)}` : `Picked up ${localTime(run.picked_up_at)}, running`}</p>
           <p className="m-0 break-words">Approved {localTime(run.consumed_at)}. This link is used; the results come back to Alfred.</p>
         </div>
       )}

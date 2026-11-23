@@ -2,6 +2,8 @@
 // A PROPOSAL until the design thread reconciles it with the data runs thread. Pure functions only: no React, no
 // network, so the simulation, the pages and later the queue tool's checks can share the same rules.
 
+import { noteOnChange } from './codeDiff';
+
 export const PAGES = ['precheck', 'dataop', 'undo', 'correction', 'check'];
 export const OPERATIONS = ['update', 'insert', 'upsert', 'delete', 'undelete', 'multi'];
 export const ORG_TYPES = ['production', 'sandbox'];
@@ -33,7 +35,8 @@ export const EDIT_RERUNS = {
   allows: [],
   value: ['rehearsal'],
   file: ['rehearsal'],
-  field: ['rehearsal', 'login'],
+  // Alex (s7, s8b): a different field means a different backup, and so a new sample record, too.
+  field: ['rehearsal', 'login', 'backup', 'sample'],
   records: ['count', 'backup', 'sample'],
   records_filter: ['count', 'backup', 'sample', 'rehearsal'],
   sandbox_filter: ['rehearsal'],
@@ -67,7 +70,8 @@ const recs = (v) => `${n(v)} ${plural(v, 'record')}`;
 const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 /** A step's or operation's object as people say it, plural ("Accounts"); the API name when there is none. */
 const pluralLabel = (o) => o?.label_plural ?? o?.object ?? '?';
-const LOGIN_VERBS = { update: 'update', insert: 'create', upsert: 'create and update', delete: 'delete', undelete: 'restore' };
+// upsert_undo: an upsert's undo deletes what it created and puts the updated records back.
+const LOGIN_VERBS = { update: 'update', insert: 'create', upsert: 'create and update', delete: 'delete', undelete: 'restore', upsert_undo: 'delete and update' };
 /** "Before the write", the first step: what must still be true depends on the operation, with the request's counts. */
 function firstBeforeWrite(r) {
   const c = r?.counts ?? {};
@@ -84,6 +88,8 @@ function firstBeforeWrite(r) {
  * "Before the write": the login check names the field an update changes, what the other kinds do, and in a run
  * across several objects each object, grouped by what is done to it ("create Accounts, Contacts and Opportunities").
  */
+/** What an undo does, by the run's operation: it puts an update back, restores a delete, deletes what was created. */
+const UNDO_KINDS = { update: 'update', delete: 'undelete', undelete: 'delete', insert: 'delete', upsert: 'upsert_undo' };
 function loginCanWrite(op) {
   if (op?.kind === 'multi') {
     const byVerb = new Map();
@@ -118,7 +124,10 @@ export const STEPS = {
   delete_test: { group: 'Sandbox rehearsal', org: 'sandbox', text: () => 'Delete the TEST records.' },
   // Data operation and undo pages.
   still_match_backup: { group: 'Before the write', org: 'production', text: (s, r) => firstBeforeWrite(r) },
-  login_can_write: { group: 'Before the write', org: 'production', text: (s, r) => loginCanWrite(r.operation) },
+  login_can_write: { group: 'Before the write', org: 'production', text: (s, r) => (r?.page === 'undo'
+    // The undo does the opposite of the run: a delete's undo restores (A7).
+    ? loginCanWrite({ ...r.operation, kind: UNDO_KINDS[r.operation?.kind] ?? r.operation?.kind })
+    : loginCanWrite(r.operation)) },
   automation_unchanged: { group: 'Before the write', org: 'production', text: (s, r) => (r?.page === 'undo'
     // Agreed with the hub (s6b).
     ? 'Confirm the triggers and flows are the same as when the run was recorded. If they differ, the undo stops with nothing changed.'
@@ -191,7 +200,10 @@ export function whatChanges(r) {
 /** The target and rehearsal orgs. */
 export const targetOrg = (r) => (r?.orgs ?? []).find((o) => o.role === 'target') ?? null;
 export const rehearsalOrg = (r) => (r?.orgs ?? []).find((o) => o.role === 'rehearsal') ?? null;
-const touches = (r, type) => (r?.orgs ?? []).some((o) => o.org_type === type);
+// A correction touches only the orgs its rerun steps run on (a sandbox filter edit never reads production).
+const touches = (r, type) => (r?.page === 'correction'
+  ? (r.steps ?? []).some((s) => STEPS[s?.code]?.org === type)
+  : (r?.orgs ?? []).some((o) => o.org_type === type));
 
 /** The large count sentence: only on pages that write (data operation, undo). Null elsewhere. */
 export function countSentence(r) {
@@ -557,9 +569,17 @@ export function codeReviewProblems(cr) {
     const lines = typeof f.new_text === 'string' ? f.new_text.split('\n').length : 0;
     if (!Number.isInteger(note.start_line) || !Number.isInteger(note.end_line) || note.start_line < 1 || note.end_line < note.start_line || note.end_line > lines) {
       out.push(`Fix notes[${i}]: lines ${note.start_line}-${note.end_line} aren't in ${note.file}.`);
+    } else if (!noteOnChange(f, note)) {
+      // A6: a note sits on the change it explains.
+      out.push(`Fix notes[${i}]: lines ${note.start_line}-${note.end_line} of ${note.file} aren't changed lines; a note sits on the change it explains.`);
     }
     if (!text(note.problem_label) || !text(note.text)) out.push(`Fix notes[${i}]: it needs a problem label and its text.`);
+    else if (f.status === 'new' && /\n/.test(note.text.trim())) out.push(`Fix notes[${i}]: a note on a new file is one line.`);
+    if (text(note.problem_label) && Array.isArray(f.problem_labels) && !f.problem_labels.includes(note.problem_label)) {
+      out.push(`Fix notes[${i}]: ${note.problem_label} isn't one of ${note.file}'s problem labels.`);
+    }
   });
+  if (text(cr.superseded_by) && !/^[0-9a-f]{7,40}$/.test(cr.superseded_by)) out.push('Fix superseded_by: the newer commit hash.');
   return out;
 }
 
@@ -571,7 +591,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SIM_ID = /^sim-[a-z0-9-]{1,40}$/;
 
 /** One line, at most LINE_TEXT_MAX characters, or '' for nothing. */
-export const lineText = (t) => String(t ?? '').replace(/\s+/g, ' ').trim().slice(0, LINE_TEXT_MAX).trim();
+export const lineText = (t) => {
+  const s = String(t ?? '').replace(/\s+/g, ' ').trim();
+  // Cut text ends with "…", still within the cap (A7).
+  return s.length <= LINE_TEXT_MAX ? s : `${s.slice(0, LINE_TEXT_MAX - 1).trimEnd()}…`;
+};
 
 function line(word, id, rest = '') {
   const sim = SIM_ID.test(String(id));

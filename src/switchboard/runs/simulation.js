@@ -3,6 +3,7 @@
 // RunShell draws the strip unless the source's kind is exactly 'real'.
 
 import { ANSWERS, simulatedState } from './desktopCheck';
+import { EDIT_RERUNS, rerunSteps } from './runContract';
 
 const HOUR = 60 * 60 * 1000;
 const iso = (t) => new Date(t).toISOString();
@@ -75,6 +76,31 @@ function undoPage(now, undoOf, base = 'dataop-update') {
 }
 
 const MIN = 60 * 1000;
+
+/**
+ * A correction page (screen d), version 2, 10 minutes after the edit: its steps are exactly what the edit kind reruns,
+ * the evidence those checks made is voided, and "Still valid" lists the rest.
+ */
+function correction(now, kind, over, reason, items) {
+  const reruns = EDIT_RERUNS[kind];
+  const evidence = passedEvidence(now, 2).map((e) => (reruns.includes(e.check) ? { ...e, voided: true } : e));
+  return {
+    request: base({
+      page: 'correction', version: 2, corrected_at: iso(now - 10 * MIN), orgs: [PROD, SANDBOX],
+      headline: `CORRECTED REQUEST ${CODE}: RUNS AGAIN WHAT THE ${kind.toUpperCase().replace('_', ' ')} EDIT TOUCHES`,
+      // The count step that fits the selection: listed Ids or a filter.
+      steps: codes(rerunSteps(kind).filter((c) => c !== (over.selected_by?.kind === 'filter' ? 'count_listed' : 'count_filter'))),
+      evidence,
+      phases: [{ name: 'Pre-check and rehearsal', state: 'waiting' }, { name: 'Data operation', state: 'not_started' }],
+      changed: {
+        edit_kind: kind, from_version: 1, reason, items,
+        still_valid: evidence.filter((e) => !e.voided).map(({ check, passed_at }) => ({ check, passed_at })),
+      },
+      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(6) }], queries: [{ label: 'The listed records', soql: IDS_SOQL }] },
+      ...over,
+    }),
+  };
+}
 
 /** Every scenario: its request, the sample the page holds (not on a pre-check) and the desktop answers, in order. */
 export const SCENARIOS = {
@@ -232,29 +258,49 @@ export const SCENARIOS = {
     build: (now) => undoPage(now, { deadline: iso(now - 2 * 24 * HOUR), deadline_reason: 'the deleted gifts left the recycle bin after 15 days' }, 'dataop-delete'),
   },
   // A5: screen d, the correction page.
+  // Each edit kind: the steps and the voided evidence follow EDIT_RERUNS (rerunSteps), never typed by hand.
   'correction-field': {
-    title: 'Corrected request: which field changed, so the rehearsal and the login check run again',
-    build: (now) => {
-      // A field edit reruns the login check and the rehearsal; everything else stays valid.
-      const evidence = passedEvidence(now, 2).map((e) => (['login', 'rehearsal'].includes(e.check) ? { ...e, voided: true } : e));
-      return {
-        request: base({
-          page: 'correction', version: 2, corrected_at: iso(now - 10 * MIN), orgs: [PROD, SANDBOX],
-          headline: `CORRECTED REQUEST ${CODE}: RUNS THE LOGIN CHECK AND THE REHEARSAL AGAIN FOR Appeal__c`,
-          operation: { kind: 'update', object: 'Gift__c', object_label: 'Gift', field: 'Appeal__c', value: 'Spring 2026 Appeal' },
-          steps: codes(['login_can_change', 'create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test']),
-          evidence,
-          phases: [{ name: 'Pre-check and rehearsal', state: 'waiting' }, { name: 'Data operation', state: 'not_started' }],
-          changed: {
-            edit_kind: 'field', from_version: 1,
-            reason: 'The Spring appeal report reads Appeal__c, not Campaign__c; diagnosis named the wrong field.',
-            items: [{ what: 'Field', old: 'Campaign__c', new: 'Appeal__c' }],
-            still_valid: evidence.filter((e) => !e.voided).map(({ check, passed_at }) => ({ check, passed_at })),
-          },
-          details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(6) }], queries: [{ label: 'The listed records', soql: IDS_SOQL }] },
-        }),
-      };
-    },
+    title: 'Corrected request: which field, so the rehearsal, the login check, the backup and the sample record run again',
+    build: (now) => correction(now, 'field', {
+      operation: { kind: 'update', object: 'Gift__c', object_label: 'Gift', field: 'Appeal__c', value: 'Spring 2026 Appeal' },
+    }, 'The Spring appeal report reads Appeal__c, not Campaign__c; diagnosis named the wrong field.', [{ what: 'Field', old: 'Campaign__c', new: 'Appeal__c' }]),
+  },
+  'correction-value': {
+    title: 'Corrected request: the value, so the rehearsal runs again',
+    build: (now) => correction(now, 'value', {
+      operation: { kind: 'update', object: 'Gift__c', object_label: 'Gift', field: 'Campaign__c', value: 'Spring 2026 Appeal (Online)' },
+    }, 'The online gifts belong to the online appeal; the client confirmed the campaign name.', [{ what: 'Value', old: 'Spring 2026 Appeal', new: 'Spring 2026 Appeal (Online)' }]),
+  },
+  'correction-records': {
+    title: 'Corrected request: which records (Id list), so the count, the backup and the sample run again',
+    build: (now) => correction(now, 'records', {
+      selected_by: { kind: 'ids', text: 'The 48 Ids diagnosis listed from the import log, including 3 found later.' },
+      counts: { expected: 48, total: 48 },
+      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(7) }], queries: [{ label: 'The 48 listed records', soql: IDS_SOQL.replace("...)", "... 48 Ids)") }] },
+    }, 'Three more gifts from the same import were found in the log.', [{ what: 'Records', old: '45 listed Ids', new: '48 listed Ids' }]),
+  },
+  'correction-records-filter': {
+    title: 'Corrected request: which records (filter), so the count, the backup, the sample and the rehearsal run again',
+    build: (now) => correction(now, 'records_filter', {
+      selected_by: { kind: 'filter', text: "Source__c = 'Spring import', created in the last 45 days, with no campaign." },
+      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(8) }], queries: [{ label: 'The filter', soql: FILTER_SOQL.replace('LAST_N_DAYS:30', 'LAST_N_DAYS:45') }] },
+    }, 'The import ran over two weeks, so 30 days missed the first batch.', [{ what: 'Filter', old: 'created in the last 30 days', new: 'created in the last 45 days' }]),
+  },
+  'correction-sandbox-filter': {
+    title: 'Corrected request: the sandbox filter, so only the rehearsal runs again',
+    build: (now) => correction(now, 'sandbox_filter', {
+      selected_by: {
+        kind: 'filter', text: "Source__c = 'Spring import', created in the last 30 days, with no campaign.",
+        sandbox_text: "Source__c = 'Spring import', with no campaign, in the 2026-11-01 sandbox refresh.", not_rehearsed: 'The 30-day limit on CreatedDate.',
+      },
+      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(9) }], queries: [{ label: 'The filter', soql: FILTER_SOQL }] },
+    }, 'The sandbox was refreshed on 1 November, so its copy needs its own date.', [{ what: 'Sandbox filter', old: 'with no campaign', new: 'with no campaign, in the 2026-11-01 sandbox refresh' }]),
+  },
+  'correction-code': {
+    title: 'Corrected request: the code, so the rehearsal runs again and a new code review follows',
+    build: (now) => correction(now, 'code', {
+      code: { commit: '8b1e07d4c2a95f36', rehearsed_at: null },
+    }, 'The batch skipped gifts whose source had a trailing space; the fix trims it.', [{ what: 'Code', old: 'commit 4f9c2ab', new: 'commit 8b1e07d' }]),
   },
   'dataop-update-wording': {
     title: 'Data operation, carrying a wording-only correction (no page of its own)',
@@ -377,5 +423,172 @@ export function simSource(name, { now = Date.now(), desktop } = {}) {
     // Not started: resend the same run, same link id (spec 4.5).
     resend: async () => ({ sent: true, resent: true, link_id: linkId }),
     cancel: async (reason) => ({ cancelled: true, reason: String(reason ?? '').trim() }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// A6: code reviews (screen f), on invented Apex
+// ---------------------------------------------------------------------------
+
+const COMMIT = '4f9c2ab71d03e5c8';
+const NEWER = '8b1e07d4c2a95f36';
+const RERUN_CLS = `public with sharing class GiftCampaignRerun implements Database.Batchable<SObject> {
+    public Database.QueryLocator start(Database.BatchableContext bc) {
+        return Database.getQueryLocator(
+            'SELECT Id FROM Gift__c WHERE Source__c = \\'Spring import\\' AND Campaign__c = null'
+        );
+    }
+
+    public void execute(Database.BatchableContext bc, List<Gift__c> scope) {
+        GiftTriggerHandler.assignCampaigns(scope);
+        update scope;
+    }
+
+    public void finish(Database.BatchableContext bc) {}
+}
+`;
+const RERUN_TEST = `@IsTest
+private class GiftCampaignRerunTest {
+    @IsTest
+    static void assignsTheSpringCampaign() {
+        insert new Campaign__c(Name = 'Spring 2026 Appeal');
+        insert new Gift__c(Source__c = 'Spring import', Amount__c = 50);
+        Test.startTest();
+        Database.executeBatch(new GiftCampaignRerun());
+        Test.stopTest();
+        System.assertNotEquals(null, [SELECT Campaign__c FROM Gift__c LIMIT 1].Campaign__c);
+    }
+}
+`;
+const HANDLER_OLD = `public with sharing class GiftTriggerHandler {
+    public static void beforeInsert(List<Gift__c> gifts) {
+        assignCampaigns(gifts);
+    }
+
+    public static void assignCampaigns(List<Gift__c> gifts) {
+        Map<String, Id> bySource = campaignsBySource();
+        for (Gift__c g : gifts) {
+            g.Campaign__c = bySource.get(g.Source__c);
+        }
+    }
+
+    static Map<String, Id> campaignsBySource() {
+        Map<String, Id> out = new Map<String, Id>();
+        for (Campaign__c c : [SELECT Id, Source__c FROM Campaign__c]) {
+            out.put(c.Source__c, c.Id);
+        }
+        return out;
+    }
+
+    public static void afterInsert(List<Gift__c> gifts) {
+        RollupService.recalculate(gifts);
+    }
+}
+`;
+const HANDLER_NEW = `public with sharing class GiftTriggerHandler {
+    public static void beforeInsert(List<Gift__c> gifts) {
+        assignCampaigns(gifts);
+    }
+
+    public static void assignCampaigns(List<Gift__c> gifts) {
+        Map<String, Id> bySource = campaignsBySource();
+        for (Gift__c g : gifts) {
+            if (g.Campaign__c == null && g.Source__c != null) {
+                g.Campaign__c = bySource.get(g.Source__c.trim().toLowerCase());
+            }
+        }
+    }
+
+    static Map<String, Id> campaignsBySource() {
+        Map<String, Id> out = new Map<String, Id>();
+        for (Campaign__c c : [SELECT Id, Source__c FROM Campaign__c WHERE IsActive__c = true]) {
+            out.put(c.Source__c.trim().toLowerCase(), c.Id);
+        }
+        return out;
+    }
+
+    public static void afterInsert(List<Gift__c> gifts) {
+        RollupService.recalculate(gifts);
+    }
+}
+`;
+
+const reviewBase = (now, over) => ({
+  simulation: true,
+  project_code: CODE,
+  repo: 'example-charity-sf',
+  base_commit: 'c01d2e3f4a5b6c7d',
+  commit: COMMIT,
+  rehearsed_at: iso(now - 2 * HOUR),
+  ...over,
+});
+
+const codeFix = (now) => reviewBase(now, {
+  headline: `CODE REVIEW ${CODE}: GiftTriggerHandler, 2 CHANGES FOR P1a AND P3`,
+  files: [{ path: 'force-app/main/default/classes/GiftTriggerHandler.cls', status: 'modified', old_text: HANDLER_OLD, new_text: HANDLER_NEW, problem_labels: ['P1a', 'P3'] }],
+  findings: {
+    fixed_by_cli: [{ id: 'f1', text: 'The source match was case-sensitive; it now trims and lowercases both sides.' }],
+    for_you: [
+      { id: 'y1', text: 'Inactive campaigns are now skipped. Confirm the client never assigns gifts to an inactive campaign.', file: 'force-app/main/default/classes/GiftTriggerHandler.cls', lines: '17' },
+      { id: 'y2', text: "A gift that already has a campaign is left alone. That's the intended fix for P3, but it changes today's behaviour." },
+    ],
+  },
+  notes: [
+    { file: 'force-app/main/default/classes/GiftTriggerHandler.cls', start_line: 9, end_line: 11, problem_label: 'P3',
+      text: "Before, every gift's campaign was overwritten on insert, even when the import had already set one (P3). The guard keeps an existing campaign and skips gifts with no source, and the lookup now uses the same trimmed, lowercased key as the map below." },
+    { file: 'force-app/main/default/classes/GiftTriggerHandler.cls', start_line: 17, end_line: 18, problem_label: 'P1a',
+      text: "The Spring import wrote 'spring import ' with a trailing space, so the case-sensitive match found no campaign and the gifts were saved empty (P1a). Keys are now trimmed and lowercased, and only active campaigns are matched." },
+  ],
+});
+
+/** The code review scenarios, each built against `now`. */
+export const REVIEW_SCENARIOS = {
+  'review-logic-rerun': {
+    title: 'Code review: a logic re-run with two new files',
+    build: (now) => reviewBase(now, {
+      headline: `CODE REVIEW ${CODE}: GiftCampaignRerun AND ITS TEST, 2 NEW FILES FOR P1a`,
+      files: [
+        { path: 'force-app/main/default/classes/GiftCampaignRerun.cls', status: 'new', new_text: RERUN_CLS, problem_labels: ['P1a'] },
+        { path: 'force-app/main/default/classes/GiftCampaignRerunTest.cls', status: 'new', new_text: RERUN_TEST, problem_labels: ['P1a'] },
+      ],
+      findings: {
+        fixed_by_cli: [{ id: 'f1', text: 'The batch first queried every gift; it now selects only Spring imports with no campaign.' }],
+        for_you: [{ id: 'y1', text: 'The batch reuses GiftTriggerHandler.assignCampaigns, so it follows the same matching rules as new gifts.' }],
+      },
+      notes: [
+        { file: 'force-app/main/default/classes/GiftCampaignRerun.cls', start_line: 1, end_line: 1, problem_label: 'P1a', text: 'A one-off batch that re-runs the campaign assignment for the gifts the Spring import left empty.' },
+        { file: 'force-app/main/default/classes/GiftCampaignRerunTest.cls', start_line: 2, end_line: 2, problem_label: 'P1a', text: 'Proves one Spring import gift gets a campaign; deleted with the batch after the run.' },
+      ],
+    }),
+  },
+  'review-code-fix': { title: 'Code review: one class changed in two places, for P1a and P3', build: codeFix },
+  'review-superseded': {
+    title: 'Code review superseded by a newer commit',
+    build: (now) => ({ ...codeFix(now), superseded_by: NEWER }),
+  },
+  'review-all-acknowledged': {
+    title: 'Code review with every finding already acknowledged',
+    build: (now) => ({ ...codeFix(now), acknowledged: { y1: { note: 'Checked with the client: inactive campaigns never take gifts.' }, y2: { note: '' } } }),
+  },
+};
+
+export const reviewScenarioNames = () => Object.keys(REVIEW_SCENARIOS);
+
+/** The simulated source for one code review; like simSource, nothing leaves the browser. */
+export function reviewSimSource(name, { now = Date.now(), desktop } = {}) {
+  const scenario = REVIEW_SCENARIOS[name];
+  if (!scenario) return null;
+  const review = scenario.build(now);
+  const answers = [...(desktop ?? ['running'])];
+  const linkId = `sim-${name}`.slice(0, 44);
+  return {
+    kind: 'sim',
+    name,
+    load: async () => ({ link_id: linkId, review }),
+    checkDesktop: async () => simulatedState(answers.length > 1 ? answers.shift() : answers[0]),
+    reviewed: async (acks) => ({ done: 'reviewed', acks }),
+    // The ticks and notes come with every answer, so the real source keeps them on the review (B2).
+    question: async (text, acks) => ({ asked: true, text: String(text ?? '').trim(), acks }),
+    changes: async (text, acks) => ({ done: 'changes', text: String(text ?? '').trim(), acks }),
   };
 }

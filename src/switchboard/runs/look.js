@@ -24,9 +24,22 @@ export const PRODUCTION_PILL = 'px-2 py-0.5 rounded bg-orange-100 text-black fon
 export const SANDBOX_PILL = 'px-2 py-0.5 rounded bg-sky-100 text-black font-mono';
 /** The "Desktop not ready" section: red means a problem; orange stays the production warning. */
 export const NOT_READY_BOX = 'mb-4 p-4 bg-red-50 rounded-lg border-2 border-red-600 text-sm text-dark';
+/** The code review's inline diff rows (A6): added green, removed red, unchanged plain; a marker column says which. */
+// Code lines never wrap: a long line makes only its file's code box scroll sideways (A7).
+export const DIFF_ROW = 'font-mono text-xs whitespace-pre';
+export const DIFF_ADD = 'bg-green-50 text-black';
+export const DIFF_DEL = 'bg-red-50 text-black line-through decoration-red-300';
+/** A link-styled button, for "Show the whole file". */
+export const LINK_BUTTON = 'text-primary underline text-sm min-h-[44px] sm:min-h-0';
 /** Claude's note on the code review page: pale orange, page only. */
 export const NOTE_BOX = 'mb-2 p-3 bg-orange-50 rounded-lg border border-orange-200 text-sm text-dark';
 export const REASON_INPUT = 'w-full px-3 py-2 min-h-[44px] rounded-lg border border-border text-dark';
+/**
+ * A superseded review's inputs: greyed, dashed border, not-allowed cursor, so they read as locked. Plain classes,
+ * applied only when superseded; an open review's disabled inputs just dim. The checkbox drops its native look to show it.
+ */
+export const LOCKED_TICK = 'appearance-none w-5 h-5 rounded border-2 border-dashed border-gray-400 bg-gray-100 checked:bg-gray-400 cursor-not-allowed';
+export const LOCKED_INPUT = 'bg-gray-100 text-gray-500 border-dashed cursor-not-allowed';
 
 /**
  * The line for the chat, to copy, as ApprovePage's ResultLine. On a real page the extension fills the hidden status and
@@ -76,7 +89,8 @@ export function ReasonInput({ value, onChange, disabled }) {
  * The page frame. The SIMULATION strip comes from the source's kind, never from the data, so a sample can't drop it.
  * The red bar shows only while the page offers an Approve button (approvable). No "Approve" heading under "Alfred".
  */
-export function RunShell({ source, approvable = false, children }) {
+/** `wide`: the code review page uses the full window, keeping today's side margins; run pages keep max-w-3xl. */
+export function RunShell({ source, approvable = false, wide = false, children }) {
   const sim = isSimulation(source);
   return h('div', { className: 'min-h-screen bg-primary-bg', ...(sim ? { 'data-switchboard-simulation': '' } : {}) },
     sim && h('div', { 'data-testid': 'run-simulation', role: 'alert', className: SIMULATION_STRIP },
@@ -84,7 +98,7 @@ export function RunShell({ source, approvable = false, children }) {
         'Sample data. Nothing here reaches any org.')),
     approvable && h('div', { 'data-testid': 'run-approval-required', role: 'alert', className: RED_BAR }, 'Approval required'),
     h('div', { className: 'flex justify-center p-4' },
-      h('div', { className: 'w-full max-w-3xl self-start p-4 sm:p-8 bg-white rounded-lg shadow-md' },
+      h('div', { 'data-testid': 'run-card', className: `w-full ${wide ? 'min-w-0' : 'max-w-3xl'} self-start p-4 sm:p-8 bg-white rounded-lg shadow-md` },
         // As today's Shell: mb-2 under "Alfred", then the mb-6 spacer where the "Approve" heading was.
         h('h1', { className: 'text-2xl font-bold text-dark mb-2 text-center' }, 'Alfred'),
         h('div', { className: 'mb-6' }),

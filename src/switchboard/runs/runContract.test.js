@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import {
   afterApproveLines, approveLabel, bannerLines, clientOrgLine, checkLine, checksExpired, codeReviewProblems, countSentence, EDIT_RERUNS, GROUPS, groupedSteps,
-  LINE_TEXT_MAX, requestProblems, reviewChangesLine, reviewQuestionLine, reviewReviewedLine, runCancelledLine, runLine,
+  LINE_TEXT_MAX, lineText, requestProblems, reviewChangesLine, reviewQuestionLine, reviewReviewedLine, runCancelledLine, runLine,
   rerunSteps, runResentLine, selectedByText, STEPS, undoClosedReason, undoLine, validUntil, whatChanges,
 } from './runContract';
 import { BUTTON, RunShell, SECOND_BUTTON, localTime } from './look';
@@ -67,7 +67,7 @@ describe('requestProblems', () => {
     expect(requestProblems(precheck({ page: 'correction', changed: changed('wording') }))[0]).toMatch(/runs nothing, so it has no page/);
     const field = precheck({ page: 'correction', changed: changed('field'), steps: rerunSteps('field').map((code) => ({ code })) });
     expect(requestProblems(field)).toEqual([]);
-    expect(rerunSteps('field')).toEqual(['create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test', 'login_can_change']);
+    expect(rerunSteps('field')).toEqual(['create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test', 'login_can_change', 'save_backup']);
     expect(requestProblems({ ...field, steps: [{ code: 'count_listed' }] })).toEqual(["Fix steps[0]: a field edit doesn't run count_listed again."]);
   });
   test("a step's org is fixed by its code", () => {
@@ -153,7 +153,7 @@ describe('built text', () => {
     expect(afterApproveLines(dataop())[1]).toMatch(/type the count, 45\. Anything else stops it with nothing changed\./);
   });
   test('the edit table', () => {
-    expect(EDIT_RERUNS.field).toEqual(['rehearsal', 'login']);
+    expect(EDIT_RERUNS.field).toEqual(['rehearsal', 'login', 'backup', 'sample']);
     expect(EDIT_RERUNS.code).toEqual(['rehearsal', 'code_review']);
     expect(EDIT_RERUNS.wording).toEqual([]);
   });
@@ -208,7 +208,12 @@ describe('result lines', () => {
   });
   test('text is capped at 200 characters, one line', () => {
     const long = 'x'.repeat(1000);
-    expect(reviewQuestionLine(ID, long)).toBe(`review ${ID} question: ${'x'.repeat(LINE_TEXT_MAX)}`);
+    // Cut text ends with "…", and stays within the cap.
+    expect(reviewQuestionLine(ID, long)).toBe(`review ${ID} question: ${'x'.repeat(LINE_TEXT_MAX - 1)}…`);
+    expect(lineText('y'.repeat(LINE_TEXT_MAX))).toBe('y'.repeat(LINE_TEXT_MAX));
+    const cut = lineText('w '.repeat(150));
+    expect(cut.length).toBeLessThanOrEqual(LINE_TEXT_MAX);
+    expect(cut.endsWith('w…')).toBe(true);
   });
   test('a question or a change needs its text', () => {
     expect(() => reviewQuestionLine(ID, ' ')).toThrow();
@@ -240,6 +245,23 @@ describe('RunShell (look.js)', () => {
     expect(BUTTON).toMatch(/bg-primary text-white/);
     expect(SECOND_BUTTON).toMatch(/border-border text-primary/);
     expect(typeof localTime).toBe('function');
+  });
+});
+
+describe('A6: a note sits on the change it explains', () => {
+  const review = (note) => ({
+    commit: 'abc1234', files: [{ path: 'A.cls', status: 'modified', old_text: 'a\nb\nc\n', new_text: 'a\nB\nc\n', problem_labels: ['P1'] }],
+    findings: { fixed_by_cli: [], for_you: [] }, notes: [{ file: 'A.cls', problem_label: 'P1', text: 'Why b changed.', ...note }],
+  });
+  test('on changed lines it passes; on unchanged lines it is refused', () => {
+    expect(codeReviewProblems(review({ start_line: 2, end_line: 2 }))).toEqual([]);
+    expect(codeReviewProblems(review({ start_line: 1, end_line: 2 })).join(' ')).toMatch(/aren't changed lines/);
+  });
+  test("a note's label must be one of its file's labels; a new file's note is one line", () => {
+    expect(codeReviewProblems(review({ start_line: 2, end_line: 2, problem_label: 'P9' })).join(' ')).toMatch(/isn't one of A.cls's problem labels/);
+    const fresh = { commit: 'abc1234', files: [{ path: 'N.cls', status: 'new', new_text: 'x\n', problem_labels: ['P1'] }], findings: { fixed_by_cli: [], for_you: [] },
+      notes: [{ file: 'N.cls', start_line: 1, end_line: 1, problem_label: 'P1', text: 'one\ntwo' }] };
+    expect(codeReviewProblems(fresh).join(' ')).toMatch(/a note on a new file is one line/);
   });
 });
 
