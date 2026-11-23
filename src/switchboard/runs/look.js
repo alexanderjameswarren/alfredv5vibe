@@ -22,6 +22,8 @@ export const BANNER_LINE = 'block text-lg sm:text-xl normal-case tracking-normal
 export const PANEL = 'mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark';
 export const PRODUCTION_PILL = 'px-2 py-0.5 rounded bg-orange-100 text-black font-mono';
 export const SANDBOX_PILL = 'px-2 py-0.5 rounded bg-sky-100 text-black font-mono';
+/** The "Desktop not ready" section: red means a problem; orange stays the production warning. */
+export const NOT_READY_BOX = 'mb-4 p-4 bg-red-50 rounded-lg border-2 border-red-600 text-sm text-dark';
 /** Claude's note on the code review page: pale orange, page only. */
 export const NOTE_BOX = 'mb-2 p-3 bg-orange-50 rounded-lg border border-orange-200 text-sm text-dark';
 export const REASON_INPUT = 'w-full px-3 py-2 min-h-[44px] rounded-lg border border-border text-dark';

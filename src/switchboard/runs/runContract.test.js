@@ -4,7 +4,7 @@ import '@testing-library/jest-dom';
 import {
   afterApproveLines, approveLabel, bannerLines, clientOrgLine, checkLine, checksExpired, codeReviewProblems, countSentence, EDIT_RERUNS, GROUPS, groupedSteps,
   LINE_TEXT_MAX, requestProblems, reviewChangesLine, reviewQuestionLine, reviewReviewedLine, runCancelledLine, runLine,
-  rerunSteps, runResentLine, STEPS, undoLine, validUntil, whatChanges,
+  rerunSteps, runResentLine, selectedByText, STEPS, undoClosedReason, undoLine, validUntil, whatChanges,
 } from './runContract';
 import { BUTTON, RunShell, SECOND_BUTTON, localTime } from './look';
 
@@ -77,12 +77,12 @@ describe('requestProblems', () => {
   test('a multi-object run: each write_step matches operation.steps', () => {
     const op = { kind: 'multi', steps: [{ object: 'Allocation', kind: 'delete', count: 12 }, { object: 'Gift', kind: 'delete', count: 45 }] };
     const ws = op.steps.map((s) => ({ code: 'write_step', ...s }));
-    expect(requestProblems(dataop({ operation: op, steps: ws }))).toEqual([]);
-    expect(requestProblems(dataop({ operation: op, steps: [ws[0]] }))).toEqual([expect.stringMatching(/must match operation.steps/)]);
+    expect(requestProblems(dataop({ operation: op, steps: ws, counts: { total: 57 } }))).toEqual([]);
+    expect(requestProblems(dataop({ operation: op, steps: [ws[0]], counts: { total: 57 } }))).toEqual([expect.stringMatching(/must match operation.steps/)]);
   });
   test('each operation names what it needs', () => {
     expect(requestProblems(dataop({ operation: { kind: 'insert', object: 'Gift' } }))).toEqual(['Add operation.file: the file of rows on the PC.']);
-    expect(requestProblems(dataop({ operation: { kind: 'upsert', object: 'Gift' } }))).toEqual(['Add operation.external_id.']);
+    expect(requestProblems(dataop({ operation: { kind: 'upsert', object: 'Gift' }, counts: { total: 45, update: 30, create: 15 } }))).toEqual(['Add operation.external_id.']);
   });
 });
 
@@ -93,7 +93,7 @@ describe('built text', () => {
       .toBe('Updates 30 and creates 15 records of Gift, matched by Legacy_Id__c.');
     expect(whatChanges(dataop({ operation: { kind: 'delete', object: 'Gift' } }))).toBe('Deletes 45 records of Gift to the recycle bin.');
     expect(whatChanges(dataop({ operation: { kind: 'multi', steps: [{ object: 'Gift' }, { object: 'Allocation' }] }, counts: { total: 90 } })))
-      .toBe('Runs 2 steps across Gift, Allocation: 90 records in all.');
+      .toBe('Runs 2 steps across Gift and Allocation: 90 records in all.');
   });
   test('the count sentence is only on pages that write', () => {
     expect(countSentence(precheck())).toBeNull();
@@ -126,7 +126,10 @@ describe('built text', () => {
   });
   test('a write step can pause before it', () => {
     const r = dataop({ operation: { kind: 'multi', steps: [] }, steps: [{ code: 'write_step', object: 'Allocation', kind: 'delete', count: 12, pause_before: true }] });
-    expect(groupedSteps(r)[0].steps[0].text).toBe('Pause before this. Allocation: delete 12 records. A failed row stops the run before the next step.');
+    expect(groupedSteps(r)[0].steps[0].text).toBe('Pause before this. Allocation: delete 12 records.');
+    // A write step with another after it says a failed row stops before the next.
+    const two = dataop({ operation: { kind: 'multi', steps: [] }, steps: [{ code: 'write_step', object: 'Allocation', kind: 'delete', count: 12 }, { code: 'write_step', object: 'Gift', kind: 'delete', count: 1 }] });
+    expect(groupedSteps(two)[0].steps.map((s) => s.text)).toEqual(['Allocation: delete 12 records. A failed row stops the run before the next step.', 'Gift: delete 1 record.']);
   });
   test('the undo page writes up to N and types the count after skips', () => {
     const r = dataop({ page: 'undo', counts: { expected: 45, undo_up_to: 45 }, steps: [{ code: 'skip_edited' }, { code: 'type_count' }, { code: 'write' }] });
@@ -237,5 +240,66 @@ describe('RunShell (look.js)', () => {
     expect(BUTTON).toMatch(/bg-primary text-white/);
     expect(SECOND_BUTTON).toMatch(/border-border text-primary/);
     expect(typeof localTime).toBe('function');
+  });
+});
+
+describe('A4: the undo page and several objects', () => {
+  test('an undo page needs undo_of; a multi step needs an object and an operation', () => {
+    expect(requestProblems(dataop({ page: 'undo' })).join(' ')).toMatch(/Add undo_of/);
+    const op = { kind: 'multi', steps: [{ object: 'Account', kind: 'merge', count: 1 }] };
+    expect(requestProblems(dataop({ operation: op, steps: [{ code: 'write_step', object: 'Account', kind: 'merge', count: 1 }] })).join(' '))
+      .toMatch(/each needs an object and an operation/);
+  });
+  test('counts must add up, and each operation carries what its page shows', () => {
+    const upsert = { kind: 'upsert', object: 'Gift__c', external_id: 'Ref__c' };
+    expect(requestProblems(dataop({ operation: upsert, counts: { expected: 45, total: 45, update: 30, create: 10 } })).join(' ')).toMatch(/update and create must add up/);
+    const op = { kind: 'multi', steps: [{ object: 'Account', kind: 'insert', count: 2 }] };
+    expect(requestProblems(dataop({ operation: op, counts: { total: 3 }, steps: [{ code: 'write_step', object: 'Account', kind: 'insert', count: 2 }] })).join(' ')).toMatch(/steps' counts must add up/);
+    expect(requestProblems(dataop({ operation: { kind: 'delete', object: 'Gift__c' } })).join(' ')).toMatch(/Add undo.deadline/);
+    expect(requestProblems(dataop({ operation: { kind: 'undelete', object: 'Gift__c' } })).join(' ')).toMatch(/Add operation.days_left/);
+    expect(requestProblems(dataop({ steps: [{ code: 'skip_edited' }] })).join(' ')).toMatch(/skip_edited is for the undo page only/);
+    const del = { kind: 'delete', object: 'Gift__c' };
+    expect(requestProblems(dataop({ page: 'undo', operation: del, undo_of: { run_tag: 'x-s1-ab12' } })).join(' ')).toMatch(/Add undo_of.deadline/);
+    expect(requestProblems(dataop({ page: 'undo', undo_of: { run_tag: 'x-s1-ab12', deadline: '2026-12-01T00:00:00Z' } })).join(' ')).toMatch(/only a delete's undo has a deadline/);
+  });
+  test('the first "Before the write" step agrees with a count of 1', () => {
+    const up = dataop({ operation: { kind: 'upsert', object: 'Gift__c', external_id: 'Ref__c' }, counts: { expected: 2, total: 2, update: 1, create: 1 } });
+    expect(STEPS.still_match_backup.text({}, up)).toBe("Confirm the 1 record to update still matches the backup, and the 1 to create still doesn't exist.");
+    const un = dataop({ operation: { kind: 'undelete', object: 'Gift__c', days_left: 3 }, counts: { expected: 1, total: 1 } });
+    expect(STEPS.still_match_backup.text({}, un)).toBe('Confirm the 1 record is still in the recycle bin.');
+  });
+  test("a stopped run's undo selects only what it changed, built", () => {
+    expect(selectedByText(dataop({ page: 'undo', undo_of: { run_tag: 'x', stopped: true, changed: 1 } }))).toBe('The 1 record the stopped run changed.');
+  });
+  test('a correction is one version up, and an update undo takes no deadline_reason', () => {
+    expect(requestProblems({ ...precheck(), page: 'correction', version: 3, changed: { edit_kind: 'value', from_version: 1, reason: 'r', items: [{ what: 'v', old: 'a', new: 'b' }] } }).join(' ')).toMatch(/one version up/);
+    expect(requestProblems(dataop({ page: 'undo', undo_of: { run_tag: 'x', deadline_reason: 'y' } })).join(' ')).toMatch(/only a delete's undo has a deadline/);
+  });
+  test('one record created reads "1 record"', () => {
+    const r = dataop({ operation: { kind: 'upsert', object: 'Gift__c', external_id: 'Ref__c' }, counts: { expected: 31, total: 31, update: 30, create: 1 } });
+    expect(whatChanges(r)).toBe('Updates 30 and creates 1 record of Gift__c, matched by Ref__c.');
+  });
+  test('an undo with no readable deadline is closed', () => {
+    expect(undoClosedReason(dataop({ page: 'undo', operation: { kind: 'delete', object: 'Gift__c' }, undo_of: { run_tag: 'x' } }))).toMatch(/^No undo is offered/);
+    // An update's undo has no deadline, so it never closes.
+    expect(undoClosedReason(dataop({ page: 'undo', undo_of: { run_tag: 'x' } }))).toBeNull();
+  });
+  test('a mixed multi-object run groups its login check by what is done', () => {
+    const text = STEPS.login_can_write.text({}, { operation: { kind: 'multi', steps: [
+      { object: 'Account', label_plural: 'Accounts', kind: 'insert' }, { object: 'Contact', kind: 'update' }, { object: 'Lead', label_plural: 'Leads', kind: 'insert' },
+    ] } });
+    expect(text).toBe('Confirm the login can still create Accounts and Leads, and update Contact.');
+  });
+});
+
+describe('"Before the write": the login check names what it checks', () => {
+  const text = (operation) => STEPS.login_can_write.text({ code: 'login_can_write' }, { operation });
+  test('an update names its field', () => {
+    expect(text({ kind: 'update', object: 'Gift__c', field: 'Campaign__c' })).toBe('Confirm the login can still update the Campaign__c field.');
+  });
+  test('the other kinds name what they do', () => {
+    expect(text({ kind: 'insert', object: 'Gift__c', object_label: 'Gift' })).toBe('Confirm the login can still create Gift records.');
+    expect(text({ kind: 'delete', object: 'Gift__c' })).toBe('Confirm the login can still delete Gift__c records.');
+    expect(text({ kind: 'undelete', object: 'Gift__c', object_label: 'Gift' })).toBe('Confirm the login can still restore Gift records.');
   });
 });

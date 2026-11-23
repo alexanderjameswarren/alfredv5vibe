@@ -30,8 +30,9 @@ Plan agreed at sb3_pages-h6v-s1-m2p7; Alex's decisions on its twelve questions a
 | What | Owner |
 |---|---|
 | The new helper action kind (proposed `sf_run`): switchboard_actions' kind constraint, the guard trigger branch, switchboard_needs_click, inserting a row already consumed, and the pickup that hands it out. Today's guard forces every new row to queued with no link. Phase B waits on it (Q5). | plumbing (sb3_plumbing-n7c) |
-| The 15-minute pickup expiry, including the migration that changes the pickup functions. These pages only display the result. The read-time rule for "Not started" (Q11) needs plumbing's agreement. | plumbing |
+| The 15-minute pickup expiry, including the migration that changes the pickup functions. These pages only display the result. "Not started" is agreed: part 4.5. | plumbing |
 | The extension: injecting into /run/ and /review/ pages (today it injects only into https /approve/<token>), a page mark saying it is there, the desktop answer (part 6), and the new result lines in its POST_LINE allow-list (part 4.4), including `cancelled: <reason>` on a run line (today only sql lines carry a reason), and storing and matching those lines by the link id rather than the action id (today postlineStep requires the line to contain the action id). | plumbing (switchboard repo) |
+| **Proposal for plumbing, the desktop check (A3, src/switchboard/runs/desktopCheck.js).** (1) Page mark: on injecting into a /run/ or /review/ page, the extension sets `data-switchboard-extension="<extension version>"` on `<html>`. (2) The page sends `window.postMessage({type: "switchboard-desktop-check", id}, location.origin)`, `id` a fresh UUID per ask. (3) The extension answers once, within 2 seconds, with `window.postMessage({type: "switchboard-desktop-state", id, extension_version, panel, helper}, location.origin)`: the same `id`; `panel` true only if the Switchboard side panel is open and connected; `helper` true only if the desktop helper is running; both booleans. (4) The page takes the first reply from its own window and origin with its id, and ignores anything later: both true → running; one false → that one isn't running; both false → neither; no reply with the mark → no answer; no reply and no mark → no extension. (5) Asked only at page open, on "Check again" and at the Approve click; the extension never sends a state unasked. | plumbing (switchboard repo) |
 | The helper action carrying the link id (payload.link_id) and reporting its result line under it, including for a resent run. | plumbing and data runs |
 | The data runs themselves, the helper, terminal windows, the typed count, the backup and results files, sending the sample record to Alfred. | data runs thread (switchboard repo) |
 | The cold review checklist line "every Claude's note matches the change it sits on". | skills (not this thread) |
@@ -210,6 +211,96 @@ without its text, duplicate finding ids, a note outside its file. At A6 a note m
 
 Until the extension's POST_LINE learns these (plumbing), the page shows the line to copy, as ResultLine does today.
 
+### 4.5 Agreed with plumbing (s5, 2026-11-23)
+
+1. **Not started.** "Not started. Nothing ran." shows when switchboard_runs.failure_reason is 'expired_not_picked_up'
+   (column name to be confirmed by plumbing). Until plumbing marks it, the page also works it out at page load from the
+   stored times (consumed, never picked up, approved over 15 minutes ago). "Try again: resend this run" works in both
+   states.
+2. **Resend.** switchboard_retry_run fails the stale action in the same database step that creates the resend (a B1
+   item). Plumbing's pickup keeps refusing anything older than 15 minutes, as the backstop.
+3. **One id.** A resend keeps the same link id (payload.link_id); every result line for that run uses the link id.
+4. **Several lines per id.** One link id can post several result lines (failed, resent, done); a lookup by link id
+   takes the newest action.
+5. **Cancel note.** `run <id> cancelled: <reason>` carries the cancel note, capped at 200 characters.
+6. **Lost reply.** A pickup retried after a lost reply returns the same action (plumbing's side).
+
+### 4.6 Fields added at A4
+
+- operation.days_left (undelete): days before Salesforce empties the recycle bin, read by the pre-check; the Problem box
+  shows it as "Recycle bin".
+- operation.object_label (A2, single-object runs): the object as people say it ("Gift"), used by the login step and the
+  count sentence; the API name when absent.
+- operation.steps[].label_plural (multi-object runs): each object in the plural ("Accounts"), used by the login step,
+  the write steps, the Count and the count sentence; the API name when absent.
+- Refused before any link, added at A4: an undo page without undo_of's run_tag, a readable deadline and
+  deadline_reason (and a page with no readable deadline shows as closed); an upsert whose update and create don't add
+  up to the total typed; a multi-object run whose step counts don't add up to it; a delete without undo.deadline; an
+  undelete without operation.days_left; skip_edited anywhere but the undo page.
+- The undo page's "What changes" describes the undo ("Puts back up to N records of X from the backup of run …"). Once
+  closed, its production banner reads "Nothing changes: no undo is offered.", and the count sentence, "After you
+  approve", the desktop line and "Undo possible until" are not shown.
+- undo_of (undo page, required): {run_tag, stopped?, changed?, deadline?, deadline_reason?}; deadline and its reason
+  only for a delete's undo (part 4.7 supersedes the rest of this entry). After a stopped run the page
+  says the undo covers only the `changed` records; after `deadline` (checked at page open and at the click) the page
+  says "No undo is offered: <deadline_reason>. A further change is a new request through diagnosis." and shows no
+  buttons, no red bar and no desktop section.
+- sample.records[].role labels an upsert's two samples "To update" and "To create" (and an insert's row "To create").
+- Focus: when the "Desktop not ready" section appears after a click, focus moves to "Check again"; when a check
+  succeeds, to the Approve button. Not at page open, so the page opens at its top.
+
+### 4.7 Decided and added at s6 (A5)
+
+- **An undo has no 24-hour expiry** (Alex): only its own undo deadline. The undo page shows no "Checks valid until"
+  and is never "checks expired" (pageExpired).
+- **Only a delete's undo has a deadline** (the 15-day recycle bin): undo_of.deadline and deadline_reason are required
+  for it and refused for any other undo. An update's undo restores from the backup on the PC and never closes, so it
+  shows no "Undo possible until". A delete's undo writes "Restore up to N records from the recycle bin."
+- **A stopped run's undo** is selected as "The N records the stopped run changed."
+- **The first "Before the write" step** (still_match_backup) depends on the operation, with the request's counts:
+  update and delete "Confirm the records still match the backup."; insert and multi-object "Confirm none of the rows
+  already exists."; upsert "Confirm the N records to update still match the backup, and the M to create still don't
+  exist."; undelete "Confirm the N records are still in the recycle bin."
+- **A multi-object run's undo line** is always "Undo: backup only. The Ids of everything created are saved on your PC.
+  Undoing across several objects isn't in this version."
+- **One action per page.** A page offers at most one action, and the red bar goes with it (one value): Approve; once
+  the checks have expired, "Run the pre-check and rehearsal again" (its own approval, with its eight steps listed in
+  full beneath it); after a run that was not started, "Try again: resend this run" (result line `run <link id>
+  resent`). Each asks the desktop at the click, and the "Desktop not ready" section stands in for any of them.
+- **The stored run** comes with the page (B2): {consumed_at, picked_up_at, finished_at, failure_reason}. Not started
+  (part 4.5, notStarted): failure_reason 'expired_not_picked_up', or consumed, never picked up, over 15 minutes ago.
+  Approved under 15 minutes ago and not picked up: "Waiting for the desktop helper", no buttons.
+- **Correction page:** changed.still_valid [{check, passed_at}] lists "Still valid, not run again" after "This run
+  will:". A wording or allowance edit carries changed on the next page, which shows only the block.
+- **Check what happened:** interrupted {run_tag, at, where} is required and shown as "Interrupted" in the Problem box;
+  "What changes" reads "Nothing: this page only reads."; no sample, no undo line; the button reads "Check what
+  happened on PRODUCTION". A phase can be "interrupted".
+- **After the rerun passed** the phase reads "passed (run again)" (phases[].rerun) and the page offers the data
+  operation as usual.
+- **A rerun already asked for** (rerun_at set, evidence still expired): "Pre-check and rehearsal asked for again", no
+  button, no expired note; a second rerun isn't offered (part 5). The rerun's result line is plain `run <link id>`.
+- **In rerun mode** the banners and "After you approve" describe the pre-check and rehearsal, not the write. A
+  dataop request whose checks may expire carries its rehearsal org, so the rerun can rehearse (B3 to enforce).
+- **A used link** (picked up or finished): "Picked up …, running" or "Finished …", no buttons.
+- **Not started with the checks expired** (decided by Alex, s6b): a link whose run failed as 'expired_not_picked_up'
+  counts as unused for the rerun ("Run the pre-check and rehearsal again"), so it is no dead end. The page keeps the
+  not-started panel, says it can't be resent and that the link counts as unused, and offers the rerun; once the
+  rerun passes, the page offers the data operation (scenario not-started-expired). The stored run that comes with
+  the page is still the old one: a rerun_at later than its consumed_at supersedes it, so the page shows the
+  rerun-waiting state while the evidence is still expired, and the data operation once it passes (never Try again). switchboard_consume_run_link's
+  rerun mode (part 5) accepts such a link at B1.
+- **Correction scenarios** (decided by Alex, s6b): only the field edit exists now; value, records, sandbox filter and
+  code are added in A7.
+- **The undo page's triggers-and-flows step** (agreed with the hub, s6b): "Confirm the triggers and flows are the same
+  as when the run was recorded. If they differ, the undo stops with nothing changed."
+- **Render test** (s6b): simulation.test.js renders every scenario through /run-sim/:scenario, with the desktop ready
+  and not ready, and fails on any render error or logged error.
+- **Correction**: "After you approve" names only what its steps do; when version and changed.from_version are both
+  sent, the version must be one up. "Selected by" for a stopped run's undo is built ("The N records the stopped run
+  changed."), never typed.
+- 4.1 additions: phases[].state also interrupted, phases[].rerun, rerun_at, undo_of, interrupted, and the stored run
+  {consumed_at, picked_up_at, finished_at, failure_reason} that comes with the page, not in the request.
+
 ## 5. Link rules
 
 Their own table and functions; today's link machinery is untouched. Every check is made against now() at the moment
@@ -225,7 +316,8 @@ of a page open or a click; nothing runs on a clock.
   link.request_version = request.version.
 - **Expired** (valid_until <= now()): preview still opens and shows no Approve, only "Run the pre-check and rehearsal
   again". That click is its own approval, through switchboard_consume_run_link in rerun mode: allowed only while the
-  checks are expired, the link unused and the version unchanged, it sets rerun_at (not used_at) and hands the pre-check
+  checks are expired, the link unused (a link whose run failed as 'expired_not_picked_up' counts as unused: part 4.7)
+  and the version unchanged, it sets rerun_at (not used_at) and hands the pre-check
   to the helper. Once the pre-check passes, the evidence is new and valid, so the same link, still unused, offers the
   data operation, whose consume sets used_at as usual. A second rerun is refused while one is waiting or running.
 - **Used.** Consume is one atomic update where used_at and voided_at are null, the version matches, the checks are
@@ -237,7 +329,8 @@ of a page open or a click; nothing runs on a clock.
 - **Restart.** switchboard_retry_run, with Alex's JWT, resends the same run (same payload and fingerprint) only when the
   last approval was not started, the version is unchanged and the checks are valid, and under the same one-path rule
   (Q10) as consume. "Not started" is read at page open
-  or Check again: consumed, never picked up, approved over 15 minutes ago (Q11, pending plumbing).
+  or Check again: failure_reason 'expired_not_picked_up', or consumed, never picked up, approved over 15 minutes ago
+  (agreed with plumbing: part 4.5). The retry fails the stale action in the same step that creates the resend.
 - **Hand-off.** Consume creates the helper action of plumbing's new kind (part 2).
 - **Where.** A new Edge Function, switchboard-run-pages, so today's runner is never redeployed for this.
 
@@ -256,6 +349,18 @@ of a page open or a click; nothing runs on a clock.
   "Approve from Chrome on your desktop"; "Check again".
 - **No answer** (mark present, no reply): no Approve and no red bar; "The Alfred extension didn't answer. Reload it,
   then Check again."; "Check again".
+- **The "Desktop not ready" section** (s4b). When the desktop isn't ready for any reason (both down, panel only,
+  helper only, no extension, no answer, or the check failing at the Approve click), one section stands in place of the
+  Approve button, above "Don't run" and its reason box: a pale red background with a red outline (red means a problem;
+  orange stays the production warning); a bold heading "Desktop not ready"; the reason sentence with its fix and its
+  "(checked …)" ending, for example "The Switchboard panel and the helper aren't running. Start Switchboard on your
+  desktop. (checked when this page opened)"; then "Check again", aligned left, in the primary BUTTON style. While a
+  Check again is in flight the section stays, reading "Checking the desktop…" with the button disabled. When the
+  desktop is ready, the plain "Desktop ready…" line stays in its place after "This run will:", and Approve is shown.
+  Once the run is sent or not run, or the page offers no action (a closed undo, a used link, a rerun already asked
+  for), there is no section; the plain line shows the answer without its fix sentence. With the checks expired the
+  section stands in for the rerun (part 4.7). The reason line is a status region, so a screen
+  reader announces each new answer.
 - **Made-up answers** until plumbing ships: a simulation scenario's `desktop=` list (for example
   `desktop=no_extension,running`) gives the answers in order, one per ask. Locally the extension doesn't inject at all
   (http, and /run-sim/ isn't /approve/), so the check is simulation only.
@@ -339,7 +444,8 @@ Q4 Claude can't read the sample; Q5 plumbing owns the new helper kind, and Phase
 the extension's one reply; Q7 the simulation is dev-server only; Q8 review text in the chat line capped at 200
 characters, the full text kept on the review; Q9 the page asks the desktop again at the Approve click; Q10 consume
 refuses while one of today's links, or a run, is live for the same project (by a read only); Q11 "Not started" is
-consumed, never picked up, approved over 15 minutes ago, pending plumbing's agreement; Q12 one click, buttons disabled
+consumed, never picked up, approved over 15 minutes ago, pending plumbing's agreement (since agreed: part 4.5
+supersedes this); Q12 one click, buttons disabled
 while busy.
 
 ## 13. Files

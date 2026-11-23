@@ -26,6 +26,11 @@ export default function RunSimulation() {
           <li key={name}><Link className="text-primary underline" to={`/run-sim/${name}`}>{name}</Link>: {SCENARIOS[name].title}</li>
         ))}
       </ul>
+      <p data-testid="run-sim-desktop" className="mt-4 text-sm text-dark break-words">
+        Desktop answers, one per ask (page open, each Check again, the Approve click), the last repeating: add
+        <span className="font-mono"> ?desktop=</span> with any of <span className="font-mono">{DESKTOP_ANSWERS.join(', ')}</span>,
+        for example <Link className="text-primary underline font-mono" to="/run-sim/dataop-update?desktop=not_running,running">dataop-update?desktop=not_running,running</Link>.
+      </p>
     </RunShell>
   );
 }

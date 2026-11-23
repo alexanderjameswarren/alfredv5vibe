@@ -5,7 +5,7 @@
 export const PAGES = ['precheck', 'dataop', 'undo', 'correction', 'check'];
 export const OPERATIONS = ['update', 'insert', 'upsert', 'delete', 'undelete', 'multi'];
 export const ORG_TYPES = ['production', 'sandbox'];
-export const PHASE_STATES = ['passed', 'waiting', 'not_started'];
+export const PHASE_STATES = ['passed', 'waiting', 'not_started', 'interrupted'];
 export const UNDO_LEVELS = ['standard', 'backup_only', 'none'];
 export const CHECK_VALID_MS = 24 * 60 * 60 * 1000;
 /** Today's chat lines cap a reason at 200 characters (the extension's POST_LINE); so do these. */
@@ -63,6 +63,42 @@ export const rerunSteps = (editKind) => {
 const n = (v) => (typeof v === 'number' ? v.toLocaleString('en-US') : '?');
 const plural = (v, one, many = `${one}s`) => (v === 1 ? one : many);
 const recs = (v) => `${n(v)} ${plural(v, 'record')}`;
+/** "A, B and C". */
+const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+/** A step's or operation's object as people say it, plural ("Accounts"); the API name when there is none. */
+const pluralLabel = (o) => o?.label_plural ?? o?.object ?? '?';
+const LOGIN_VERBS = { update: 'update', insert: 'create', upsert: 'create and update', delete: 'delete', undelete: 'restore' };
+/** "Before the write", the first step: what must still be true depends on the operation, with the request's counts. */
+function firstBeforeWrite(r) {
+  const c = r?.counts ?? {};
+  switch (r?.operation?.kind) {
+    case 'insert':
+    case 'multi': return 'Confirm none of the rows already exists.';
+    case 'upsert': return `Confirm the ${recs(c.update)} to update still ${plural(c.update, 'matches', 'match')} the backup, and the ${n(c.create)} to create still ${plural(c.create, "doesn't", "don't")} exist.`;
+    case 'undelete': return `Confirm the ${recs(c.expected)} ${plural(c.expected, 'is', 'are')} still in the recycle bin.`;
+    default: return 'Confirm the records still match the backup.';
+  }
+}
+
+/**
+ * "Before the write": the login check names the field an update changes, what the other kinds do, and in a run
+ * across several objects each object, grouped by what is done to it ("create Accounts, Contacts and Opportunities").
+ */
+function loginCanWrite(op) {
+  if (op?.kind === 'multi') {
+    const byVerb = new Map();
+    (Array.isArray(op.steps) ? op.steps : []).forEach((s) => {
+      const verb = LOGIN_VERBS[s?.kind] ?? 'update';
+      const list = byVerb.get(verb) ?? [];
+      if (!list.includes(pluralLabel(s))) list.push(pluralLabel(s));
+      byVerb.set(verb, list);
+    });
+    return `Confirm the login can still ${[...byVerb].map(([verb, objs]) => `${verb} ${andList(objs)}`).join(', and ') || 'write'}.`;
+  }
+  return op?.field && (op.kind ?? 'update') === 'update'
+    ? `Confirm the login can still update the ${op.field} field.`
+    : `Confirm the login can still ${LOGIN_VERBS[op?.kind] ?? 'update'} ${op?.object_label ?? op?.object ?? 'these'} records.`;
+}
 
 /**
  * Every step code, the group and org it belongs to, and its fixed statement. The request sends codes; the tool and
@@ -81,15 +117,22 @@ export const STEPS = {
   rehearse_undo: { group: 'Sandbox rehearsal', org: 'sandbox', text: () => 'Run the standard undo and confirm each one is back.' },
   delete_test: { group: 'Sandbox rehearsal', org: 'sandbox', text: () => 'Delete the TEST records.' },
   // Data operation and undo pages.
-  still_match_backup: { group: 'Before the write', org: 'production', text: () => 'Confirm the records still match the backup.' },
-  login_can_write: { group: 'Before the write', org: 'production', text: () => 'Confirm the login can still write.' },
-  automation_unchanged: { group: 'Before the write', org: 'production', text: () => 'Confirm the triggers and flows are unchanged.' },
+  still_match_backup: { group: 'Before the write', org: 'production', text: (s, r) => firstBeforeWrite(r) },
+  login_can_write: { group: 'Before the write', org: 'production', text: (s, r) => loginCanWrite(r.operation) },
+  automation_unchanged: { group: 'Before the write', org: 'production', text: (s, r) => (r?.page === 'undo'
+    // Agreed with the hub (s6b).
+    ? 'Confirm the triggers and flows are the same as when the run was recorded. If they differ, the undo stops with nothing changed.'
+    : 'Confirm the triggers and flows are unchanged.') },
   skip_edited: { group: 'Before the write', org: 'production', text: () => 'Skip any record edited since the run, and list who changed it and when.' },
   type_count: { group: 'Write', org: 'production', text: (s, r) => (r.page === 'undo'
     ? 'You type the exact count left after skips in the terminal; anything else stops with nothing changed.'
     : `You type the count, ${n(r.counts?.total ?? r.counts?.expected)}, in the terminal; anything else stops with nothing changed.`) },
   write: { group: 'Write', org: 'production', text: (s, r) => writeStatement(r) },
-  write_step: { group: 'Write', org: 'production', text: (s) => `${s.pause_before ? 'Pause before this. ' : ''}${s.object ?? '?'}: ${s.kind ?? '?'} ${recs(s.count)}. A failed row stops the run before the next step.` },
+  write_step: { group: 'Write', org: 'production', text: (s, r) => {
+    // The last write step has no next step to stop before.
+    const last = (r?.steps ?? []).filter((x) => x?.code === 'write_step').at(-1) === s;
+    return `${s.pause_before ? 'Pause before this. ' : ''}${pluralLabel(s)}: ${LOGIN_VERBS[s.kind] ?? s.kind ?? '?'} ${recs(s.count)}.${last ? '' : ' A failed row stops the run before the next step.'}`;
+  } },
   read_back: { group: 'After the write', org: 'production', text: () => 'Read each record back and confirm the goal, and that nothing else changed.' },
   save_results: { group: 'After the write', org: 'production', text: () => "Save the run's results to your PC and to Alfred." },
   // Check what happened page, read only.
@@ -104,11 +147,15 @@ const isFilter = (r) => r?.selected_by?.kind === 'filter';
 function writeStatement(r) {
   const o = r.operation ?? {};
   const c = r.counts ?? {};
-  if (r.page === 'undo') return `Put back up to ${recs(c.undo_up_to ?? c.expected)} from the backup.`;
+  if (r.page === 'undo') {
+    return o.kind === 'delete'
+      ? `Restore up to ${recs(c.undo_up_to ?? c.expected)} from the recycle bin.`
+      : `Put back up to ${recs(c.undo_up_to ?? c.expected)} from the backup.`;
+  }
   switch (o.kind) {
     case 'update': return `Update the ${recs(c.expected)}.`;
     case 'insert': return `Create ${recs(c.expected)} from ${o.file ?? 'the file of rows'} on your PC.`;
-    case 'upsert': return `Update ${n(c.update)} and create ${n(c.create)} records, matched by ${o.external_id ?? 'the external Id'}.`;
+    case 'upsert': return `Update ${n(c.update)} and create ${recs(c.create)}, matched by ${o.external_id ?? 'the external Id'}.`;
     case 'delete': return `Delete the ${recs(c.expected)} to the recycle bin.`;
     case 'undelete': return `Restore the ${recs(c.expected)} from the recycle bin.`;
     default: return 'Write the records.';
@@ -120,15 +167,22 @@ export function whatChanges(r) {
   const o = r?.operation ?? {};
   const c = r?.counts ?? {};
   const obj = o.object ?? '?';
+  // The undo page changes the records back, whatever the original operation did.
+  if (r?.page === 'undo') {
+    return o.kind === 'delete'
+      ? `Restores up to ${recs(c.undo_up_to ?? c.expected)} of ${obj} from the recycle bin, undoing run ${r.undo_of?.run_tag ?? '?'}.`
+      : `Puts back up to ${recs(c.undo_up_to ?? c.expected)} of ${obj} from the backup of run ${r.undo_of?.run_tag ?? '?'}.`;
+  }
+  if (r?.page === 'check') return 'Nothing: this page only reads.';
   switch (o.kind) {
     case 'update': return `Sets ${o.field ?? '?'} to ${JSON.stringify(o.value ?? null)} on ${recs(c.expected)} of ${obj}.`;
     case 'insert': return `Creates ${recs(c.expected)} of ${obj} from ${o.file ?? '?'}.`;
-    case 'upsert': return `Updates ${n(c.update)} and creates ${n(c.create)} records of ${obj}, matched by ${o.external_id ?? '?'}.`;
+    case 'upsert': return `Updates ${n(c.update)} and creates ${recs(c.create)} of ${obj}, matched by ${o.external_id ?? '?'}.`;
     case 'delete': return `Deletes ${recs(c.expected)} of ${obj} to the recycle bin.`;
     case 'undelete': return `Restores ${recs(c.expected)} of ${obj} from the recycle bin.`;
     case 'multi': {
       const steps = Array.isArray(o.steps) ? o.steps : [];
-      return `Runs ${steps.length} ${plural(steps.length, 'step')} across ${[...new Set(steps.map((s) => s.object))].join(', ') || '?'}: ${recs(c.total)} in all.`;
+      return `Runs ${steps.length} ${plural(steps.length, 'step')} across ${andList([...new Set(steps.map(pluralLabel))]) || '?'}: ${recs(c.total)} in all.`;
     }
     default: return '?';
   }
@@ -146,8 +200,10 @@ export function countSentence(r) {
   const live = t?.org_type === 'sandbox' ? 'sandbox' : 'live';
   const c = r.counts ?? {};
   const total = r.page === 'undo' ? c.undo_up_to ?? c.expected : c.total ?? c.expected;
-  // object_label: the object's name as people say it ("Gift"); the API name when there is none.
-  const obj = r.operation?.object_label ?? r.operation?.object ?? '?';
+  // object_label: the object's name as people say it ("Gift"); the API name when there is none. Several objects: each.
+  const obj = r.operation?.kind === 'multi'
+    ? andList([...new Set((r.operation.steps ?? []).map(pluralLabel))])
+    : r.operation?.object_label ?? r.operation?.object ?? '?';
   return `This changes ${r.page === 'undo' ? 'up to ' : ''}${n(total)} ${live} ${plural(total, 'record')} of ${obj} in ${t?.alias ?? '?'}.`;
 }
 
@@ -170,19 +226,24 @@ export function bannerLines(r) {
 /** The Approve button's label. */
 export function approveLabel(r) {
   if (r?.page === 'undo') return 'Approve this UNDO on PRODUCTION';
+  if (r?.page === 'check') return 'Check what happened on PRODUCTION';
   const p = touches(r, 'production');
   const s = touches(r, 'sandbox');
   if (p && s) return 'Approve this run on PRODUCTION and SANDBOX';
   return s ? 'Approve this run on SANDBOX' : 'Approve this run on PRODUCTION';
 }
 
-const UNDO_WORDS = { standard: 'standard', backup_only: 'backup only', none: 'none' };
+export const MULTI_UNDO = "Undo: backup only. The Ids of everything created are saved on your PC. Undoing across several objects isn't in this version.";
+const UNDO_WORDS ={ standard: 'standard', backup_only: 'backup only', none: 'none' };
 /**
  * The undo line: level, mechanics and deadline only. An undo page has no undo, and says a further change is a new
  * request through diagnosis.
  */
 export function undoLine(r) {
   if (r?.page === 'undo') return 'Undo: none. An undo has no undo. A further change is a new request through diagnosis.';
+  if (r?.page === 'check') return null;
+  // Across several objects the undo is always backup only, whatever the request says.
+  if (r?.operation?.kind === 'multi') return MULTI_UNDO;
   const u = r?.undo;
   if (!u || !UNDO_LEVELS.includes(u.level)) return null;
   const parts = [`Undo: ${UNDO_WORDS[u.level]}.`];
@@ -197,16 +258,24 @@ export function clientOrgLine(r) {
   return [r?.client, ...orgs].filter(Boolean).join(' · ');
 }
 
-const PHASE_WORDS = { passed: 'passed', waiting: 'waiting', not_started: 'not started' };
+const PHASE_WORDS = { passed: 'passed', waiting: 'waiting', not_started: 'not started', interrupted: 'interrupted' };
 export const phaseWord = (state) => PHASE_WORDS[state] ?? 'not started';
 
 /** "After you approve", one statement per line. The 15-minute pickup is plumbing's; the page only says it. */
 export function afterApproveLines(r) {
   const lines = ['The desktop helper must pick the run up within 15 minutes; if it doesn\'t, the page says "Not started. Nothing ran." and offers "Try again: resend this run".'];
   if (r?.page === 'precheck' || r?.page === 'correction') {
-    lines.push('A terminal window on your desktop runs the production pre-check first, read only, then the sandbox rehearsal.');
+    // A correction reruns only some checks: say only what its steps do.
+    const codes = new Set((r.steps ?? []).map((s) => s?.code));
+    const prod = [...codes].some((c) => STEPS[c]?.org === 'production');
+    const sandbox = [...codes].some((c) => STEPS[c]?.org === 'sandbox');
+    lines.push(prod && sandbox
+      ? 'A terminal window on your desktop runs the production pre-check first, read only, then the sandbox rehearsal.'
+      : prod ? 'A terminal window on your desktop runs the production checks, read only.' : 'A terminal window on your desktop runs the sandbox rehearsal.');
     lines.push('Nothing in production changes.');
-    lines.push('Back to Alfred: the counts, pass or fail for each step, and one sample record, held for at most 24 hours. The backup stays on your PC.');
+    lines.push(codes.has('save_backup')
+      ? 'Back to Alfred: the counts, pass or fail for each step, and one sample record, held for at most 24 hours. The backup stays on your PC.'
+      : 'Back to Alfred: pass or fail for each step.');
   } else if (r?.page === 'dataop' || r?.page === 'undo') {
     lines.push(r.page === 'undo'
       ? 'A terminal window on your desktop runs the checks before the write, lists any records skipped, then asks you to type the exact count left. Anything else stops it with nothing changed.'
@@ -218,6 +287,102 @@ export function afterApproveLines(r) {
   }
   return lines;
 }
+
+/** The Problem box's Count: the total, with an upsert's split or a multi-object run's steps. */
+export function countDetail(r) {
+  const c = r?.counts ?? {};
+  const total = r?.page === 'undo' ? c.undo_up_to ?? c.expected : c.total ?? c.expected;
+  if (r?.page === 'undo') return `Up to ${n(total)}`;
+  if (r?.operation?.kind === 'upsert') return `${n(total)}: ${n(c.update)} to update, ${n(c.create)} to create`;
+  if (r?.operation?.kind === 'multi') {
+    return `${n(total)} in all: ${(r.operation.steps ?? []).map((s) => `${n(s.count)} ${pluralLabel(s)}`).join(', ')}`;
+  }
+  return n(total);
+}
+
+/** A delete's knock-on counts, read by the pre-check: children deleted with it, links blanked, links blocking. */
+export function knockOnLines(r) {
+  if (r?.operation?.kind !== 'delete') return [];
+  const c = r.counts ?? {};
+  return [
+    typeof c.children === 'number' && `${recs(c.children)} deleted with ${plural(c.expected, 'its parent', 'their parents')}`,
+    typeof c.links_blanked === 'number' && `${n(c.links_blanked)} ${plural(c.links_blanked, 'link')} on other records blanked`,
+    typeof c.links_blocking === 'number' && `${n(c.links_blocking)} ${plural(c.links_blocking, 'link')} blocking the delete`,
+  ].filter(Boolean);
+}
+
+/** An undelete: the days left before Salesforce empties the recycle bin. */
+export function daysLeftLine(r) {
+  const d = r?.operation?.days_left;
+  if (r?.operation?.kind !== 'undelete' || typeof d !== 'number') return null;
+  return `${n(d)} ${plural(d, 'day')} left before Salesforce empties the recycle bin.`;
+}
+
+/** "Selected by": diagnosis's words, except a stopped run's undo, which selects only what that run changed (built). */
+export function selectedByText(r) {
+  if (r?.page === 'undo' && r.undo_of?.stopped) return `The ${recs(r.undo_of.changed ?? r.counts?.undo_up_to)} the stopped run changed.`;
+  return r?.selected_by?.text ?? '';
+}
+
+/** The undo page: which run it undoes, and after a stopped run, only what that run changed. */
+export function undoScopeLine(r) {
+  if (r?.page !== 'undo') return null;
+  const u = r.undo_of ?? {};
+  const c = r.counts ?? {};
+  const skips = 'Records edited since the run are skipped and listed with who changed them and when.';
+  if (u.stopped) {
+    return `Run ${u.run_tag ?? '?'} stopped before it finished, so this undo covers only the ${recs(u.changed ?? c.undo_up_to)} it changed. ${skips}`;
+  }
+  return `Undoes run ${u.run_tag ?? '?'}: up to ${recs(c.undo_up_to ?? c.expected)}. ${skips}`;
+}
+
+/**
+ * Only an undo of a delete has a deadline (the recycle bin's 15 days); an update's undo restores from the backup on the
+ * PC and never closes. An undo has no 24-hour expiry of its own (Alex, s6).
+ */
+export const undoHasDeadline = (r) => r?.page === 'undo' && r.operation?.kind === 'delete';
+
+/** The undo page after its deadline: why no undo is offered, or null while it can still run. */
+export function undoClosedReason(r, now = Date.now()) {
+  if (!undoHasDeadline(r)) return null;
+  // No readable deadline counts as passed: a delete's undo is never offered without one.
+  const t = Date.parse(r.undo_of?.deadline ?? '');
+  if (!Number.isNaN(t) && t > now) return null;
+  return `No undo is offered: ${r.undo_of?.deadline_reason ?? 'its deadline has passed'}. A further change is a new request through diagnosis.`;
+}
+
+/** The 24-hour expiry, for every page but the undo page, which has none. */
+export const pageExpired = (r, now = Date.now()) => r?.page !== 'undo' && checksExpired(r?.evidence, now);
+
+/** The helper must pick an approved run up within this; plumbing's pickup refuses anything older. */
+export const PICKUP_MS = 15 * 60 * 1000;
+/**
+ * "Not started. Nothing ran.": plumbing marks failure_reason 'expired_not_picked_up' (spec 4.5); until it does, the
+ * page works it out at load from the stored times: consumed, never picked up, approved over 15 minutes ago.
+ */
+export function notStarted(run, now = Date.now()) {
+  if (!run) return false;
+  if (run.failure_reason === 'expired_not_picked_up') return true;
+  const t = Date.parse(run.consumed_at ?? '');
+  return !Number.isNaN(t) && !run.picked_up_at && !run.finished_at && now - t > PICKUP_MS;
+}
+
+/** The pre-check and rehearsal that "Run the pre-check and rehearsal again" runs, listed in full beneath it. */
+export function rerunRequest(r) {
+  const count = r?.selected_by?.kind === 'filter' ? 'count_filter' : 'count_listed';
+  const codes = [count, 'login_can_change', 'list_automation', 'save_backup', 'create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test'];
+  return { ...r, page: 'precheck', steps: codes.map((code) => ({ code })) };
+}
+export const RERUN_LABEL = 'Run the pre-check and rehearsal again';
+
+/** The correction page's "Still valid, not run again": [{ check, passed_at }]. */
+export const stillValid = (r) => (r?.page === 'correction' && Array.isArray(r.changed?.still_valid) ? r.changed.still_valid : []);
+const CHECK_WORDS = { count: 'Count', login: 'Login check', automation: 'Triggers and flows', backup: 'Backup', sample: 'Sample record', rehearsal: 'Sandbox rehearsal' };
+export const checkWord = (check) => CHECK_WORDS[check] ?? check;
+
+const SAMPLE_ROLES = { update: 'To update', create: 'To create' };
+/** An upsert's two samples are labelled; a single record isn't. */
+export const sampleRoleLabel = (role) => SAMPLE_ROLES[role] ?? null;
 
 /** The phase header. */
 export const PHASE_HEADERS = {
@@ -297,6 +462,31 @@ export function requestProblems(r, opts = {}) {
     out.push("Fix diagnosis_allows: a list of sentences in diagnosis's words, or leave it out.");
   }
   if (r.page === 'precheck' && r.sample) out.push('Leave the sample out of a pre-check: the pre-check reads it.');
+  if (r.page === 'check' && !text(r.interrupted?.run_tag)) out.push('Add interrupted: the run_tag of the interrupted run, when, and where it stopped.');
+  if (r.page === 'check' && r.sample) out.push('Leave the sample out of a check: it only reads.');
+  if (r.page === 'undo' && !text(r.undo_of?.run_tag)) out.push('Add undo_of: the run_tag of the run this undoes, and whether it stopped.');
+  if (undoHasDeadline(r) && (Number.isNaN(Date.parse(r.undo_of?.deadline ?? '')) || !text(r.undo_of?.deadline_reason))) {
+    out.push("Add undo_of.deadline and deadline_reason: a delete's undo ends when the records leave the recycle bin.");
+  }
+  // The database sets the version (4.1); when both are sent, they must agree.
+  if (r.page === 'correction' && typeof r.version === 'number' && typeof r.changed?.from_version === 'number' && r.version !== r.changed.from_version + 1) {
+    out.push('Fix version: a correction is one version up from changed.from_version.');
+  }
+  if (r.page === 'undo' && !undoHasDeadline(r) && (r.undo_of?.deadline !== undefined || r.undo_of?.deadline_reason !== undefined)) {
+    out.push("Leave undo_of.deadline out: only a delete's undo has a deadline; this one restores from the backup on the PC.");
+  }
+  const c = r.counts ?? {};
+  if (r.operation?.kind === 'upsert' && r.page !== 'undo' && (c.update ?? 0) + (c.create ?? 0) !== (c.total ?? c.expected)) {
+    out.push('Fix counts: an upsert\'s update and create must add up to the total you type.');
+  }
+  if (r.operation?.kind === 'multi' && Array.isArray(r.operation?.steps) && r.operation.steps.reduce((a, s) => a + (s?.count ?? 0), 0) !== (c.total ?? c.expected)) {
+    out.push("Fix counts: the steps' counts must add up to the total you type.");
+  }
+  if (r.page === 'dataop' && r.operation?.kind === 'delete' && !text(r.undo?.deadline)) out.push('Add undo.deadline: the date the deleted records leave the recycle bin, read by the pre-check.');
+  if (r.page === 'dataop' && r.operation?.kind === 'undelete' && typeof r.operation?.days_left !== 'number') out.push('Add operation.days_left: the days before the recycle bin is emptied, read by the pre-check.');
+  if (r.operation?.kind === 'multi' && Array.isArray(r.operation?.steps) && r.operation.steps.some((s) => !text(s?.object) || !OPERATIONS.includes(s?.kind) || s.kind === 'multi')) {
+    out.push('Fix operation.steps: each needs an object and an operation (update, insert, upsert, delete or undelete).');
+  }
   if (['dataop', 'undo'].includes(r.page) && r.undo && !UNDO_LEVELS.includes(r.undo.level)) out.push(`Fix undo.level: one of ${UNDO_LEVELS.join(', ')}.`);
   const steps = Array.isArray(r.steps) ? r.steps : [];
   if (!steps.length) out.push('Add steps: the step codes this run will take.');
@@ -305,6 +495,7 @@ export function requestProblems(r, opts = {}) {
     const def = STEPS[s?.code];
     if (!def) out.push(`Fix steps[${i}]: ${JSON.stringify(s?.code ?? null)} is not a known step code.`);
     else if (groups.length && !groups.includes(def.group)) out.push(`Fix steps[${i}]: ${s.code} doesn't belong on a ${r.page} page.`);
+    else if (s.code === 'skip_edited' && r.page !== 'undo') out.push(`Fix steps[${i}]: skip_edited is for the undo page only.`);
     if (def && s?.org !== undefined && s.org !== def.org) out.push(`Fix steps[${i}]: ${s.code} always runs on ${def.org}; leave org out.`);
   });
   // A run across several objects: each write_step matches operation.steps, in order.
