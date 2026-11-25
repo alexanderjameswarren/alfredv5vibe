@@ -57,6 +57,9 @@ function deps(over = {}) {
     slices: async () => DATA.slices,
     projectPlans: async () => DATA.projectPlans,
     liveLinks: async () => [],
+    runLinks: async () => [],
+    runRequests: async () => [],
+    codeReviews: async () => [],
     ...over,
   };
 }
@@ -169,6 +172,77 @@ test("live_link: waiting_on_alex is unchanged by it", async () => {
     assert.equal(plain.projects[code].live_link, null, code);
   }
   assert.equal(live.projects["ee-e5e"].waiting_on_alex, false);
+});
+
+// s6 (L3d): pending /run/ and /review/ links, from switchboard_run_links.
+const RUN_LINKS = [
+  // ff-f6f: a run link, and a newer review link whose review is still open: the newest wins.
+  { id: "rl-1", request_id: "rq-f", review_id: null, used_at: null, voided_at: null, created_at: "2026-11-25T09:00:00Z" },
+  { id: "rl-2", request_id: "rq-f", review_id: "rv-open", used_at: null, voided_at: null, created_at: "2026-11-25T09:30:00Z" },
+  // gg-g7g: a review link whose review is done never lights; a used or voided run link neither.
+  { id: "rl-3", request_id: "rq-g", review_id: "rv-done", used_at: null, voided_at: null, created_at: "2026-11-25T09:00:00Z" },
+  { id: "rl-4", request_id: "rq-g", review_id: null, used_at: "2026-11-25T09:10:00Z", voided_at: null, created_at: "2026-11-25T09:00:00Z" },
+  { id: "rl-5", request_id: "rq-g", review_id: null, used_at: null, voided_at: "2026-11-25T09:10:00Z", created_at: "2026-11-25T09:00:00Z" },
+  // aa-a1a also has a live git-style link (LIVE): that one is returned.
+  { id: "rl-6", request_id: "rq-a", review_id: null, used_at: null, voided_at: null, created_at: "2026-11-25T11:00:00Z" },
+  // A link whose request isn't found is skipped.
+  { id: "rl-7", request_id: "rq-gone", review_id: null, used_at: null, voided_at: null, created_at: "2026-11-25T11:00:00Z" },
+];
+const RUN_REQUESTS = [{ id: "rq-f", project_code: "ff-f6f" }, { id: "rq-g", project_code: "gg-g7g" }, { id: "rq-a", project_code: "aa-a1a" }];
+const REVIEWS = [{ id: "rv-open", status: "open" }, { id: "rv-done", status: "reviewed" }];
+const runDeps = (over = {}) => deps({
+  liveLinks: async () => LIVE,
+  runLinks: async () => RUN_LINKS,
+  runRequests: async (ids) => RUN_REQUESTS.filter((r) => ids.includes(r.id)),
+  codeReviews: async (ids) => REVIEWS.filter((r) => ids.includes(r.id)),
+  ...over,
+});
+
+test("live_link from run links: sf_run or sf_review by review_id, expires_at and chat_url null, the newest per project", async () => {
+  const { projects } = await (await handle(get({ "x-switchboard-panel-key": KEY }), runDeps(), NOW)).json();
+  assert.deepEqual(projects["ff-f6f"].live_link, { kind: "sf_review", expires_at: null, chat_url: null });
+  assert.equal(projects["gg-g7g"], undefined);
+  const runOnly = await (await handle(get({ "x-switchboard-panel-key": KEY }),
+    runDeps({ runLinks: async () => [RUN_LINKS[0]] }), NOW)).json();
+  assert.deepEqual(runOnly.projects["ff-f6f"], {
+    report_unread: false, waiting_on_alex: false, lane: null, lane_order: null,
+    live_link: { kind: "sf_run", expires_at: null, chat_url: null },
+  });
+});
+
+test("live_link: a live git-style link beats a run link for the same project", async () => {
+  const { projects } = await (await handle(get({ "x-switchboard-panel-key": KEY }), runDeps(), NOW)).json();
+  assert.deepEqual(projects["aa-a1a"].live_link, { kind: "deploy", expires_at: at(20), chat_url: "https://claude.ai/chat/a" });
+  const noGit = await (await handle(get({ "x-switchboard-panel-key": KEY }), runDeps({ liveLinks: async () => [] }), NOW)).json();
+  assert.deepEqual(noGit.projects["aa-a1a"].live_link, { kind: "sf_run", expires_at: null, chat_url: null });
+});
+
+test("live_link from run links: waiting_on_alex and the other fields stay as they were", async () => {
+  const plain = await (await handle(get({ "x-switchboard-panel-key": KEY }), deps(), NOW)).json();
+  const lit = await (await handle(get({ "x-switchboard-panel-key": KEY }), runDeps({ liveLinks: async () => [] }), NOW)).json();
+  for (const code of Object.keys(plain.projects)) {
+    const { live_link: _a, ...before } = plain.projects[code];
+    const { live_link: _b, ...after } = lit.projects[code];
+    assert.deepEqual(after, before, code);
+  }
+});
+
+test("live_link from run links: a failed read leaves git-style links and every other field", async () => {
+  const withGit = await (await handle(get({ "x-switchboard-panel-key": KEY }), deps({ liveLinks: async () => LIVE }), NOW)).json();
+  for (const broken of ["runLinks", "runRequests", "codeReviews"]) {
+    const out = await (await handle(get({ "x-switchboard-panel-key": KEY }),
+      runDeps({ [broken]: async () => { throw new Error("boom"); } }), NOW)).json();
+    assert.deepEqual(out, withGit, broken);
+  }
+});
+
+test("index.ts: run links unused and not voided, no token hash; requests and reviews by id", () => {
+  const index = read("./index.ts");
+  assert.match(index, /from\("switchboard_run_links", "id, request_id, review_id, used_at, voided_at, created_at"\)\s*\.is\("used_at", null\)\.is\("voided_at", null\)\.is\("review_id", null\)/);
+  assert.match(index, /switchboard_code_reviews!inner\(status\)"\)\s*\.is\("used_at", null\)\.is\("voided_at", null\)\.not\("review_id", "is", null\)\.eq\("switchboard_code_reviews\.status", "open"\)/);
+  assert.match(index, /from\("switchboard_run_requests", "id, project_code"\)\.in\("id", ids\)/);
+  assert.match(index, /from\("switchboard_code_reviews", "id, status"\)\.in\("id", ids\)/);
+  assert.doesNotMatch(index, /token_hash/);
 });
 
 test("live_link: a failed live-link read leaves the other fields as they were, every live_link null", async () => {

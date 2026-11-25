@@ -39,7 +39,17 @@ export type Deps = {
   projectPlans(groupIds: string[]): Promise<ProjectPlan[]>;
   /** Actions with a live link (189): link_issued, a link hash, unused, not expired. Never the hash itself. */
   liveLinks(nowIso: string): Promise<LinkRow[]>;
+  /** s6 (L3d): switchboard_run_links not used and not voided (250). Never the token hash. */
+  runLinks(): Promise<RunLinkRow[]>;
+  /** The run links' requests, for their project code. */
+  runRequests(ids: string[]): Promise<{ id: string; project_code: string }[]>;
+  /** The review links' reviews, for their status. */
+  codeReviews(ids: string[]): Promise<{ id: string; status: string }[]>;
 };
+type RunLinkRow = {
+  id: string; request_id: string; review_id: string | null; used_at: string | null; voided_at: string | null; created_at: string;
+};
+type LiveLink = { kind: string | null; expires_at: string | null; chat_url: string | null };
 
 export type PanelData = {
   clips: Clip[];
@@ -51,14 +61,40 @@ export type PanelData = {
   slices: Slice[];
   projectPlans: ProjectPlan[];
   links?: LinkRow[];
+  /** Each project's newest pending run or review link, already resolved (pendingRunLinks). */
+  runLive?: Map<string, LiveLink>;
 };
+
+/**
+ * s6 (L3d): each project's newest pending /run/ or /review/ link. A run link (review_id null) is pending until it is
+ * used or voided. A review link is never used (consume refuses it), so it is pending while not voided and its review
+ * is still open. kind sf_run or sf_review; these links have no expiry and no chat, so both are null.
+ */
+export function pendingRunLinks(
+  links: RunLinkRow[], requests: { id: string; project_code: string }[], reviews: { id: string; status: string }[],
+): Map<string, LiveLink> {
+  const projectOf = new Map(requests.map((r) => [r.id, r.project_code]));
+  const open = new Set(reviews.filter((r) => r.status === "open").map((r) => r.id));
+  const out = new Map<string, LiveLink>();
+  const newest = new Map<string, number>();
+  for (const l of links) {
+    if (l.used_at !== null || l.voided_at !== null) continue;
+    if (l.review_id !== null && !open.has(l.review_id)) continue;
+    const code = projectOf.get(l.request_id);
+    const at = Date.parse(l.created_at);
+    if (!code || (newest.get(code) ?? -Infinity) >= at) continue;
+    newest.set(code, at);
+    out.set(code, { kind: l.review_id === null ? "sf_run" : "sf_review", expires_at: null, chat_url: null });
+  }
+  return out;
+}
 
 /** A link's kind in the panel's words, as 227's switchboard_issue_link puts it in the url. */
 const panelKind = (kind: string | null) => (kind === "sf_deploy" || kind === "sf_test" ? "deploy" : kind);
 
 /** Each project's newest live link (latest expiry; 30 minutes from issue, so latest issued), checked again here. */
 function liveLinks(links: LinkRow[], now: number) {
-  const out = new Map<string, { kind: string | null; expires_at: string; chat_url: string | null }>();
+  const out = new Map<string, LiveLink>();
   const newest = new Map<string, number>();
   for (const l of links) {
     const exp = Date.parse(l.link_expires_at ?? "");
@@ -115,7 +151,8 @@ export function buildPanel(data: PanelData, now = Date.now()) {
   const unarchived = new Set(data.inbox.filter((r) => r.archived === false).map((r) => r.id));
   const waiting = new Set(data.actions.map((a) => a.project_code));
   const lanes = laneOrder(data);
-  const live = liveLinks(data.links ?? [], now);
+  // A live git-style link wins over a run link: it expires in 30 minutes and has a chat; the run link stays lit.
+  const live = new Map<string, LiveLink>([...(data.runLive ?? new Map()), ...liveLinks(data.links ?? [], now)]);
   const codes = [...new Set([...reports.keys(), ...waiting, ...lanes.keys(), ...live.keys()])].sort();
   const projects: Record<string, unknown> = {};
   for (const code of codes) {
@@ -151,10 +188,27 @@ export async function handle(req: Request, deps: Deps, now = Date.now()): Promis
     // A failed live-link read never takes the other fields down: every live_link is then null.
     deps.liveLinks(new Date(now).toISOString()).catch(() => []),
   ]);
+  const runLive = await runLinksOf(deps);
   const inboxIds = [...latestReports(clips).values()].filter((id): id is string => Boolean(id));
   const plans = await deps.activePlans(portfolios.map((p) => p.id));
   const planIds = plans.map((p) => p.id);
   const [inbox, lanes, slices] = await Promise.all([deps.inboxRows(inboxIds), deps.lanes(planIds), deps.slices(planIds)]);
   const projectPlans = await deps.projectPlans([...new Set(slices.map((s) => s.group_id))]);
-  return json(buildPanel({ clips, inbox, actions, portfolios, plans, lanes, slices, projectPlans, links }, now));
+  return json(buildPanel({ clips, inbox, actions, portfolios, plans, lanes, slices, projectPlans, links, runLive }, now));
+}
+
+/** The pending run and review links; any failed read leaves them all out, never the rest of the panel. */
+async function runLinksOf(deps: Deps): Promise<Map<string, LiveLink>> {
+  try {
+    const links = await deps.runLinks();
+    if (!links.length) return new Map();
+    const reviewIds = [...new Set(links.map((l) => l.review_id).filter((id): id is string => Boolean(id)))];
+    const [requests, reviews] = await Promise.all([
+      deps.runRequests([...new Set(links.map((l) => l.request_id))]),
+      reviewIds.length ? deps.codeReviews(reviewIds) : Promise.resolve([]),
+    ]);
+    return pendingRunLinks(links, requests, reviews);
+  } catch {
+    return new Map();
+  }
 }

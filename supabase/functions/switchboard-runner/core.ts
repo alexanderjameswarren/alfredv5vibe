@@ -90,6 +90,9 @@ export type Deps = {
    * LONG_PICK_KINDS action (an sf_dataop or sf_dataquery, which may take hours) before `dataopBefore`.
    */
   stalePicks(userId: string, before: string, dataopBefore: string): Promise<{ action_id: string; run_id: string | null }[]>;
+  /** s6 (M): helper-kind actions whose run row the pickup functions closed with failure_reason expired_not_picked_up
+   *  (247, 248) at or after `since`. Read-only. */
+  expiredSince(userId: string, since: string): Promise<{ action_id: string; kind: string; project_code: string }[]>;
   findPicked(actionId: string, runId: string): Promise<Picked | null>;
   finishRun(runId: string, fields: Record<string, unknown>): Promise<void>;
   insertAction(row: Record<string, unknown>): Promise<{ id: string }>;
@@ -700,9 +703,38 @@ async function handlePickup(req: Request, deps: Deps, now: number): Promise<Resp
     : await (pickupId ? deps.pickupGit(deps.userId, pickupId) : deps.pickupGit(deps.userId));
   // pickup_git returns no kind; everything it hands out is git.
   const action = picked && pick === "git" ? { ...picked, kind: "git" } : picked;
-  const timedOut = stale.map((s) => s.action_id);
-  if (action?.kind === "sf_run") return sfRunPickup(action, deps, now, timedOut);
-  return json({ ok: true, action, timed_out: timedOut });
+  const extra = { timed_out: stale.map((s) => s.action_id), ...(await expiredOf(deps, now)) };
+  if (action?.kind === "sf_run") return sfRunPickup(action, deps, now, extra);
+  return json({ ok: true, action, ...extra });
+}
+
+/** How far back /pickup's `expired` looks. The helper calls /pickup only when something prompts it, so pickups can be
+ *  hours apart: a day covers a lost reply, a failed read or a 500 (the next pickup repeats them), and any clock gap. */
+export const EXPIRED_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * s6 (M): the approved helper actions failed for never being picked up, read after this call's pickup function has
+ * returned. That function's expiry commits before it returns, so this read sees every expiry it made, and any a
+ * concurrent pickup (or a run page's resend, which writes the same failure_reason) committed first: repeats, which the
+ * helper de-dupes by action id. Each one is in the reply of the call that made it, and in every reply for a day. The
+ * read is tried twice; if both fail the field is left out, never failing the pickup, whose action is already picked.
+ */
+async function expiredOf(deps: Deps, now: number): Promise<{ expired?: { action_id: string; kind: string; project_code: string }[] }> {
+  const since = new Date(now - EXPIRED_LOOKBACK_MS).toISOString();
+  try {
+    const rows = await deps.expiredSince(deps.userId, since).catch(() => deps.expiredSince(deps.userId, since));
+    const seen = new Set<string>();
+    const expired = [];
+    for (const r of rows) {
+      if (seen.has(r.action_id)) continue;
+      seen.add(r.action_id);
+      expired.push({ action_id: r.action_id, kind: r.kind, project_code: r.project_code });
+    }
+    return { expired };
+  } catch (e) {
+    console.error("[switchboard-runner] expired read failed:", messageOf(e));
+    return {};
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -724,7 +756,7 @@ const linkIdOf = (payload: Record<string, unknown> | null | undefined) =>
  * refused naming the fix; a read that throws leaves the pick open, so the helper's retry with the same pickup_id gets
  * the same action and reads again.
  */
-async function sfRunPickup(action: PickedAction, deps: Deps, now: number, timedOut: string[]): Promise<Response> {
+async function sfRunPickup(action: PickedAction, deps: Deps, now: number, extra: Record<string, unknown>): Promise<Response> {
   const linkId = linkIdOf(action.payload);
   const link = linkId ? await deps.runLink(linkId, deps.userId) : null;
   const request = link && typeof link.request_id === "string" ? await deps.runRequest(link.request_id, deps.userId) : null;
@@ -734,10 +766,10 @@ async function sfRunPickup(action: PickedAction, deps: Deps, now: number, timedO
     await deps.finishRun(action.run_id, { summary: error.slice(0, MAX_SUMMARY), result: { ok: false }, finished_at: new Date(now).toISOString() });
     await deps.setStatus(action.action_id, "failed");
     return json({ ok: false, error, action_id: action.action_id, run_id: action.run_id, project_code: action.project_code,
-                  ...(linkId ? { line: sfRunLine(linkId, false) } : {}), timed_out: timedOut }, 409);
+                  ...(linkId ? { line: sfRunLine(linkId, false) } : {}), ...extra }, 409);
   }
   const { token_hash: _hash, ...shown } = link;
-  return json({ ok: true, action: { ...action, link: shown, request }, timed_out: timedOut });
+  return json({ ok: true, action: { ...action, link: shown, request }, ...extra });
 }
 
 /** The pre-check's check names and orgs, as switchboard_record_run_evidence (251) takes them. */

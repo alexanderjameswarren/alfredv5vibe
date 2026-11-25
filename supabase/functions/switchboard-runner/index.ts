@@ -37,6 +37,10 @@ import {
 //                  A picked sf_run comes with link (its switchboard_run_links row by payload.link_id, without
 //                  token_hash) and request (that link's switchboard_run_requests row, whole); a missing one fails the
 //                  action and answers 409 with the fix. sf_run picks get 4 hours.
+//                  s6 (M): every reply adds expired: [{action_id, kind, project_code}], the helper-kind actions whose
+//                  run was closed with failure_reason expired_not_picked_up in the last 24 hours (by a pickup, or a
+//                  run page's resend), read after the pickup function returns. Repeats are expected (the helper
+//                  de-dupes by action id); left out if the read fails twice. An older helper ignores it.
 //   POST /pending  x-switchboard-pickup-key. {} -> { ok, clear, unpicked: [{action_id, kind, project_code, status,
 //                  approved_at, stale}], unreported: [{action_id, run_id, kind, project_code, picked_up_at, stale}] }.
 //                  Read-only, for B's reinstall check at Alex's click, never on a timer. An unpicked stale one never
@@ -170,6 +174,17 @@ function deps(): Deps {
         : [];
       const picked = pickedRows.map((a) => ({ ...a, run_id: runs.find((r) => r.action_id === a.id)?.id ?? null }));
       return { unpicked, picked };
+    },
+    expiredSince: async (userId, since) => {
+      // s6 (M): the run rows 247's and 248's pickups close for an approval never picked up, then their actions.
+      const runs = must(await db.from("switchboard_runs").select("action_id").eq("user_id", userId)
+        .eq("failure_reason", "expired_not_picked_up").gte("finished_at", since)
+        .order("finished_at", { ascending: false }).limit(200)) as { action_id: string }[];
+      if (!runs.length) return [];
+      const actions = must(await db.from("switchboard_actions").select("id, kind, project_code").eq("user_id", userId)
+        .in("id", [...new Set(runs.map((r) => r.action_id))]).in("kind", [...HELPER_KINDS])) as
+        { id: string; kind: string; project_code: string }[];
+      return actions.map((a) => ({ action_id: a.id, kind: a.kind, project_code: a.project_code }));
     },
     stalePicks: async (userId, before, dataopBefore) => {
       // sf_dataop, sf_dataquery and sf_datawrite (LONG_PICK_KINDS) get 4 hours; every other helper kind 30 minutes.

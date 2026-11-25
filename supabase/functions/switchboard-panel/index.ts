@@ -13,12 +13,16 @@ import { type Deps, handle } from "./core.ts";
 //   live_link (sb3_runner-r4q s5): null, or { kind, expires_at, chat_url } for the project's newest action with a live
 //   link as 189 defines one (link_issued, link_hash set, link_used_at null, link_expires_at > now). kind as 227 names
 //   it (sf_deploy and sf_test are deploy). The hash is filtered on, never selected.
+//   s6 (L3d): otherwise the project's newest pending /run/ or /review/ link from switchboard_run_links (not used, not
+//   voided; a review link only while its review is open), project from its request: { kind: sf_run | sf_review,
+//   expires_at: null, chat_url: null }. A live git-style link wins over a run link. A failed run-link read leaves them out.
 //
 // ⚠️ verify_jwt must be false in config.toml: the panel has no user token, so this checks SWITCHBOARD_PANEL_KEY itself.
 // After every deploy a GET without the key must come back 401 with this function's own body.
 // ⚠️ THE SERVICE ROLE BYPASSES RLS, so every query filters on user_id, from CLIPBOARD_USER_ID. This file only reads.
 
 const LIMIT = 500;
+type RunLink = { id: string; request_id: string; review_id: string | null; used_at: string | null; voided_at: string | null; created_at: string };
 
 function deps(): Deps {
   const db = createServiceClient();
@@ -49,6 +53,19 @@ function deps(): Deps {
       must(await from("switchboard_actions", "project_code, kind, status, link_expires_at, link_used_at, chat_url")
         .eq("status", "link_issued").not("link_hash", "is", null).is("link_used_at", null).gt("link_expires_at", nowIso)
         .order("link_expires_at", { ascending: false }).limit(LIMIT)),
+    // Run links, and review links of open reviews only: a review link is never used, so closed ones would pile up.
+    runLinks: async () => [
+      ...must<RunLink[]>(await from("switchboard_run_links", "id, request_id, review_id, used_at, voided_at, created_at")
+        .is("used_at", null).is("voided_at", null).is("review_id", null).order("created_at", { ascending: false }).limit(LIMIT)),
+      ...must<RunLink[]>(await from("switchboard_run_links",
+        "id, request_id, review_id, used_at, voided_at, created_at, switchboard_code_reviews!inner(status)")
+        .is("used_at", null).is("voided_at", null).not("review_id", "is", null).eq("switchboard_code_reviews.status", "open")
+        .order("created_at", { ascending: false }).limit(LIMIT)),
+    ].map(({ id, request_id, review_id, used_at, voided_at, created_at }) => ({ id, request_id, review_id, used_at, voided_at, created_at })),
+    runRequests: async (ids) =>
+      (ids.length ? must(await from("switchboard_run_requests", "id, project_code").in("id", ids)) : []),
+    codeReviews: async (ids) =>
+      (ids.length ? must(await from("switchboard_code_reviews", "id, status").in("id", ids)) : []),
   };
 }
 
