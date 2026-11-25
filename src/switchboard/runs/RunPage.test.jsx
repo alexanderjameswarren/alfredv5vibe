@@ -88,13 +88,14 @@ describe('the run page, on sample data', () => {
     await screen.findByTestId('run-sent');
     expect(container.querySelector('[data-switchboard-run-id]')).toBeNull();
     expect(container.querySelector('[data-switchboard-status]')).toBeNull();
-    expect(screen.getByTestId('run-result-line')).toHaveTextContent('SIMULATION run sim-dataop-update');
+    // A write approval: the bare line, no outcome word (s12b).
+    expect(screen.getByTestId('run-result-line')).toHaveTextContent(/chat\.SIMULATION run sim-dataop-update$/);
   });
 });
 
 describe('the red bar and the Approve button always appear together', () => {
   // These offer no buttons at all (closed, used, or a rerun already asked for); their own tests are below.
-  const approvable = scenarioNames().filter((n) => !['undo-closed', 'run-picked-up', 'run-finished', 'dataop-update-rerun-waiting'].includes(n));
+  const approvable = scenarioNames().filter((n) => !['undo-closed', 'run-picked-up', 'run-finished', 'run-finished-outcome', 'run-stopped-outcome', 'dataop-update-rerun-waiting'].includes(n));
   test.each(approvable)('%s, desktop ready, then approved', async (name) => {
     await open(name, { desktop: ['running'] });
     together();
@@ -523,6 +524,13 @@ describe('A5: screen d, the correction page', () => {
     expect(screen.getByTestId('run-approve')).toHaveTextContent('Approve this run on PRODUCTION and SANDBOX');
   });
 
+  test('a correction Approve runs its reruns: its result line is "run <id> reruns" (s12b)', async () => {
+    await open('correction-field');
+    fireEvent.click(screen.getByTestId('run-approve'));
+    await screen.findByTestId('run-sent');
+    expect(screen.getByTestId('run-result-line')).toHaveTextContent(/chat\.SIMULATION run sim-correction-field reruns$/);
+  });
+
   test('a wording-only edit has no page of its own: the next page carries the block', async () => {
     await open('dataop-update-wording');
     expect(screen.getByTestId('run-phase-header')).toHaveTextContent('Data operation');
@@ -587,6 +595,44 @@ describe('A5: not started, checks expired, check what happened', () => {
     expect(screen.getByTestId('run-used')).toHaveTextContent(words);
     expect(screen.queryByRole('button')).toBeNull();
     together();
+  });
+
+  test('s17: the outcome, below the status: the changed count, then Before, Goal and After with knock-on rows last', async () => {
+    render(<RunPage source={simSource('run-finished-outcome')} />);
+    const box = await screen.findByTestId('run-outcome');
+    expect(screen.getByTestId('run-outcome-changed')).toHaveTextContent('Changed: 45 records');
+    const rows = screen.getAllByTestId('run-outcome-row');
+    expect(rows.map((r) => r.dataset.knockOn)).toEqual(['false', 'false', 'true']);
+    expect(rows.map((r) => [...r.querySelectorAll('td')].map((td) => td.textContent))).toEqual([
+      ['Gifts in the list with no campaign', '45', '0', '0'],
+      ['Gifts in the list on another campaign', '0', '0', '0'],
+      ['Knock-on: Donor rollups recalculated', '0', '12', '12'],
+    ]);
+    // Only the named parts: nothing else in the outcome is shown, and no stop block.
+    expect(box).not.toHaveTextContent('exit_code');
+    expect(screen.queryByTestId('run-outcome-stopped')).toBeNull();
+    // Below the status line.
+    const status = screen.getByTestId('run-status');
+    expect(status.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  test('s17: a stopped run: what already changed and what is saved on the PC', async () => {
+    render(<RunPage source={simSource('run-stopped-outcome')} />);
+    const stopped = await screen.findByTestId('run-outcome-stopped');
+    expect(stopped).toHaveTextContent('Stopped. Already changed: 20 records');
+    expect([...stopped.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
+      'data-ops/demo_gift_campaign-x1y/2026-11-23/backup.csv', 'data-ops/demo_gift_campaign-x1y/2026-11-23/results.csv']);
+  });
+
+  test('s17: no outcome, or none on a page that writes nothing: nothing shown', async () => {
+    const { unmount } = render(<RunPage source={simSource('run-finished')} />);
+    await screen.findByTestId('run-used');
+    expect(screen.queryByTestId('run-outcome')).toBeNull();
+    unmount();
+    render(<RunPage source={simSource('precheck-ids')} />);
+    await screen.findByTestId('run-headline');
+    expect(screen.queryByTestId('run-outcome')).toBeNull();
   });
 
   test('a rerun already asked for: no second rerun, no expired note', async () => {

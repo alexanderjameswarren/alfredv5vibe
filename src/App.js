@@ -4,12 +4,16 @@ import Alfred from './Alfred';
 import OAuthConsent from './OAuthConsent';
 import SendFromDesktop from './switchboard/SendFromDesktop';
 import ApprovePage from './switchboard/ApprovePage';
+import { RunErrorBoundary } from './switchboard/runs/look';
 
 // Dev server only (dataops_alfred-d4x s6b): the approve page with a sample payload and a fake runner. CRA sets
 // NODE_ENV to "production" in a build, so webpack drops this branch and its import, and the build has no such route.
 const ApproveFixture = process.env.NODE_ENV !== 'production' ? lazy(() => import('./switchboard/ApproveFixture')) : null;
 // Dev server only (sb3_pages-h6v A2): the Switchboard 3 run page on made-up data. Dropped from a build the same way.
 const RunSimulation = process.env.NODE_ENV !== 'production' ? lazy(() => import('./switchboard/runs/RunSimulation')) : null;
+// sb3_pages-h6v B4: the live Switchboard 3 run and code review pages, beside today's /approve/ pages.
+const RunRoute = lazy(() => import('./switchboard/runs/LiveRunRoute').then((m) => ({ default: m.RunRoute })));
+const ReviewRoute = lazy(() => import('./switchboard/runs/LiveRunRoute').then((m) => ({ default: m.ReviewRoute })));
 
 // Step 2 of docs/technical-spec-navigation-urls.md: mount the router and
 // change nothing else. This replaces the hard-coded
@@ -28,6 +32,9 @@ function App() {
         <Route path="/oauth/consent" element={<OAuthConsent />} />
         <Route path="/send/:runTag" element={<SendFromDesktop />} />
         <Route path="/approve/:token" element={<ApprovePage />} />
+        {/* s16b: the boundary sits outside the lazy load, so a failed LiveRunRoute chunk shows its message, not a blank page. */}
+        <Route path="/run/:token" element={<RunErrorBoundary><Suspense fallback={null}><RunRoute /></Suspense></RunErrorBoundary>} />
+        <Route path="/review/:token" element={<RunErrorBoundary><Suspense fallback={null}><ReviewRoute /></Suspense></RunErrorBoundary>} />
         {ApproveFixture && process.env.NODE_ENV !== 'production' && (
           <Route path="/approve-fixture/:kind" element={<Suspense fallback={null}><ApproveFixture /></Suspense>} />
         )}

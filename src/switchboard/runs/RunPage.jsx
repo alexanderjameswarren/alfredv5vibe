@@ -1,12 +1,13 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import {
-  BUTTON, NOT_READY_BOX, OrgBanners, OrgPill, PANEL, ReasonInput, ResultLine, RunShell, SECOND_BUTTON, isSimulation, localTime, shortHash,
+  BUTTON, NOT_READY_BOX, OrgBanners, OrgPill, PANEL, ReasonInput, ResultLine, RunShell, SECOND_BUTTON, isSimulation, localTime, refusalNote,
+  shortHash,
 } from './look';
 import {
   PHASE_HEADERS, RERUN_LABEL, STOPS_AT_FIRST_FAILURE, afterApproveLines, approveLabel, bannerLines, checkWord, clientOrgLine,
   countDetail, countSentence, daysLeftLine, groupedSteps, knockOnLines, notStarted, pageExpired, phaseWord, rehearsalOrg,
-  rerunRequest, selectedByText, runCancelledLine, runLine, runResentLine, sampleRoleLabel, stillValid, targetOrg, undoClosedReason,
-  undoHasDeadline, undoLine, undoScopeLine, validUntil, whatChanges,
+  rerunRequest, selectedByText, runCancelledLine, runLine, runRerunsLine, runResentLine, sampleRoleLabel, stillValid, targetOrg, undoClosedReason,
+  outcomeView, undoHasDeadline, undoLine, undoScopeLine, validUntil, whatChanges,
 } from './runContract';
 import { desktopLine, notReadyReason } from './desktopCheck';
 
@@ -141,6 +142,54 @@ function ChangedBlock({ changed }) {
 }
 
 /** Part 10: the sample record, now and after. Not on the pre-check, which reads it. */
+const records = (v) => `${v.toLocaleString('en-US')} ${v === 1 ? 'record' : 'records'}`;
+
+/**
+ * s17: a data operation's or undo's outcome, below the status: only the parts outcomeView names, and only once this
+ * link is used (the database returns it only on the link whose run recorded it).
+ */
+function Outcome({ r, outcome, used }) {
+  const view = used && ['dataop', 'undo'].includes(r.page) ? outcomeView(outcome) : null;
+  if (!view) return null;
+  const shown = (v) => (v === null ? '' : typeof v === 'number' ? v.toLocaleString('en-US') : v);
+  return (
+    <section data-testid="run-outcome" className={PANEL}>
+      <h2 className="text-lg font-bold mb-2">What the run did</h2>
+      {view.changed !== null && <p data-testid="run-outcome-changed" className="m-0 mb-2 font-medium">Changed: {records(view.changed)}</p>}
+      {view.rows.length > 0 && (
+        <div className="mb-2 overflow-x-auto">
+          <table className="w-full border-collapse">
+            <thead><tr className="text-left border-b border-border"><th className="pr-3 py-1 font-medium">Check</th><th className="pr-3 py-1 font-medium">Before</th><th className="pr-3 py-1 font-medium">Goal</th><th className="py-1 font-medium">After</th></tr></thead>
+            <tbody>
+              {view.rows.map((row, i) => (
+                // eslint-disable-next-line react/no-array-index-key -- labels can repeat; the order is fixed
+                <tr key={i} data-testid="run-outcome-row" data-knock-on={row.knock_on ? 'true' : 'false'} className="border-b border-border">
+                  <td className="pr-3 py-1 break-words">{row.knock_on ? `Knock-on: ${row.label}` : row.label}</td>
+                  <td className="pr-3 py-1">{shown(row.before)}</td><td className="pr-3 py-1">{shown(row.goal)}</td><td className="py-1">{shown(row.after)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {view.stopped && (
+        <div data-testid="run-outcome-stopped">
+          {view.stopped.already_changed !== null && <p className="m-0 mb-1 font-medium">Stopped. Already changed: {records(view.stopped.already_changed)}</p>}
+          {view.stopped.saved_on_pc.length > 0 && (
+            <>
+              <p className="m-0">Saved on the PC:</p>
+              <ul className="list-disc pl-6 m-0 break-all">{view.stopped.saved_on_pc.map((s, i) => (
+                // eslint-disable-next-line react/no-array-index-key -- a path can repeat; the order is fixed
+                <li key={i} className="font-mono">{s}</li>
+              ))}</ul>
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SampleRecord({ r, sample }) {
   if (['precheck', 'correction', 'check'].includes(r.page) || !sample?.records?.length) return null;
   return (
@@ -240,6 +289,9 @@ function Details({ details, runTag }) {
   );
 }
 
+/** B4: the function's own line when its reply has one (a simulation's carries "SIMULATION "), else the page's. */
+const lineOf = (reply, fallback) => (typeof reply?.line === 'string' && reply.line ? reply.line : fallback);
+
 export default function RunPage({ source }) {
   const sim = isSimulation(source);
   const [loaded, setLoaded] = useState(null);
@@ -288,10 +340,14 @@ export default function RunPage({ source }) {
   // Picked up or finished: the link is used, so the page only reports.
   const used = Boolean(run?.consumed_at) && Boolean(run?.picked_up_at || run?.finished_at);
   // A rerun asked for and not yet passed: the evidence is still old, but a second rerun is refused (part 5).
-  const rerunWaiting = Boolean(r?.rerun_at) && expired && !run?.consumed_at;
+  // B4: the real source marks a rerun (a correction's Approve too) approved and not yet finished as rerun_pending.
+  const rerunWaiting = (Boolean(r?.rerun_at) && expired && !run?.consumed_at) || r?.rerun_pending === true;
   // The one action this page offers: Approve; once the checks expired, the rerun (its own approval); after a run
   // that never started, the resend.
-  const mode = closed || waiting || used || rerunWaiting ? null : expired ? 'rerun' : unpicked ? 'resend' : 'approve';
+  const offered = closed || waiting || used || rerunWaiting ? null : expired ? 'rerun' : unpicked ? 'resend' : 'approve';
+  // s16: the real source marks a write whose shown count isn't the database's; that page offers no Approve.
+  const countRefused = offered === 'approve' && typeof r?.count_mismatch === 'string' ? r.count_mismatch : null;
+  const mode = countRefused ? null : offered;
   const quiet = waiting || used || rerunWaiting;
   // One value decides both the action button and the red bar.
   const canApprove = Boolean(r) && Boolean(mode) && ready && !sent && !cancelled;
@@ -337,7 +393,7 @@ export default function RunPage({ source }) {
       else if (mode === 'resend') setSent(await source.resend());
       else setSent(await source.approve());
     } catch (e) {
-      setNote(`${e instanceof Error ? e.message : String(e)} Nothing was approved.`);
+      setNote(refusalNote(e, 'Nothing was approved.'));
     }
   });
 
@@ -358,7 +414,7 @@ export default function RunPage({ source }) {
     try {
       setCancelled(await source.cancel(reason));
     } catch (e) {
-      setNote(`${e instanceof Error ? e.message : String(e)} Nothing ran; try again.`);
+      setNote(refusalNote(e, 'Nothing ran; try again.'));
     }
   });
 
@@ -385,6 +441,7 @@ export default function RunPage({ source }) {
       {sentence && <p data-testid="run-count-sentence" className="text-2xl font-bold text-dark mb-3 break-words">{sentence}</p>}
       <ProblemBox r={r} closed={closed} />
       <StatusLine r={r} run={used ? run : null} closed={closed} />
+      <Outcome r={r} outcome={loaded.outcome} used={used} />
       <ChangedBlock changed={r.changed} />
       <SampleRecord r={r} sample={loaded.sample} />
       {undo && <p data-testid="run-undo" className="mb-4 text-dark font-medium break-words">{undo}</p>}
@@ -397,6 +454,9 @@ export default function RunPage({ source }) {
           {/* Expired, sent or not run: no fix to offer, since nothing can be approved here. */}
           {desktopLine(desktop, rechecked, { fix: ready || !desktop })}
         </p>
+      )}
+      {countRefused && !sent && !cancelled && (
+        <p data-testid="run-count-mismatch" role="alert" className="mb-4 text-dark break-words">{countRefused}</p>
       )}
       {expired && !closed && !quiet && !sent && !cancelled && !unpicked && (
         <p data-testid="run-expired" className="mb-4 text-dark break-words">
@@ -450,7 +510,7 @@ export default function RunPage({ source }) {
         <div data-testid="run-cancelled" className={PANEL}>
           <p className="font-medium m-0 mb-1">Not run</p>
           <p className="m-0 mb-3 break-words">{cancelled.reason || 'No reason given.'}</p>
-          <ResultLine line={runCancelledLine(linkId, cancelled.reason)} sim={sim} />
+          <ResultLine line={lineOf(cancelled, runCancelledLine(linkId, cancelled.reason))} sim={sim} />
         </div>
       ) : closed ? (
         // After the undo deadline: why, and no buttons.
@@ -461,13 +521,15 @@ export default function RunPage({ source }) {
       ) : quiet ? null : sent ? (
         <div data-testid="run-sent" data-mode={mode} className={PANEL}>
           <p className="font-medium m-0 mb-1">
-            {sim ? 'Simulated: ' : ''}{sent.rerun ? 'The pre-check and rehearsal were sent to the desktop helper' : sent.resent ? 'Resent to the desktop helper' : 'Sent to the desktop helper'}
+            {sim ? 'Simulated: ' : ''}{sent.rerun ? 'The pre-check and rehearsal were sent to the desktop helper' : sent.as_rerun ? 'The checks to run again were sent to the desktop helper' : sent.resent ? 'Resent to the desktop helper' : 'Sent to the desktop helper'}
           </p>
           <p className="m-0 mb-3 break-words">
             {sim ? 'Nothing was sent: this is a simulation, and no org was touched. ' : 'It must pick the run up within 15 minutes. '}
-            {sent.rerun ? 'Once they pass, this same page offers the data operation.' : ''}
+            {sent.rerun || sent.as_rerun ? 'Once they pass, this same page offers the data operation.' : ''}
           </p>
-          <ResultLine line={sent.resent ? runResentLine(linkId) : runLine(linkId)} sim={sim} />
+          {/* as_rerun on an Approve: the database recorded a correction's Approve as its reruns (251), not the write.
+              The expired-checks rerun (mode rerun) also replies as_rerun, and keeps the bare line. */}
+          <ResultLine line={lineOf(sent, sent.resent ? runResentLine(linkId) : mode === 'approve' && sent.as_rerun && !sent.rerun ? runRerunsLine(linkId) : runLine(linkId))} sim={sim} />
         </div>
       ) : (
         <>

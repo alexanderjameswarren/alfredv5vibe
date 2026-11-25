@@ -4,9 +4,36 @@ import '@testing-library/jest-dom';
 import {
   afterApproveLines, approveLabel, bannerLines, clientOrgLine, checkLine, checksExpired, codeReviewProblems, countSentence, EDIT_RERUNS, GROUPS, groupedSteps,
   LINE_TEXT_MAX, lineText, requestProblems, reviewChangesLine, reviewQuestionLine, reviewReviewedLine, runCancelledLine, runLine,
-  rerunSteps, runRerunsLine, runResentLine, selectedByText, STEPS, undoClosedReason, undoLine, validUntil, whatChanges,
+  rerunSteps, runRerunsLine, runResentLine, selectedByText, STEPS, statusFromEvidence, undoClosedReason, undoLine, validUntil, whatChanges,
+  WRITE_CHECKS, outcomeView,
 } from './runContract';
 import { BUTTON, RunShell, SECOND_BUTTON, localTime } from './look';
+
+describe('outcomeView (s17): only the named parts, a missing or malformed part left out', () => {
+  test('nothing to show: null', () => {
+    for (const o of [null, undefined, 'done', [1], {}, { raw: 1 }, { changed: -1 }, { changed: 1.5, rows: 'x' }, { stopped: {} }]) {
+      expect(outcomeView(o)).toBeNull();
+    }
+  });
+  test('the changed count, rows with knock-on last, and the stop', () => {
+    const v = outcomeView({
+      changed: 3, extra: 'never shown',
+      rows: [{ label: 'K', before: 0, goal: 1, after: 1, knock_on: true }, { label: 'A', before: 3, goal: 0, after: 0 }, { before: 1 }, null,
+        { label: 'B', before: { x: 1 }, goal: 'none', after: null }],
+      stopped: { already_changed: 2, saved_on_pc: 'backup.csv' },
+    });
+    expect(v).toEqual({
+      changed: 3,
+      rows: [{ label: 'A', before: 3, goal: 0, after: 0, knock_on: false }, { label: 'B', before: null, goal: 'none', after: null, knock_on: false },
+        { label: 'K', before: 0, goal: 1, after: 1, knock_on: true }],
+      stopped: { already_changed: 2, saved_on_pc: ['backup.csv'] },
+    });
+  });
+  test('a stop with only saved files, or only a count', () => {
+    expect(outcomeView({ stopped: { saved_on_pc: ['a.csv', 7, ''] } }).stopped).toEqual({ already_changed: null, saved_on_pc: ['a.csv'] });
+    expect(outcomeView({ stopped: { already_changed: 0 } }).stopped).toEqual({ already_changed: 0, saved_on_pc: [] });
+  });
+});
 
 jest.mock('../../supabaseClient', () => ({ supabaseUrl: 'https://db.example', supabaseAnonKey: 'anon', supabase: { auth: {} } }));
 
@@ -325,5 +352,42 @@ describe('"Before the write": the login check names what it checks', () => {
     expect(text({ kind: 'insert', object: 'Gift__c', object_label: 'Gift' })).toBe('Confirm the login can still create Gift records.');
     expect(text({ kind: 'delete', object: 'Gift__c' })).toBe('Confirm the login can still delete Gift__c records.');
     expect(text({ kind: 'undelete', object: 'Gift__c', object_label: 'Gift' })).toBe('Confirm the login can still restore Gift records.');
+  });
+});
+
+describe('B4: the status from the evidence, never the chat', () => {
+  const at = (h) => new Date(Date.parse('2026-11-24T12:00:00Z') - h * 3600000).toISOString();
+  const all = (h) => WRITE_CHECKS.map((check) => ({ check, org: check === 'rehearsal' ? 'sandbox' : 'production', passed_at: at(h) }));
+
+  test('a data operation: passed at the newest check in use when every write check is; waiting otherwise', () => {
+    const evidence = [...all(3), { check: 'count', passed_at: at(1) }].map((e, i) => (i === 0 ? { ...e, voided: true } : e));
+    const r = statusFromEvidence({ page: 'dataop', evidence, phases: [{ name: 'x', state: 'passed' }] });
+    expect(r.phases).toEqual([{ name: 'Pre-check and rehearsal', state: 'passed', at: at(1) }, { name: 'Data operation', state: 'waiting' }]);
+    const missing = statusFromEvidence({ page: 'dataop', evidence: all(3).filter((e) => e.check !== 'backup') });
+    expect(missing.phases).toEqual([{ name: 'Pre-check and rehearsal', state: 'waiting' }, { name: 'Data operation', state: 'not_started' }]);
+  });
+
+  test('a pass after a rerun was asked for says so', () => {
+    expect(statusFromEvidence({ page: 'dataop', evidence: all(1), rerun_at: at(2) }).phases[0].rerun).toBe(true);
+    expect(statusFromEvidence({ page: 'dataop', evidence: all(3), rerun_at: at(2) }).phases[0].rerun).toBeUndefined();
+  });
+
+  test("a correction: waiting, and Still valid is every check in use with its own time, whatever the chat sent", () => {
+    const evidence = [{ check: 'count', passed_at: at(2) }, { check: 'login', passed_at: at(2), voided: true }];
+    const r = statusFromEvidence({ page: 'correction', evidence, changed: { edit_kind: 'field', still_valid: [{ check: 'backup', passed_at: at(0) }] } });
+    expect(r.phases[0]).toEqual({ name: 'Pre-check and rehearsal', state: 'waiting' });
+    expect(r.changed).toEqual({ edit_kind: 'field', still_valid: [{ check: 'count', passed_at: at(2) }] });
+  });
+
+  test('Still valid leaves out a check that has passed again since the correction', () => {
+    const evidence = [{ check: 'count', passed_at: at(3) }, { check: 'backup', passed_at: at(0) }];
+    const r = statusFromEvidence({ page: 'correction', corrected_at: at(1), evidence, changed: {} });
+    expect(r.changed.still_valid).toEqual([{ check: 'count', passed_at: at(3) }]);
+  });
+
+  test('an undo or check page, and no request, are left as they are', () => {
+    const undo = { page: 'undo', phases: [{ name: 'Undo', state: 'waiting' }] };
+    expect(statusFromEvidence(undo)).toBe(undo);
+    expect(statusFromEvidence(null)).toBeNull();
   });
 });

@@ -337,6 +337,35 @@ export const SCENARIOS = {
     title: 'Approved, picked up and finished',
     build: (now) => ({ ...SCENARIOS['dataop-update'].build(now), run: { consumed_at: iso(now - 40 * MIN), picked_up_at: iso(now - 39 * MIN), finished_at: iso(now - 30 * MIN) } }),
   },
+  // s17: the write's outcome, as its run recorded it (254). Only the parts the page names; knock-on rows come last.
+  'run-finished-outcome': {
+    title: 'Finished, with its outcome',
+    build: (now) => ({
+      ...SCENARIOS['run-finished'].build(now),
+      outcome: {
+        changed: 45,
+        rows: [
+          { label: 'Donor rollups recalculated', before: 0, goal: 12, after: 12, knock_on: true },
+          { label: 'Gifts in the list with no campaign', before: 45, goal: 0, after: 0 },
+          { label: 'Gifts in the list on another campaign', before: 0, goal: 0, after: 0 },
+        ],
+        // Not a part the page names: never shown.
+        raw: { exit_code: 0 },
+      },
+    }),
+  },
+  'run-stopped-outcome': {
+    title: 'Stopped part way, with its outcome',
+    build: (now) => ({
+      ...SCENARIOS['dataop-update'].build(now),
+      run: { consumed_at: iso(now - 40 * MIN), picked_up_at: iso(now - 39 * MIN), finished_at: iso(now - 30 * MIN), failure_reason: 'stopped' },
+      outcome: {
+        changed: 20,
+        rows: [{ label: 'Gifts in the list with no campaign', before: 45, goal: 0, after: 25 }],
+        stopped: { already_changed: 20, saved_on_pc: [`data-ops/${CODE}/2026-11-23/backup.csv`, `data-ops/${CODE}/2026-11-23/results.csv`] },
+      },
+    }),
+  },
   // A5: checks expired, and the same page after the pre-check ran again.
   'dataop-update-expired': {
     title: 'Data operation, checks expired: run the pre-check and rehearsal again',
@@ -413,11 +442,15 @@ export function simSource(name, { now = Date.now(), desktop } = {}) {
   return {
     kind: 'sim',
     name,
-    load: async () => ({ link_id: linkId, request: built.request, sample: built.sample ?? null, run: built.run ?? null }),
+    load: async () => ({ link_id: linkId, request: built.request, sample: built.sample ?? null, run: built.run ?? null, outcome: built.outcome ?? null }),
     checkDesktop: async () => {
       return simulatedState(answers.length > 1 ? answers.shift() : answers[0]);
     },
-    approve: async () => ({ sent: true, link_id: linkId }),
+    // A write's correction Approve is its reruns, as the database records it (251: as_rerun); a pre-check's isn't.
+    approve: async () => ({
+      sent: true, link_id: linkId,
+      ...(built.request?.page === 'correction' && built.request?.base_page !== 'precheck' ? { as_rerun: true } : {}),
+    }),
     // Checks expired: the rerun click is its own approval (spec part 5, rerun mode).
     rerun: async () => ({ sent: true, rerun: true, link_id: linkId }),
     // Not started: resend the same run, same link id (spec 4.5).

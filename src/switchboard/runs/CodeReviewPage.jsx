@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import {
   BUTTON, DIFF_ADD, DIFF_DEL, DIFF_ROW, LINK_BUTTON, LOCKED_INPUT, LOCKED_TICK, NOTE_BOX, NOT_READY_BOX, PANEL, REASON_INPUT, ResultLine, RunShell,
-  SECOND_BUTTON, isSimulation, localTime, shortHash,
+  SECOND_BUTTON, isSimulation, localTime, refusalNote, shortHash,
 } from './look';
 import { REVIEW_TEXT_MAX, codeReviewProblems, reviewChangesLine, reviewQuestionLine, reviewReviewedLine } from './runContract';
 import { desktopLine, notReadyReason } from './desktopCheck';
@@ -96,6 +96,9 @@ function FileDiff({ file, notes }) {
   );
 }
 
+/** B4: the function's own line when its reply has one (a simulation's carries "SIMULATION "), else the page's. */
+const lineOf = (reply, fallback) => (typeof reply?.line === 'string' && reply.line ? reply.line : fallback);
+
 export default function CodeReviewPage({ source }) {
   const sim = isSimulation(source);
   const [loaded, setLoaded] = useState(null);
@@ -119,6 +122,9 @@ export default function CodeReviewPage({ source }) {
         setLoaded(page);
         // Acknowledgements kept from an earlier visit (or an earlier question) come with the review.
         setAcks(page.review?.acknowledged ?? {});
+        // B4: a review already answered (a revisit) shows its answer, with nothing to click.
+        if (page.review?.status === 'reviewed') setDone('reviewed');
+        else if (page.review?.status === 'changes_required') setDone('changes');
         const d = await source.checkDesktop().catch(() => NO_ANSWER);
         if (live) setDesktop(d);
       } catch (e) {
@@ -134,7 +140,7 @@ export default function CodeReviewPage({ source }) {
     inFlight.current = true;
     setBusy(true);
     setNote(null);
-    try { await fn(); } catch (e) { setNote(`${e instanceof Error ? e.message : String(e)} Nothing was sent.`); } finally { inFlight.current = false; setBusy(false); }
+    try { await fn(); } catch (e) { setNote(refusalNote(e, 'Nothing was sent.')); } finally { inFlight.current = false; setBusy(false); }
   };
 
   const cr = loaded?.review;
@@ -167,24 +173,24 @@ export default function CodeReviewPage({ source }) {
     const a = acksNow.current;
     if (d.answer !== 'running' || !forYou.every((f) => a[f.id])) return;
     const line = reviewReviewedLine(linkId);
-    await source.reviewed(a);
-    setLines((l) => [...l, line]);
+    const out = await source.reviewed(a);
+    setLines((l) => [...l, lineOf(out, line)]);
     setDone('reviewed');
   });
   // The ticks and notes go with every answer, so they are kept on the review across questions and visits.
   const question = once(async () => {
     const t = text.trim();
     const line = reviewQuestionLine(linkId, t);
-    await source.question(t, acksNow.current);
+    const out = await source.question(t, acksNow.current);
     // The review stays open on the same commit; the ticks are kept.
-    setLines((l) => [...l, line]);
+    setLines((l) => [...l, lineOf(out, line)]);
     setText('');
   });
   const changes = once(async () => {
     const t = text.trim();
     const line = reviewChangesLine(linkId, t);
-    await source.changes(t, acksNow.current);
-    setLines((l) => [...l, line]);
+    const out = await source.changes(t, acksNow.current);
+    setLines((l) => [...l, lineOf(out, line)]);
     setDone('changes');
   });
 

@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-24 21:24, through migration 252 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-25 06:18, through migration 254 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -9693,6 +9693,7 @@ declare
   v_o       jsonb;
   v_diff    text[];
   v_base    jsonb;
+  v_wrote   uuid;
   -- Words only: what every kind may change (250's wording rule), what the database sets, and (252) the base steps
   -- and phases the database keeps.
   c_words   constant text[] := array['headline', 'side_effects', 'problem', 'diagnosis_allows', 'changed', 'page', 'id', 'version',
@@ -9709,6 +9710,32 @@ begin
   select * into v_row from public.switchboard_run_requests where id = p_request_id and user_id = v_user for update;
   if not found then
     raise exception 'switchboard_correct_run_request: no such request.' using errcode = 'P0002';
+  end if;
+  -- 254 (s17b, Alex's option A): once a write on a data operation or undo has started, or may still start, the request
+  -- can't be corrected, whatever the kind; a further change is a new request through diagnosis, with its own pre-check.
+  -- Started or may still start: a link's approved action (link.action_id, the write; a rerun never sets it) that was
+  -- picked up, has a run other than one marked expired_not_picked_up, or is still consumed within its 15 minutes. A
+  -- write that never started (failed as expired_not_picked_up, or consumed, unpicked and past 15 minutes) leaves the
+  -- request correctable. Consume locks the request first, so an Approve and a correction never cross; a pickup locks
+  -- only its action, so every approved action of the request is locked first and read after any pickup commits.
+  if v_row.base_page in ('dataop', 'undo') then
+    perform 1 from public.switchboard_actions a
+     where a.id in (select l.action_id from public.switchboard_run_links l where l.request_id = v_row.id and l.action_id is not null)
+       for update;
+    select a.id into v_wrote
+      from public.switchboard_run_links l
+      join public.switchboard_actions a on a.id = l.action_id
+     where l.request_id = v_row.id
+       and (a.picked_up_at is not null
+            or exists (select 1 from public.switchboard_runs r
+                        where r.action_id = a.id and r.failure_reason is distinct from 'expired_not_picked_up')
+            or (a.status = 'consumed' and a.created_at >= now() - interval '15 minutes'))
+     order by a.created_at desc, a.id desc
+     limit 1;
+    if v_wrote is not null then
+      raise exception 'switchboard_correct_run_request: a production write already ran on this request (action %); queue a new request through diagnosis. No link was issued.', v_wrote
+        using errcode = '55000';
+    end if;
   end if;
   -- The checks each edit runs again (runContract.js EDIT_RERUNS; Alex s7, s8b: a field reruns the backup and sample).
   v_reruns := case p_edit_kind
@@ -9908,7 +9935,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") IS 'Switchboard 3: correct a run request (part 5 "Corrected"). Refuses an object or operation edit (a new request through diagnosis), and (s12c) any change to pre_check_request_id. Each kind changes only its own row of the correction table, besides the wording (headline, side effects, problem, what diagnosis allows) and, for a kind that reruns a check, the run''s own steps, phases, details, kept, run_tag and still_valid: value operation.value; file operation.file; field operation.field and undo; records selected_by (not its kind or sandbox filter), counts, operation.steps and undo; records_filter all of selected_by, counts, operation.steps and undo; sandbox_filter selected_by.sandbox_text and not_rehearsed; code the code. A kind that reruns the rehearsal may also add one role-rehearsal sandbox org to a request with none (252). Any other change is refused, naming the field (a key set to null counts as left out). A wording or allowance edit voids nothing and keeps the version and the page. Any other edit raises the version by one, makes it a correction page, keeps the request''s own steps and phases as base_steps and base_phases (252; restored by switchboard_record_run_evidence on return), voids the evidence its kind reruns (field: rehearsal, login, backup, sample; Alex s8b) and the request''s live links, and for a code edit marks older reviews superseded, in one transaction. Returns {request_id, version, voided_checks, voided_links}.';
+COMMENT ON FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") IS 'Switchboard 3: correct a run request (part 5 "Corrected"). Refuses (254, Alex s17b) every correction of a data operation or undo, wording included, once an approved write on it has started or may still start (its link''s approved action was picked up, has a run other than expired_not_picked_up, or is consumed within its 15 minutes): a further change is a new request through diagnosis; a write that never started leaves it correctable, and a pre-check is unaffected. Refuses an object or operation edit (a new request through diagnosis), and (s12c) any change to pre_check_request_id. Each kind changes only its own row of the correction table, besides the wording (headline, side effects, problem, what diagnosis allows) and, for a kind that reruns a check, the run''s own steps, phases, details, kept, run_tag and still_valid: value operation.value; file operation.file; field operation.field and undo; records selected_by (not its kind or sandbox filter), counts, operation.steps and undo; records_filter all of selected_by, counts, operation.steps and undo; sandbox_filter selected_by.sandbox_text and not_rehearsed; code the code. A kind that reruns the rehearsal may also add one role-rehearsal sandbox org to a request with none (252). Any other change is refused, naming the field (a key set to null counts as left out). A wording or allowance edit voids nothing and keeps the version and the page. Any other edit raises the version by one, makes it a correction page, keeps the request''s own steps and phases as base_steps and base_phases (252; restored by switchboard_record_run_evidence on return), voids the evidence its kind reruns (field: rehearsal, login, backup, sample; Alex s8b) and the request''s live links, and for a code edit marks older reviews superseded, in one transaction. Returns {request_id, version, voided_checks, voided_links}.';
 
 
 
@@ -11348,6 +11375,88 @@ COMMENT ON FUNCTION "public"."switchboard_record_run_evidence"("p_run_id" "uuid"
 
 
 
+CREATE OR REPLACE FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  v_run    public.switchboard_runs;
+  v_action public.switchboard_actions;
+  v_link   public.switchboard_run_links;
+  v_row    public.switchboard_run_requests;
+begin
+  if p_outcome is null or jsonb_typeof(p_outcome) <> 'object' then
+    raise exception 'switchboard_record_run_outcome: the outcome must be a JSON object.' using errcode = '22023';
+  end if;
+  if octet_length(p_outcome::text) > 65536 then
+    raise exception 'switchboard_record_run_outcome: the outcome is over 64 KB (% bytes).', octet_length(p_outcome::text) using errcode = '22023';
+  end if;
+  select * into v_run from public.switchboard_runs where id = p_run_id;
+  if v_run.id is null then
+    raise exception 'switchboard_record_run_outcome: no such run (%).', p_run_id using errcode = 'P0002';
+  end if;
+  if v_run.mode <> 'real' then
+    raise exception 'switchboard_record_run_outcome: run % is a %, not a real run.', p_run_id, v_run.mode using errcode = '55000';
+  end if;
+  if v_run.finished_at is null then
+    raise exception 'switchboard_record_run_outcome: run % has not finished.', p_run_id using errcode = '55000';
+  end if;
+  select * into v_action from public.switchboard_actions where id = v_run.action_id;
+  if v_action.id is null or v_action.kind <> 'sf_run' or v_action.user_id <> v_run.user_id then
+    raise exception 'switchboard_record_run_outcome: run % is not a run page''s run.', p_run_id using errcode = '55000';
+  end if;
+  -- The link that approved this action: action_id is set only by Approve on a page that writes or pre-checks, never by a
+  -- rerun (rerun_action_id) and moved to the new action by a resend.
+  select * into v_link from public.switchboard_run_links
+   where id::text = v_action.payload->>'link_id' and user_id = v_run.user_id and action_id = v_run.action_id;
+  if v_link.id is null then
+    raise exception 'switchboard_record_run_outcome: run % is not the run its link approved (a rerun, or a superseded run). Nothing was recorded.', p_run_id
+      using errcode = '55000';
+  end if;
+  -- Lock in consume's order (the request, then the link), then read the link again: a resend may have moved its action.
+  select * into v_row from public.switchboard_run_requests where id = v_link.request_id for update;
+  select * into v_link from public.switchboard_run_links where id = v_link.id for update;
+  if v_link.action_id is distinct from v_run.action_id then
+    raise exception 'switchboard_record_run_outcome: run % is not the run its link approved (a rerun, or a superseded run). Nothing was recorded.', p_run_id
+      using errcode = '55000';
+  end if;
+  if v_run.failure_reason = 'expired_not_picked_up' then
+    raise exception 'switchboard_record_run_outcome: run % never started; it has no outcome. Nothing was recorded.', p_run_id using errcode = '55000';
+  end if;
+  if v_row.base_page not in ('dataop', 'undo') then
+    raise exception 'switchboard_record_run_outcome: run % is a % run; only a data operation or undo has an outcome. Nothing was recorded.', p_run_id, v_row.base_page
+      using errcode = '55000';
+  end if;
+  if v_row.simulation then
+    raise exception 'switchboard_record_run_outcome: request % is a simulation; it has no outcome. Nothing was recorded.', v_row.id using errcode = '55000';
+  end if;
+  if v_row.outcome_run_id = p_run_id then
+    return jsonb_build_object('recorded', false, 'already', true, 'request_id', v_row.id);
+  end if;
+  -- A backstop (part 3 refuses a correction once a write ran, so a request is written once): the first write's outcome
+  -- is the durable record of a real change, so another link never replaces it; only a later run of the same link (a
+  -- resend) does.
+  if v_row.outcome_run_id is not null and not exists (
+       select 1 from public.switchboard_runs r join public.switchboard_actions a on a.id = r.action_id
+        where r.id = v_row.outcome_run_id and a.payload->>'link_id' = v_link.id::text) then
+    raise exception 'switchboard_record_run_outcome: request % already keeps the outcome of run %, approved through another link. Nothing was recorded.',
+      v_row.id, v_row.outcome_run_id using errcode = '55000';
+  end if;
+  update public.switchboard_run_requests
+     set outcome = p_outcome, outcome_run_id = p_run_id, outcome_recorded_at = now(), updated_at = now()
+   where id = v_row.id;
+  return jsonb_build_object('recorded', true, 'already', false, 'request_id', v_row.id);
+end;
+$$;
+
+
+ALTER FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") IS 'Switchboard 3: keep a data operation''s or undo''s outcome on its request (outcome, outcome_run_id, outcome_recorded_at), since the run''s own result is pruned after 30 days. Accepted only for a finished real run of the sf_run action its link approved (link.action_id), on a request whose base page is dataop or undo, not a simulation; p_outcome is a JSON object of at most 64 KB, stored as given. A pre-check''s run, a rerun, an unfinished run and a run that never started are refused. Once per run: the same run again returns already true. A later run of the same link (a resend) replaces it; a run approved through another link of the request never does. Never touches evidence, the 24-hour clock or what can be approved. Returns {recorded, already, request_id}. Service role only: called by switchboard-runner after a write''s result.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."switchboard_retry_run"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public', 'pg_temp'
@@ -11468,6 +11577,7 @@ declare
   v_sample  public.switchboard_run_samples;
   v_review  public.switchboard_code_reviews;
   v_started boolean;
+  v_mine    boolean;
 begin
   if v_user is null then
     raise exception 'switchboard_run_preview: no signed-in user.' using errcode = '28000';
@@ -11503,6 +11613,9 @@ begin
   if v_link.review_id is not null then
     select * into v_review from public.switchboard_code_reviews where id = v_link.review_id;
   end if;
+  -- 254: the outcome is shown only on the link whose approved run recorded it, never on a later link of the request.
+  v_mine := v_row.outcome_run_id is not null and exists (
+    select 1 from public.switchboard_runs r where r.id = v_row.outcome_run_id and r.action_id = v_link.action_id);
 
   return jsonb_build_object(
     'link_id', v_link.id,
@@ -11510,6 +11623,12 @@ begin
                                                    'corrected_at', v_row.corrected_at, 'evidence', v_row.evidence,
                                                    'simulation', v_row.simulation, 'rerun_at', v_link.rerun_at),
     'fingerprint', public.switchboard_fingerprint(v_row.request || jsonb_build_object('version', v_row.version)),
+    -- The count switchboard_consume_run_link checks; the page sends exactly this with Approve.
+    'total_count', v_row.total_count,
+    -- 254: the write's outcome, once this link's run recorded one.
+    'outcome', case when v_mine then v_row.outcome end,
+    'outcome_run_id', case when v_mine then v_row.outcome_run_id end,
+    'outcome_recorded_at', case when v_mine then v_row.outcome_recorded_at end,
     'link', jsonb_build_object('version', v_link.request_version, 'current', v_link.request_version = v_row.version,
                                'used_at', v_link.used_at, 'rerun_at', v_link.rerun_at,
                                'voided_at', v_link.voided_at, 'void_reason', v_link.void_reason),
@@ -11531,7 +11650,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_run_preview"("p_token" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_run_preview"("p_token" "text") IS 'Switchboard 3: what a run or review page shows for its token, read at page open and at a click. Returns {link_id, request (with id, page, version, corrected_at, evidence, simulation, rerun_at), fingerprint, link {version, current, used_at, rerun_at, voided_at, void_reason}, valid_until, expired (never for an undo), run (the newest sf_run for this link id: status, consumed_at, picked_up_at, finished_at, failure_reason, not_started, rerun), sample, review}. Deletes the sample when it is past expires_at. Called by switchboard-run-pages with Alex''s JWT.';
+COMMENT ON FUNCTION "public"."switchboard_run_preview"("p_token" "text") IS 'Switchboard 3: what a run or review page shows for its token, read at page open and at a click. Returns {link_id, request (with id, page, version, corrected_at, evidence, simulation, rerun_at), fingerprint, total_count (the request''s count, which switchboard_consume_run_link checks and the page sends with Approve; null when the request has none), outcome, outcome_run_id, outcome_recorded_at (254: the write''s outcome, null until recorded and on any link but the one whose approved run recorded it), link {version, current, used_at, rerun_at, voided_at, void_reason}, valid_until, expired (never for an undo), run (the newest sf_run for this link id: status, consumed_at, picked_up_at, finished_at, failure_reason, not_started, rerun), sample, review}. Deletes the sample when it is past expires_at. Called by switchboard-run-pages with Alex''s JWT.';
 
 
 
@@ -21623,8 +21742,13 @@ CREATE TABLE IF NOT EXISTS "public"."switchboard_run_requests" (
     "total_count" integer,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "outcome" "jsonb",
+    "outcome_run_id" "uuid",
+    "outcome_recorded_at" timestamp with time zone,
     CONSTRAINT "switchboard_run_requests_base_page_check" CHECK (("base_page" = ANY (ARRAY['precheck'::"text", 'dataop'::"text", 'undo'::"text", 'check'::"text"]))),
     CONSTRAINT "switchboard_run_requests_evidence_check" CHECK (("jsonb_typeof"("evidence") = 'array'::"text")),
+    CONSTRAINT "switchboard_run_requests_outcome_check" CHECK ((("outcome" IS NULL) OR (("jsonb_typeof"("outcome") = 'object'::"text") AND ("octet_length"(("outcome")::"text") <= 65536)))),
+    CONSTRAINT "switchboard_run_requests_outcome_whole" CHECK (((("outcome" IS NULL) = ("outcome_run_id" IS NULL)) AND (("outcome" IS NULL) = ("outcome_recorded_at" IS NULL)))),
     CONSTRAINT "switchboard_run_requests_page_check" CHECK (("page" = ANY (ARRAY['precheck'::"text", 'dataop'::"text", 'undo'::"text", 'correction'::"text", 'check'::"text"]))),
     CONSTRAINT "switchboard_run_requests_project_code_check" CHECK (("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text")),
     CONSTRAINT "switchboard_run_requests_request_check" CHECK ((("jsonb_typeof"("request") = 'object'::"text") AND ("octet_length"(("request")::"text") <= 200000))),
@@ -21689,6 +21813,18 @@ COMMENT ON COLUMN "public"."switchboard_run_requests"."created_at" IS 'When it w
 
 
 COMMENT ON COLUMN "public"."switchboard_run_requests"."updated_at" IS 'Last change.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_run_requests"."outcome" IS 'A data operation''s or undo''s outcome, as its run reported it (a JSON object, at most 64 KB; its shape is the data runs thread''s). Written only by switchboard_record_run_outcome (service role); kept after the run''s own result is pruned. Null until the write''s run records one.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_run_requests"."outcome_run_id" IS 'The switchboard_runs row whose outcome this is: the run of the action the request''s link approved.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_run_requests"."outcome_recorded_at" IS 'When the outcome was recorded.';
 
 
 
@@ -30726,6 +30862,11 @@ GRANT ALL ON FUNCTION "public"."switchboard_record_code_review"("p_request_id" "
 
 REVOKE ALL ON FUNCTION "public"."switchboard_record_run_evidence"("p_run_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."switchboard_record_run_evidence"("p_run_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") TO "service_role";
 
 
 
