@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-24 20:35, through migration 251 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-24 21:24, through migration 252 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -9692,12 +9692,16 @@ declare
   v_n       jsonb;
   v_o       jsonb;
   v_diff    text[];
-  -- Words only: what every kind may change (250's wording rule), and what the database sets.
+  v_base    jsonb;
+  -- Words only: what every kind may change (250's wording rule), what the database sets, and (252) the base steps
+  -- and phases the database keeps.
   c_words   constant text[] := array['headline', 'side_effects', 'problem', 'diagnosis_allows', 'changed', 'page', 'id', 'version',
-                                     'corrected_at', 'simulation'];
+                                     'corrected_at', 'simulation', 'base_steps', 'base_phases'];
   -- What a correction run carries of its own, for a kind that reruns a check: its steps and phases, its run folder and
   -- hashes, what it keeps, its run tag, and the still-valid list.
   c_run     constant text[] := array['steps', 'phases', 'details', 'kept', 'run_tag', 'still_valid'];
+  -- Keys the chat never sends: the database's own.
+  c_set     constant text[] := array['id', 'version', 'corrected_at', 'evidence', 'simulation', 'base_steps', 'base_phases'];
 begin
   if v_user is null then
     raise exception 'switchboard_correct_run_request: no signed-in user.' using errcode = '28000';
@@ -9753,6 +9757,22 @@ begin
     v_n := v_n - c_run;
     v_o := v_o - c_run;
   end if;
+  -- 252: a kind that reruns the rehearsal may add the rehearsal sandbox to a request that has none: exactly one org
+  -- {alias, org_type sandbox, role rehearsal}, nothing else. Taken out of the new side, every other org must be as it was.
+  if 'rehearsal' = any(v_reruns)
+     and jsonb_typeof(v_n->'orgs') = 'array' and jsonb_typeof(v_o->'orgs') = 'array'
+     and not exists (select 1 from jsonb_array_elements(v_o->'orgs') o where o->>'role' = 'rehearsal')
+     and (select count(*) from jsonb_array_elements(v_n->'orgs') o where o->>'role' = 'rehearsal') = 1
+     and exists (select 1 from jsonb_array_elements(v_n->'orgs') o
+                  where jsonb_typeof(o) = 'object' and o->>'role' = 'rehearsal' and o->>'org_type' = 'sandbox'
+                    and coalesce(btrim(o->>'alias'), '') <> '' and (o - array['alias', 'org_type', 'role']) = '{}'::jsonb
+                    -- Never one of the request's own orgs under another role (the target's alias, say).
+                    and not exists (select 1 from jsonb_array_elements(v_o->'orgs') p where p->>'alias' = o->>'alias')) then
+    v_n := jsonb_set(v_n, '{orgs}',
+             (select coalesce(jsonb_agg(t.o order by t.ord), '[]'::jsonb)
+                from jsonb_array_elements(v_n->'orgs') with ordinality t(o, ord)
+               where t.o->>'role' is distinct from 'rehearsal'));
+  end if;
   if p_edit_kind = 'value' then
     v_n := v_n #- '{operation,value}'; v_o := v_o #- '{operation,value}';
   elsif p_edit_kind = 'file' then
@@ -9781,6 +9801,20 @@ begin
     v_o := v_o #- '{selected_by,sandbox_text}' #- '{selected_by,not_rehearsed}';
   elsif p_edit_kind = 'code' then
     v_n := v_n - 'code'; v_o := v_o - 'code';
+  end if;
+  -- 252: a records or records_filter correction may change a multi-object run's step counts, never its steps' objects,
+  -- kinds or number: each operation.steps entry is compared without its count (251 left operation.steps out whole).
+  if p_edit_kind in ('records', 'records_filter') then
+    if jsonb_typeof(p_request->'operation'->'steps') = 'array' then
+      v_n := jsonb_set(v_n, '{operation,steps}',
+               (select coalesce(jsonb_agg(case when jsonb_typeof(t.s) = 'object' then t.s - 'count' else t.s end order by t.ord), '[]'::jsonb)
+                  from jsonb_array_elements(jsonb_strip_nulls(p_request)->'operation'->'steps') with ordinality t(s, ord)));
+    end if;
+    if jsonb_typeof(v_row.request->'operation'->'steps') = 'array' then
+      v_o := jsonb_set(v_o, '{operation,steps}',
+               (select coalesce(jsonb_agg(case when jsonb_typeof(t.s) = 'object' then t.s - 'count' else t.s end order by t.ord), '[]'::jsonb)
+                  from jsonb_array_elements(jsonb_strip_nulls(v_row.request)->'operation'->'steps') with ordinality t(s, ord)));
+    end if;
   end if;
   -- Name each field that differs, one level into an object (operation.value, selected_by.text, counts.total).
   select coalesce(array_agg(distinct d.name order by d.name), '{}') into v_diff
@@ -9811,12 +9845,29 @@ begin
   v_total := case when v_row.page = 'undo' then coalesce(p_request->'counts'->'undo_up_to', p_request->'counts'->'expected')
                   else coalesce(p_request->'counts'->'total', p_request->'counts'->'expected') end;
 
+  -- 252: the request's own steps and phases, kept by the database (never the chat's), so the base page gets them back.
+  -- On its correction page already: the first correction's are kept. Otherwise: the request's own, as they are now.
+  -- Each key only when present, so nothing inside a step or phase is stripped.
+  v_base := case when v_row.page = 'correction'
+                 then case when v_row.request ? 'base_steps' then jsonb_build_object('base_steps', v_row.request->'base_steps') else '{}'::jsonb end
+                   || case when v_row.request ? 'base_phases' then jsonb_build_object('base_phases', v_row.request->'base_phases') else '{}'::jsonb end
+                 else case when v_row.request ? 'steps' then jsonb_build_object('base_steps', v_row.request->'steps') else '{}'::jsonb end
+                   || case when v_row.request ? 'phases' then jsonb_build_object('base_phases', v_row.request->'phases') else '{}'::jsonb end end;
+
   if cardinality(v_reruns) = 0 then
     -- Wording or what diagnosis allows: nothing runs again, nothing is voided, no page of its own; the next page carries
     -- the block. The version stays, so a live link stays live; its page must reload, as the fingerprint changed.
+    -- 252: the page key stays the row's (a request on its correction page stays one), and kept base steps stay. On a
+    -- correction page the correction's own changed block stays (the page shows what it reruns), the wording edit
+    -- under changed.wording.
     update public.switchboard_run_requests
-       set request = (p_request - array['id', 'version', 'corrected_at', 'evidence', 'simulation'])
-                     || jsonb_build_object('changed', p_changed || jsonb_build_object('edit_kind', p_edit_kind, 'from_version', v_row.version)),
+       set request = (p_request - c_set)
+                     || jsonb_build_object('page', v_row.page,
+                                           'changed', case when v_row.page = 'correction' and jsonb_typeof(v_row.request->'changed') = 'object'
+                                                           then (v_row.request->'changed') || jsonb_build_object('wording',
+                                                                  p_changed || jsonb_build_object('edit_kind', p_edit_kind, 'from_version', v_row.version))
+                                                           else p_changed || jsonb_build_object('edit_kind', p_edit_kind, 'from_version', v_row.version) end)
+                     || case when v_row.page = 'correction' then v_base else '{}'::jsonb end,
            updated_at = now()
      where id = v_row.id;
     return jsonb_build_object('request_id', v_row.id, 'version', v_row.version, 'voided_checks', 0, 'voided_links', 0);
@@ -9826,9 +9877,10 @@ begin
      set version      = v_row.version + 1,
          corrected_at = now(),
          page         = 'correction',
-         request      = (p_request - array['id', 'version', 'corrected_at', 'evidence', 'simulation'])
+         request      = (p_request - c_set)
                         || jsonb_build_object('page', 'correction',
-                                              'changed', p_changed || jsonb_build_object('edit_kind', p_edit_kind, 'from_version', v_row.version)),
+                                              'changed', p_changed || jsonb_build_object('edit_kind', p_edit_kind, 'from_version', v_row.version))
+                        || v_base,
          evidence     = (select coalesce(jsonb_agg(case when e->>'check' = any(v_reruns) then e || '{"voided": true}'::jsonb else e end), '[]'::jsonb)
                            from jsonb_array_elements(v_row.evidence) e),
          total_count  = case when jsonb_typeof(v_total) = 'number' and v_total::text ~ '^[0-9]{1,9}$' then v_total::text::integer else v_row.total_count end,
@@ -9856,7 +9908,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") IS 'Switchboard 3: correct a run request (part 5 "Corrected"). Refuses an object or operation edit (a new request through diagnosis), and (s12c) any change to pre_check_request_id. Each kind changes only its own row of the correction table, besides the wording (headline, side effects, problem, what diagnosis allows) and, for a kind that reruns a check, the run''s own steps, phases, details, kept, run_tag and still_valid: value operation.value; file operation.file; field operation.field and undo; records selected_by (not its kind or sandbox filter), counts, operation.steps and undo; records_filter all of selected_by, counts, operation.steps and undo; sandbox_filter selected_by.sandbox_text and not_rehearsed; code the code. Any other change is refused, naming the field (a key set to null counts as left out). A wording or allowance edit voids nothing and keeps the version. Any other edit raises the version by one, makes it a correction page, voids the evidence its kind reruns (field: rehearsal, login, backup, sample; Alex s8b) and the request''s live links, and for a code edit marks older reviews superseded, in one transaction. Returns {request_id, version, voided_checks, voided_links}.';
+COMMENT ON FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") IS 'Switchboard 3: correct a run request (part 5 "Corrected"). Refuses an object or operation edit (a new request through diagnosis), and (s12c) any change to pre_check_request_id. Each kind changes only its own row of the correction table, besides the wording (headline, side effects, problem, what diagnosis allows) and, for a kind that reruns a check, the run''s own steps, phases, details, kept, run_tag and still_valid: value operation.value; file operation.file; field operation.field and undo; records selected_by (not its kind or sandbox filter), counts, operation.steps and undo; records_filter all of selected_by, counts, operation.steps and undo; sandbox_filter selected_by.sandbox_text and not_rehearsed; code the code. A kind that reruns the rehearsal may also add one role-rehearsal sandbox org to a request with none (252). Any other change is refused, naming the field (a key set to null counts as left out). A wording or allowance edit voids nothing and keeps the version and the page. Any other edit raises the version by one, makes it a correction page, keeps the request''s own steps and phases as base_steps and base_phases (252; restored by switchboard_record_run_evidence on return), voids the evidence its kind reruns (field: rehearsal, login, backup, sample; Alex s8b) and the request''s live links, and for a code edit marks older reviews superseded, in one transaction. Returns {request_id, version, voided_checks, voided_links}.';
 
 
 
@@ -10927,6 +10979,7 @@ declare
   v_cnt_n  jsonb;
   v_cnt_p  jsonb;
   v_moved  integer := 0;
+  v_key    text;
 begin
   if v_user is null then
     raise exception 'switchboard_queue_run_request: no signed-in user.' using errcode = '28000';
@@ -10963,6 +11016,13 @@ begin
   if p_request ? 'evidence' then
     raise exception 'switchboard_queue_run_request: leave evidence out: only the pre-check''s result records passed checks; name the pre-check with pre_check_request_id.' using errcode = '23514';
   end if;
+  -- 252: nor the steps and phases a correction keeps: only switchboard_correct_run_request sets them, from the row.
+  foreach v_key in array array['base_steps', 'base_phases'] loop
+    if p_request ? v_key then
+      raise exception 'switchboard_queue_run_request: leave % out: only a correction keeps the request''s own steps and phases, from the database. No link was issued.', v_key
+        using errcode = '23514';
+    end if;
+  end loop;
   if p_request ? 'simulation' and jsonb_typeof(p_request->'simulation') is distinct from 'boolean' then
     raise exception 'switchboard_queue_run_request: simulation must be true or false.' using errcode = '23514';
   end if;
@@ -11096,7 +11156,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_queue_run_request"("p_request" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_queue_run_request"("p_request" "jsonb") IS 'Switchboard 3: queue a run request (spec 4.1) for the signed-in caller. Refuses, before any link, a request without page, project_code, the problem label and sentence, side_effects, headline or steps; one with a sample or evidence; a correction (use switchboard_correct_run_request); and a data operation or undo without its count. A simulation (Q7) is accepted and flagged. A data operation may name its pre-check (pre_check_request_id, s12b): the caller''s own Pre-check and Rehearsal request in the same project, on its pre-check page, with passed checks, whose object, operation, records or filter, count (the write''s count is the pre-check''s total, else expected; other counts equal), field, value, file, other operation details, sandbox filter, code commit and target org all match; its checks in use are copied with their original passed_at and copied_from, so the 24 hours count from the oldest; the pre-check''s sample row moves to the new request, expires_at unchanged (s12c). Refused, naming every mismatch, otherwise, and when that pre-check already backed an approved write. Returns {request_id, version, copied_checks, moved_sample}. Called by the queue_switchboard_run_request tool (B3).';
+COMMENT ON FUNCTION "public"."switchboard_queue_run_request"("p_request" "jsonb") IS 'Switchboard 3: queue a run request (spec 4.1) for the signed-in caller. Refuses, before any link, a request without page, project_code, the problem label and sentence, side_effects, headline or steps; one with a sample, evidence, base_steps or base_phases (252: only a correction keeps those); a correction (use switchboard_correct_run_request); and a data operation or undo without its count. A simulation (Q7) is accepted and flagged. A data operation may name its pre-check (pre_check_request_id, s12b): the caller''s own Pre-check and Rehearsal request in the same project, on its pre-check page, with passed checks, whose object, operation, records or filter, count (the write''s count is the pre-check''s total, else expected; other counts equal), field, value, file, other operation details, sandbox filter, code commit and target org all match; its checks in use are copied with their original passed_at and copied_from, so the 24 hours count from the oldest; the pre-check''s sample row moves to the new request, expires_at unchanged (s12c). Refused, naming every mismatch, otherwise, and when that pre-check already backed an approved write. Returns {request_id, version, copied_checks, moved_sample}. Called by the queue_switchboard_run_request tool (B3).';
 
 
 
@@ -11159,6 +11219,8 @@ declare
   v_evid   jsonb;
   v_back   boolean;
   v_page   text;
+  v_req    jsonb;
+  v_steps  jsonb;
 begin
   select * into v_run from public.switchboard_runs where id = p_run_id;
   if not found then
@@ -11245,10 +11307,33 @@ begin
                          where not exists (select 1 from jsonb_array_elements(v_evid) f
                                             where f->>'check' = w and coalesce((f->>'voided')::boolean, false) = false)));
   v_page := case when v_back then v_row.base_page else v_row.page end;
+  v_req := v_row.request;
+  if v_back then
+    v_req := v_req || jsonb_build_object('page', v_page);
+    -- 252: the request's own steps and phases come back, kept by switchboard_correct_run_request. A multi-object
+    -- run's write_step entries take their object, kind and count from operation.steps, in order, so a records
+    -- correction's step counts carry through. A request corrected before 252 has no base_steps: it keeps its steps.
+    if jsonb_typeof(v_req->'base_steps') = 'array' then
+      select coalesce(jsonb_agg(case when x.s->>'code' = 'write_step'
+                                          and jsonb_typeof(v_req->'operation'->'steps'->(x.wn::int - 1)) = 'object'
+                                     then x.s || jsonb_strip_nulls(jsonb_build_object(
+                                                   'object', v_req->'operation'->'steps'->(x.wn::int - 1)->'object',
+                                                   'kind',   v_req->'operation'->'steps'->(x.wn::int - 1)->'kind',
+                                                   'count',  v_req->'operation'->'steps'->(x.wn::int - 1)->'count'))
+                                     else x.s end order by x.ord), '[]'::jsonb)
+        into v_steps
+        from (select t.s, t.ord,
+                     count(*) filter (where t.s->>'code' = 'write_step') over (order by t.ord) as wn
+                from jsonb_array_elements(v_req->'base_steps') with ordinality t(s, ord)) x;
+      v_req := (v_req - array['steps', 'phases']) || jsonb_build_object('steps', v_steps)
+               || case when jsonb_typeof(v_req->'base_phases') = 'array' then jsonb_build_object('phases', v_req->'base_phases') else '{}'::jsonb end;
+    end if;
+    v_req := v_req - array['base_steps', 'base_phases'];
+  end if;
   update public.switchboard_run_requests
      set evidence = v_evid,
          page = v_page,
-         request = case when v_back then request || jsonb_build_object('page', v_page) else request end,
+         request = v_req,
          updated_at = now()
    where id = v_row.id;
   return jsonb_build_object('recorded', jsonb_array_length(v_fresh), 'already', false, 'request_id', v_row.id, 'page', v_page);
@@ -11259,7 +11344,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_record_run_evidence"("p_run_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_record_run_evidence"("p_run_id" "uuid") IS 'Switchboard 3: record the passed checks of a finished run page pre-check run (the link''s approval on a pre-check page, or its rerun, which a correction page''s Approve is) as its request''s evidence. Reads only that run''s own switchboard_runs row: result {ok: true, pass: true, checks: [{check, org, commit?}]}, passed_at = finished_at; nothing from the caller but the run id. Refused for a run not finished or not passed, a malformed check, a simulation, a voided link or one for an older version, a run finished before the last correction, and a data operation''s own run; recorded once per run. Older entries for the same checks are kept, voided. A correction returns to its base page once every check it voided is in use again (and every write check, for a data operation). Returns {recorded, already, request_id, page}. Service role only: called by switchboard-runner after a helper''s result (Alex''s option A, s12).';
+COMMENT ON FUNCTION "public"."switchboard_record_run_evidence"("p_run_id" "uuid") IS 'Switchboard 3: record the passed checks of a finished run page pre-check run (the link''s approval on a pre-check page, or its rerun, which a correction page''s Approve is) as its request''s evidence. Reads only that run''s own switchboard_runs row: result {ok: true, pass: true, checks: [{check, org, commit?}]}, passed_at = finished_at; nothing from the caller but the run id. Refused for a run not finished or not passed, a malformed check, a simulation, a voided link or one for an older version, a run finished before the last correction, and a data operation''s own run; recorded once per run. Older entries for the same checks are kept, voided. A correction returns to its base page once every check it voided is in use again (and every write check, for a data operation), and (252) gets its own steps and phases back from base_steps and base_phases, a multi-object run''s write_step entries following operation.steps. Returns {recorded, already, request_id, page}. Service role only: called by switchboard-runner after a helper''s result (Alex''s option A, s12).';
 
 
 
