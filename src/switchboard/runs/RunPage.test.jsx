@@ -758,14 +758,16 @@ describe('A7 fixes', () => {
     },
   );
 
-  test('a finished run with a failure reads "stopped", not "finished"', async () => {
+  // s21b: was "stopped"; a failed run now reads "failed", with its reason (runEnd.test.jsx has every end).
+  test('a finished run with a failure reads "failed", not "finished"', async () => {
     const source = simSource('run-finished');
     const load = source.load;
     source.load = async () => { const p = await load(); return { ...p, run: { ...p.run, failure_reason: 'stopped_at_step' } }; };
     render(<RunPage source={source} />);
     await screen.findByTestId('run-used');
-    expect(screen.getByTestId('run-used')).toHaveTextContent(/^Stopped /);
-    expect(screen.getAllByTestId('run-phase').find((p) => p.textContent.startsWith('Data operation'))).toHaveAttribute('data-live', 'stopped');
+    expect(screen.getByTestId('run-used')).toHaveTextContent(/^Failed /);
+    expect(screen.getByTestId('run-end-reason')).toHaveTextContent('Reason: stopped_at_step');
+    expect(screen.getAllByTestId('run-phase').find((p) => p.textContent.startsWith('Data operation'))).toHaveAttribute('data-live', 'failed');
   });
 
   test('a closed undo has one "Undo:" line, in the status line', async () => {

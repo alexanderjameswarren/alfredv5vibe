@@ -1094,3 +1094,40 @@ the /run-sim/ scenarios) carries none of these, and keeps `data-switchboard-kind
 - **The review page** has the line marks only: a review has no action, so no action id and no running mark.
 - Today's /approve/ pages keep their own marks unchanged.
 - Tests: src/switchboard/runs/pageMarks.test.jsx.
+
+### 14.8 How a run ended, on the run page (s21, s21b)
+
+- **The bug (s21, the live end-to-end test).** The helper refused a real pre-check before anything ran: action status
+  failed, run result {ok:false}, the reason in summary, no failure_reason (only the 15-minute expiry writes that,
+  247). The page chose stopped or finished on failure_reason alone, so it said "finished". PASS and FAIL both end
+  succeeded, so the page couldn't tell them apart either.
+- **The preview (migration 255_preview_run_end.sql)** adds three fields to `run`:
+  - `ok`: result.ok;
+  - `pass`: result.pass;
+  - `summary`: the first 500 characters.
+
+  ok and pass are read only when they are JSON booleans, otherwise null. switchboard_prune_runs clears result after
+  30 days and keeps summary, so a pruned run has ok and pass null and its summary still there. Test 7 covers each end.
+
+  **Applied (s21e):** run 87e7b3ee-fd3c-4ff7-b73e-ca45da449b78. All five statements ran, and conformance came back
+  "CONFORMANT — all 123 non-exempt public tables satisfy platform contract v1, and anon reaches nothing undecided."
+  Test 7 is queued as action fee25e15-0b17-4f84-aedd-661c9f09edec.
+- **The page (runEnd in runContract.js)**, for a finished run that started:
+  - **Failed:** status failed, ok false, or a failure_reason. It reads "failed" in the status line and "Failed <time>"
+    in the used box, with "Reason: <summary>". Without a summary, the reason falls back to the failure_reason in
+    words ('stopped' reads "The run stopped partway."; any other is shown as it is), then "No reason was recorded.".
+    It never says "finished".
+  - **Not ended yet:** a finished run row whose action isn't yet succeeded (the runner is still recording its
+    evidence) reads running, never PASS. A sample run with no status counts as succeeded.
+  - **PASS:** succeeded with pass true reads "finished: PASS".
+  - **FAIL:** succeeded with pass false reads "finished: FAIL".
+  - **Pruned:** pass null reads plain "finished".
+  - **Never picked up:** a run the expiry closed shows only "Not started. Nothing ran." It used to show the used box
+    as well, because the expiry sets finished_at. A run that finished before its pickup was recorded shows only the
+    used box, no longer the waiting box as well.
+  - **Not covered, a gap for later:** the live source hides a rerun's run (the expired-checks rerun, or a correction's
+    Approve). A refused rerun therefore shows no reason: once it finishes, the page offers the rerun again.
+  - **Cancelled:** a reopened cancelled link shows linkEndedReason, as before.
+- **No end state draws a result line or carries `data-switchboard-line`:** the helper posts the done and failed lines.
+  Don't run's own cancelled line, posted by the page, keeps its s20 marks.
+- **Tests:** src/switchboard/runs/runEnd.test.jsx. The A7 test that pinned "stopped" now pins "failed".
