@@ -940,7 +940,8 @@ function.
 
 **Gated on client work:**
 
-**C2. The old data run links are retired, and new data runs use the run pages.** One CLI step.
+**C2. The old data run links are retired, and new data runs use the run pages.** One CLI step, now s23 (s20 to s22
+went to the extension's marks, the run's end and the sql bar).
 - Before it (all three, each named in the prompt):
   1. Alex says Common Defense Fix D and iwh_ab_codefix-p8v are finished. A read shows no sf_dataop or sf_datawrite
      action in switchboard_actions that is queued, linked, consumed or picked up and unfinished.
@@ -1075,6 +1076,22 @@ isn't counted. The DB guard and the helper's link commands belong to plumbing an
   - Every word, mark, result line and status block is unchanged.
   - The pinned tests now assert the bar before acting and none after Approve and after Don't run, for every kind,
     plus the sql cases.
+- **s22, sql: the bar first (Alex, "Bar first: yes").**
+  - The problem: since s19c the SQL showed a few seconds before the bar, so the page looked read-only, as if it would
+    close by itself.
+  - Now the bar shows as soon as the page has the action, while the dry run is pending (`checking`: no dry run
+    result, no Approve or Don't run yet, and no note, not even an empty one). "Run the dry run again" is pending too,
+    so the checking bar comes back while it runs.
+    - It reads "APPROVAL REQUIRED — checking the SQL first…". The note (RunShell's `approvalNote`) keeps its own
+      case, so "SQL" stays upper case, and it takes the bar's size and spacing.
+    - Approve is shown, disabled.
+  - A clean dry run gives the plain bar and an enabled Approve, as before.
+  - When the dry run fails, its counts differ, or the runner refuses it or can't be reached (a note), there is no bar
+    and Approve stays off.
+  - After Approve or Don't run the bar goes, as in s19c.
+  - A sql test (it runs by itself) and every other kind keep s19c's rule.
+  - Every mark, result line and status block is unchanged.
+  - The tests now wait for an enabled Approve (approveOn) rather than any Approve button.
 
 ### 14.7 The page side of the extension contract: marks on /run/ and /review/ (s20)
 
@@ -1111,7 +1128,8 @@ the /run-sim/ scenarios) carries none of these, and keeps `data-switchboard-kind
 
   **Applied (s21e):** run 87e7b3ee-fd3c-4ff7-b73e-ca45da449b78. All five statements ran, and conformance came back
   "CONFORMANT — all 123 non-exempt public tables satisfy platform contract v1, and anon reaches nothing undecided."
-  Test 7 is queued as action fee25e15-0b17-4f84-aedd-661c9f09edec.
+  Test 7 (action fee25e15-0b17-4f84-aedd-661c9f09edec) ran as run 95b046e9-ae50-423c-b5bb-25c3212c2044:
+  all_passed true, 49 of 49.
 - **The page (runEnd in runContract.js)**, for a finished run that started:
   - **Failed:** status failed, ok false, or a failure_reason. It reads "failed" in the status line and "Failed <time>"
     in the used box, with "Reason: <summary>". Without a summary, the reason falls back to the failure_reason in

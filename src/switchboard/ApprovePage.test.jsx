@@ -31,6 +31,11 @@ const open = () =>
     </MemoryRouter>
   );
 const dryRun = () => fireEvent.click(screen.getByRole('button', { name: /^dry run$/i }));
+/** s22: a sql page shows Approve disabled while its dry run is pending, so wait for it to be on offer. */
+const approveOn = async () => {
+  await waitFor(() => expect(screen.getByRole('button', { name: /^approve/i })).toBeEnabled());
+  return screen.getByRole('button', { name: /^approve/i });
+};
 const CLEAN = () => reply({ ok: true, run_id: 'dry1', summary: 'runs a select' });
 const DRY = '11111111-2222-3333-4444-555555555555';
 
@@ -54,7 +59,7 @@ test('running shows only while an approved run is under way, with the link\'s ki
   let finish;
   runner({ preview: reply(PREVIEW), 'dry-run': CLEAN, approve: () => new Promise((r) => { finish = r; }) });
   const { container } = openAt('/approve/tok1?kind=git&exp=2000000000');
-  fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
+  fireEvent.click(await approveOn());
   await waitFor(() => expect(runningMark(container)).toHaveAttribute('data-switchboard-running', 'git'));
   finish(await reply({ ok: true, run_id: DRY, summary: 'done' }));
   await screen.findByText('Ran for real');
@@ -71,7 +76,7 @@ test('a dry run is not running; a link with no kind is SQL', async () => {
   expect(runningMark(container)).toBeNull();
   expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'sql');
   finish(await CLEAN());
-  await screen.findByRole('button', { name: /^approve/i });
+  await approveOn();
   expect(runningMark(container)).toBeNull();
 });
 
@@ -89,7 +94,7 @@ test('a test action is running from open, until its result', async () => {
 test('a refused Approve stops running', async () => {
   runner({ preview: reply(PREVIEW), 'dry-run': CLEAN, approve: reply({ ok: false, error: 'busy, try again' }, 409) });
   const { container } = open();
-  fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
+  fireEvent.click(await approveOn());
   await screen.findByText(/busy, try again/);
   expect(runningMark(container)).toBeNull();
 });
@@ -102,7 +107,9 @@ test('every finished outcome keeps the place the extension reports a failed post
   for (const [routes, button] of cases) {
     runner(routes);
     const { container, unmount } = open();
-    fireEvent.click(await screen.findByRole('button', { name: button }));
+    // s22: wait for the dry run, since Approve is shown disabled until it answers.
+    await approveOn();
+    fireEvent.click(screen.getByRole('button', { name: button }));
     await waitFor(() => expect(container.querySelector('[data-switchboard-run-id]')).not.toBeNull());
     expect(container.querySelector('[data-switchboard-status]')).toHaveAttribute('hidden');
     expect(container.querySelector('[data-switchboard-retry]')).not.toBeNull();
@@ -151,10 +158,11 @@ test('the dry run starts by itself, once, and Approve waits for it; no run id on
   runner({ preview: reply(PREVIEW), 'dry-run': () => new Promise((r) => { finish = r; }) });
   const { container } = open();
   expect(await screen.findByText(/running the dry run/i)).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: /^approve/i })).not.toBeInTheDocument();
+  // s22: Approve is shown while the dry run runs, but can't be clicked.
+  expect(screen.getByRole('button', { name: /^approve/i })).toBeDisabled();
   finish(await CLEAN());
   expect(await screen.findByText(/runs a select/)).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: /^approve/i })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /^approve/i })).toBeEnabled();
   expect(called('dry-run')).toHaveLength(1);
   expect(container.querySelector('[data-switchboard-run-id]')).toBeNull();
 });
@@ -170,7 +178,7 @@ test('Approve sends the fingerprint, shows the result and puts the run id on the
   runner({ preview: reply(PREVIEW), 'dry-run': CLEAN,
     approve: reply({ ok: true, run_id: 'run9', summary: 'done it', conformance: 'CONFORMANT' }) });
   const { container } = open();
-  fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
+  fireEvent.click(await approveOn());
   expect(await screen.findByText(/done it/)).toBeInTheDocument();
   expect(screen.getByText('sql run9')).toBeInTheDocument();
   expect(screen.getByText('Paste this into the Claude chat, then close this tab.')).toBeInTheDocument();
@@ -197,7 +205,7 @@ test('Approve sends the fingerprint, shows the result and puts the run id on the
 test('a real run that fails still shows its run id, and cannot be approved again', async () => {
   runner({ preview: reply(PREVIEW), 'dry-run': CLEAN, approve: reply({ ok: false, run_id: 'run9', summary: 'failed at statement 1: boom' }) });
   const { container } = open();
-  fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
+  fireEvent.click(await approveOn());
   expect(await screen.findByText(/failed at statement 1: boom/)).toBeInTheDocument();
   // Claude still needs to hear about a failure.
   expect(screen.getByText('sql run9')).toBeInTheDocument();
@@ -222,7 +230,7 @@ test('a mismatched link at Approve says so and nothing more can be run', async (
   runner({ preview: reply(PREVIEW), 'dry-run': CLEAN,
     approve: reply({ ok: false, error: 'switchboard_consume_link: the SQL does not match what this link approved.' }, 409) });
   open();
-  fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
+  fireEvent.click(await approveOn());
   expect(await screen.findByText(/does not match what this link approved/i)).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /^approve/i })).not.toBeInTheDocument();
 });
@@ -233,7 +241,7 @@ test('a busy dry run keeps the page and can be tried again', async () => {
   open();
   expect(await screen.findByText(/another run is in progress/)).toBeInTheDocument();
   dryRun();
-  expect(await screen.findByRole('button', { name: /^approve/i })).toBeInTheDocument();
+  expect(await approveOn()).toBeInTheDocument();
 });
 
 const COUNTS = [
@@ -356,7 +364,7 @@ test('a failed test still posts its run id, with Copy details; a busy one can be
 test('a lost connection at Approve warns it may have run and offers no retry', async () => {
   runner({ preview: reply(PREVIEW), 'dry-run': CLEAN, approve: () => Promise.reject(new Error('network')) });
   open();
-  fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
+  fireEvent.click(await approveOn());
   expect(await screen.findByText(/may have run/i)).toBeInTheDocument();
   await waitFor(() => expect(screen.queryByRole('button', { name: /^approve/i })).not.toBeInTheDocument());
 });
@@ -1221,8 +1229,9 @@ describe('C1: every kind keeps its marks and its result line, and never shows th
     const { container } = open();
     noStrip(container);
     // Waits for the click: the red bar, and no "Approve" heading.
-    expect(await screen.findByTestId('run-approval-required')).toHaveTextContent(/^Approval required$/);
-    fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
+    const approve = await approveOn();
+    expect(screen.getByTestId('run-approval-required')).toHaveTextContent(/^Approval required$/);
+    fireEvent.click(approve);
     await waitFor(() => expect(container.querySelector('[data-switchboard-running]')).not.toBeNull());
     // While the approval is under way: the running mark (the url's kind for sql, the runner's kind otherwise) and the
     // project and kind marks, nothing else.
@@ -1241,33 +1250,76 @@ describe('C1: every kind keeps its marks and its result line, and never shows th
     expect(status.querySelector('button[data-switchboard-retry]')).toHaveTextContent('Try again');
   });
 
-  test('s19c, sql: no bar while the dry run runs, nor when its counts differ or it failed; the bar once Approve is offered', async () => {
+  // s22 (Alex, "Bar first: yes"): on sql the bar shows from the page's load, with its checking note, while the dry run
+  // is pending; s19c's rule holds once it answers.
+  test('s22, sql: the bar with "checking the SQL first…" and a disabled Approve while the dry run runs; plain once clean', async () => {
     let finish;
     runner({ preview: reply(PREVIEW), 'dry-run': () => new Promise((r) => { finish = r; }) });
-    const a = open();
+    open();
     await screen.findByText(/running the dry run/i);
-    expect(screen.queryByTestId('run-approval-required')).toBeNull();
+    const bar = screen.getByTestId('run-approval-required');
+    expect(bar).toHaveTextContent('Approval required — checking the SQL first…');
+    expect(screen.getByTestId('run-approval-note')).toHaveClass('normal-case');
+    expect(screen.getByRole('button', { name: /^approve/i })).toBeDisabled();
     finish(await CLEAN());
-    await screen.findByRole('button', { name: /^approve/i });
-    expect(screen.getByTestId('run-approval-required')).toBeInTheDocument();
-    a.unmount();
+    await approveOn();
+    expect(screen.getByTestId('run-approval-required')).toHaveTextContent(/^Approval required$/);
+    expect(screen.queryByTestId('run-approval-note')).toBeNull();
+  });
+
+  test('s22, sql: no bar once the dry run fails or its counts differ, and Approve stays off', async () => {
     runner({ preview: reply(PREVIEW), 'dry-run': MISMATCH });
     const b = open();
-    expect(await screen.findByRole('button', { name: /^approve/i })).toBeDisabled();
+    await screen.findByText('Counts differ from what was expected, rolled back');
+    expect(screen.getByRole('button', { name: /^approve/i })).toBeDisabled();
     expect(screen.queryByTestId('run-approval-required')).toBeNull();
     b.unmount();
     runner({ preview: reply(PREVIEW), 'dry-run': () => reply({ ok: false, run_id: 'dry1', summary: 'relation t does not exist' }) });
-    open();
+    const c = open();
     await screen.findByText('The dry run failed, rolled back');
     expect(screen.queryByRole('button', { name: /^approve/i })).toBeNull();
     expect(screen.queryByTestId('run-approval-required')).toBeNull();
+    c.unmount();
+    // A dry run the runner refuses, or one that can't reach it, sets a note: no bar, no Approve.
+    runner({ preview: reply(PREVIEW), 'dry-run': () => Promise.reject(new Error('offline')) });
+    const d = open();
+    await screen.findByText(/Couldn't reach the runner/);
+    expect(screen.queryByRole('button', { name: /^approve/i })).toBeNull();
+    expect(screen.queryByTestId('run-approval-required')).toBeNull();
+    d.unmount();
+    // A refusal with no words at all still ends the check: no bar, and the dry run can be tried again.
+    runner({ preview: reply(PREVIEW), 'dry-run': () => reply({ ok: false }, 500) });
+    open();
+    await screen.findByRole('button', { name: /^dry run$/i });
+    expect(screen.queryByRole('button', { name: /^approve/i })).toBeNull();
+    expect(screen.queryByTestId('run-approval-required')).toBeNull();
+  });
+
+  test('s22, a sql test: no bar and no Approve while it runs, since it runs by itself', async () => {
+    runner({ preview: reply({ ...PREVIEW, test: true }), 'dry-run': () => new Promise(() => {}) });
+    open();
+    await screen.findByText(/running the test/i);
+    expect(screen.queryByTestId('run-approval-required')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^approve/i })).toBeNull();
+  });
+
+  test('s22, git keeps s19c: no bar before its page is ready, the plain bar once Approve is offered', async () => {
+    let show;
+    runner({ preview: () => new Promise((r) => { show = r; }) });
+    open();
+    await waitFor(() => expect(show).toBeDefined());
+    expect(screen.queryByTestId('run-approval-required')).toBeNull();
+    show(await reply(SYNC));
+    await approveOn();
+    expect(screen.getByTestId('run-approval-required')).toHaveTextContent(/^Approval required$/);
+    expect(screen.queryByTestId('run-approval-note')).toBeNull();
   });
 
   test('a ?kind=deploy link: the running and kind marks carry the link\'s kind, the line stays sql', async () => {
     let finish;
     runner({ preview: reply(PREVIEW), 'dry-run': CLEAN, approve: () => new Promise((r) => { finish = r; }) });
     const { container } = openAt('/approve/tok1?kind=deploy&exp=2000000000');
-    fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
+    fireEvent.click(await approveOn());
     await waitFor(() => expect(container.querySelector('[data-switchboard-running]')).not.toBeNull());
     expect(marksOf(container)).toEqual(['data-switchboard-running=deploy', 'data-switchboard-project=switchboard2-h8r', 'data-switchboard-kind=deploy']);
     finish(await reply({ ok: true, run_id: DRY, summary: 'done' }));
@@ -1283,7 +1335,7 @@ describe('C1: every kind keeps its marks and its result line, and never shows th
     const runId = kind === 'sql' ? 'c1' : id;
     runner({ preview: reply(p), 'dry-run': CLEAN, cancel: reply({ cancelled: true, reason: 'wait', run_id: 'c1' }) });
     const { container } = open();
-    await screen.findByRole('button', { name: /^approve/i });
+    await approveOn();
     expect(screen.getByTestId('run-approval-required')).toHaveTextContent(/^Approval required$/);
     fireEvent.change(screen.getByLabelText('Reason for not running (optional)'), { target: { value: 'wait' } });
     fireEvent.click(screen.getByRole('button', { name: "Don't run" }));
