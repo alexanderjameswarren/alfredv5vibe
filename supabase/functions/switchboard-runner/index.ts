@@ -58,6 +58,10 @@ import {
 //                  s4b: the link and request are read first; a data operation's write (sfRunKind) records no evidence
 //                  or sample, and drops the request's sample (switchboard_drop_run_sample) at its final status. A
 //                  refusal with SQLSTATE P0002, 23514 or 55000 fails the run at once (422, retry: false, the fix named).
+//                  s5: a write's body may add write {...}, its outcome: after the run row and before the status,
+//                  switchboard_record_run_outcome (254) keeps it on the request, never on the run row. 254's refusals
+//                  (22023, P0002, 55000) are noted in the summary; other errors 503 {retry: true}. The 409 pickup
+//                  refusal carries project_code.
 //   POST /sf-result x-switchboard-pickup-key. { action_id, run_id, ok, summary, level, object, production_full_data, count,
 //                  rows, query? } or { ..., ok: false, reason } -> { stored }. An sf_read's rows, before its /result (s89e):
 //                  into switchboard_sf_results for at most 10 minutes, plus a switchboard_sf_read_log row. The run is untouched.
@@ -247,6 +251,8 @@ function deps(): Deps {
       coded(await db.rpc("switchboard_record_run_evidence", { p_run_id: runId })) as Record<string, unknown>,
     dropRunSample: async (requestId) =>
       Number(coded(await db.rpc("switchboard_drop_run_sample", { p_request_id: requestId })) ?? 0),
+    recordRunOutcome: async (runId, outcome) =>
+      coded(await db.rpc("switchboard_record_run_outcome", { p_run_id: runId, p_outcome: outcome })) as Record<string, unknown>,
   };
 }
 

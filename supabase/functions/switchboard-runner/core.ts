@@ -122,7 +122,9 @@ export type Deps = {
   recordRunEvidence(runId: string): Promise<Record<string, unknown>>;
   /** switchboard_drop_run_sample (250), with the service role: how many were deleted (0 or 1). */
   dropRunSample(requestId: string): Promise<number>;
-  // The three throw an Error whose `code` is the database's SQLSTATE when it refused (see FINAL_SQLSTATES).
+  /** switchboard_record_run_outcome (254), with the service role. A repeat returns already: true. Throws when refused. */
+  recordRunOutcome(runId: string, outcome: Record<string, unknown>): Promise<Record<string, unknown>>;
+  // These throw an Error whose `code` is the database's SQLSTATE when it refused (see FINAL_SQLSTATES).
 };
 
 /** The preview's stakes field, or nothing. A runner deployed before the migration never fails a preview on it. */
@@ -731,7 +733,7 @@ async function sfRunPickup(action: PickedAction, deps: Deps, now: number, timedO
     const error = `sf_run ${action.action_id}: ${why} — its request was deleted; queue the request again and approve its new link.`;
     await deps.finishRun(action.run_id, { summary: error.slice(0, MAX_SUMMARY), result: { ok: false }, finished_at: new Date(now).toISOString() });
     await deps.setStatus(action.action_id, "failed");
-    return json({ ok: false, error, action_id: action.action_id, run_id: action.run_id,
+    return json({ ok: false, error, action_id: action.action_id, run_id: action.run_id, project_code: action.project_code,
                   ...(linkId ? { line: sfRunLine(linkId, false) } : {}), timed_out: timedOut }, 409);
   }
   const { token_hash: _hash, ...shown } = link;
@@ -799,6 +801,11 @@ const FINAL_FIX: Record<string, string> = {
   "23514": "the helper's result doesn't fit what the database records; fix the helper's report and run the pre-check again.",
   "55000": "the run page changed since this run was approved; reload the run page and run the pre-check again.",
 };
+/** 254's switchboard_record_run_outcome refusals: 22023 (not an object, over 64 KB), P0002 (no such run), 55000 (not a
+ *  finished real run its link approved on a data operation or undo, a simulation, never started, another link's). */
+export const OUTCOME_FINAL_SQLSTATES = ["22023", "P0002", "55000"];
+/** The function itself unreachable: PostgREST's no such function, undefined function, no permission. Noted, not retried. */
+export const OUTCOME_MISSING_CODES = ["PGRST202", "42883", "42501"];
 const sqlstateOf = (e: unknown) => (e && typeof e === "object" && typeof (e as { code?: unknown }).code === "string" ? (e as { code: string }).code : "");
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -880,13 +887,46 @@ async function sfRunRecord(
       return ` (sample not dropped: ${blankIds(messageOf(e)).slice(0, 100)}; the 24-hour prune removes it)`;
     }
   };
+  // s5: a write's outcome (254), from the helper's write object, goes on its request once the run row is finished;
+  // never on the run row. 254's refusals are noted and don't undo the run; anything else is retried while `retrying`.
+  const outcome: { reply: Record<string, unknown> | null; refused: string | null; error: string | null } = { reply: null, refused: null, error: null };
+  const recordOutcome = async (retrying: boolean): Promise<{ note: string; again?: Response }> => {
+    if (kind !== "write" || body.write === undefined) return { note: "" };
+    if (!isPlain(body.write)) return { note: " (outcome not recorded: the helper's write isn't an object)" };
+    try {
+      outcome.reply = await deps.recordRunOutcome(r.id, body.write);
+      return { note: "" };
+    } catch (e) {
+      const code = sqlstateOf(e);
+      const msg = blankIds(messageOf(e)).slice(0, 100);
+      if (OUTCOME_FINAL_SQLSTATES.includes(code)) {
+        outcome.refused = code;
+        return { note: ` (outcome refused (${code}): ${msg})` };
+      }
+      // 254 not applied, or its grant missing: retrying can't help, so the write isn't held for it.
+      if (OUTCOME_MISSING_CODES.includes(code)) {
+        outcome.error = code;
+        return { note: ` (outcome not recorded (${code}): switchboard_record_run_outcome is missing or not granted)` };
+      }
+      if (retrying) return { note: "", again: retry("outcome", e) };
+      outcome.error = code || "error";
+      return { note: ` (outcome not recorded (${outcome.error}): ${msg})` };
+    }
+  };
+  const writeReply = () => (kind === "write"
+    ? { sample_dropped: sampleDropped, outcome: outcome.reply,
+        ...(outcome.refused ? { outcome_refused: outcome.refused } : {}), ...(outcome.error ? { outcome_error: outcome.error } : {}) }
+    : {});
   // Fail the run for good: the run row says why and the fix; the helper is told not to retry.
   const final = async (why: string, kept: Record<string, unknown>, status = 422) => {
     const reason = noted(why, await drop());
     await deps.finishRun(r.id, { summary: reason, result: { ...kept, ok: false }, finished_at: r.finished_at ?? finished_at });
+    // The write may still have run, so its outcome is kept; here a failure to keep it is only noted.
+    const { note } = await recordOutcome(false);
+    if (note) await deps.finishRun(r.id, { summary: noted(reason, note) });
     await deps.setStatus(a.id, "failed");
     return json({ ok: false, retry: false, error: why, ...ids, status: "failed", line: sfRunLine(linkId, false),
-                  ...(kind === "write" ? { sample_dropped: sampleDropped } : {}) }, status);
+                  ...writeReply() }, status);
   };
 
   const problem = sfRunReportProblem(body);
@@ -930,12 +970,19 @@ async function sfRunRecord(
       }
     }
   }
+  // A write's outcome, succeeded or failed, before the drop and the status, so a retry still finds the action consumed.
+  const kept = await recordOutcome(true);
+  if (kept.again) return kept.again;
+  if (kept.note) {
+    runSummary = noted(runSummary, kept.note);
+    await deps.finishRun(r.id, { summary: runSummary });
+  }
   const dropNote = await drop();
   if (dropNote) await deps.finishRun(r.id, { summary: noted(runSummary, dropNote) });
   const status = ok ? "succeeded" : "failed";
   await deps.setStatus(a.id, status);
   return json({ ok: true, ...ids, run_kind: kind, status, line: sfRunLine(linkId, ok, result.pass), evidence,
-                sample_stored: sampleStored, ...(kind === "write" ? { sample_dropped: sampleDropped } : {}) });
+                sample_stored: sampleStored, ...writeReply() });
 }
 
 /** The helper's report: closes the run and marks the action succeeded or failed. Only for a pick still waiting. */

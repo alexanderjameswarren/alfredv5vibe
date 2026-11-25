@@ -1622,7 +1622,7 @@ const SR_PICKED = { action_id: "sr-1", run_id: "run-s", kind: "sf_run", project_
 const CHECKS = [{ check: "count", org: "production" }, { check: "rehearsal", org: "sandbox", commit: "abc1234" }];
 const SAMPLE = { records: [{ Id: "003000000000001AAA", Name: "Sam Ple" }] };
 
-function srFakes({ link = LINK_ROW, request = REQ_ROW, action = {}, run = {}, evidence, sample } = {}) {
+function srFakes({ link = LINK_ROW, request = REQ_ROW, action = {}, run = {}, evidence, sample, outcome } = {}) {
   const order = [];
   const f = fakes({
     pickupHelper: async (u, k, p) => (order.push("pickup"), f.calls.helperArgs = [u, k, p], { ...SR_PICKED }),
@@ -1640,6 +1640,8 @@ function srFakes({ link = LINK_ROW, request = REQ_ROW, action = {}, run = {}, ev
     storeRunSample: sample ?? (async (id, s) => (order.push(`sample ${id}`), f.calls.sample = s,
       { stored: true, request_id: id, expires_at: "2026-11-25T10:00:00Z" })),
     dropRunSample: async (id) => (order.push(`drop ${id}`), 0),
+    recordRunOutcome: outcome ?? (async (id, o) => (order.push(`outcome ${id}`), (f.calls.outcomes ??= []).push([id, o]),
+      { recorded: true, already: false, request_id: REQ_ID })),
   });
   f.order = order;
   return f;
@@ -2107,4 +2109,159 @@ test("index.ts: the link read names its columns and leaves token_hash out; never
   // The SQLSTATE rides on the thrown error, so core can tell a refusal from a network error.
   assert.match(src, /throw Object\.assign\(new Error\(res\.error\.message\), \{ code: res\.error\.code \?\? "" \}\)/);
   assert.match(src, /select\("id, action_id, mode, finished_at, result"\)/);
+});
+
+// s5: a write's outcome (254), kept on its request, never on the run row.
+const WRITE_OUT = { stage: "done", changed: 45, failed: 0, ids_file: "data-ops/x/changed.csv" };
+
+test("sf_run write outcome: recorded after the run row, before the drop and the status, succeeded or failed; never on the run row", async () => {
+  for (const [over, status] of [[{}, "succeeded"], [{ ok: false, pass: undefined }, "failed"]]) {
+    const { deps, calls, order } = srFakes({ request: WRITE_REQ });
+    const res = await handle(srResult({ write: WRITE_OUT, ...over }), deps);
+    assert.equal(res.status, 200, status);
+    const body = await res.json();
+    assert.equal(body.status, status);
+    assert.deepEqual(body.outcome, { recorded: true, already: false, request_id: REQ_ID });
+    assert.deepEqual(calls.outcomes, [["run-s", WRITE_OUT]]);
+    assert.deepEqual(order, [...READS, "finish", "outcome run-s", `drop ${REQ_ID}`, `status ${status}`]);
+    assert.ok(!JSON.stringify(calls.finished).includes("changed.csv"));
+    assert.equal(calls.finished[0].result.write, undefined);
+  }
+});
+
+test("sf_run write outcome: undo is a write too; already true is fine", async () => {
+  const { deps, calls } = srFakes({ request: { ...WRITE_REQ, page: "undo", base_page: "undo" },
+    outcome: async () => ({ recorded: false, already: true, request_id: REQ_ID }) });
+  const body = await (await handle(srResult({ write: WRITE_OUT }), deps)).json();
+  assert.equal(body.status, "succeeded");
+  assert.equal(body.outcome.already, true);
+  assert.deepEqual(calls.status, [{ id: "sr-1", status: "succeeded" }]);
+});
+
+test("sf_run write outcome: never for a pre-check, a rerun, another page, or a write with no write object", async () => {
+  const cases = [
+    {},
+    { link: { ...LINK_ROW, action_id: "sr-0", rerun_action_id: "sr-1" }, request: WRITE_REQ },
+    { request: { ...REQ_ROW, page: "check", base_page: "check" } },
+  ];
+  for (const over of cases) {
+    const { deps, calls } = srFakes(over);
+    const body = await (await handle(srResult({ write: WRITE_OUT }), deps)).json();
+    assert.equal(calls.outcomes, undefined, JSON.stringify(over));
+    assert.equal(body.outcome, undefined);
+  }
+  const bare = srFakes({ request: WRITE_REQ });
+  const body = await (await handle(srResult(), bare.deps)).json();
+  assert.equal(bare.calls.outcomes, undefined);
+  assert.equal(body.outcome, null);
+});
+
+test("sf_run write outcome: a write that isn't an object is not sent; the run summary says so", async () => {
+  for (const write of ["done", [WRITE_OUT], null, 3]) {
+    const { deps, calls } = srFakes({ request: WRITE_REQ });
+    const body = await (await handle(srResult({ write }), deps)).json();
+    assert.equal(body.status, "succeeded");
+    assert.equal(calls.outcomes, undefined);
+    assert.match(calls.finished.at(-1).summary, /\(outcome not recorded: the helper's write isn't an object\)$/);
+  }
+});
+
+test("sf_run write outcome: 254's refusals (22023, P0002, 55000) are noted and don't undo the run", async () => {
+  const { OUTCOME_FINAL_SQLSTATES } = await import("./core.ts");
+  assert.deepEqual(OUTCOME_FINAL_SQLSTATES, ["22023", "P0002", "55000"]);
+  for (const code of OUTCOME_FINAL_SQLSTATES) {
+    const drops = [];
+    const { deps, calls } = srFakes({ request: WRITE_REQ,
+      outcome: async () => { throw coded(code, "switchboard_record_run_outcome: record 003000000000001AAA is not the run its link approved"); } });
+    deps.dropRunSample = async (id) => (drops.push(id), 1);
+    const res = await handle(srResult({ write: WRITE_OUT }), deps);
+    assert.equal(res.status, 200, code);
+    const body = await res.json();
+    assert.equal(body.status, "succeeded");
+    assert.equal(body.outcome, null);
+    assert.equal(body.outcome_refused, code);
+    assert.deepEqual(drops, [REQ_ID]);
+    const note = calls.finished.at(-1).summary;
+    assert.match(note, new RegExp(`\\(outcome refused \\(${code}\\): .+\\)$`));
+    assert.ok(!note.includes("003000000000001AAA"));
+    assert.deepEqual(calls.status, [{ id: "sr-1", status: "succeeded" }]);
+  }
+});
+
+test("sf_run write outcome: any other error keeps the 503 retry, and the retry records it once", async () => {
+  for (const code of ["", "PGRST301", "57014", undefined]) {
+    const { deps, calls } = srFakes({ request: WRITE_REQ,
+      outcome: async () => { throw code === undefined ? new Error("fetch failed") : coded(code); } });
+    const res = await handle(srResult({ write: WRITE_OUT }), deps);
+    assert.equal(res.status, 503, String(code));
+    const body = await res.json();
+    assert.equal(body.retry, true);
+    assert.match(body.error, /^outcome: /);
+    assert.deepEqual(calls.status, []);
+  }
+  // The retry: the run row is already written, so it's reused; the outcome goes in once.
+  const again = srFakes({ request: WRITE_REQ, run: { finished_at: "2026-11-24T10:05:00Z", result: { ok: true, pass: true } } });
+  const body = await (await handle(srResult({ write: WRITE_OUT }), again.deps)).json();
+  assert.equal(body.status, "succeeded");
+  assert.deepEqual(again.calls.outcomes, [["run-s", WRITE_OUT]]);
+  assert.deepEqual(again.order, [...READS, "outcome run-s", `drop ${REQ_ID}`, "status succeeded"]);
+});
+
+test("sf_run write outcome: a refused write report still records the write's outcome after closing the run", async () => {
+  const { deps, calls, order } = srFakes({ request: WRITE_REQ });
+  const res = await handle(srResult({ write: WRITE_OUT, pass: "yes" }), deps);
+  assert.equal(res.status, 400);
+  assert.deepEqual(calls.outcomes, [["run-s", WRITE_OUT]]);
+  assert.deepEqual(order, [...READS, `drop ${REQ_ID}`, "finish", "outcome run-s", "status failed"]);
+  assert.deepEqual(calls.status, [{ id: "sr-1", status: "failed" }]);
+});
+
+test("sf_run write outcome: a refused report with a transient outcome error says not recorded, never refused", async () => {
+  const { deps, calls } = srFakes({ request: WRITE_REQ, outcome: async () => { throw new Error("fetch failed"); } });
+  const body = await (await handle(srResult({ write: WRITE_OUT, pass: "yes" }), deps)).json();
+  assert.equal(body.outcome_error, "error");
+  assert.equal(body.outcome_refused, undefined);
+  assert.match(calls.finished.at(-1).summary, /\(outcome not recorded \(error\): fetch failed\)$/);
+  assert.deepEqual(calls.status, [{ id: "sr-1", status: "failed" }]);
+});
+
+test("sf_run write outcome: 254 missing or not granted is noted, not retried, so the write isn't held", async () => {
+  const { OUTCOME_MISSING_CODES } = await import("./core.ts");
+  for (const code of OUTCOME_MISSING_CODES) {
+    const { deps, calls } = srFakes({ request: WRITE_REQ, outcome: async () => { throw coded(code, "Could not find the function"); } });
+    const res = await handle(srResult({ write: WRITE_OUT }), deps);
+    assert.equal(res.status, 200, code);
+    const body = await res.json();
+    assert.equal(body.outcome_error, code);
+    assert.match(calls.finished.at(-1).summary, /missing or not granted\)$/);
+    assert.deepEqual(calls.status, [{ id: "sr-1", status: "succeeded" }]);
+  }
+});
+
+test("sf_run write outcome: recorded, then the status write fails (503); the retry gets already and finishes once", async () => {
+  let recorded = false;
+  const outcomeFn = async () => { const was = recorded; recorded = true; return { recorded: !was, already: was, request_id: REQ_ID }; };
+  const first = srFakes({ request: WRITE_REQ, outcome: outcomeFn });
+  first.deps.setStatus = async () => { throw new Error("fetch failed"); };
+  assert.equal((await handle(srResult({ write: WRITE_OUT }), first.deps)).status, 503);
+  const again = srFakes({ request: WRITE_REQ, outcome: outcomeFn,
+    run: { finished_at: "2026-11-24T10:05:00Z", result: { ok: true, pass: true } } });
+  const body = await (await handle(srResult({ write: WRITE_OUT }), again.deps)).json();
+  assert.equal(body.status, "succeeded");
+  assert.equal(body.outcome.already, true);
+  assert.deepEqual(again.calls.status, [{ id: "sr-1", status: "succeeded" }]);
+});
+
+test("sf_run pickup: the 409 refusal carries the action's project_code", async () => {
+  for (const over of [{ link: null }, { request: null }]) {
+    const { deps } = srFakes(over);
+    const res = await handle(helper("pickup", { kinds: EIGHT }), deps);
+    assert.equal(res.status, 409);
+    assert.equal((await res.json()).project_code, "cd_fixc-q8d");
+  }
+});
+
+test("index.ts: the outcome goes by rpc with the run id and the helper's write", () => {
+  const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  assert.match(src, /coded\(await db\.rpc\("switchboard_record_run_outcome", \{ p_run_id: runId, p_outcome: outcome \}\)\)/);
 });

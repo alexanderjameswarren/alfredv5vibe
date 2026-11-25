@@ -8,7 +8,11 @@ import { type Deps, handle } from "./core.ts";
 //
 // 🛑 A SERVER-TO-SERVER EXCEPTION, LIKE switchboard-runner. Not an MCP tool: no defineTool, no ctx.db.
 //
-//   GET /  x-switchboard-panel-key -> { ok, projects: { <code>: { report_unread, waiting_on_alex, lane, lane_order } } }
+//   GET /  x-switchboard-panel-key -> { ok, projects: { <code>: { report_unread, waiting_on_alex, lane, lane_order,
+//          live_link } } }
+//   live_link (sb3_runner-r4q s5): null, or { kind, expires_at, chat_url } for the project's newest action with a live
+//   link as 189 defines one (link_issued, link_hash set, link_used_at null, link_expires_at > now). kind as 227 names
+//   it (sf_deploy and sf_test are deploy). The hash is filtered on, never selected.
 //
 // ⚠️ verify_jwt must be false in config.toml: the panel has no user token, so this checks SWITCHBOARD_PANEL_KEY itself.
 // After every deploy a GET without the key must come back 401 with this function's own body.
@@ -41,6 +45,10 @@ function deps(): Deps {
       (ids.length ? must(await from("portfolio_slices", "plan_id, lane_id, position, group_id, status").in("plan_id", ids).limit(LIMIT)) : []),
     projectPlans: async (ids) =>
       (ids.length ? must(await from("project_plans", "group_id, project_code").in("group_id", ids)) : []),
+    liveLinks: async (nowIso) =>
+      must(await from("switchboard_actions", "project_code, kind, status, link_expires_at, link_used_at, chat_url")
+        .eq("status", "link_issued").not("link_hash", "is", null).is("link_used_at", null).gt("link_expires_at", nowIso)
+        .order("link_expires_at", { ascending: false }).limit(LIMIT)),
   };
 }
 

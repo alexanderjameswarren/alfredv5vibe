@@ -56,6 +56,7 @@ function deps(over = {}) {
     lanes: async () => DATA.lanes,
     slices: async () => DATA.slices,
     projectPlans: async () => DATA.projectPlans,
+    liveLinks: async () => [],
     ...over,
   };
 }
@@ -92,11 +93,11 @@ test("per project: report unread, waiting on Alex, lane and order", async () => 
   assert.deepEqual(await res.json(), {
     ok: true,
     projects: {
-      "aa-a1a": { report_unread: true, waiting_on_alex: false, lane: "Main", lane_order: 2 },
-      "bb-b2b": { report_unread: false, waiting_on_alex: true, lane: "Fast track", lane_order: 1 },
-      "cc-c3c": { report_unread: false, waiting_on_alex: true, lane: "Client", lane_order: 3 },
-      "gone-g1g": { report_unread: false, waiting_on_alex: false, lane: null, lane_order: null },
-      "nolink-n1n": { report_unread: false, waiting_on_alex: false, lane: null, lane_order: null },
+      "aa-a1a": { report_unread: true, waiting_on_alex: false, lane: "Main", lane_order: 2, live_link: null },
+      "bb-b2b": { report_unread: false, waiting_on_alex: true, lane: "Fast track", lane_order: 1, live_link: null },
+      "cc-c3c": { report_unread: false, waiting_on_alex: true, lane: "Client", lane_order: 3, live_link: null },
+      "gone-g1g": { report_unread: false, waiting_on_alex: false, lane: null, lane_order: null, live_link: null },
+      "nolink-n1n": { report_unread: false, waiting_on_alex: false, lane: null, lane_order: null, live_link: null },
     },
   });
 });
@@ -129,6 +130,69 @@ test("the function only reads, and never selects SQL or results", () => {
   assert.doesNotMatch(index, /payload|switchboard_runs|page_text|captured_text|SUPABASE_DB_URL|select\("\*"\)/);
   assert.match(index, /\.is\("link_used_at", null\)/);
   assert.match(index, /\.eq\("needs_click", true\)/);
+});
+
+// s5 (sb3_runner-r4q): a project's live link, as 189 defines one.
+const NOW = Date.parse("2026-11-25T12:00:00Z");
+const at = (min) => new Date(NOW + min * 60000).toISOString();
+const LIVE = [
+  { project_code: "aa-a1a", kind: "sf_deploy", status: "link_issued", link_expires_at: at(20), link_used_at: null, chat_url: "https://claude.ai/chat/a" },
+  { project_code: "bb-b2b", kind: "sql", status: "link_issued", link_expires_at: at(5), link_used_at: null, chat_url: null },
+  // Newer for bb-b2b: the newest wins.
+  { project_code: "bb-b2b", kind: "git", status: "link_issued", link_expires_at: at(25), link_used_at: null, chat_url: "https://claude.ai/chat/b" },
+  // Not live: expired, used, or no longer link_issued.
+  { project_code: "cc-c3c", kind: "sql", status: "link_issued", link_expires_at: at(-1), link_used_at: null, chat_url: null },
+  { project_code: "cc-c3c", kind: "sql", status: "link_issued", link_expires_at: at(10), link_used_at: at(-2), chat_url: null },
+  { project_code: "cc-c3c", kind: "sql", status: "consumed", link_expires_at: at(10), link_used_at: null, chat_url: null },
+  // A project with only a live link still gets a row.
+  { project_code: "ee-e5e", kind: "sf_test", status: "link_issued", link_expires_at: at(1), link_used_at: null, chat_url: null },
+];
+
+test("live_link: per project, null where none; kind in the panel's words; the newest when there are two", async () => {
+  const res = await handle(get({ "x-switchboard-panel-key": KEY }), deps({ liveLinks: async () => LIVE }), NOW);
+  const { projects } = await res.json();
+  assert.deepEqual(projects["aa-a1a"].live_link, { kind: "deploy", expires_at: at(20), chat_url: "https://claude.ai/chat/a" });
+  assert.deepEqual(projects["bb-b2b"].live_link, { kind: "git", expires_at: at(25), chat_url: "https://claude.ai/chat/b" });
+  assert.equal(projects["cc-c3c"].live_link, null);
+  assert.deepEqual(projects["ee-e5e"], {
+    report_unread: false, waiting_on_alex: false, lane: null, lane_order: null,
+    live_link: { kind: "deploy", expires_at: at(1), chat_url: null },
+  });
+  for (const code of Object.keys(projects)) assert.ok("live_link" in projects[code], code);
+});
+
+test("live_link: waiting_on_alex is unchanged by it", async () => {
+  const plain = await (await handle(get({ "x-switchboard-panel-key": KEY }), deps({ liveLinks: async () => [] }), NOW)).json();
+  const live = await (await handle(get({ "x-switchboard-panel-key": KEY }), deps({ liveLinks: async () => LIVE }), NOW)).json();
+  for (const code of Object.keys(plain.projects)) {
+    assert.equal(live.projects[code].waiting_on_alex, plain.projects[code].waiting_on_alex, code);
+    assert.equal(plain.projects[code].live_link, null, code);
+  }
+  assert.equal(live.projects["ee-e5e"].waiting_on_alex, false);
+});
+
+test("live_link: a failed live-link read leaves the other fields as they were, every live_link null", async () => {
+  const plain = await (await handle(get({ "x-switchboard-panel-key": KEY }), deps(), NOW)).json();
+  const failed = await (await handle(get({ "x-switchboard-panel-key": KEY }),
+    deps({ liveLinks: async () => { throw new Error("boom"); } }), NOW)).json();
+  assert.deepEqual(failed, plain);
+});
+
+test("live_link: no stray field, never the link hash", () => {
+  const out = buildPanel({ ...DATA, links: [{ ...LIVE[0], link_hash: "SECRETHASH", payload: { sql: "drop table x" } }] }, NOW);
+  assert.doesNotMatch(JSON.stringify(out), /SECRETHASH|drop table/);
+  assert.deepEqual(Object.keys(out.projects["aa-a1a"].live_link).sort(), ["chat_url", "expires_at", "kind"]);
+});
+
+test("index.ts: the live-link read is 189's live link, and selects no hash", () => {
+  const index = read("./index.ts");
+  const q = /liveLinks:[\s\S]*?\)\),/.exec(index)?.[0] ?? "";
+  assert.match(q, /from\("switchboard_actions", "project_code, kind, status, link_expires_at, link_used_at, chat_url"\)/);
+  assert.match(q, /\.eq\("status", "link_issued"\)/);
+  assert.match(q, /\.not\("link_hash", "is", null\)/);
+  assert.match(q, /\.is\("link_used_at", null\)/);
+  assert.match(q, /\.gt\("link_expires_at", /);
+  assert.doesNotMatch(index, /select\([^)]*link_hash/);
 });
 
 test("config: verify_jwt off, with an empty import map", () => {

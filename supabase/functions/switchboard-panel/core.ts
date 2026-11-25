@@ -20,6 +20,10 @@ type Plan = { id: string; portfolio_id: string };
 type Lane = { id: string; plan_id: string; name: string; position: number };
 type Slice = { plan_id: string; lane_id: string; position: number; group_id: string; status: string };
 type ProjectPlan = { group_id: string; project_code: string | null };
+type LinkRow = {
+  project_code: string; kind: string | null; status: string; link_expires_at: string | null; link_used_at: string | null;
+  chat_url: string | null;
+};
 
 export type Deps = {
   panelKey: string;
@@ -33,6 +37,8 @@ export type Deps = {
   lanes(planIds: string[]): Promise<Lane[]>;
   slices(planIds: string[]): Promise<Slice[]>;
   projectPlans(groupIds: string[]): Promise<ProjectPlan[]>;
+  /** Actions with a live link (189): link_issued, a link hash, unused, not expired. Never the hash itself. */
+  liveLinks(nowIso: string): Promise<LinkRow[]>;
 };
 
 export type PanelData = {
@@ -44,7 +50,25 @@ export type PanelData = {
   lanes: Lane[];
   slices: Slice[];
   projectPlans: ProjectPlan[];
+  links?: LinkRow[];
 };
+
+/** A link's kind in the panel's words, as 227's switchboard_issue_link puts it in the url. */
+const panelKind = (kind: string | null) => (kind === "sf_deploy" || kind === "sf_test" ? "deploy" : kind);
+
+/** Each project's newest live link (latest expiry; 30 minutes from issue, so latest issued), checked again here. */
+function liveLinks(links: LinkRow[], now: number) {
+  const out = new Map<string, { kind: string | null; expires_at: string; chat_url: string | null }>();
+  const newest = new Map<string, number>();
+  for (const l of links) {
+    const exp = Date.parse(l.link_expires_at ?? "");
+    if (l.status !== "link_issued" || l.link_used_at !== null || !(exp > now)) continue;
+    if ((newest.get(l.project_code) ?? -Infinity) >= exp) continue;
+    newest.set(l.project_code, exp);
+    out.set(l.project_code, { kind: panelKind(l.kind), expires_at: l.link_expires_at as string, chat_url: l.chat_url ?? null });
+  }
+  return out;
+}
 
 /** Each project's latest report's inbox id, from clips newest first. Null when that clip has none. */
 function latestReports(clips: Clip[]): Map<string, string | null> {
@@ -86,12 +110,13 @@ function laneOrder({ portfolios, plans, lanes, slices, projectPlans }: PanelData
 }
 
 /** Built field by field, so nothing else in a row can reach the panel. */
-export function buildPanel(data: PanelData) {
+export function buildPanel(data: PanelData, now = Date.now()) {
   const reports = latestReports(data.clips);
   const unarchived = new Set(data.inbox.filter((r) => r.archived === false).map((r) => r.id));
   const waiting = new Set(data.actions.map((a) => a.project_code));
   const lanes = laneOrder(data);
-  const codes = [...new Set([...reports.keys(), ...waiting, ...lanes.keys()])].sort();
+  const live = liveLinks(data.links ?? [], now);
+  const codes = [...new Set([...reports.keys(), ...waiting, ...lanes.keys(), ...live.keys()])].sort();
   const projects: Record<string, unknown> = {};
   for (const code of codes) {
     const inboxId = reports.get(code);
@@ -100,6 +125,7 @@ export function buildPanel(data: PanelData) {
       waiting_on_alex: waiting.has(code),
       lane: lanes.get(code)?.lane ?? null,
       lane_order: lanes.get(code)?.lane_order ?? null,
+      live_link: live.get(code) ?? null,
     };
   }
   return { ok: true, projects };
@@ -116,15 +142,19 @@ function keyMatches(provided: string | null, expected: string): boolean {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
-export async function handle(req: Request, deps: Deps): Promise<Response> {
+export async function handle(req: Request, deps: Deps, now = Date.now()): Promise<Response> {
   if (!keyMatches(req.headers.get("x-switchboard-panel-key"), deps.panelKey)) return json({ ok: false, error: "unauthorized" }, 401);
   if (req.method !== "GET") return json({ ok: false, error: "GET only" }, 405);
 
-  const [clips, actions, portfolios] = await Promise.all([deps.latestCliClips(), deps.waitingActions(), deps.portfolios()]);
+  const [clips, actions, portfolios, links] = await Promise.all([
+    deps.latestCliClips(), deps.waitingActions(), deps.portfolios(),
+    // A failed live-link read never takes the other fields down: every live_link is then null.
+    deps.liveLinks(new Date(now).toISOString()).catch(() => []),
+  ]);
   const inboxIds = [...latestReports(clips).values()].filter((id): id is string => Boolean(id));
   const plans = await deps.activePlans(portfolios.map((p) => p.id));
   const planIds = plans.map((p) => p.id);
   const [inbox, lanes, slices] = await Promise.all([deps.inboxRows(inboxIds), deps.lanes(planIds), deps.slices(planIds)]);
   const projectPlans = await deps.projectPlans([...new Set(slices.map((s) => s.group_id))]);
-  return json(buildPanel({ clips, inbox, actions, portfolios, plans, lanes, slices, projectPlans }));
+  return json(buildPanel({ clips, inbox, actions, portfolios, plans, lanes, slices, projectPlans, links }, now));
 }
