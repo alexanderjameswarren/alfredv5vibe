@@ -879,3 +879,199 @@ while busy.
   supabase/functions/_shared/tools/switchboard-runs.ts and its test; supabase/functions/mcp/index.ts and its test;
   supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql; supabase/tests/sb3_pages-h6v/.
 - Not touched: ApprovePage.jsx, ApproveFixture.jsx, switchboard-runner.
+
+## 14. Phase C: switch-over plan (s18, 2026-11-25; a plan only, for Alex to approve)
+
+Main at 9b2b29b holds 250-254, switchboard-run-pages, the four run-page MCP tools, and the live /run/ and /review/
+pages beside today's /approve/ pages (unchanged). The end-to-end test waits for plumbing's extension reinstall (L3).
+
+### 14.1 Inventory: today's /approve/ page kinds
+
+ApprovePage.jsx renders every kind from the runner's preview. The url's `?kind=` is display only (sql, git or deploy;
+anything else shows as sql). Each kind keeps its `data-switchboard-*` marks and its result line word.
+
+| Kind (line word) | Queued by | What it shows today | C changes it? | Why |
+|---|---|---|---|---|
+| sql (`sql <run id>`): dry run, then Approve | scripts/sql-queue.mjs, issue_switchboard_link | SQL, the dry run's counts, "Approve and run for real" | look and heading | No new page replaces it; the heading goes ("Approval required" is enough) |
+| sql test (`sql <run id>`): runs on open | sql-queue.mjs --test | the test result; no red bar, no heading already (s90d) | look only | It already has no heading, and runsByItself keeps it without the bar |
+| git (`git <action id>`), with gitpush Finish's no_prod_deploy line and then.send chain | queue_switchboard_git | the command lines, Approve and run | look and heading | Unchanged behaviour; it is not a run page |
+| sb_setup (`sb`) | queue_switchboard_sb_setup | sb lines, the files it writes | look and heading | as git |
+| sf_check (`sf`) | queue_switchboard_sf_check | the check lines | look and heading | as git |
+| sf_read (`sf`), with the red PRODUCTION FULL DATA banner | queue_switchboard_sf_read | the read's lines | look and heading | as git |
+| sf_dataquery (`dataquery`), orange production or sky-blue sandbox read banner | queue_switchboard_sf_dataquery | the queries, their hashes, the mode | look and heading | Read only, diagnosis's counts and exports. Not a write, so the run pages don't replace it |
+| sf_dataop (`dataop`): Data run v1, production write | queue_switchboard_sf_dataop (from `sb prod dataop-link`) | the stamped plan's rows, the write | heading now; **retired** later (gated) | "The old data run link is retired": the run pages replace it. Common Defense ran on it |
+| sf_datawrite (`datawrite`): Data run v2, bulk, batch or undo | queue_switchboard_sf_datawrite (from `sb prod datawrite-link`) | the gate, write, check and upload steps | heading now; **retired** later (gated, see Q1) | the run pages replace it too. Clients may have runs mid-flight on it |
+| sign-in, loading, ended link | (every kind) | plain text | look and heading | no marks |
+| /approve-fixture/:kind (dev server only) | ApproveFixture.jsx | ApprovePage on fake data | follows ApprovePage | its tests follow |
+
+Untouched by C: the runner (switchboard-runner), the link builder (migrations 189-227: `/approve/<token>?kind=..`,
+and the `stakes=change` that claude-watch.js matches in the chat), the /run/ and /review/ pages, and every database
+function.
+
+### 14.2 The steps, in order
+
+**Safe now (no behaviour change):**
+
+**C1. Today's pages take the look from look.js, and the heading goes.** One CLI step.
+- Files:
+  - new src/switchboard/format.js holding localTime, shortHash and shortStamp;
+  - ApprovePage.jsx re-exports them, so its callers and tests are unchanged;
+  - look.js imports them from format.js instead of from ApprovePage, which breaks the circular import before
+    ApprovePage imports look.js;
+  - ApprovePage.jsx uses look.js's BUTTON, SECOND_BUTTON, RED_BAR, the banner classes and RunShell (with
+    `approvable` = needsApprovalHeader, and `source={kind: 'real'}`);
+  - ApprovePage.test.jsx and ApproveFixture.test.jsx update.
+- Changes: the frame and the "Approve" heading (gone on every kind; inbox note ac562aef). Kept: Shell's red bar only
+  while the page waits for a click (runsByItself), every word, every button, every `data-switchboard-*` mark, and
+  ApprovePage's own ResultLine with its status block. look.js's ResultLine is not used here: with `sim` it drops the
+  status block.
+- Before it: nothing gates it. Don't deploy it while a client fix has an /approve/ link open (a reload mid-approval
+  would show the new look). Alex names any that are open.
+- Check:
+  - a new test renders every kind (fixtures for sql, sql test, git, sb, sf_check, sf_read, dataquery both org types,
+    dataop, datawrite bulk, batch and undo, cancelled and sent) and asserts the same `data-switchboard-*`
+    attributes and values, and the same result line text, as before C1;
+  - no SIMULATION strip on any kind;
+  - the red bar exactly where it was;
+  - no "Approve" heading;
+  - the runs folder, the app suite and build;
+  - Alex looks at /approve-fixture/<kind> in desktop Chrome.
+- Roll back: revert the commit; there is no data or function change.
+
+**Gated on client work:**
+
+**C2. The old data run links are retired, and new data runs use the run pages.** One CLI step.
+- Before it (all three, each named in the prompt):
+  1. Alex says Common Defense Fix D and iwh_ab_codefix-p8v are finished. A read shows no sf_dataop or sf_datawrite
+     action in switchboard_actions that is queued, linked, consumed or picked up and unfinished.
+  2. The data runs runner is live: B4's end-to-end test on a sandbox passed (an sf_run picked up, run, its evidence
+     and outcome recorded).
+  3. Plumbing's extension is reinstalled with L3: it injects into /run/ and /review/ and posts the run and review
+     lines.
+- Files:
+  - supabase/functions/_shared/tools/switchboard.ts: queue_switchboard_sf_dataop and queue_switchboard_sf_datawrite
+    refuse, with one line naming queue_switchboard_run_request and issue_switchboard_run_link. Their argument checks
+    stay for one release.
+  - mcp/index.ts: their descriptions say "retired".
+  - mcp/index.test.mjs and the tools' tests.
+  - Deploy mcp (db:deploy, main's commits present).
+- Kept: ApprovePage's DataopRun and DatawriteRun renderers and the runner's kinds, so an action already queued still
+  shows, approves or cancels; get_switchboard_run and get_switchboard_sf_result for history.
+- Check:
+  - each retired tool refuses with its pointer;
+  - an old action's /approve/ page still renders (a fixture test);
+  - a simulated run request goes queue → link → page → `SIMULATION run <id>`.
+- Roll back: revert and redeploy mcp. Nothing in the database changed.
+
+**C3 (later, optional; not in the 2): remove what C2 kept.** It comes after C2 has held with no old data run action
+open:
+- the two renderers from ApprovePage;
+- the tools' code;
+- the runner's kinds (switchboard-runner, this repo);
+- the guard refusing new sf_dataop and sf_datawrite rows (plumbing's actions guard);
+- `sb prod dataop-link` and `datawrite-link` (the data runs thread, switchboard repo).
+
+About 1 step here, plus the other threads' own.
+
+**Skills (wrap-up slice, not this thread).** At C2, salesforce-workflow and cli-workflow will need to point at:
+- the production write flow: queue_switchboard_run_request, then issue_switchboard_run_link, then the /run/ page
+  (pre-check and rehearsal, then the data operation on the same request), in place of `sb prod dataop-link` with
+  sf_dataop and `sb prod datawrite-link` with sf_datawrite;
+- the result lines: `run <link id>`, `run <id> reruns`, `run <id> resent`, `run <id> cancelled: <note>`, and the
+  `review <id> ...` lines, in place of `dataop` and `datawrite`. A `SIMULATION ` line is never posted;
+- corrections: correct_switchboard_run_request before a write runs. After that it is a new request through diagnosis
+  (254);
+- code review: record_switchboard_code_review, then the /review/ link;
+- the outcome: the page's "What the run did", from switchboard_run_requests.outcome.
+
+### 14.3 Risks, and how each step avoids them
+
+- **The extension's marks (bridge-core.js 697-741):** it reads data-switchboard-running, -run-id, -project, -kind,
+  -cancelled and -reason, and the status block (data-switchboard-status, -status-text, -retry). A renamed attribute
+  or a moved status block silently stops posting. C1 keeps ApprovePage's markup for all of them, and its new test pins
+  the full set per kind.
+- **The route:** the extension's content script matches only `/approve/*` (bridge-core.js 222), and claude-watch.js
+  matches `/approve/` links with `stakes=change` in the chat. C1 and C2 change neither the route nor the link.
+- **A false SIMULATION strip:** RunShell shows the strip unless the source's kind is exactly 'real'. C1 passes
+  `{kind: 'real'}`, and its test asserts no strip on every kind.
+- **The circular import** (look.js imports localTime and shortHash from ApprovePage): C1 moves them to format.js first.
+- **The red bar's meaning (s86ag):** the bar means "waits for your click". C1 drives RunShell's `approvable` from
+  needsApprovalHeader, unchanged, so a sql test still has none.
+- **Client runs mid-flight:** C1 changes no behaviour. C2 keeps the renderers and the runner's kinds, and is gated on
+  Alex naming both client runs finished and a read showing no open old data run action.
+- **Skills that still say sf_dataop or sf_datawrite:** C2's refusal is one line naming the new tools, so a Claude
+  following an old skill is turned round, never stuck. The skills are rewritten in the wrap-up slice.
+- **Run lines not posted:** without L3 a run page's line isn't posted, only copied. C2 waits for the reinstall.
+
+### 14.4 Estimate
+
+C1: 1 step. C2: 1 step. **Total 2, as planned.** C3 is optional cleanup after C2 has held, about 1 more here, and it
+isn't counted. The DB guard and the helper's link commands belong to plumbing and the data runs thread.
+
+### 14.5 Questions for Alex
+
+1. Does "the old data run link" mean sf_dataop only, or sf_datawrite too? **Recommend both:** the run pages replace
+   both writes. sf_dataquery stays, since diagnosis's read-only counts and exports aren't writes.
+2. Should C2 retire the tools by refusing with a pointer, or remove them? **Recommend refusing** for one release,
+   then removing them in C3.
+3. Should ApprovePage keep the dataop and datawrite renderers after C2? **Recommend yes**, until no such action is
+   open (C3).
+4. When should C1 run? **Recommend now:** no behaviour changes. Say which /approve/ links are open, if any, and C1
+   waits for them.
+5. Should plumbing add a guard refusing new sf_dataop and sf_datawrite rows after C2? **Recommend yes, in C3,** as
+   the database's backstop to the tools' refusal.
+
+**Alex's answers (s19, 2026-11-25): all five recommendations.**
+- Q1: retire both sf_dataop and sf_datawrite, and keep sf_dataquery.
+- Q2: the old tools refuse with a pointer for one release.
+- Q3: keep the old renderers until no old action is open.
+- Q4: run C1 now, and ship it only when no /approve/ link is open.
+- Q5: a database guard from plumbing, in C3.
+
+### 14.6 C1 as built (s19)
+
+- **format.js** (new) holds localTime, shortHash and shortStamp. ApprovePage.jsx re-exports them, and look.js imports
+  them from format.js, so look.js no longer imports ApprovePage. ApprovePage imports look.js without a cycle.
+- **ApprovePage.jsx:**
+  - Shell is RunShell with `source={kind: 'real'}` (so never the SIMULATION strip) and `approvable` =
+    needsApprovalHeader (the bar's rule unchanged). There is no "Approve" heading on any page.
+  - BUTTON, SECOND_BUTTON, REASON_INPUT, BANNER_LINE and the banners come from look.js: PRODUCTION_BANNER,
+    SANDBOX_BANNER, and the new RED_BANNER for PRODUCTION FULL DATA. The classes are the same, only their order
+    changed. The result box keeps its own class string, since look.js's PANEL adds text-dark.
+  - RunShell's frame adds the card's `run-card` testid and the mb-6 spacer where the heading was; nothing else differs.
+  - Every word, every `data-switchboard-*` mark and ApprovePage's own ResultLine with its status block are unchanged.
+- **The bar's testid** is RunShell's `run-approval-required` (it was `approve-stakes-change`). Nothing outside the
+  tests read it; the extension matches links by `stakes=change` in the url, not the page.
+- **Pinned** (ApprovePage.test.jsx, "C1: every kind keeps its marks"): written and run against the code before C1,
+  then kept unchanged. For each of 11 previews (sql, git, sb_setup, sf_check, sf_read, sf_dataquery production and
+  sandbox, sf_dataop, sf_datawrite batch, bulk and undo) it checks:
+  - the running mark while Approve is in flight;
+  - the full ordered list of `data-switchboard-*` attributes and values once approved and once not run;
+  - the result line;
+  - the hidden status block;
+  - no SIMULATION strip.
+  The sql test, a `?kind=deploy` link, sign-in and an ended link are pinned the same way, as is the status block's
+  text and Try again sitting inside it.
+- **s19b finding (Alex's screen test 2), a bug from before C1, not caused by it.**
+  - What happens: on today's /approve/ page the red "APPROVAL REQUIRED" bar stays after Approve and after Don't run.
+  - Why: the bar follows the preview, not the state. Before C1, ApprovePage's Shell drew it whenever
+    `needsApprovalHeader(preview)` was true (HEAD at 9b2b29b, ApprovePage.jsx:522-530). Every page past loading passes
+    `preview`, and nothing clears it after `setReal` or `setCancelled` (lines 688 and 702). C1 kept that rule exactly
+    (`approvable={needsApprovalHeader(preview)}`).
+  - Where: the live page as well as the fixture, every kind.
+  - The run pages differ: their bar goes once nothing can be approved.
+  - Pinned: the marks tests now assert the bar is still there after Approve and after Don't run, for every kind. A
+    fix flips those asserts.
+  - **Proposed fix, a separate step:** pass `approvable` only while an Approve is still on offer:
+    `needsApprovalHeader(preview) && !real && !cancelled`. On sql, also not while the dry run is running, and not when
+    its counts differ (Approve is disabled then). Flip the pinned asserts and add the sql cases. The extension doesn't
+    read the bar, so its marks are untouched. About 10 minutes, page code and its test only.
+- **s19c, the bar fixed (Alex chose to ship it with C1).** Shell takes `offered`, and the bar shows only when
+  `offered && needsApprovalHeader(preview)`.
+  - Git-shaped kinds: `!real && !cancelled`.
+  - sql: `dry?.ok && !mismatch && !real && !cancelled`. So there is no bar while the dry run runs, when its counts
+    differ (Approve is disabled then), when it failed (Approve isn't offered), or after Approve or Don't run.
+  - Loading, sign-in and ended pages have none, as before.
+  - Every word, mark, result line and status block is unchanged.
+  - The pinned tests now assert the bar before acting and none after Approve and after Don't run, for every kind,
+    plus the sql cases.

@@ -2,6 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
 import { supabase, supabaseUrl, supabaseAnonKey } from '../supabaseClient';
 import CopyButton from '../shared/CopyButton';
+import { localTime, shortHash, shortStamp } from './format';
+import {
+  BANNER_LINE, BUTTON, PRODUCTION_BANNER, RED_BANNER, REASON_INPUT, RunShell, SANDBOX_BANNER, SECOND_BUTTON,
+} from './runs/look';
+
+// sb3_pages-h6v C1 (s19): the look comes from runs/look.js and the "Approve" heading is gone; nothing else changed.
+// The formatters moved to format.js and are re-exported here, so callers are unchanged.
+export { localTime, shortHash, shortStamp };
 
 // Where a Switchboard approval link lands (spec §8.1). The runner decides everything;
 // this page shows the SQL, runs the dry run by itself, then offers Approve and Don't run. Only a finished
@@ -13,10 +21,6 @@ import CopyButton from '../shared/CopyButton';
 // desktop helper, and the action id is the run mark, since the helper opens its run only when it picks the action up.
 // An sb setup (kind 'sb_setup', §11.5) is shown the same way, with its answers and the files the click writes,
 // and so is a sandbox check (kind 'sf_check', §11.4, s86pa), whose lines are "sf <id>".
-
-// As on OAuthConsent (primary) and ItemAddToCollection (secondary).
-const BUTTON = 'w-full sm:w-auto px-4 py-3 min-h-[44px] bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50';
-const SECOND_BUTTON = 'w-full sm:w-auto px-4 py-3 min-h-[44px] rounded-lg border border-border text-primary hover:border-primary transition-colors disabled:opacity-50';
 
 /** The plain sentence for a refusal that ends this link, or null if the page can carry on. */
 export function linkEnded(status, error) {
@@ -136,15 +140,6 @@ export function sfReadLines(payload) {
 // writes, so the page shows what will run. Orange is the PRODUCTION warning (O7); red stays for problems.
 // ---------------------------------------------------------------------------
 
-/** The stamp's first 12 characters, as sb prints it. */
-export const shortStamp = (stamp) => String(stamp ?? '').slice(0, 12);
-
-/** An ISO time in the viewer's local time, or the text as given if it doesn't parse. */
-export function localTime(iso) {
-  const t = Date.parse(iso);
-  return Number.isNaN(t) ? String(iso ?? '') : new Date(t).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
-}
-
 const KNOCK_ON = 'Knock-on check: ';
 /** A row's label, with the knock-on prefix sb uses when the row is one and the label doesn't already carry it. */
 export function rowLabel(row) {
@@ -235,7 +230,6 @@ export function dataqueryOrgType(payload) {
 }
 
 /** A sha256 as the page shows it first: its first 12 characters. */
-export const shortHash = (h) => String(h ?? '').slice(0, 12);
 
 function Hash({ value, testId }) {
   return (
@@ -523,25 +517,16 @@ export function needsApprovalHeader(preview) {
   return !!preview && !runsByItself(preview);
 }
 
-function Shell({ children, preview }) {
-  return (
-    <div className="min-h-screen bg-primary-bg">
-      {needsApprovalHeader(preview) && (
-        <div data-testid="approve-stakes-change" role="alert"
-          className="w-full bg-red-700 text-white text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-6 px-4">
-          Approval required
-        </div>
-      )}
-      <div className="flex justify-center p-4">
-      <div className="w-full max-w-3xl self-start p-4 sm:p-8 bg-white rounded-lg shadow-md">
-        <h1 className="text-2xl font-bold text-dark mb-2 text-center">Alfred</h1>
-        {/* s90d: a sql test runs and closes by itself, so nothing on it is approved. */}
-        {runsByItself(preview) ? <div className="mb-6" /> : <p data-testid="approve-heading" className="text-sm text-dark text-center mb-6">Approve</p>}
-        {children}
-      </div>
-      </div>
-    </div>
-  );
+// Never a simulation: today's pages are always real, so RunShell draws no SIMULATION strip on them.
+const REAL = { kind: 'real' };
+
+/**
+ * C1: the run pages' frame (look.js RunShell), with no "Approve" heading on any page. s19c: the red bar shows only
+ * while an Approve is still on offer: the page's kind needs one (needsApprovalHeader) and `offered` says the button
+ * is there, so it goes after Approve, after Don't run, and on sql while the dry run runs or when its counts differ.
+ */
+function Shell({ children, preview, offered = false }) {
+  return <RunShell source={REAL} approvable={offered && needsApprovalHeader(preview)}>{children}</RunShell>;
 }
 
 /** One line per counted statement: its rows, and what was expected when that's a number. */
@@ -743,29 +728,29 @@ export default function ApprovePage({ runner = callRunner, session = realSession
     const lines = isDataop || isDataquery || isDatawrite ? [] : isSb ? sbLines(preview.payload) : isSf ? sfLines(preview.payload)
       : isSfRead ? sfReadLines(preview.payload) : gitLines(preview.payload, preview.project_code);
     return (
-      <Shell preview={preview}>
+      <Shell preview={preview} offered={!real && !cancelled}>
         {approving && <span hidden data-switchboard-running={preview.kind} />}
         {isDataop && (
           <div data-testid="approve-production" role="alert"
-            className="mb-4 w-full bg-orange-400 text-black text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
+            className={PRODUCTION_BANNER}>
             Production, live client data
           </div>
         )}
         {/* dataquery_fixes-v3n: orange PRODUCTION, or a sky-blue SANDBOX that never says production; no org_type is production. */}
         {isDataquery && dataqueryOrgType(preview.payload) === 'sandbox' && (
           <div data-testid="approve-sandbox-read" role="alert"
-            className="mb-4 w-full bg-sky-700 text-white text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
+            className={SANDBOX_BANNER}>
             Sandbox, read only
-            <span data-testid="approve-sandbox-read-mode" className="block text-lg sm:text-xl normal-case tracking-normal mt-1">
+            <span data-testid="approve-sandbox-read-mode" className={BANNER_LINE}>
               {dataqueryMode(preview.payload) === 'exports' ? 'Bulk exports' : 'Counts'}
             </span>
           </div>
         )}
         {isDataquery && dataqueryOrgType(preview.payload) !== 'sandbox' && (
           <div data-testid="approve-production-read" role="alert"
-            className="mb-4 w-full bg-orange-400 text-black text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
+            className={PRODUCTION_BANNER}>
             Production, read only
-            <span data-testid="approve-production-read-mode" className="block text-lg sm:text-xl normal-case tracking-normal mt-1">
+            <span data-testid="approve-production-read-mode" className={BANNER_LINE}>
               {dataqueryMode(preview.payload) === 'exports' ? 'Bulk exports' : 'Counts'}
             </span>
             {dataqueryOrgType(preview.payload) === null && (
@@ -778,19 +763,19 @@ export default function ApprovePage({ runner = callRunner, session = realSession
         {/* dataop_write-j5w: orange PRODUCTION or sky-blue SANDBOX, from org_type. */}
         {isDatawrite && datawriteOrgType(preview.payload) === 'sandbox' && (
           <div data-testid="approve-sandbox-write" role="alert"
-            className="mb-4 w-full bg-sky-700 text-white text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
+            className={SANDBOX_BANNER}>
             Sandbox, changes records
           </div>
         )}
         {isDatawrite && datawriteOrgType(preview.payload) === 'production' && (
           <div data-testid="approve-production-write" role="alert"
-            className="mb-4 w-full bg-orange-400 text-black text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
+            className={PRODUCTION_BANNER}>
             Production, changes live records
           </div>
         )}
         {isSfRead && isProductionFullData(preview.payload) && (
           <div data-testid="approve-production-full-data" role="alert"
-            className="mb-4 w-full bg-red-700 text-white text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg">
+            className={RED_BANNER}>
             Production full data
           </div>
         )}
@@ -868,7 +853,7 @@ export default function ApprovePage({ runner = callRunner, session = realSession
             <div className="mb-4">
               <label htmlFor="dont-run-reason" className="block text-sm text-dark mb-1">Reason for not running (optional)</label>
               <input id="dont-run-reason" type="text" maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)}
-                className="w-full px-3 py-2 min-h-[44px] rounded-lg border border-border text-dark" />
+                className={REASON_INPUT} />
             </div>
             <div className="flex flex-col sm:flex-row gap-3">
               <button className={BUTTON} disabled={busy} onClick={runReal}>Approve and run</button>
@@ -887,9 +872,12 @@ export default function ApprovePage({ runner = callRunner, session = realSession
     : dry?.ok ? 'Dry run, rolled back' : 'The dry run failed, rolled back';
   const dryProblem = mismatch ? 'counts differ from what was expected' : dry?.summary;
   const running = approving || (preview.test && busy && !dry);
+  // s19c: Approve is on offer only once a clean dry run is in (not while it runs, not when its counts differ or it
+  // failed), and until Approve or Don't run.
+  const offered = Boolean(dry?.ok) && !mismatch && !real && !cancelled;
 
   return (
-    <Shell preview={preview}>
+    <Shell preview={preview} offered={offered}>
       {running && <span hidden data-switchboard-running={kind} />}
       <p className="font-bold text-dark mb-2 break-words">{preview.headline}</p>
       <p className="text-sm text-dark">Project</p>
@@ -950,7 +938,7 @@ export default function ApprovePage({ runner = callRunner, session = realSession
                 maxLength={200}
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                className="w-full px-3 py-2 min-h-[44px] rounded-lg border border-border text-dark"
+                className={REASON_INPUT}
               />
             </div>
           )}
