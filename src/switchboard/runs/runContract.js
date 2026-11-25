@@ -206,6 +206,12 @@ const touches = (r, type) => (r?.page === 'correction'
   ? (r.steps ?? []).some((s) => STEPS[s?.code]?.org === type)
   : (r?.orgs ?? []).some((o) => o.org_type === type));
 
+/** The total a write page shows (the count sentence and detail): undo_up_to or expected on an undo, else total or expected. */
+export function shownTotal(r) {
+  const c = r?.counts ?? {};
+  return r?.page === 'undo' ? c.undo_up_to ?? c.expected : c.total ?? c.expected;
+}
+
 /** The large count sentence: only on pages that write (data operation, undo). Null elsewhere. */
 export function countSentence(r) {
   if (!r || !['dataop', 'undo'].includes(r.page)) return null;
@@ -390,6 +396,39 @@ export const RERUN_LABEL = 'Run the pre-check and rehearsal again';
 
 /** The correction page's "Still valid, not run again": [{ check, passed_at }]. */
 export const stillValid = (r) => (r?.page === 'correction' && Array.isArray(r.changed?.still_valid) ? r.changed.still_valid : []);
+
+/** The checks a data operation's write needs, each passed and in use (as switchboard_consume_run_link holds them). */
+export const WRITE_CHECKS = ['count', 'login', 'automation', 'backup', 'rehearsal'];
+
+/**
+ * B4 (spec 10d item 3): the status a real page shows, built from the request's evidence, which only the database
+ * writes, never from what the chat sent. On a pre-check, data operation or correction page, the phases and (on a
+ * correction) "Still valid" are rebuilt from the evidence in use: the pre-check and rehearsal passed when every write
+ * check is in use, at the newest of them, "(run again)" when that came after a rerun was asked for; the correction's
+ * still-valid list is every check in use with its own time. An undo or check page is left as it is: its phases report
+ * the earlier run, which has no evidence here. The expiry is validUntil(evidence) already.
+ */
+export function statusFromEvidence(r) {
+  if (!r || typeof r !== 'object' || !['precheck', 'dataop', 'correction'].includes(r.page)) return r;
+  const inUse = (Array.isArray(r.evidence) ? r.evidence : [])
+    .filter((e) => e && !e.voided && typeof e.passed_at === 'string' && !Number.isNaN(Date.parse(e.passed_at)));
+  const passed = r.page !== 'correction' && WRITE_CHECKS.every((c) => inUse.some((e) => e.check === c));
+  const newest = inUse.length ? new Date(Math.max(...inUse.map((e) => Date.parse(e.passed_at)))).toISOString() : null;
+  const rerun = passed && Boolean(r.rerun_at) && Date.parse(newest) > Date.parse(r.rerun_at);
+  const first = passed
+    ? { name: 'Pre-check and rehearsal', state: 'passed', at: newest, ...(rerun ? { rerun: true } : {}) }
+    : { name: 'Pre-check and rehearsal', state: 'waiting' };
+  const second = { name: 'Data operation', state: r.page === 'dataop' && passed ? 'waiting' : 'not_started' };
+  const out = { ...r, phases: [first, second] };
+  if (r.page === 'correction') {
+    // Only what passed before the correction: a check that has since passed again was run again.
+    const since = Date.parse(r.corrected_at ?? '');
+    out.changed = { ...(r.changed ?? {}), still_valid: inUse
+      .filter((e) => Number.isNaN(since) || Date.parse(e.passed_at) <= since)
+      .map(({ check, passed_at }) => ({ check, passed_at })) };
+  }
+  return out;
+}
 const CHECK_WORDS = { count: 'Count', login: 'Login check', automation: 'Triggers and flows', backup: 'Backup', sample: 'Sample record', rehearsal: 'Sandbox rehearsal' };
 export const checkWord = (check) => CHECK_WORDS[check] ?? check;
 

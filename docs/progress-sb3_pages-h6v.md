@@ -15,10 +15,13 @@ Phase B 7), the switch-over (C, 2) later and approved separately. At double the 
 | A5 (s6, s6b) | s6 fixes; correction page; not started and Try again; checks expired and the rerun; check what happened; used link and rerun waiting. s6b: the dev server's lint error, a render test of every scenario, the stuck-run rerun path, the undo's triggers-and-flows step | 2 + follow-up | done (265 tests); awaiting Alex's screen tests |
 | A6 (s7) | Code review page; `diff` 5.2.0; acks, notes, superseded; s7 field-correction rule | 2 | done in one step; Alex's screen tests passed |
 | A7 (s8, s8b) | The A7 list below, the other correction scenarios, and the A6 testing fixes. s8b: the closed undo's status line, the field correction reruns the sample, new-file notes at the top | 1 + follow-up | done (351 tests in the runs folder); awaiting Alex's s8b screen tests. Phase A: 11 planned, 11 run (with 4 follow-ups) |
-| B1 | Migration, tests, queue, conformance, Checkpoint (waits on plumbing's helper kind) | 2 | |
-| B2 | switchboard-run-pages function; deploy | 2 | |
-| B3 | MCP tools; deploy | 2 | |
-| B4 | Real source; live routes; end to end on a sandbox | 1 | |
+| B1 (s10, s10b) | Migration, tests, queue, conformance, Checkpoint | 2 | s10: drift check passed; migration and both tests drafted and cold-reviewed; 15 db items claimed; numbered 250 (db:migration:250). s10b: 250_run_pages.sql written, _pending_ deleted, queued (action 9f97e4f0-7206-4b38-8155-2bd5a48d2af3); waiting for Alex's approval, then the two --test scripts |
+| B1 | (see above) | | done: live, verify 69/69, failure tests 62/62, on main at 1d12214 |
+| B2 (s11) | switchboard-run-pages function; deploy | 2 | built (22 tests), deployed, unauthenticated smoke test passed; the preview-with-JWT smoke test is Alex's; one 250 gap open for a follow-up migration (spec 10b) |
+| B2 follow-up (s12, s12b) | The correction gap and switchboard_record_run_evidence (migration 251); helper routes removed | - | s12: drafted, cold-reviewed, db items claimed, numbered 251. s12b: 251 written with option A (pre_check_request_id), _pending_ deleted, the reruns line, cold-reviewed, queued (action 170f9522-95c9-43ea-b9bd-da761ce30633, never applied). s12c (blocked) and s12d: sample moves with the copy, correction kinds held to their rows, pre_check_request_id fixed, /approve reruns line; requeued (action b32ebcc8-313e-418a-b85b-d88780f69dc2). s12e: 251 live; 3_followup_test queued (action 566672f2-7d2d-4ecc-99c5-0b8b9319b502); switchboard-run-pages redeployed, smoke test passed. Next: read the test result, then the Checkpoint |
+| B3 (s13, s13b) | MCP tools; deploy | 2 | s13 stopped (runContract not loadable). s13b: four tools, runContract shared, git keys and strict schema, tests, cold review; deploy waits for a gitsync (main moved: 268f2e2, 509bb49). s13c: synced, deployed, strict refusal confirmed live; the tool listing shows after a connector reconnect |
+| B3 follow-up (s14, s14b) | Migration 252: a write's correction gets its own steps back; a sandbox can be added | - | s14: drafted, cold-reviewed, db items claimed, numbered 252. s14b: 252_correction_steps.sql written (plus the queue's base_steps refusal), _pending_ deleted, queued (action af4a4305-53dd-4d48-b23c-e0733ea127cc). s14c: 252 live; 4_correction_steps_test queued (action 9283ede0-b2a8-4e95-bc02-db205f724c5c). Next: read its result, then the Checkpoint |
+| B4 (s15, s15b) | Real source; live routes; end to end on a sandbox | 1 | s15 stopped (new files undeclared). s15b: liveSource.js, LiveRunRoute.jsx, the /run/ and /review/ routes, status from the evidence, the function's lines; tests, build, cold review; Alex's screen tests passed. s16: the count (the preview's total_count, migration 253 drafted and numbered, 5_preview_count_test written; a write page whose shown count differs offers no Approve) and the error boundary; db:fn:switchboard_run_preview and db:migration:253 held. s16b: 253_preview_count.sql written, _pending_ deleted, App.js wraps the lazy routes in RunErrorBoundary, 253 queued (action 6b041669-0b30-4a6a-9eef-069205953db1). s16c: 253 live (run b11a37fb-4495-4e4d-8dfa-c0f63888d9a6, CONFORMANT); 5_preview_count_test queued (action 756bd1ca-160b-465c-8fd0-123fc42a9536). Next: read its result, then the Checkpoint |
 | C | Switch-over (separate approval) | 2 | |
 
 ## A7: fixes from Alex's testing (recorded at s7, all built at s8)
@@ -44,17 +47,18 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-Run tag: sb3_pages-h6v-s9-<4>, B1 (the migration: four tables, ten functions and one added delete in switchboard_prune_sf_results, grants, register_table; verification and failure tests; queue; conformance; Checkpoint)
+Run tag: sb3_pages-h6v-s16d-<4>, read 5_preview_count_test's result (action 756bd1ca-160b-465c-8fd0-123fc42a9536), note it in the spec, and stop
 
 Scope of this step:
-- create: supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql (renamed to its number at the numbering step), supabase/tests/sb3_pages-h6v/1_verify.sql, supabase/tests/sb3_pages-h6v/2_failure_test.sql
+- create: nothing
 - update: docs/technical-spec-sb3_pages-h6v.md
-- delete: supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, after `claims.cmd number-migration` writes the numbered file
-- deploy: nothing (the migration and tests are queued with scripts/sql-queue.mjs; Alex approves by link)
-- SQL: the numbered migration (schema), 1_verify.sql and 2_failure_test.sql (--test)
-- db items, claimed at the database step, after gitsync and the drift check, never before: db:table:switchboard_run_requests, db:table:switchboard_run_links, db:table:switchboard_run_samples, db:table:switchboard_code_reviews, db:table:switchboard_actions, db:fn:switchboard_queue_run_request, db:fn:switchboard_correct_run_request, db:fn:switchboard_issue_run_link, db:fn:switchboard_run_preview, db:fn:switchboard_consume_run_link, db:fn:switchboard_cancel_run_link, db:fn:switchboard_retry_run, db:fn:switchboard_record_code_review, db:fn:switchboard_store_run_sample, db:fn:switchboard_drop_run_sample, db:fn:switchboard_prune_sf_results (all free at s8)
-- Before it starts: plumbing's helper kind (proposed sf_run) has landed on main (spec part 2, Q5); A6 and A7 committed; Alex runs gitsync in this worktree; then the drift check on what came in
-Estimated run: 30m
+- delete: nothing
+- deploy: nothing
+- SQL: none (reading the result only; it must say all_passed, 19 of 19)
+- db items: db:fn:switchboard_run_preview and db:migration:253, held since s16; released by the Checkpoint
+Estimated run: 3m
+
+Then one Checkpoint for all of B4 and 253, listing only files that changed.
 
 ## Timing log
 
@@ -93,3 +97,49 @@ Estimated run: 30m
 | s8b | Fixes | 13:22:26 | 13:24:11 | 1m45s |
 | s8b | Cold review and fixes | 13:24:11 | 13:26:00 | 1m49s |
 | s8b | Full suites and report | 13:26:00 | 13:26:40 | 0m40s |
+| s9 | Yield and report | 14:07:40 | 14:08:11 | 0m31s |
+| s10 | Drift check and draft | 14:12:29 | 14:19:51 | 7m22s |
+| s10 | Cold review and fixes | 14:19:51 | 14:28:33 | 8m42s |
+| s10 | Claims, number and report | 14:28:33 | 14:29:30 | 0m57s |
+| s10b | Write 250, delete _pending_, queue | 14:42:17 | 14:44:40 | 2m23s |
+| s10b | Notes and report | 14:44:40 | 14:45:50 | 1m10s |
+| s10c | Queue tests, notes and report | 14:50:00 | 14:50:40 | 0m40s |
+| s10d | Diagnose, fix test, requeue, report | 14:56:55 | 14:57:40 | 0m45s |
+| s11 | Build and tests | 15:10:55 | 15:15:16 | 4m21s |
+| s11 | Cold review and fixes, then waiting overnight on the db:deploy approval | 15:15:16 | 09:16:17 (next day) | 18h01m (mostly the wait) |
+| s11 | Deploy, smoke test, notes and report | 09:16:17 | 09:18:00 | 1m43s |
+| s12 | Migration, test, route removal | 09:22:38 | 09:28:44 | 6m06s |
+| s12 | Cold review and fixes | 09:28:44 | 09:35:15 | 6m31s |
+| s12 | Claims, number and report | 09:35:15 | 09:36:30 | 1m15s |
+| s12b | Claim, 251, test, reruns line, spec | 20:05:00 | 20:12:36 | 7m36s |
+| s12b | Cold review, fixes, full suites | 20:12:36 | 20:17:59 | 5m23s |
+| s12b | Queue and report | 20:17:59 | 20:19:30 | 1m31s |
+| s12c | Claim, sample move; blocked by the plan guard | 20:20:25 | 20:23:10 | 2m45s |
+| s12d | Correction function, tests, /approve line, spec | 20:23:48 | 20:25:53 | 2m05s |
+| s12d | Cold review and fixes, queue | 20:25:53 | 20:29:23 | 3m30s |
+| s12d | Report | 20:29:23 | 20:30:30 | 1m07s |
+| s12e | Queue test, deploy, smoke test | 20:32:03 | 20:32:40 | 0m37s |
+| s12e | Notes and report | 20:32:40 | 20:33:40 | 1m00s |
+| s13 | Claim, read, stop | 20:37:56 | 20:40:10 | 2m14s |
+| s13b | Shared runContract, tools, schema, tests, build | 20:40:41 | 20:45:28 | 4m47s |
+| s13b | Cold review, fixes, spec | 20:45:28 | 20:51:18 | 5m50s |
+| s13b | Deploy check (stopped: main moved), report | 20:51:18 | 20:52:30 | 1m12s |
+| s13c | Sync check, tests, deploy, smoke test | 20:53:51 | 20:56:40 | 2m49s |
+| s13c | Notes and report | 20:56:40 | 20:57:30 | 0m50s |
+| s14 | Draft 252, test, spec | 21:03:12 | 21:07:28 | 4m16s |
+| s14 | Cold review and fixes | 21:07:28 | 21:12:30 | 5m02s |
+| s14 | Claims, number and report | 21:12:30 | 21:13:30 | 1m00s |
+| s14b | Claim, write 252, test, spec | 21:14:55 | 21:17:52 | 2m57s |
+| s14b | Cold review, queue, report | 21:17:52 | 21:20:30 | 2m38s |
+| s14c | Queue test, notes, report | 21:21:59 | 21:23:00 | 1m01s |
+| s15 | Read, statusFromEvidence (stopped: new files) | 21:25:16 | 21:28:40 | 3m24s |
+| s15b | Data layer, routes, pages, tests, build | 21:29:20 | 21:34:37 | 5m17s |
+| s15b | Cold review, fixes, suites, spec | 21:34:37 | 21:39:48 | 5m11s |
+| s15b | Report | 21:39:48 | 21:41:30 | 1m42s |
+| s16 | Migration, test, page fixes and tests | 05:21:13 | 05:25:37 | 4m24s |
+| s16 | Cold review, count-mismatch fix, suites, build, spec, number | 05:25:37 | 05:30:36 | 4m59s |
+| s16 | Report | 05:30:36 | 05:31:01 | 0m25s |
+| s16b | 253 written, App.js boundary | 05:35:22 | 05:36:07 | 0m45s |
+| s16b | Suites, build, spec, queue | 05:36:07 | 05:37:01 | 0m54s |
+| s16b | Report | 05:37:01 | 05:37:15 | 0m14s |
+| s16c | Queue test, spec, report | 05:40:22 | 05:41:00 | 0m38s |

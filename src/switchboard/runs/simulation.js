@@ -417,7 +417,11 @@ export function simSource(name, { now = Date.now(), desktop } = {}) {
     checkDesktop: async () => {
       return simulatedState(answers.length > 1 ? answers.shift() : answers[0]);
     },
-    approve: async () => ({ sent: true, link_id: linkId }),
+    // A write's correction Approve is its reruns, as the database records it (251: as_rerun); a pre-check's isn't.
+    approve: async () => ({
+      sent: true, link_id: linkId,
+      ...(built.request?.page === 'correction' && built.request?.base_page !== 'precheck' ? { as_rerun: true } : {}),
+    }),
     // Checks expired: the rerun click is its own approval (spec part 5, rerun mode).
     rerun: async () => ({ sent: true, rerun: true, link_id: linkId }),
     // Not started: resend the same run, same link id (spec 4.5).

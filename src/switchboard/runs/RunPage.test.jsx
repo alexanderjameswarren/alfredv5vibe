@@ -88,7 +88,8 @@ describe('the run page, on sample data', () => {
     await screen.findByTestId('run-sent');
     expect(container.querySelector('[data-switchboard-run-id]')).toBeNull();
     expect(container.querySelector('[data-switchboard-status]')).toBeNull();
-    expect(screen.getByTestId('run-result-line')).toHaveTextContent('SIMULATION run sim-dataop-update');
+    // A write approval: the bare line, no outcome word (s12b).
+    expect(screen.getByTestId('run-result-line')).toHaveTextContent(/chat\.SIMULATION run sim-dataop-update$/);
   });
 });
 
@@ -521,6 +522,13 @@ describe('A5: screen d, the correction page', () => {
     // eslint-disable-next-line no-bitwise
     expect(screen.getByTestId('run-will').compareDocumentPosition(screen.getByTestId('run-still-valid')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByTestId('run-approve')).toHaveTextContent('Approve this run on PRODUCTION and SANDBOX');
+  });
+
+  test('a correction Approve runs its reruns: its result line is "run <id> reruns" (s12b)', async () => {
+    await open('correction-field');
+    fireEvent.click(screen.getByTestId('run-approve'));
+    await screen.findByTestId('run-sent');
+    expect(screen.getByTestId('run-result-line')).toHaveTextContent(/chat\.SIMULATION run sim-correction-field reruns$/);
   });
 
   test('a wording-only edit has no page of its own: the next page carries the block', async () => {

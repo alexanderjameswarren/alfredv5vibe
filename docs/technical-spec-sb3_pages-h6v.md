@@ -711,9 +711,6 @@ switchboard_pickup_git(p_user, p_pickup_id default null). Nothing else on main t
      Closed (Alex, s14b, in 252): switchboard_queue_run_request refuses base_steps and base_phases from the chat,
      naming the key ("leave base_steps out: only a correction keeps the request's own steps and phases"), as it refuses
      evidence; everything else in it is 251's, unchanged. 252 is numbered 252_correction_steps.sql.
-- **252 live (s14c, 2026-11-24):** applied (action af4a4305-53dd-4d48-b23c-e0733ea127cc, run
-  8917e8e6-02ee-4108-a358-aaf41bdb79c7, 13 statements, CONFORMANT, 123 tables). 4_correction_steps_test.sql queued with
-  --test (action 9283ede0-b2a8-4e95-bc02-db205f724c5c); its result is still to read.
      switchboard_record_run_evidence restores them when the request returns to its base page, and a multi-object run's
      write_step entries take their object, kind and count from operation.steps, so a records correction's counts carry
      through. A request with no phases of its own gets none back. A request corrected before 252 has no base_steps
@@ -726,12 +723,68 @@ switchboard_pickup_git(p_user, p_pickup_id default null). Nothing else on main t
   2a. Also in 252 (cold review): a records or records_filter correction may change a multi-object run's step counts,
      never its steps' objects, kinds or number (251 left operation.steps out of the comparison whole). The kept base
      steps keep any null fields inside them.
-  3. B4's: changed.still_valid and phases[].state "passed" come from the chat; consume reads only the evidence column,
-     so approval is safe, but the page could show passes that don't exist. The real source builds both from the
-     evidence, never from the chat's request.
+  3. Closed by B4 (s15b): changed.still_valid and phases[].state "passed" came from the chat; consume reads only the
+     evidence column, so approval was safe, but the page could show passes that don't exist. The real source builds
+     both from the evidence (10e).
 - **Also in 252:** a wording or allowance edit keeps the row's page key. 251 stored the chat's page, so a wording edit on a
   correction page set request.page to the base page while the row stayed a correction. On a correction page it also
   keeps the correction's changed block (the page shows what it reruns) and adds the wording edit as changed.wording.
+- **252 live (s14c, 2026-11-24):** applied (action af4a4305-53dd-4d48-b23c-e0733ea127cc, run
+  8917e8e6-02ee-4108-a358-aaf41bdb79c7, 13 statements, CONFORMANT, 123 tables). 4_correction_steps_test.sql queued with
+  --test (action 9283ede0-b2a8-4e95-bc02-db205f724c5c).
+
+### 10e. B4 as built (s15, s15b, 2026-11-24): the live pages
+
+- **Routes** (src/App.js, beside /approve/, which is unchanged): /run/:token and /review/:token, both lazy-loaded
+  (src/switchboard/runs/LiveRunRoute.jsx). A signed-out visitor gets "Sign in with Google", which returns to the same
+  address. The preview is read once at open. An unknown token shows the function's (the database's) own words; a
+  voided link "This link was voided (<reason>). Nothing was approved."; an outdated one "The request was corrected since
+  this link was issued. Nothing was approved." (the wording of switchboard_consume_run_link's refusals). A review link
+  on /run/, or a run link on /review/, says which address to open. /run-sim/ stays dev-only.
+- **Data layer** (liveSource.js): callRunPages POSTs switchboard-run-pages/<route> with the session's JWT and the anon
+  key; a refusal throws a RunPagesError carrying the function's error text word for word, and the pages show it with
+  nothing added (refusalNote, look.js). liveRunSource and liveReviewSource are the real sources. Their kind is fixed from
+  the database's request.simulation: 'real' only when it is false, so the SIMULATION strip shows otherwise. Approve,
+  rerun and resend send the token, the preview's fingerprint and the newest desktop answer (asked at open, on Check
+  again and at the click, Q9); Approve also sends the count: the preview's total_count, exactly (s16). The review
+  answers send token, answer, text, acks and the desktop.
+- **Status from the evidence** (runContract statusFromEvidence): on a pre-check, data operation or correction page the
+  phases are rebuilt: "Pre-check and rehearsal" passed when every write check (count, login, automation, backup,
+  rehearsal) is in use, at the newest, "(run again)" when that came after rerun_at; "Data operation" waiting once it
+  has, else not started. A correction's "Still valid" is every check in use with its own time. The expiry was already
+  validUntil(evidence). An undo or check page keeps the chat's phases: they report the earlier run, which has no
+  evidence here (for Alex: the runner could record that run's outcome for them later).
+- **Result lines:** the pages show the function's own reply line: `run <id>`, `run <id> reruns`, `run <id> resent`,
+  `run <id> cancelled[: <note>]`, `review <id> ...`, each "SIMULATION "-prefixed for a simulation. A simulation's
+  ResultLine has no data-switchboard-status block, so the extension never posts it (plumbing L3). The
+  data-switchboard-project and data-switchboard-kind marks are unchanged.
+- **After the cold review (s15b):** the preview's run is the link's newest sf_run, which may be a rerun (a correction's
+  Approve or the expired-checks rerun). The real source never treats a rerun as the write: while it is approved and not
+  finished the request carries rerun_pending and the page waits with no Approve; once it finishes, the same link offers
+  what comes next (Approve after a pass, the rerun again after a failure). "Still valid" lists only checks that passed
+  before the correction. A correction's Approve says "Once they pass, this same page offers the data operation." A
+  review already answered shows its answer with nothing to click. A simulation's ended link keeps the strip.
+- **Closed in s16 (both s15b open items):**
+  1. **The count.** The page worked the count out from the request's counts, which a correction could leave apart
+     from total_count. Now migration 253 (numbered at s16; written and queued at s16b) has switchboard_run_preview
+     return the row's total_count at the top level, every other behaviour of 250's preview unchanged. The page sends
+     exactly that with Approve (approveCount(preview)), never a number of its own; with none it sends null, which a
+     write refuses. On a write page (data operation, undo) the count shown (shownTotal: total or expected;
+     undo_up_to or expected on an undo) must equal total_count; when they differ (a correction can part them) the
+     page offers no Approve and says why, so Alex never approves a number he wasn't shown. The page needs 253 applied
+     before it ships; until then a write's Approve is refused on the count,
+     and nothing runs. Test: supabase/tests/sb3_pages-h6v/5_preview_count_test.sql.
+  2. **The error boundary.** RunErrorBoundary (look.js) wraps each live route, keyed by token: a render failure, or a
+     failed load of RunPage or CodeReviewPage (now lazy-loaded inside it), shows "This page couldn't load. Nothing has
+     run." with a Reload button in the run page's look, with no strip and no Approve. A failed getSession now ends in
+     the message too, rather than staying on Loading. s16b: App.js imports RunErrorBoundary from look.js and wraps
+     the two lazy routes (/run/, /review/) outside their Suspense, so a failed load of LiveRunRoute's own chunk shows
+     the message too. /approve/ and every other route are unchanged.
+  3. **s16b:** 253_preview_count.sql written (the s16 _pending_ file, header renumbered, body unchanged), the
+     _pending_ file deleted, 253 queued. 5_preview_count_test.sql follows once 253 is applied (s16c).
+  4. **s16c:** 253 is live (action 6b041669-0b30-4a6a-9eef-069205953db1, run b11a37fb-4495-4e4d-8dfa-c0f63888d9a6,
+     CONFORMANT, 123 tables). 5_preview_count_test.sql queued with --test (action
+     756bd1ca-160b-465c-8fd0-123fc42a9536); its result must say all_passed, 19 of 19.
 
 ## 11. Build order (CLI steps)
 

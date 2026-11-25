@@ -1,4 +1,4 @@
-import { createElement as h } from 'react';
+import { Component, createElement as h } from 'react';
 import { localTime, shortHash } from '../ApprovePage';
 import CopyButton from '../../shared/CopyButton';
 
@@ -62,6 +62,9 @@ export function ResultLine({ line, sim }) {
  */
 export const isSimulation = (source) => source?.kind !== 'real';
 
+/** B4: a refusal from switchboard-run-pages is shown word for word; any other failure gets the page's own sentence. */
+export const refusalNote = (e, tail) => (e?.name === 'RunPagesError' ? e.message : `${e instanceof Error ? e.message : String(e)} ${tail}`);
+
 /** "PRODUCTION" or "SANDBOX" pill for one step. */
 export function OrgPill({ org }) {
   const sandbox = org === 'sandbox';
@@ -103,4 +106,22 @@ export function RunShell({ source, approvable = false, wide = false, children })
         h('h1', { className: 'text-2xl font-bold text-dark mb-2 text-center' }, 'Alfred'),
         h('div', { className: 'mb-6' }),
         children)));
+}
+
+/**
+ * Around the live /run/ and /review/ routes: a load or render failure shows a plain message in the run page's look,
+ * with a reload button, never a blank page. No request is known here, so no strip and no Approve.
+ */
+export class RunErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { failed: false }; }
+
+  static getDerivedStateFromError() { return { failed: true }; }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    const reload = this.props.onReload ?? (() => window.location.reload());
+    return h(RunShell, { source: { kind: 'real' } },
+      h('p', { 'data-testid': 'run-load-failed', role: 'alert', className: 'text-dark mb-4' }, "This page couldn't load. Nothing has run."),
+      h('button', { 'data-testid': 'run-reload', className: BUTTON, onClick: () => reload() }, 'Reload'));
+  }
 }
