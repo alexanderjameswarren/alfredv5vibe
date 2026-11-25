@@ -97,15 +97,18 @@ export function ReasonInput({ value, onChange, disabled }) {
 /**
  * The page frame. The SIMULATION strip comes from the source's kind, never from the data, so a sample can't drop it.
  * The red bar shows only while the page offers an Approve button (approvable). No "Approve" heading under "Alfred".
+ * s22: `approvalNote` adds a note after the bar's words, in its own case, not upper case ("— checking the SQL
+ * first…" on a sql page).
  */
 /** `wide`: the code review page uses the full window, keeping today's side margins; run pages keep max-w-3xl. */
-export function RunShell({ source, approvable = false, wide = false, children }) {
+export function RunShell({ source, approvable = false, approvalNote = null, wide = false, children }) {
   const sim = isSimulation(source);
   return h('div', { className: 'min-h-screen bg-primary-bg', ...(sim ? { 'data-switchboard-simulation': '' } : {}) },
     sim && h('div', { 'data-testid': 'run-simulation', role: 'alert', className: SIMULATION_STRIP },
       'Simulation', h('span', { className: 'block text-base sm:text-lg normal-case tracking-normal mt-1' },
         'Sample data. Nothing here reaches any org.')),
-    approvable && h('div', { 'data-testid': 'run-approval-required', role: 'alert', className: RED_BAR }, 'Approval required'),
+    approvable && h('div', { 'data-testid': 'run-approval-required', role: 'alert', className: RED_BAR }, 'Approval required',
+      approvalNote && h('span', { 'data-testid': 'run-approval-note', className: 'normal-case' }, ` — ${approvalNote}`)),
     h('div', { className: 'flex justify-center p-4' },
       h('div', { 'data-testid': 'run-card', className: `w-full ${wide ? 'min-w-0' : 'max-w-3xl'} self-start p-4 sm:p-8 bg-white rounded-lg shadow-md` },
         // As today's Shell: mb-2 under "Alfred", then the mb-6 spacer where the "Approve" heading was.

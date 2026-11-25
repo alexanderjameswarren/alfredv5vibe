@@ -48,23 +48,11 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-s21e: 255 applied (run 87e7b3ee-fd3c-4ff7-b73e-ca45da449b78, CONFORMANT); test 7 queued (action fee25e15-0b17-4f84-aedd-661c9f09edec). Next, once test 7 has run with all_passed true: record its result in spec 14.8, then the Checkpoint.
-
-Run tag: sb3_pages-h6v-s21f-<4>, test 7 passed: record it, then the Checkpoint
-
-Scope of this step:
-- create: nothing
-- update: docs/technical-spec-sb3_pages-h6v.md (14.8: test 7's run id and result)
-- delete: nothing
-- deploy: nothing
-- SQL: none
-Estimated run: 3m
-
-Then one Checkpoint (gitpush Checkpoint, this worktree) for s21b to s21f, which releases db:fn:switchboard_run_preview and db:migration:255 (s20 is on main, 336af24): src/switchboard/runs/RunPage.jsx src/switchboard/runs/RunPage.test.jsx src/switchboard/runs/runContract.js src/switchboard/runs/runEnd.test.jsx supabase/migrations/255_preview_run_end.sql supabase/tests/sb3_pages-h6v/7_preview_run_end_test.sql docs/technical-spec-sb3_pages-h6v.md docs/progress-sb3_pages-h6v.md
+s21b to s21e are on main (test 7: run 95b046e9-ae50-423c-b5bb-25c3212c2044, 49 of 49). s22: the sql approve page shows the bar first, "checking the SQL first…", with Approve disabled (spec 14.6). Next: its Checkpoint (gitpush Checkpoint, this worktree): src/switchboard/ApprovePage.jsx src/switchboard/ApprovePage.test.jsx src/switchboard/runs/look.js docs/technical-spec-sb3_pages-h6v.md docs/progress-sb3_pages-h6v.md. It ships today's /approve/ page, so approve it only while no /approve/ link is open.
 
 Then C2, once its gates are met (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall.
 
-Run tag: sb3_pages-h6v-s22-<4>, C2: retire sf_dataop and sf_datawrite (they refuse with a pointer to the run request tools)
+Run tag: sb3_pages-h6v-s23-<4>, C2: retire sf_dataop and sf_datawrite (they refuse with a pointer to the run request tools)
 
 Scope of this step:
 - create: nothing
@@ -177,3 +165,5 @@ Estimated run: 20m
 | s21c | Number the migration, report | 12:25:45 | 12:26:32 | 0m47s |
 | s21d | Claim, write 255, delete pending, spec, queue, report | 12:30:13 | 12:31:23 | 1m10s |
 | s21e | Queue test 7, spec, report | 12:37:35 | 12:37:54 | 0m19s |
+| s22 | Bar first, tests, spec, suites, build | 12:46:03 | 12:50:53 | 4m50s |
+| s22 | Cold review, fixes, suites again, report | 12:50:53 | 12:54:03 | 3m10s |

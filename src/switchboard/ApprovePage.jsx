@@ -523,10 +523,15 @@ const REAL = { kind: 'real' };
 /**
  * C1: the run pages' frame (look.js RunShell), with no "Approve" heading on any page. s19c: the red bar shows only
  * while an Approve is still on offer: the page's kind needs one (needsApprovalHeader) and `offered` says the button
- * is there, so it goes after Approve, after Don't run, and on sql while the dry run runs or when its counts differ.
+ * is there, so it goes after Approve, after Don't run, and on sql when its counts differ or the dry run failed.
+ * s22: on sql the bar also shows while the dry run is pending (`checking`), with "checking the SQL first…".
  */
-function Shell({ children, preview, offered = false }) {
-  return <RunShell source={REAL} approvable={offered && needsApprovalHeader(preview)}>{children}</RunShell>;
+function Shell({ children, preview, offered = false, checking = false }) {
+  return (
+    <RunShell source={REAL} approvable={(offered || checking) && needsApprovalHeader(preview)} approvalNote={checking ? 'checking the SQL first…' : null}>
+      {children}
+    </RunShell>
+  );
 }
 
 /** One line per counted statement: its rows, and what was expected when that's a number. */
@@ -872,12 +877,16 @@ export default function ApprovePage({ runner = callRunner, session = realSession
     : dry?.ok ? 'Dry run, rolled back' : 'The dry run failed, rolled back';
   const dryProblem = mismatch ? 'counts differ from what was expected' : dry?.summary;
   const running = approving || (preview.test && busy && !dry);
-  // s19c: Approve is on offer only once a clean dry run is in (not while it runs, not when its counts differ or it
-  // failed), and until Approve or Don't run.
+  // s19c: Approve is on offer only once a clean dry run is in (not when its counts differ or it failed), and until
+  // Approve or Don't run.
   const offered = Boolean(dry?.ok) && !mismatch && !real && !cancelled;
+  // s22: from the page's load until the dry run answers (or is refused, which sets a note), the bar shows with its
+  // "checking" note and Approve is shown disabled, so the page never looks like one that closes by itself. A refusal
+  // with no words sets an empty note, which still ends checking (note is null only until something answers).
+  const checking = !dry && !real && !cancelled && note === null;
 
   return (
-    <Shell preview={preview} offered={offered}>
+    <Shell preview={preview} offered={offered} checking={checking}>
       {running && <span hidden data-switchboard-running={kind} />}
       <p className="font-bold text-dark mb-2 break-words">{preview.headline}</p>
       <p className="text-sm text-dark">Project</p>
@@ -943,7 +952,9 @@ export default function ApprovePage({ runner = callRunner, session = realSession
             </div>
           )}
           <div className="flex flex-col sm:flex-row gap-3">
-            {busy && !dry ? null : dry?.ok || mismatch ? (
+            {checking && !preview.test ? (
+              <button className={BUTTON} disabled onClick={runReal}>Approve and run for real</button>
+            ) : busy && !dry ? null : dry?.ok || mismatch ? (
               <>
                 <button className={BUTTON} disabled={busy || mismatch} onClick={runReal}>Approve and run for real</button>
                 <button className={SECOND_BUTTON} disabled={busy} onClick={runDry}>Run the dry run again</button>
