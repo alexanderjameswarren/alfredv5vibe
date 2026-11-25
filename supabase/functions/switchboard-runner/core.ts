@@ -39,22 +39,28 @@ export type PickedAction = {
 };
 /**
  * The kinds the desktop helper runs (spec 10, 11.3-11.6). sf_read since s89e; sf_dataop since dataops_alfred-d4x;
- * sf_dataquery since dataop_link-k7d; sf_datawrite since dataop_write-j5w.
+ * sf_dataquery since dataop_link-k7d; sf_datawrite since dataop_write-j5w; sf_run (a run page's approval, migration 248)
+ * since sb3_runner-r4q s4.
  */
-export const HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop", "sf_dataquery", "sf_datawrite"] as const;
+export const HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop", "sf_dataquery", "sf_datawrite", "sf_run"] as const;
+/** What a helper from dataop_write-j5w asks for; served as today, never handed an sf_run (sb3_runner-r4q s4). */
+const J5W_HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop", "sf_dataquery", "sf_datawrite"];
 /** What a helper from dataop_link-k7d asks for; served as today, never handed an sf_datawrite (dataop_write-j5w). */
 const K7D_HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop", "sf_dataquery"];
 /** What a helper from dataops_alfred-d4x asks for; still handed an sf_dataop, never an sf_dataquery (dataop_link-k7d). */
 const D4X_HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read", "sf_dataop"];
-/** The kinds whose picks get the 4-hour limit: a data run's batch and waits, or a large export, take that long. */
-export const LONG_PICK_KINDS = ["sf_dataop", "sf_dataquery", "sf_datawrite"];
+/**
+ * The kinds whose picks get the 4-hour limit: a data run's batch and waits, or a large export, take that long. An sf_run
+ * is a run page's pre-check, data operation or undo, so it gets the same.
+ */
+export const LONG_PICK_KINDS = ["sf_dataop", "sf_dataquery", "sf_datawrite", "sf_run"];
 /** What a helper from before dataops_alfred-d4x asks for; still served, and never handed an sf_dataop (O3). */
 const S89_HELPER_KINDS = ["git", "sf_check", "sb_setup", "sf_read"];
 /** What a helper from before s89c asks for; still served, so an older install keeps picking up. */
 const OLDER_HELPER_KINDS = ["git", "sf_check", "sb_setup"];
 export type Picked = {
   action: { id: string; user_id: string; kind: string; status: string; picked_up_at: string | null; payload?: Record<string, unknown> | null };
-  run: { id: string; action_id: string; mode: string; finished_at: string | null } | null;
+  run: { id: string; action_id: string; mode: string; finished_at: string | null; result?: Record<string, unknown> | null } | null;
 };
 export type Deps = {
   queueSecret: string;
@@ -106,6 +112,17 @@ export type Deps = {
   insertSfResult(row: Record<string, unknown>): Promise<{ conflict: boolean }>;
   /** One switchboard_sf_read_log row. Never rows. */
   logSfRead(row: Record<string, unknown>): Promise<void>;
+  /** sb3_runner-r4q s4: the user's switchboard_run_links row by id, every column but token_hash; null when missing. */
+  runLink(linkId: string, userId: string): Promise<Record<string, unknown> | null>;
+  /** The user's switchboard_run_requests row by id, whole; null when missing. */
+  runRequest(requestId: string, userId: string): Promise<Record<string, unknown> | null>;
+  /** switchboard_store_run_sample (250), with the service role. Throws when refused. */
+  storeRunSample(requestId: string, sample: Record<string, unknown>): Promise<unknown>;
+  /** switchboard_record_run_evidence (251), with the service role. A repeat returns already: true. Throws when refused. */
+  recordRunEvidence(runId: string): Promise<Record<string, unknown>>;
+  /** switchboard_drop_run_sample (250), with the service role: how many were deleted (0 or 1). */
+  dropRunSample(requestId: string): Promise<number>;
+  // The three throw an Error whose `code` is the database's SQLSTATE when it refused (see FINAL_SQLSTATES).
 };
 
 /** The preview's stakes field, or nothing. A runner deployed before the migration never fails a preview on it. */
@@ -442,6 +459,8 @@ async function handleRun(route: string, req: Request, deps: Deps): Promise<Respo
   if (!action.link_expires_at || Date.parse(action.link_expires_at) <= Date.now()) {
     return reply({ ok: false, error: "this link has expired." }, 410);
   }
+  // An sf_run has no link of its own: its run page approves it (switchboard-run-pages), never these routes.
+  if (action.kind === "sf_run") return reply({ ok: false, error: "an sf_run is approved on its run page, not here." }, 409);
   if (isHelperKind(action.kind)) return handleHelperRun(route, body, action, jwt, token, deps, reply);
   if (action.kind && action.kind !== "sql") return reply({ ok: false, error: `a ${action.kind} action has no link here yet.` }, 409);
 
@@ -598,6 +617,7 @@ function pickupKinds(body: Record<string, unknown> | null): { pick?: "git" | "he
   const exactly = (list: readonly string[]) => set.size === list.length && list.every((k) => set.has(k));
   if (set.size === 1 && set.has("git")) return { pick: "git" };
   if (exactly(HELPER_KINDS)) return { pick: "helper", kinds: [...HELPER_KINDS] };
+  if (exactly(J5W_HELPER_KINDS)) return { pick: "helper", kinds: [...J5W_HELPER_KINDS] };
   if (exactly(K7D_HELPER_KINDS)) return { pick: "helper", kinds: [...K7D_HELPER_KINDS] };
   if (exactly(D4X_HELPER_KINDS)) return { pick: "helper", kinds: [...D4X_HELPER_KINDS] };
   // A helper from before dataops_alfred-d4x, and one from before s89c (which refuses an sf_read it is handed, and that
@@ -678,7 +698,244 @@ async function handlePickup(req: Request, deps: Deps, now: number): Promise<Resp
     : await (pickupId ? deps.pickupGit(deps.userId, pickupId) : deps.pickupGit(deps.userId));
   // pickup_git returns no kind; everything it hands out is git.
   const action = picked && pick === "git" ? { ...picked, kind: "git" } : picked;
-  return json({ ok: true, action, timed_out: stale.map((s) => s.action_id) });
+  const timedOut = stale.map((s) => s.action_id);
+  if (action?.kind === "sf_run") return sfRunPickup(action, deps, now, timedOut);
+  return json({ ok: true, action, timed_out: timedOut });
+}
+
+// ---------------------------------------------------------------------------
+// sb3_runner-r4q s4: sf_run, a run page's approval (248; pages contract parts 2, 4.4, 4.5, 10c). The action's payload
+// is {link_id} only: what to run is the run link's request, read here with the service role. The helper reports
+// {ok, pass, checks, sample?}; the runner records the run, then the evidence (251), then the sample (250).
+// ---------------------------------------------------------------------------
+
+/** The result line for a run page's run (part 4.4), by its link id: done: PASS, done: FAIL, or failed. */
+export const sfRunLine = (linkId: string, ok: boolean, pass?: unknown) =>
+  `run ${linkId} ${ok ? (pass === true ? "done: PASS" : "done: FAIL") : "failed"}`;
+
+const linkIdOf = (payload: Record<string, unknown> | null | undefined) =>
+  typeof payload?.link_id === "string" ? payload.link_id : "";
+
+/**
+ * The picked sf_run with its link (every column but token_hash) and its request (whole). Never the sample: the page
+ * shows it, the helper never needs it. A missing link or request can't be run, so the action fails and the pickup is
+ * refused naming the fix; a read that throws leaves the pick open, so the helper's retry with the same pickup_id gets
+ * the same action and reads again.
+ */
+async function sfRunPickup(action: PickedAction, deps: Deps, now: number, timedOut: string[]): Promise<Response> {
+  const linkId = linkIdOf(action.payload);
+  const link = linkId ? await deps.runLink(linkId, deps.userId) : null;
+  const request = link && typeof link.request_id === "string" ? await deps.runRequest(link.request_id, deps.userId) : null;
+  if (!link || !request) {
+    const why = !link ? `no run link ${linkId || "(none in the payload)"}` : `run link ${linkId} has no request ${link.request_id}`;
+    const error = `sf_run ${action.action_id}: ${why} — its request was deleted; queue the request again and approve its new link.`;
+    await deps.finishRun(action.run_id, { summary: error.slice(0, MAX_SUMMARY), result: { ok: false }, finished_at: new Date(now).toISOString() });
+    await deps.setStatus(action.action_id, "failed");
+    return json({ ok: false, error, action_id: action.action_id, run_id: action.run_id,
+                  ...(linkId ? { line: sfRunLine(linkId, false) } : {}), timed_out: timedOut }, 409);
+  }
+  const { token_hash: _hash, ...shown } = link;
+  return json({ ok: true, action: { ...action, link: shown, request }, timed_out: timedOut });
+}
+
+/** The pre-check's check names and orgs, as switchboard_record_run_evidence (251) takes them. */
+export const SF_RUN_CHECKS = ["count", "login", "automation", "backup", "sample", "rehearsal"];
+const SF_RUN_ORGS = ["production", "sandbox"];
+const COMMIT = /^[0-9a-f]{7,40}$/;
+
+/**
+ * Why an sf_run report can't be kept, or null. The one place its shape is checked, while the evidence shape is still
+ * the data runs thread's proposal: {ok, pass, checks: [{check, org, commit?}], sample?}. pass is required when ok;
+ * checks may be left out or empty (a run with nothing to record); sample is an object (250 checks its records).
+ */
+export function sfRunReportProblem(body: Record<string, unknown>): string | null {
+  if (body.pass !== undefined && typeof body.pass !== "boolean") return "pass must be true or false.";
+  if (body.ok === true && typeof body.pass !== "boolean") return "an sf_run that succeeded must report pass, true or false.";
+  if (body.pass === true && body.ok !== true) return "pass can be true only when ok is true.";
+  if (body.checks !== undefined) {
+    if (!Array.isArray(body.checks)) return "checks must be a list of {check, org, commit?}.";
+    const bad = body.checks.find((c) => !isPlain(c) || !SF_RUN_CHECKS.includes(c.check as string) || !SF_RUN_ORGS.includes(c.org as string) ||
+      (c.commit !== undefined && !(typeof c.commit === "string" && COMMIT.test(c.commit))) ||
+      Object.keys(c).some((k) => !["check", "org", "commit"].includes(k)));
+    if (bad !== undefined) {
+      return `every check must be {check, org, commit?}: check one of ${SF_RUN_CHECKS.join(", ")}; org production or sandbox; commit a hex hash.`;
+    }
+    if (new Set(body.checks.map((c) => c.check)).size !== body.checks.length) return "checks names a check twice.";
+  }
+  if (body.sample !== undefined) {
+    const records = isPlain(body.sample) ? body.sample.records : undefined;
+    if (!Array.isArray(records) || records.length < 1 || records.length > 2) {
+      return "sample must be an object: {records: [one record, or two for an upsert]}.";
+    }
+  }
+  return null;
+}
+
+/**
+ * What an sf_run is, by 251's own rule (switchboard_record_run_evidence): the link's pre-check when it is the link's
+ * rerun (rerun_action_id: "Run the pre-check and rehearsal again", or a write's correction Approve) or the link's
+ * approval (action_id) on a request whose base_page is precheck; the data operation's write when it is the link's
+ * approval on a request whose base_page is dataop or undo; anything else (a check page, or an action the link no longer
+ * names) is neither, and records nothing.
+ */
+export function sfRunKind(actionId: string, link: Record<string, unknown>, request: Record<string, unknown>): "pre-check" | "write" | "other" {
+  if (actionId === link.rerun_action_id) return "pre-check";
+  if (actionId !== link.action_id) return "other";
+  if (request.base_page === "precheck") return "pre-check";
+  if (request.base_page === "dataop" || request.base_page === "undo") return "write";
+  return "other";
+}
+
+/**
+ * The SQLSTATEs 250's switchboard_store_run_sample and 251's switchboard_record_run_evidence raise for a refusal that
+ * a retry can't change: P0002 (no such run, request or link), 23514 (a result or sample that doesn't fit, a run that
+ * isn't an sf_run's), 55000 (not finished, not passed, a simulation, a voided or older link, not the link's pre-check,
+ * finished before the correction, newer evidence in use, no valid checks for a sample). Anything else (a network or
+ * connection error, a server error) is retried.
+ */
+export const FINAL_SQLSTATES = ["P0002", "23514", "55000"];
+const FINAL_FIX: Record<string, string> = {
+  P0002: "its run link or request is gone; queue the request again and approve its new link.",
+  "23514": "the helper's result doesn't fit what the database records; fix the helper's report and run the pre-check again.",
+  "55000": "the run page changed since this run was approved; reload the run page and run the pre-check again.",
+};
+const sqlstateOf = (e: unknown) => (e && typeof e === "object" && typeof (e as { code?: unknown }).code === "string" ? (e as { code: string }).code : "");
+const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/**
+ * The run of an sf_run. The link and its request are read first, to tell a pre-check from a write; then the result
+ * goes on the run row without the sample (only {ok, exit_code?, pass?, checks?}; chat can read that row).
+ * - A pre-check, passing with checks: switchboard_record_run_evidence, then the sample if one came (250 stores one
+ *   only against valid evidence), both before the status, because a rerun's evidence must be recorded while its
+ *   action is still consumed (contract 10c).
+ * - A write: no evidence and no sample (251 refuses a data operation's own run); at its final status,
+ *   switchboard_drop_run_sample by its own link's request_id. A failed drop doesn't fail the write: the run summary
+ *   says so, and the 24-hour prune is the backstop.
+ * A refusal with a FINAL_SQLSTATES code fails the run at once, naming the fix (422, retry: false). Any other failed
+ * read or write is 503 {retry: true}, with the action still consumed, so the helper sends the same result again.
+ *
+ * A repeat never records twice: the run row is written only while unfinished (a retry reuses what it holds), the
+ * evidence function records a run id once (already: true), the sample is one row per request (replaced, never added),
+ * and once the status is set a repeat only answers already.
+ */
+async function sfRunResult(
+  a: Picked["action"], r: NonNullable<Picked["run"]>, body: Record<string, unknown>, summary: string, exitCode: unknown,
+  deps: Deps, now: number,
+): Promise<Response> {
+  const linkId = linkIdOf(a.payload);
+  const ids = { action_id: a.id, run_id: r.id, link_id: linkId };
+  const retry = (which: string, e: unknown) => json({
+    ok: false, retry: true, ...ids, error: `${which}: ${messageOf(e)} — the run is kept; send the same result again.`,
+  }, 503);
+  if (!a.picked_up_at || r.mode !== "real") {
+    return json({ ok: false, error: `this action is ${a.status} and no longer waiting for a result.` }, 409);
+  }
+  if (a.status !== "consumed") {
+    const stored = r.result ?? {};
+    if (r.finished_at && stored.timed_out !== true && (a.status === "succeeded" || a.status === "failed")) {
+      // From the status too: an action failed by the stale check after a failed write says failed, never PASS.
+      return json({ ok: true, already: true, action_id: a.id, run_id: r.id, status: a.status, link_id: linkId,
+                    line: sfRunLine(linkId, a.status === "succeeded" && stored.ok === true, stored.pass) });
+    }
+    return json({ ok: false, error: `this action is ${a.status} and no longer waiting for a result.` }, 409);
+  }
+
+  // Any other write that throws (the run row, the status) is retried too: every step is safe to repeat.
+  try {
+    return await sfRunRecord(a, r, body, summary, exitCode, deps, now, linkId, ids, retry);
+  } catch (e) {
+    return retry("runner", e);
+  }
+}
+
+const noted = (summary: string, note: string) => summary.slice(0, MAX_SUMMARY - note.length) + note;
+
+async function sfRunRecord(
+  a: Picked["action"], r: NonNullable<Picked["run"]>, body: Record<string, unknown>, summary: string, exitCode: unknown,
+  deps: Deps, now: number, linkId: string, ids: Record<string, string>, retry: (which: string, e: unknown) => Response,
+): Promise<Response> {
+  const finished_at = new Date(now).toISOString();
+  const exit = exitCode === undefined ? {} : { exit_code: exitCode };
+
+  // The link and its request first, so the kind is known on every path, a refused report's included.
+  let link: Record<string, unknown> | null;
+  let request: Record<string, unknown> | null;
+  try {
+    link = linkId ? await deps.runLink(linkId, deps.userId) : null;
+    request = link && typeof link.request_id === "string" ? await deps.runRequest(link.request_id, deps.userId) : null;
+  } catch (e) {
+    return retry("link", e);
+  }
+  const kind = link && request ? sfRunKind(a.id, link, request) : "other";
+  let runSummary = blankIds(summary).slice(0, MAX_SUMMARY);
+  let sampleDropped: number | null = null;
+  // A write's sample goes at its final status, succeeded or failed; a failed drop is noted, never fatal.
+  const drop = async (): Promise<string> => {
+    if (kind !== "write") return "";
+    try {
+      const n = await deps.dropRunSample(link!.request_id as string);
+      sampleDropped = typeof n === "number" ? n : 0;
+      return "";
+    } catch (e) {
+      return ` (sample not dropped: ${blankIds(messageOf(e)).slice(0, 100)}; the 24-hour prune removes it)`;
+    }
+  };
+  // Fail the run for good: the run row says why and the fix; the helper is told not to retry.
+  const final = async (why: string, kept: Record<string, unknown>, status = 422) => {
+    const reason = noted(why, await drop());
+    await deps.finishRun(r.id, { summary: reason, result: { ...kept, ok: false }, finished_at: r.finished_at ?? finished_at });
+    await deps.setStatus(a.id, "failed");
+    return json({ ok: false, retry: false, error: why, ...ids, status: "failed", line: sfRunLine(linkId, false),
+                  ...(kind === "write" ? { sample_dropped: sampleDropped } : {}) }, status);
+  };
+
+  const problem = sfRunReportProblem(body);
+  if (problem) {
+    // A retry after a failed write keeps the result already on the run; only a first report is closed by its shape.
+    if (r.finished_at) return json({ ok: false, error: problem, ...ids }, 400);
+    return final(`refused by the runner: ${problem}`, exit, 400);
+  }
+  const result: Record<string, unknown> = r.finished_at ? (r.result ?? {}) : {
+    ok: body.ok, ...exit,
+    ...(typeof body.pass === "boolean" ? { pass: body.pass } : {}),
+    ...(Array.isArray(body.checks) ? { checks: body.checks } : {}),
+  };
+  if (!link || !request) {
+    return final(`sf_run ${a.id}: ${!link ? `no run link ${linkId}` : `run link ${linkId} has no request`} — queue the request again and approve its new link.`, result);
+  }
+  if (!r.finished_at) await deps.finishRun(r.id, { summary: runSummary, result, finished_at });
+
+  const ok = result.ok === true;
+  let evidence: Record<string, unknown> | null = null;
+  let sampleStored = false;
+  if (kind === "pre-check" && ok && result.pass === true && Array.isArray(result.checks) && result.checks.length > 0) {
+    try {
+      evidence = await deps.recordRunEvidence(r.id);
+    } catch (e) {
+      const code = sqlstateOf(e);
+      if (!FINAL_SQLSTATES.includes(code)) return retry("evidence", e);
+      return final(`evidence refused (${code}): ${blankIds(messageOf(e))} — ${FINAL_FIX[code]}`, { ...result, refused: "evidence", sqlstate: code });
+    }
+    // Only a passing pre-check's sample is kept; any other is dropped, never stored. Once the evidence is in, a
+    // refused sample doesn't undo the run: it is noted, and the page shows no sample.
+    if (isPlain(body.sample)) {
+      try {
+        await deps.storeRunSample(link.request_id as string, body.sample);
+        sampleStored = true;
+      } catch (e) {
+        const code = sqlstateOf(e);
+        if (!FINAL_SQLSTATES.includes(code)) return retry("sample", e);
+        runSummary = noted(runSummary, ` (sample refused (${code}): ${blankIds(messageOf(e)).slice(0, 100)})`);
+        await deps.finishRun(r.id, { summary: runSummary });
+      }
+    }
+  }
+  const dropNote = await drop();
+  if (dropNote) await deps.finishRun(r.id, { summary: noted(runSummary, dropNote) });
+  const status = ok ? "succeeded" : "failed";
+  await deps.setStatus(a.id, status);
+  return json({ ok: true, ...ids, run_kind: kind, status, line: sfRunLine(linkId, ok, result.pass), evidence,
+                sample_stored: sampleStored, ...(kind === "write" ? { sample_dropped: sampleDropped } : {}) });
 }
 
 /** The helper's report: closes the run and marks the action succeeded or failed. Only for a pick still waiting. */
@@ -705,6 +962,8 @@ async function handleResult(req: Request, deps: Deps, now: number): Promise<Resp
   if (!a || a.user_id !== deps.userId || !isHelperKind(a.kind) || !r || r.action_id !== a.id) {
     return json({ ok: false, error: "no such picked action and run." }, 404);
   }
+  // sb3_runner-r4q s4: an sf_run answers a repeat itself, and may retry its writes after the run is recorded.
+  if (a.kind === "sf_run") return sfRunResult(a, r, body, summary, exitCode, deps, now);
   if (a.status !== "consumed" || !a.picked_up_at || r.mode !== "real" || r.finished_at) {
     return json({ ok: false, error: `this action is ${a.status} and no longer waiting for a result.` }, 409);
   }
