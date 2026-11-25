@@ -108,6 +108,9 @@ import {
   queueSwitchboardSfDataqueryTool, queueSwitchboardSfDatawriteTool, queueSwitchboardSfReadTool,
 } from "../_shared/tools/switchboard.ts";
 import {
+  correctSwitchboardRunRequestTool, issueSwitchboardRunLinkTool, queueSwitchboardRunRequestTool, recordSwitchboardCodeReviewTool,
+} from "../_shared/tools/switchboard-runs.ts";
+import {
   getClaudeNotificationSettingsTool,
   getClaudeNotificationsTool,
   logClaudeNotificationTool,
@@ -3626,11 +3629,13 @@ export function createMcpServer(token: string) {
       title: "Queue Switchboard Git",
       description:
         "Queue one git command (gitcom, gitsync, gitnewtree or gitpush) for a project and issue its single-use approval link in the same call. Nothing runs until Alex clicks Approve; then the desktop helper runs it in that project's worktree. Git has no dry run. " +
-        "Keys by command: gitcom takes message, include_unclaimed (main only); gitsync takes nothing; gitnewtree takes install and repo: FILL IN repo with the repo's absolute path (a repos.json key, e.g. C:\\Users\\Alex\\projects\\alfred-v5), since a code with no worktree yet names no repo; gitpush takes mode (push | checkpoint | finish), and for a Finish finish (phase | project-done), for a Checkpoint paths (a list) or all: true, and db (release | keep), plus message. Any other key is refused. " +
+        "Keys by command: gitcom takes message, include_unclaimed (main only); gitsync takes nothing; gitnewtree takes install and repo: FILL IN repo with the repo's absolute path (a repos.json key, e.g. C:\\Users\\Alex\\projects\\alfred-v5), since a code with no worktree yet names no repo, plus client and lane to register the project on the panel (client: the client's slug; lane: Fast track, Main, Side road or Country road) and main: true to bind main instead of making a worktree; gitpush takes mode (push | checkpoint | finish), and for a Finish finish (phase | project-done), for a Checkpoint paths (a list) or all: true, and db (release | keep), plus message. Any other key is refused. " +
         "NO PROD DEPLOY (w3k s9): no_prod_deploy: true, on gitpush finish only, for a Salesforce repo's Finish when no production deploy is recorded for the project; gitpush refuses such a Finish by link without it. Approving is Alex's word that nothing from the project went to production, and the headline and approve page say so. Pass it only when he has said nothing went out; refused on any other command or mode, and the helper refuses it outside a Salesforce repo. " +
         "One live link per project code, as issue_switchboard_link. Returns { action_id, url, expires_at, headline, payload, next }. Give Alex the url whole. Nothing is posted at approval: once he approves, the result line (git <action id> done or failed) arrives in this chat by itself when the command finishes. Tell him that, and that he can also say \"check the git run\" (get_switchboard_run). If it says queued but no link, the action exists: issue its link later with issue_switchboard_link. " +
         "CHAINED LINK (s90d): then_send, the run tag of the CLI prompt in this same reply, makes one link run the command and then, only if it succeeds, send that prompt into the same project's window when Alex taps the tile. Only on gitsync, and gitpush checkpoint or push; never gitcom, gitnewtree or a Finish. The tag must be this project's own: <project_code>-s<step>-<4 characters>, at most 40 characters. The chain link REPLACES BOTH the git link and the Send link: give no Send link, and the reply still ends with the prompt block. Never chain the checkpoint right after a test: Alex checks the test's result first. The result arrives as \"git <id> done; prompt sent\", \"git <id> done; send not run: <reason>\" or \"git <id> failed; send not run\". Tier 2.",
-      inputSchema: {
+      // sb3 B3: strict, so a key this tool doesn't take is refused before the handler (and so before any link),
+      // never dropped silently; the JSON schema says additionalProperties: false.
+      inputSchema: z.object({
         project_code: z.string().describe("The project code, e.g. switchboard2-h8r; main's code for main."),
         command: z.enum(["gitcom", "gitsync", "gitnewtree", "gitpush"]).describe("The git command."),
         mode: z.enum(["push", "checkpoint", "finish"]).optional().describe("gitpush only."),
@@ -3642,12 +3647,82 @@ export function createMcpServer(token: string) {
         include_unclaimed: z.enum(["all", "none"]).optional().describe("gitcom or gitpush on main: unclaimed changes."),
         install: z.boolean().optional().describe("gitnewtree: run npm install."),
         repo: z.string().optional().describe("gitnewtree only: the repo's absolute path, e.g. C:\\Users\\Alex\\projects\\alfred-v5, no trailing backslash."),
+        client: z.string().optional().describe("gitnewtree only: the client's slug (lowercase letters, digits and hyphens), registering the project on the panel."),
+        lane: z.enum(["Fast track", "Main", "Side road", "Country road"]).optional().describe("gitnewtree only: the project's lane on the panel."),
+        main: z.literal(true).optional().describe("gitnewtree only, true only: bind main instead of making a worktree."),
         then_send: z.string().optional().describe("Chain: the run tag of the prompt in this reply, sent at Alex's tap only if the command succeeds. gitsync, gitpush checkpoint or push only; this project's own tag."),
         no_prod_deploy: z.boolean().optional().describe("gitpush finish only, true only: a Salesforce repo's Finish with no production deploy recorded; approving confirms nothing went to production."),
         chat_url: z.string().optional().describe("Optional; don't guess it, the extension remembers the chat. Only a https://claude.ai/chat/<uuid> address is used."),
-      },
+      }).strict(),
     },
     async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardGitTool, args, token),
+  );
+
+  // sb3_pages-h6v B3: the Switchboard 3 run pages, Claude's side. Approval is only Alex's click on the page.
+  server.registerTool(
+    "queue_switchboard_run_request",
+    {
+      title: "Queue Switchboard Run Request",
+      description:
+        "Queue a Switchboard 3 run request (a pre-check and rehearsal, a production data operation, an undo, or a check of what happened) for a run page. It issues no link and runs nothing: then call issue_switchboard_run_link, and only Alex's Approve on that page approves anything. " +
+        "request is the request of spec 4.1: page (precheck, dataop, undo or check), project_code, headline, orgs (the target, and the rehearsal sandbox), problem {label, sentence} and side_effects in diagnosis's words, operation, selected_by, counts, undo, steps (the step codes), and optional diagnosis_allows, details and code. " +
+        "A PRODUCTION DATA OPERATION NAMES ITS PRE-CHECK: pre_check_request_id, the request id of the Pre-check and Rehearsal whose checks passed. The database copies that pre-check's passed checks (their original times: the 24 hours count from the oldest) and its sample onto the new request, only when the object, operation, records or filter, count, field, value, file, sandbox filter, code commit and target org all match what the pre-check checked; otherwise it refuses, naming each difference. " +
+        "NEVER send evidence or a sample: only a pre-check's result records them. A correction is correct_switchboard_run_request, not a new queue. " +
+        "Refused first by the page's own rules (runContract requestProblems), each problem one sentence saying what to add, then by the database, whose words come back as they are; fix what they name and queue again. Returns {request_id, version, copied_checks, moved_sample}. Nothing acts on the request until Alex approves its page. Tier 2.",
+      inputSchema: {
+        request: z.object({}).passthrough().describe("The run request (spec 4.1). On a data operation, pre_check_request_id names its pre-check. No evidence, no sample."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(queueSwitchboardRunRequestTool, args, token),
+  );
+
+  server.registerTool(
+    "correct_switchboard_run_request",
+    {
+      title: "Correct Switchboard Run Request",
+      description:
+        "Correct a queued run request (part 5 \"Corrected\"). edit_kind says what changed and so what runs again: wording or allows (nothing reruns; no version change), value or file (the rehearsal), field (rehearsal, login, backup, sample), records (count, backup, sample), records_filter (those and the rehearsal), sandbox_filter (rehearsal), code (rehearsal and code review). Each kind may change only its own part of the request; any other change is refused, naming the field. The object or the operation is never corrected: that is a new request through diagnosis. pre_check_request_id never changes. " +
+        "request is the whole corrected request; changed is {reason (diagnosis's words), items [{what, old, new}]}. A kind that reruns a check raises the version, makes the page a correction page and voids the request's live links (issue a new one with issue_switchboard_run_link), and its steps must be only what the edit reruns. " +
+        "Refused first by the page's own rules, then by the database, whose words come back as they are. Returns {request_id, version, voided_checks, voided_links}. Approval is still only Alex's click on the page. Tier 2.",
+      inputSchema: {
+        request_id: z.string().describe("The request to correct."),
+        edit_kind: z.enum(["wording", "allows", "value", "file", "field", "records", "records_filter", "sandbox_filter", "code", "object", "operation"]).describe("What changed. object and operation are refused: a new request through diagnosis."),
+        request: z.object({}).passthrough().describe("The whole corrected request (spec 4.1)."),
+        changed: z.object({}).passthrough().describe("{reason, items: [{what, old, new}]}."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(correctSwitchboardRunRequestTool, args, token),
+  );
+
+  server.registerTool(
+    "issue_switchboard_run_link",
+    {
+      title: "Issue Switchboard Run Link",
+      description:
+        "Issue the page link for a queued run request, or with review_id for its code review page. Returns {link_id, url, headline, version}: give Alex the url whole. The link has no expiry of its own; the checks' 24 hours decide what the page offers. One live link per request version (and per review); refused once that version was approved, since a version is approved once. " +
+        "Approving happens only on the page, by Alex's click, with the desktop check passing; the result line (run <link id>, run <link id> reruns for a correction's reruns, cancelled, resent, review <link id> ...) arrives in this chat from the page. The database's refusal comes back as it is. Tier 2.",
+      inputSchema: {
+        request_id: z.string().describe("The run request."),
+        review_id: z.string().optional().describe("Its code review, for the review page's link."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(issueSwitchboardRunLinkTool, args, token),
+  );
+
+  server.registerTool(
+    "record_switchboard_code_review",
+    {
+      title: "Record Switchboard Code Review",
+      description:
+        "Record Claude's code review of a run request's code at one commit (spec 4.3), for Alex's code review page: repo, commit, base_commit, rehearsed_at, files [{path, status new|modified|deleted, old_text, new_text, problem_labels}] with each file's whole text, findings {fixed_by_cli, for_you} each [{id, text, file?, lines?}], and notes [{file, start_line, end_line, problem_label, text}] on changed lines. An older review of the request at another commit is marked superseded. " +
+        "Alex's answers (reviewed, a question, changes required, acknowledgements) are his, on the page; never send status, acks or answers. Then issue the review page's link with issue_switchboard_run_link and review_id. " +
+        "Refused first by the page's own rules (codeReviewProblems), then by the database, whose words come back as they are. Returns {review_id, commit, superseded}. Tier 2.",
+      inputSchema: {
+        request_id: z.string().describe("The run request whose code this reviews."),
+        review: z.object({}).passthrough().describe("The review (spec 4.3)."),
+      },
+    },
+    async (args: Record<string, unknown>) => runToolForMcp(recordSwitchboardCodeReviewTool, args, token),
   );
 
   server.registerTool(

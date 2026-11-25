@@ -667,6 +667,53 @@ switchboard_pickup_git(p_user, p_pickup_id default null). Nothing else on main t
 - **For B3 (the queue tool):** the code review of a data operation that carries code is recorded on the data
   operation's own request (consume checks switchboard_code_reviews by request_id), not on the pre-check's.
 
+### 10d. B3 as built (s13b, 2026-11-24): the MCP tools
+
+- **One copy of the rules.** supabase/functions/_shared/tools/switchboard-runs.ts imports
+  src/switchboard/runs/runContract.js itself (requestProblems, codeReviewProblems, EDIT_RERUNS), as samScores.ts and
+  notify-dispatch already import from src/. For that, runContract.js imports `./codeDiff.js` (with the extension, which
+  Deno and node need and CRA accepts), and supabase/functions/mcp/deno.json maps `diff` to `npm:diff@5.2.0` (the
+  version package.json pins). codeDiff.js needed no change: its only import is `diff`. Neither file imports anything
+  else, and both are on main.
+- **The tools**, each running the page's rules first (a refusal lists every problem, and nothing reaches the
+  database), then its 250/251 function, whose refusal comes back word for word as "refused: <message>" (codes 28000,
+  P0002, 55000, 23514, 22023, 22P02; anything else is an operational error, without refusal wording):
+  - queue_switchboard_run_request, **tier 2**: it adds a request row, which nothing acts on until Alex approves its
+    page, but with pre_check_request_id it also updates an existing row (the pre-check's sample moves onto the new
+    request), and an update of an existing row is tier 2 (cold review, s13b). It takes {request}; refuses evidence, a sample and a correction before anything; pre_check_request_id only on a data
+    operation, a uuid (lower-cased). Returns {request_id, version, copied_checks, moved_sample}.
+  - correct_switchboard_run_request, **tier 2**: it updates an existing request, raising its version and voiding its
+    checks and live links (audited, reversible by a new correction or request). Takes {request_id, edit_kind,
+    request, changed}; it reads the request's base page, then runContract checks the corrected request on its base
+    page (counts, undo, deadlines) and, for a kind that reruns a check, its steps as a correction page's (only what
+    the edit reruns). pre_check_request_id is lower-cased, as the queue stores it.
+  - issue_switchboard_run_link, **tier 2**, as issue_switchboard_link: it inserts the link row a page opens with. Takes
+    {request_id, review_id?}; returns {link_id, url, headline, version} whole.
+  - record_switchboard_code_review, **tier 2**: it adds a review and marks older reviews of the request superseded (an
+    update). Takes {request_id, review}; codeReviewProblems first; refuses status, acknowledged, acks, answers and
+    superseded_by (Alex's side, on the page).
+  None is tier 3: approval is never in the chat, it is Alex's click on the page.
+- **queue_switchboard_git:** gitnewtree's client, lane (Fast track, Main, Side road, Country road) and main (true only)
+  are in its schema, from plumbing's GIT_KEYS on main. The schema is `z.object({...}).strict()`: an unknown key is
+  refused by the SDK's parse (MCP error -32602, "Unrecognized key"), before the handler and so before any link, and
+  the advertised JSON schema has additionalProperties: false. Every key it took before is kept. Before this,
+  client, lane and main were stripped by the schema and never reached gitnewtree.
+- **Deployed (s13c, 2026-11-24):** mcp deployed to zuqjyfqnvhddnchhpbcz after the gitsync (action
+  f3a62469-e19a-4eee-b3ed-4e5f8d0d806e; it brought nothing under mcp/ or _shared/tools/). Smoke test, read-only: a live
+  queue_switchboard_git call with an unknown key and a bad project code was refused by the server's parse, "MCP error
+  -32602: Input validation error: ... Unrecognized key", before the handler and so before any link. The four new
+  tools show only once the claude.ai connector reconnects (the session's tool list is cached at its start); the
+  listing check is that reconnect.
+- **Open (for Alex, from B3's cold review; each needs a migration):**
+  1. A write's correction stores its rerun steps in place of the write's: once the reruns pass and the request returns
+     to dataop, the page shows no write steps. Proposed: keep the base request's steps and phases and store the
+     correction's separately, or restore them on return (switchboard_record_run_evidence).
+  2. A data operation queued without its rehearsal sandbox in orgs can't take a correction that reruns the rehearsal:
+     251 refuses the orgs change. Proposed: let a rerunning kind add the role-rehearsal org.
+  3. changed.still_valid and phases[].state "passed" come from the chat; consume reads only the evidence column, so
+     approval is safe, but the page could show passes that don't exist. Proposed for B4: the real source builds both
+     from the evidence, never from the chat's request.
+
 ## 11. Build order (CLI steps)
 
 | Step | What | Est. |

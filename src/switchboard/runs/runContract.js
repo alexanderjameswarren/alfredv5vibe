@@ -2,7 +2,8 @@
 // A PROPOSAL until the design thread reconciles it with the data runs thread. Pure functions only: no React, no
 // network, so the simulation, the pages and later the queue tool's checks can share the same rules.
 
-import { noteOnChange } from './codeDiff';
+// The extension lets the mcp Edge Function (Deno) and node load this file too: one copy of the rules (sb3 B3).
+import { noteOnChange } from './codeDiff.js';
 
 export const PAGES = ['precheck', 'dataop', 'undo', 'correction', 'check'];
 export const OPERATIONS = ['update', 'insert', 'upsert', 'delete', 'undelete', 'multi'];
@@ -607,6 +608,8 @@ const withText = (lead, t) => (lineText(t) ? `${lead}: ${lineText(t)}` : lead);
 export const runLine = (id) => line('run', id);
 export const runCancelledLine = (id, reason) => line('run', id, withText(' cancelled', reason));
 export const runResentLine = (id) => line('run', id, ' resent');
+// A correction page's Approve runs its reruns, not the write (s12b): its own word. A write approval stays runLine.
+export const runRerunsLine = (id) => line('run', id, ' reruns');
 export function checkLine(id, { job, at_goal: goal, at_backup: backup, neither }) {
   return line('check', id, ` done: job ${lineText(job) || 'unknown'}; ${n(goal)} at goal, ${n(backup)} at backup, ${n(neither)} neither`);
 }

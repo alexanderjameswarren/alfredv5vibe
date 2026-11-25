@@ -4,7 +4,7 @@ import '@testing-library/jest-dom';
 import {
   afterApproveLines, approveLabel, bannerLines, clientOrgLine, checkLine, checksExpired, codeReviewProblems, countSentence, EDIT_RERUNS, GROUPS, groupedSteps,
   LINE_TEXT_MAX, lineText, requestProblems, reviewChangesLine, reviewQuestionLine, reviewReviewedLine, runCancelledLine, runLine,
-  rerunSteps, runResentLine, selectedByText, STEPS, undoClosedReason, undoLine, validUntil, whatChanges,
+  rerunSteps, runRerunsLine, runResentLine, selectedByText, STEPS, undoClosedReason, undoLine, validUntil, whatChanges,
 } from './runContract';
 import { BUTTON, RunShell, SECOND_BUTTON, localTime } from './look';
 
@@ -200,6 +200,8 @@ describe('result lines', () => {
     expect(runCancelledLine(ID, '')).toBe(`run ${ID} cancelled`);
     expect(runCancelledLine(ID, 'wait for\nMonday')).toBe(`run ${ID} cancelled: wait for Monday`);
     expect(runResentLine(ID)).toBe(`run ${ID} resent`);
+    expect(runRerunsLine(ID)).toBe(`run ${ID} reruns`);
+    expect(runRerunsLine('sim-correction-field')).toBe('SIMULATION run sim-correction-field reruns');
     expect(checkLine(ID, { job: 'Aborted', at_goal: 30, at_backup: 15, neither: 0 }))
       .toBe(`check ${ID} done: job Aborted; 30 at goal, 15 at backup, 0 neither`);
     expect(reviewReviewedLine(ID)).toBe(`review ${ID} reviewed`);
