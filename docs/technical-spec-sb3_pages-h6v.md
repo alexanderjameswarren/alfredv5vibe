@@ -704,15 +704,34 @@ switchboard_pickup_git(p_user, p_pickup_id default null). Nothing else on main t
   -32602: Input validation error: ... Unrecognized key", before the handler and so before any link. The four new
   tools show only once the claude.ai connector reconnects (the session's tool list is cached at its start); the
   listing check is that reconnect.
-- **Open (for Alex, from B3's cold review; each needs a migration):**
-  1. A write's correction stores its rerun steps in place of the write's: once the reruns pass and the request returns
-     to dataop, the page shows no write steps. Proposed: keep the base request's steps and phases and store the
-     correction's separately, or restore them on return (switchboard_record_run_evidence).
-  2. A data operation queued without its rehearsal sandbox in orgs can't take a correction that reruns the rehearsal:
-     251 refuses the orgs change. Proposed: let a rerunning kind add the role-rehearsal org.
-  3. changed.still_valid and phases[].state "passed" come from the chat; consume reads only the evidence column, so
-     approval is safe, but the page could show passes that don't exist. Proposed for B4: the real source builds both
-     from the evidence, never from the chat's request.
+- **From B3's cold review:**
+  1. Closed by 252 (s14, drafted): a correction that reruns a check keeps the request's own steps and phases in
+     request.base_steps and base_phases, taken from the row and never from the chat (a correction drops a chat-sent
+     base_steps; a second correction keeps the first one's), while the correction page shows only its rerun steps.
+     Closed (Alex, s14b, in 252): switchboard_queue_run_request refuses base_steps and base_phases from the chat,
+     naming the key ("leave base_steps out: only a correction keeps the request's own steps and phases"), as it refuses
+     evidence; everything else in it is 251's, unchanged. 252 is numbered 252_correction_steps.sql.
+- **252 live (s14c, 2026-11-24):** applied (action af4a4305-53dd-4d48-b23c-e0733ea127cc, run
+  8917e8e6-02ee-4108-a358-aaf41bdb79c7, 13 statements, CONFORMANT, 123 tables). 4_correction_steps_test.sql queued with
+  --test (action 9283ede0-b2a8-4e95-bc02-db205f724c5c); its result is still to read.
+     switchboard_record_run_evidence restores them when the request returns to its base page, and a multi-object run's
+     write_step entries take their object, kind and count from operation.steps, so a records correction's counts carry
+     through. A request with no phases of its own gets none back. A request corrected before 252 has no base_steps
+     and keeps its steps on return.
+  2. Closed by 252: a correction whose kind reruns the rehearsal (value, file, field, records_filter, sandbox_filter,
+     code) may add exactly one {alias, org_type sandbox, role rehearsal} org to a request that has none. Any other
+     orgs change, a second sandbox, a non-sandbox rehearsal org, swapping an existing sandbox, or adding one on a kind
+     that doesn't rerun the rehearsal is refused ("it also changed orgs"), as is a sandbox under an alias the request
+     already uses (the target's, say).
+  2a. Also in 252 (cold review): a records or records_filter correction may change a multi-object run's step counts,
+     never its steps' objects, kinds or number (251 left operation.steps out of the comparison whole). The kept base
+     steps keep any null fields inside them.
+  3. B4's: changed.still_valid and phases[].state "passed" come from the chat; consume reads only the evidence column,
+     so approval is safe, but the page could show passes that don't exist. The real source builds both from the
+     evidence, never from the chat's request.
+- **Also in 252:** a wording or allowance edit keeps the row's page key. 251 stored the chat's page, so a wording edit on a
+  correction page set request.page to the base page while the row stayed a correction. On a correction page it also
+  keeps the correction's changed block (the page shows what it reruns) and adds the wording edit as changed.wording.
 
 ## 11. Build order (CLI steps)
 
