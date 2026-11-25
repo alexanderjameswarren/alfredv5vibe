@@ -185,9 +185,18 @@ test("switchboard git: project_code is advertised, the reply says the result arr
   assert.doesNotMatch(q.cfg.description, /send git/);
 });
 
+// sb3 B3: queue_switchboard_git's schema is z.object({...}).strict(), so with zod stubbed its keys are read from the
+// registration source.
+const gitSchemaBlock = () => {
+  const src = readFileSync(join(HERE, "index.ts"), "utf-8");
+  const block = src.split(`server.registerTool(\n    "queue_switchboard_git",`)[1].split("server.registerTool(")[0];
+  const schema = block.split("inputSchema: z.object({")[1].split("}).strict(),")[0];
+  return { block, schema, keys: [...schema.matchAll(/^\s{8}(\w+): z\./gm)].map((m) => m[1]).sort() };
+};
+
 test("switchboard s86k: gitnewtree advertises repo", () => {
   const q = registered.find((r) => r.name === "queue_switchboard_git");
-  assert.ok("repo" in q.cfg.inputSchema);
+  assert.ok(gitSchemaBlock().keys.includes("repo"));
   assert.match(q.cfg.description, /gitnewtree takes install and repo: FILL IN repo/);
   assert.match(q.cfg.description, /C:\\Users\\Alex\\projects\\alfred-v5/);
 });
@@ -234,12 +243,50 @@ test("switchboard s87e: get_claim_state says it is posted on change, not a heart
 
 test("switchboard s90d: queue_switchboard_git takes then_send and says what a chain replaces", () => {
   const g = registered.find((r) => r.name === "queue_switchboard_git");
-  assert.ok(g.cfg.inputSchema.then_send);
+  assert.ok(gitSchemaBlock().keys.includes("then_send"));
   assert.match(g.cfg.description, /REPLACES BOTH the git link and the Send link/);
   assert.match(g.cfg.description, /the reply still ends with the prompt block/);
   assert.match(g.cfg.description, /Never chain the checkpoint right after a test/);
   assert.match(g.cfg.description, /Only on gitsync, and gitpush checkpoint or push; never gitcom, gitnewtree or a Finish/);
   assert.match(g.cfg.description, /git <id> done; prompt sent/);
+});
+
+test("sb3 B3: queue_switchboard_git is strict, keeps every key it took, and takes client, lane and main", () => {
+  const { block, schema, keys } = gitSchemaBlock();
+  // Every key Claude sent before B3, plus gitnewtree's client, lane and main (plumbing's switchboard.ts GIT_KEYS).
+  assert.deepEqual(keys, ["all", "chat_url", "client", "command", "db", "finish", "include_unclaimed", "install", "lane", "main",
+    "message", "mode", "no_prod_deploy", "paths", "project_code", "repo", "then_send"]);
+  // Strict: an unknown key is refused by the SDK's parse, before the handler and so before any link.
+  assert.match(block, /inputSchema: z\.object\(\{[\s\S]*\}\)\.strict\(\),/);
+  assert.ok(!/passthrough/.test(schema));
+  assert.match(schema, /lane: z\.enum\(\["Fast track", "Main", "Side road", "Country road"\]\)\.optional\(\)/);
+  assert.match(schema, /main: z\.literal\(true\)\.optional\(\)/);
+  // The handler's own key lists agree: gitnewtree keeps client and lane.
+  const sw = readFileSync(join(TOOLS, "switchboard.ts"), "utf-8");
+  assert.match(sw, /gitnewtree: \["command", "install", "repo", "client", "lane", "main"\]/);
+  const q = registered.find((r) => r.name === "queue_switchboard_git");
+  assert.match(q.cfg.description, /plus client and lane to register the project on the panel/);
+});
+
+test("sb3 B3: the four run page tools are registered, say approval is only on the page, and never take evidence", () => {
+  for (const name of ["queue_switchboard_run_request", "correct_switchboard_run_request", "issue_switchboard_run_link",
+                      "record_switchboard_code_review"]) {
+    const t = registered.find((r) => r.name === name);
+    assert.ok(t, `${name} not registered`);
+    assert.match(t.cfg.description, /Alex/);
+    assert.match(t.cfg.description, /Tier [12]/);
+  }
+  const q = registered.find((r) => r.name === "queue_switchboard_run_request");
+  assert.deepEqual(Object.keys(q.cfg.inputSchema), ["request"]);
+  assert.match(q.cfg.description, /pre_check_request_id/);
+  assert.match(q.cfg.description, /NEVER send evidence or a sample/);
+  assert.match(q.cfg.description, /only Alex's Approve on that page approves anything/);
+  assert.deepEqual(Object.keys(registered.find((r) => r.name === "correct_switchboard_run_request").cfg.inputSchema).sort(),
+    ["changed", "edit_kind", "request", "request_id"]);
+  assert.deepEqual(Object.keys(registered.find((r) => r.name === "issue_switchboard_run_link").cfg.inputSchema).sort(), ["request_id", "review_id"]);
+  const rv = registered.find((r) => r.name === "record_switchboard_code_review");
+  assert.deepEqual(Object.keys(rv.cfg.inputSchema).sort(), ["request_id", "review"]);
+  assert.match(rv.cfg.description, /never send status, acks or answers/);
 });
 
 test("dataop_link-k7d: queue_switchboard_sf_dataquery takes sb's arguments, says only the click runs it and where counts are", () => {
@@ -550,8 +597,9 @@ test("the tool count is 72 after the job-search tools", () => {
   // 2026-11-17, +1: get_job_health (job_health-t4m s8). 2026-11-18, +1: queue_switchboard_sf_dataop (dataops_alfred-d4x A1).
   // 2026-11-19, +1: queue_switchboard_sf_dataquery (dataop_link-k7d A1). +1: queue_switchboard_sf_datawrite (dataop_write-j5w A2).
   assert.ok(registered.some((r) => r.name === "record_wb_subscription_review"), "record_wb_subscription_review is not registered");
-  assert.equal(registered.length, 230,
-    `expected 230 registered tools, found ${registered.length}: ` +
+  // 2026-11-24, +4: the Switchboard 3 run page tools (sb3_pages-h6v B3).
+  assert.equal(registered.length, 234,
+    `expected 234 registered tools, found ${registered.length}: ` +
     registered.map((r) => r.name).join(", "));
 });
 
