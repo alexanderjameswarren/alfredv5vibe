@@ -1,14 +1,14 @@
 import { Component, createElement as h } from 'react';
-import { localTime, shortHash } from '../ApprovePage';
+import { localTime, shortHash } from '../format';
 import CopyButton from '../../shared/CopyButton';
 
-// sb3_pages-h6v A1: the look of the Switchboard 3 run and code review pages, copied from ApprovePage.jsx (which stays
-// untouched until the switch-over, when it imports from here). What ApprovePage already exports is re-exported, not
-// copied. Plain createElement, so the file stays .js as the plan names it.
+// sb3_pages-h6v A1: the look of the Switchboard 3 run and code review pages, copied from ApprovePage.jsx. C1 (s19):
+// today's approve page now takes its look from here too, and the shared formatters live in ../format.js, so neither
+// file imports the other's page. Plain createElement, so the file stays .js as the plan names it.
 
 export { localTime, shortHash };
 
-// Same strings as ApprovePage.jsx's BUTTON and SECOND_BUTTON.
+// The buttons, as every page has them.
 export const BUTTON = 'w-full sm:w-auto px-4 py-3 min-h-[44px] bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50';
 export const SECOND_BUTTON = 'w-full sm:w-auto px-4 py-3 min-h-[44px] rounded-lg border border-border text-primary hover:border-primary transition-colors disabled:opacity-50';
 
@@ -17,6 +17,8 @@ export const SIMULATION_STRIP = 'w-full bg-purple-700 text-white text-center tex
 const BANNER = 'mb-4 w-full text-center text-3xl sm:text-4xl font-bold uppercase tracking-wide py-5 px-4 rounded-lg';
 export const PRODUCTION_BANNER = `${BANNER} bg-orange-400 text-black`;
 export const SANDBOX_BANNER = `${BANNER} bg-sky-700 text-white`;
+/** C1: the approve page's red PRODUCTION FULL DATA banner (an sf_read of full data on production). */
+export const RED_BANNER = `${BANNER} bg-red-700 text-white`;
 /** The smaller second line inside a banner. */
 export const BANNER_LINE = 'block text-lg sm:text-xl normal-case tracking-normal mt-1';
 export const PANEL = 'mb-4 p-4 bg-primary-bg rounded-lg border border-primary-light text-sm text-dark';

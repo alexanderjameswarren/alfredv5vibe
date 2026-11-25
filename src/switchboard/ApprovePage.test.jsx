@@ -125,7 +125,8 @@ test('shows the headline, project and whole SQL, with his JWT and the token', as
   expect(await screen.findByText('THIS RUNS A SELECT')).toBeInTheDocument();
   expect(screen.getByText('switchboard2-h8r')).toHaveAttribute('data-switchboard-project', 'switchboard2-h8r');
   expect(screen.getByTestId('approve-sql').textContent).toBe(PREVIEW.sql);
-  expect(screen.getByText('Approve')).toHaveClass('text-dark');
+  // C1: no "Approve" heading under "Alfred".
+  expect(screen.queryByText('Approve')).toBeNull();
   const [url, init] = called('preview')[0];
   expect(url).toBe('https://db.example/functions/v1/switchboard-runner/preview');
   expect(init.method).toBe('POST');
@@ -543,7 +544,7 @@ test('waits for Approve: red Approval required bar at the very top (sql, sf_chec
   for (const p of [PREVIEW, { ...SF, stakes: 'none' }, { ...SYNC, stakes: 'none' }, { ...PREVIEW, stakes: 'change' }]) {
     runner({ preview: reply(p), 'dry-run': CLEAN });
     const { container, unmount } = open();
-    const head = await screen.findByTestId('approve-stakes-change');
+    const head = await screen.findByTestId('run-approval-required');
     expect(head).toHaveTextContent('Approval required');
     expect(head).toHaveClass('bg-red-700', 'w-full');
     expect(container.firstChild.firstChild).toBe(head);
@@ -557,7 +558,7 @@ test('runs by itself (a sql test): no bar, nothing green', async () => {
     runner({ preview: reply(p), 'dry-run': () => reply({ ok: true, test: true, run_id: 'dry1', summary: 'undone' }) });
     const { container, unmount } = open();
     await screen.findByText(p.headline);
-    expect(screen.queryByTestId('approve-stakes-change')).toBeNull();
+    expect(screen.queryByTestId('run-approval-required')).toBeNull();
     expect(screen.queryByText(/approval required/i)).toBeNull();
     noGreen(container);
     unmount();
@@ -567,12 +568,12 @@ test('runs by itself (a sql test): no bar, nothing green', async () => {
 test('the bar ignores the url', async () => {
   runner({ preview: reply(SF) });
   const a = openAt('/approve/tok1?kind=sql&stakes=none&exp=1');
-  expect(await screen.findByTestId('approve-stakes-change')).toBeInTheDocument();
+  expect(await screen.findByTestId('run-approval-required')).toBeInTheDocument();
   a.unmount();
   runner({ preview: reply({ ...PREVIEW, test: true }), 'dry-run': CLEAN });
   openAt('/approve/tok1?kind=sql&stakes=change&exp=1');
   await screen.findByText(PREVIEW.headline);
-  expect(screen.queryByTestId('approve-stakes-change')).toBeNull();
+  expect(screen.queryByTestId('run-approval-required')).toBeNull();
 });
 
 test('runsByItself: only a sql test', () => {
@@ -593,7 +594,6 @@ test('chain: a chained git link says it sends the prompt at the tap; a plain one
   runner({ preview: reply(CHAINED) });
   const a = open();
   expect(await screen.findByTestId('approve-chain')).toHaveTextContent('Then sends the prompt p-a1-s90e-ab12 when you tap the tile.');
-  expect(screen.getByTestId('approve-heading')).toHaveTextContent('Approve');
   a.unmount();
   runner({ preview: reply(SYNC) });
   open();
@@ -601,18 +601,15 @@ test('chain: a chained git link says it sends the prompt at the tap; a plain one
   expect(screen.queryByTestId('approve-chain')).toBeNull();
 });
 
-test('a sql test has no Approve heading; a real sql run and a git link keep it', async () => {
-  runner({ preview: reply({ ...PREVIEW, test: true }), 'dry-run': () => reply({ ok: true, test: true, run_id: 'dry1', summary: 'undone' }) });
-  const a = open();
-  await screen.findByText(PREVIEW.headline);
-  expect(screen.queryByTestId('approve-heading')).toBeNull();
-  expect(screen.queryByText(/^approve$/i)).toBeNull();
-  a.unmount();
-  for (const p of [PREVIEW, SYNC]) {
-    runner({ preview: reply(p), 'dry-run': CLEAN });
+// C1 (s19): the "Approve" heading is gone on every page; the red bar says it (inbox note ac562aef).
+test('no page has the Approve heading: a sql test, a real sql run, a git link', async () => {
+  for (const [p, dry] of [[{ ...PREVIEW, test: true }, () => reply({ ok: true, test: true, run_id: 'dry1', summary: 'undone' })], [PREVIEW, CLEAN], [SYNC, CLEAN]]) {
+    runner({ preview: reply(p), 'dry-run': dry });
     const b = open();
     await screen.findByText(p.headline);
-    expect(screen.getByTestId('approve-heading')).toHaveTextContent('Approve');
+    expect(screen.queryByTestId('approve-heading')).toBeNull();
+    expect(screen.queryByText(/^approve$/i)).toBeNull();
+    expect(screen.getByText('Alfred')).toBeInTheDocument();
     b.unmount();
   }
 });
@@ -637,7 +634,7 @@ test('sf read: org, production, level, object, fields, filters and limit; red ba
   expect(lines).toHaveTextContent('Limit: up to 50 rows.');
   expect(lines).toHaveTextContent('Filter 1: Status__c = "Failed"');
   expect(lines).toHaveTextContent('Filter 2: Amount__c in [5,10]');
-  expect(screen.getByTestId('approve-stakes-change')).toHaveTextContent('Approval required');
+  expect(screen.getByTestId('run-approval-required')).toHaveTextContent('Approval required');
   const banner = screen.getByTestId('approve-production-full-data');
   expect(banner).toHaveTextContent(/production full data/i);
   expect(banner).toHaveClass('bg-red-700', 'uppercase');
@@ -657,7 +654,7 @@ test('sf read: a sandbox count has the red bar but no full-data banner, and says
   expect(lines).toHaveTextContent('Reads sandbox org ab-dev');
   expect(lines).toHaveTextContent('A count only: no rows.');
   expect(lines).toHaveTextContent('Filters: none.');
-  expect(screen.getByTestId('approve-stakes-change')).toBeInTheDocument();
+  expect(screen.getByTestId('run-approval-required')).toBeInTheDocument();
   expect(screen.queryByTestId('approve-production-full-data')).toBeNull();
 });
 
@@ -725,7 +722,7 @@ test('sf_dataop: orange PRODUCTION banner with black text, the count, problem, w
   expect(rows[2]).toHaveTextContent('Knock-on check: Plans whose paid total went up today');
   expect(screen.getByText(/its sandbox rehearsal was the dry run/)).toBeInTheDocument();
   expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'sf_dataop');
-  expect(screen.getByTestId('approve-stakes-change')).toBeInTheDocument();
+  expect(screen.getByTestId('run-approval-required')).toBeInTheDocument();
   expect(called('dry-run')).toHaveLength(0);
   fireEvent.click(screen.getByRole('button', { name: /^approve and run$/i }));
   expect(await screen.findByText('Sent to the desktop helper')).toBeInTheDocument();
@@ -817,7 +814,7 @@ test('sf_dataquery: orange PRODUCTION, READ ONLY banner saying exports; org, rep
   expect(container.querySelector('[data-switchboard-kind]')).toHaveAttribute('data-switchboard-kind', 'sf_dataquery');
   expect(screen.queryByTestId('approve-sandbox-read')).toBeNull();
   expect(screen.queryByTestId('approve-org-type-missing')).toBeNull();
-  expect(screen.getByTestId('approve-stakes-change')).toBeInTheDocument();
+  expect(screen.getByTestId('run-approval-required')).toBeInTheDocument();
   expect(screen.getByText(/A production read has no dry run/)).toBeInTheDocument();
   expect(called('dry-run')).toHaveLength(0);
   fireEvent.click(screen.getByRole('button', { name: /^approve and run$/i }));
@@ -1186,4 +1183,142 @@ test('sf read: a metadata read of several objects lists them', () => {
   const lines = sfReadLines({ alias: 'cd-prod', production: true, level: 'metadata', objects: ['Contact', 'Account'] });
   expect(lines).toContain('Objects (2): Contact, Account.');
   expect(lines.some((l) => l.startsWith('Object:'))).toBe(false);
+});
+
+// sb3_pages-h6v C1 (s19): today's page takes look.js's look and drops the "Approve" heading, with no behaviour change.
+// Every kind's data-switchboard-* marks (the extension's) and its result line are pinned as they were before C1.
+describe('C1: every kind keeps its marks and its result line, and never shows the SIMULATION strip', () => {
+  const marksOf = (c) => [...c.querySelectorAll('*')].flatMap((el) => [...el.attributes]
+    .filter((a) => a.name.startsWith('data-switchboard')).map((a) => `${a.name}=${a.value}`));
+  const lineOf = () => screen.getByTitle('Copy this line for the chat').parentElement.querySelector('code').textContent;
+  // [preview, the kind mark, its project mark, the id the line carries once approved, the line's word]: as before C1.
+  const KINDS = {
+    sql: [PREVIEW, 'sql', 'switchboard2-h8r', DRY, 'sql'],
+    git: [GIT, 'git', 'switchboard2-h8r', 'g1', 'git'],
+    sb_setup: [SB, 'sb_setup', 'switchboard2-h8r', 's1', 'sb'],
+    sf_check: [SF, 'sf_check', 'sf-acme-dev', 'f1', 'sf'],
+    sf_read: [SFR, 'sf_read', 'sf-cd-prod', 'r1', 'sf'],
+    'sf_dataquery production': [DQ(DQ_EXPORT), 'sf_dataquery', 'cd_fixc-q8d', 'q1', 'dataquery'],
+    'sf_dataquery sandbox': [DQ({ ...DQ_EXPORT, org_type: 'sandbox' }), 'sf_dataquery', 'cd_fixc-q8d', 'q1', 'dataquery'],
+    sf_dataop: [DOP, 'sf_dataop', 'cd_ab_link_installments-q8d', 'd1', 'dataop'],
+    'sf_datawrite batch': [DW(DW_BATCH), 'sf_datawrite', 'cd_fixc-q8d', 'w1', 'datawrite'],
+    'sf_datawrite bulk': [DW(DW_BULK), 'sf_datawrite', 'cd_fixc-q8d', 'w1', 'datawrite'],
+    'sf_datawrite undo': [DW(DW_UNDO), 'sf_datawrite', 'cd_fixc-q8d', 'w1', 'datawrite'],
+  };
+  const STATUS = ['data-switchboard-status=', 'data-switchboard-status-text=', 'data-switchboard-retry='];
+  const pinned = (kind, project, id, extra = []) => [`data-switchboard-project=${project}`, `data-switchboard-kind=${kind}`,
+    `data-switchboard-run-id=${id}`, ...extra, ...STATUS];
+  const noStrip = (c) => {
+    expect(screen.queryByTestId('run-simulation')).toBeNull();
+    expect(c.querySelector('[data-switchboard-simulation]')).toBeNull();
+    expect(screen.queryByText(/^simulation$/i)).toBeNull();
+  };
+
+  test.each(Object.keys(KINDS))('%s, approved: running while it waits, then its marks and line', async (name) => {
+    const [p, kind, project, id, word] = KINDS[name];
+    let finish;
+    runner({ preview: reply(p), 'dry-run': CLEAN, approve: () => new Promise((r) => { finish = r; }) });
+    const { container } = open();
+    noStrip(container);
+    // Waits for the click: the red bar, and no "Approve" heading.
+    expect(await screen.findByTestId('run-approval-required')).toHaveTextContent(/^Approval required$/);
+    fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
+    await waitFor(() => expect(container.querySelector('[data-switchboard-running]')).not.toBeNull());
+    // While the approval is under way: the running mark (the url's kind for sql, the runner's kind otherwise) and the
+    // project and kind marks, nothing else.
+    expect(marksOf(container)).toEqual([`data-switchboard-running=${kind}`, `data-switchboard-project=${project}`, `data-switchboard-kind=${kind}`]);
+    finish(await reply(kind === 'sql' ? { ok: true, run_id: DRY, summary: 'done' } : { ok: true, sent: true }));
+    await screen.findByText('Paste this into the Claude chat, then close this tab.');
+    noStrip(container);
+    expect(marksOf(container)).toEqual(pinned(kind, project, id));
+    expect(lineOf()).toBe(`${word} ${id}`);
+    // s19c: once approved nothing waits for a click, so the bar is gone (before s19c it stayed: spec 14.6).
+    expect(screen.queryByTestId('run-approval-required')).toBeNull();
+    // The extension fills the text and shows Try again inside the hidden status block.
+    const status = container.querySelector('[data-switchboard-status]');
+    expect(status).toHaveAttribute('hidden');
+    expect(status.querySelector('[data-switchboard-status-text]')).not.toBeNull();
+    expect(status.querySelector('button[data-switchboard-retry]')).toHaveTextContent('Try again');
+  });
+
+  test('s19c, sql: no bar while the dry run runs, nor when its counts differ or it failed; the bar once Approve is offered', async () => {
+    let finish;
+    runner({ preview: reply(PREVIEW), 'dry-run': () => new Promise((r) => { finish = r; }) });
+    const a = open();
+    await screen.findByText(/running the dry run/i);
+    expect(screen.queryByTestId('run-approval-required')).toBeNull();
+    finish(await CLEAN());
+    await screen.findByRole('button', { name: /^approve/i });
+    expect(screen.getByTestId('run-approval-required')).toBeInTheDocument();
+    a.unmount();
+    runner({ preview: reply(PREVIEW), 'dry-run': MISMATCH });
+    const b = open();
+    expect(await screen.findByRole('button', { name: /^approve/i })).toBeDisabled();
+    expect(screen.queryByTestId('run-approval-required')).toBeNull();
+    b.unmount();
+    runner({ preview: reply(PREVIEW), 'dry-run': () => reply({ ok: false, run_id: 'dry1', summary: 'relation t does not exist' }) });
+    open();
+    await screen.findByText('The dry run failed, rolled back');
+    expect(screen.queryByRole('button', { name: /^approve/i })).toBeNull();
+    expect(screen.queryByTestId('run-approval-required')).toBeNull();
+  });
+
+  test('a ?kind=deploy link: the running and kind marks carry the link\'s kind, the line stays sql', async () => {
+    let finish;
+    runner({ preview: reply(PREVIEW), 'dry-run': CLEAN, approve: () => new Promise((r) => { finish = r; }) });
+    const { container } = openAt('/approve/tok1?kind=deploy&exp=2000000000');
+    fireEvent.click(await screen.findByRole('button', { name: /^approve/i }));
+    await waitFor(() => expect(container.querySelector('[data-switchboard-running]')).not.toBeNull());
+    expect(marksOf(container)).toEqual(['data-switchboard-running=deploy', 'data-switchboard-project=switchboard2-h8r', 'data-switchboard-kind=deploy']);
+    finish(await reply({ ok: true, run_id: DRY, summary: 'done' }));
+    await screen.findByText('Paste this into the Claude chat, then close this tab.');
+    noStrip(container);
+    expect(marksOf(container)).toEqual(pinned('deploy', 'switchboard2-h8r', DRY));
+    expect(lineOf()).toBe(`sql ${DRY}`);
+  });
+
+  test.each(Object.keys(KINDS))('%s, not run: its marks and line', async (name) => {
+    const [p, kind, project, id, word] = KINDS[name];
+    // A sql cancel carries the runner's run id; every other kind carries the action id.
+    const runId = kind === 'sql' ? 'c1' : id;
+    runner({ preview: reply(p), 'dry-run': CLEAN, cancel: reply({ cancelled: true, reason: 'wait', run_id: 'c1' }) });
+    const { container } = open();
+    await screen.findByRole('button', { name: /^approve/i });
+    expect(screen.getByTestId('run-approval-required')).toHaveTextContent(/^Approval required$/);
+    fireEvent.change(screen.getByLabelText('Reason for not running (optional)'), { target: { value: 'wait' } });
+    fireEvent.click(screen.getByRole('button', { name: "Don't run" }));
+    await screen.findByText('Paste this into the Claude chat, then close this tab.');
+    noStrip(container);
+    expect(marksOf(container)).toEqual(pinned(kind, project, runId, ['data-switchboard-cancelled=', 'data-switchboard-reason=wait']));
+    expect(lineOf()).toBe(`${word} ${runId} cancelled: wait`);
+    // s19c: after Don't run nothing waits for a click either, so the bar is gone.
+    expect(screen.queryByTestId('run-approval-required')).toBeNull();
+  });
+
+  test('sql test: runs on open, with no bar and no heading; its marks and line', async () => {
+    runner({ preview: reply({ ...PREVIEW, test: true }), 'dry-run': () => reply({ ok: true, test: true, run_id: 'dry1', summary: 'undone' }) });
+    const { container } = open();
+    await screen.findByText('Paste this into the Claude chat, then close this tab.');
+    noStrip(container);
+    expect(screen.queryByTestId('run-approval-required')).toBeNull();
+    expect(screen.queryByTestId('approve-heading')).toBeNull();
+    expect(marksOf(container)).toEqual(pinned('sql', 'switchboard2-h8r', 'dry1'));
+    expect(lineOf()).toBe('sql dry1');
+  });
+
+  test('sign-in, loading and an ended link: no strip, no bar, no marks', async () => {
+    supabase.auth.getSession.mockResolvedValue({ data: { session: null } });
+    const a = open();
+    await screen.findByText(/sign in to alfred/i);
+    noStrip(a.container);
+    expect(screen.queryByTestId('run-approval-required')).toBeNull();
+    expect(marksOf(a.container)).toEqual([]);
+    a.unmount();
+    supabase.auth.getSession.mockResolvedValue({ data: { session: { access_token: 'jwt1' } } });
+    runner({ preview: reply({ ok: false, error: 'no such link' }, 404) });
+    const b = open();
+    await screen.findByText(/this link doesn't exist/i);
+    noStrip(b.container);
+    expect(marksOf(b.container)).toEqual([]);
+  });
 });

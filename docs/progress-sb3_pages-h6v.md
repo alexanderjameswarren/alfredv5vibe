@@ -23,7 +23,7 @@ Phase B 7), the switch-over (C, 2) later and approved separately. At double the 
 | B3 follow-up (s14, s14b) | Migration 252: a write's correction gets its own steps back; a sandbox can be added | - | s14: drafted, cold-reviewed, db items claimed, numbered 252. s14b: 252_correction_steps.sql written (plus the queue's base_steps refusal), _pending_ deleted, queued (action af4a4305-53dd-4d48-b23c-e0733ea127cc). s14c: 252 live; 4_correction_steps_test queued (action 9283ede0-b2a8-4e95-bc02-db205f724c5c). Next: read its result, then the Checkpoint |
 | B4 (s15, s15b) | Real source; live routes; end to end on a sandbox | 1 | s15 stopped (new files undeclared). s15b: liveSource.js, LiveRunRoute.jsx, the /run/ and /review/ routes, status from the evidence, the function's lines; tests, build, cold review; Alex's screen tests passed. s16: the count (the preview's total_count, migration 253 drafted and numbered, 5_preview_count_test written; a write page whose shown count differs offers no Approve) and the error boundary; db:fn:switchboard_run_preview and db:migration:253 held. s16b: 253_preview_count.sql written, _pending_ deleted, App.js wraps the lazy routes in RunErrorBoundary, 253 queued (action 6b041669-0b30-4a6a-9eef-069205953db1). s16c: 253 live (run b11a37fb-4495-4e4d-8dfa-c0f63888d9a6, CONFORMANT); 5_preview_count_test queued (action 756bd1ca-160b-465c-8fd0-123fc42a9536). Next: read its result, then the Checkpoint |
 | B4 follow-up (s17) | Migration 254: the write's outcome on its request | - | B4 and 253 committed on the branch (bfb2e49), not yet on main. s17: 254 drafted (columns, switchboard_record_run_outcome, preview), 6_run_outcome_test (29 checks), the page's outcome display, cold-reviewed; db:table:switchboard_run_requests, db:fn:switchboard_record_run_outcome and db:migration:254 claimed. s17b: Alex chose A (no correction once a write ran); 254 adds the correction refusal, written, _pending_ deleted, queued (action 274a4371-64e1-46b8-b085-87c674e219d3); test 36 checks; db:fn:switchboard_correct_run_request claimed. s17c: 254 live (run fb4a48a5-051e-412a-acd4-b5b5ca632651, CONFORMANT); 6_run_outcome_test queued (action d9f8a2cc-1258-409c-9030-8555fc451d0c). Next: read its result, then the Checkpoint |
-| C | Switch-over (separate approval) | 2 | |
+| C | Switch-over (separate approval) | 2 | s18: plan written (spec 14), read only: C1 look and heading (safe now, 1), C2 retire sf_dataop and sf_datawrite (gated on the client runs, the runner and L3, 1); C3 cleanup optional. s19: Alex approved all five; C1 built (format.js, ApprovePage on look.js, no heading, marks pinned), tests and build pass, cold-reviewed. s19b: screen test 2's bar-after-Approve is from before C1 (spec 14.6, fix proposed as its own step); 5 of 6 passed. s19c: the bar fixed (only while an Approve is on offer). Next: Alex's test 2 again, then one Checkpoint for C1 and the bar fix while no /approve/ link is open |
 
 ## A7: fixes from Alex's testing (recorded at s7, all built at s8)
 
@@ -48,16 +48,9 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-Run tag: sb3_pages-h6v-s17d-<4>, read 6_run_outcome_test's result (action d9f8a2cc-1258-409c-9030-8555fc451d0c), note it in the spec, and stop
+Alex's screen tests of C1, then its Checkpoint (gitpush Checkpoint, this worktree), only while no /approve/ link is open: it ships the new look live. Paths: src/switchboard/format.js src/switchboard/ApprovePage.jsx src/switchboard/ApprovePage.test.jsx src/switchboard/runs/look.js docs/technical-spec-sb3_pages-h6v.md docs/progress-sb3_pages-h6v.md
 
-Scope of this step:
-- create: nothing
-- update: docs/technical-spec-sb3_pages-h6v.md
-- delete: nothing
-- deploy: nothing
-- SQL: none (reading the result only; it must say all_passed, 36 of 36)
-- db items: db:fn:switchboard_run_preview, db:migration:253, db:table:switchboard_run_requests, db:fn:switchboard_record_run_outcome, db:fn:switchboard_correct_run_request and db:migration:254; released by the Checkpoint
-Estimated run: 3m Then one Checkpoint for B4, 253 and 254, listing only the files git shows as changed or new since bfb2e49, checked against git status.
+Then C2 waits on its gates (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall.
 
 ## Timing log
 
@@ -147,4 +140,10 @@ Estimated run: 3m Then one Checkpoint for B4, 253 and 254, listing only the file
 | s17 | Report | 06:00:15 | 06:00:49 | 0m34s |
 | s17b | Claim, 254 with the correction refusal, test | 06:04:08 | 06:08:30 | 4m22s |
 | s17b | Cold review, fixes, spec, queue, report | 06:08:30 | 06:11:44 | 3m14s |
-| s17c | Queue test, spec, report | 06:14:16 | 06:15:00 | 0m44s |
+| s17c | Queue test, spec, report | 06:14:16 | 06:14:50 | 0m34s |
+| s18 | Read pages, tools, extension, skills | 06:23:19 | 06:24:47 | 1m28s |
+| s18 | Plan (spec 14), progress, report | 06:24:47 | 06:26:20 | 1m33s |
+| s19 | Claim, pin marks, move, look, tests | 06:29:51 | 06:34:31 | 4m40s |
+| s19 | Cold review, fixes, suites, build, spec, report | 06:34:31 | 06:37:20 | 2m49s |
+| s19b | Compare with HEAD, pin the bar, spec, suites, build, report | 06:47:43 | 06:48:59 | 1m16s |
+| s19c | Bar fix, flipped tests, spec, suites, build, report | 07:40:46 | 07:44:00 | 3m14s |
