@@ -201,6 +201,7 @@ without its text, duplicate finding ids, a note outside its file. At A6 a note m
 | Event | Line |
 |---|---|
 | Approve | `run <link id>`; the helper later posts `run <link id> done: PASS`, `done: FAIL` or `failed` (data runs and plumbing). Every line uses the link id, also for a resent run, so the chat follows one id per page; the helper action carries it as payload.link_id (part 2) |
+| Approve on a correction page (its reruns, s12b) | `run <link id> reruns` |
 | Don't run | `run <link id> cancelled[: <reason>]` |
 | Try again: resend this run | `run <link id> resent` |
 | Check what happened | `check <link id> done: job <state>; <a> at goal, <b> at backup, <c> neither` |
@@ -544,6 +545,127 @@ switchboard_pickup_git(p_user, p_pickup_id default null). Nothing else on main t
   reaches the audit log.
 - **Code review answers:** switchboard_code_reviews.answers keeps each answer's full text (up to 1000 characters) with
   its kind (reviewed, question, changes_required); a question keeps the status open (B2 writes them).
+
+### 10b. B2 as built (s11, 2026-11-24): switchboard-run-pages
+
+- **Deployed** (project zuqjyfqnvhddnchhpbcz) with verify_jwt = false in config.toml: the helper's /evidence and /sample
+  carry x-switchboard-pickup-key and no JWT; every page route checks Alex's JWT itself (auth.getUser, and the user must
+  be CLIPBOARD_USER_ID). Smoke test after the deploy: POST /preview with no JWT and with a made-up JWT, and /evidence with
+  no key, each 401 {"ok":false,"error":"unauthorized"}; an unknown route 404.
+- **Alex's routes** (POST, CORS): /preview {token}, /approve {token, fingerprint, desktop, count}, /rerun {token,
+  fingerprint, desktop}, /resend {token, fingerprint, desktop}, /cancel {token, reason?}, /review {token, answer:
+  reviewed|question|changes_required, text?, acks, desktop?}. Each calls the 250 function with a client built from his
+  JWT; the database's refusal text comes back unchanged (status from its code: 28000 401, P0002 404, 23514/22023 400,
+  else 409). Each reply carries "line", the result line of 4.4; a simulation's is "SIMULATION "-prefixed and carries
+  the link's uuid (the "sim-" ids are the page simulation's only). The cancel note is one line, cut to 200 with "…".
+- **The service role**, only for what 250 reserves for it, each read narrowed to CLIPBOARD_USER_ID:
+  - /evidence {link_id} records the passed checks of the link's finished pre-check run (the approval on a pre-check or
+    correction page, else the rerun) from that run's own switchboard_runs row: result {ok: true, pass: true, checks:
+    [{check, org, commit?}]} with passed_at = finished_at and run_id (proposal for the data runs thread: the helper's
+    /result for an sf_run carries checks). Nothing but link_id is read from the body. Refused for a simulation, a voided
+    link, a link for an older version, and a run finished before the last correction; recorded once per run; older
+    entries for the same checks stay, voided. A correction returns to base_page once every check it voided is in use
+    again (and, for a data operation, every write check); the request's page key follows, so its fingerprint changes
+    and an open page previews again. The write happens only if the request is unchanged since read (updated_at).
+  - /sample {link_id, sample} calls switchboard_store_run_sample for the link's request.
+  - /review writes the answer (found first through switchboard_run_preview with his JWT): refused when superseded,
+    answered, or through a voided or no-longer-current link; "reviewed" needs every For-you finding acknowledged and the
+    desktop ready; the full text (up to 1000) is appended to answers, acks merged; a question keeps it open; written
+    only if the review is unchanged since read.
+- **Superseded by 10c (s12, s12b):** /evidence and /sample and the pickup-key handling are removed; the evidence write
+  is the database function switchboard_record_run_evidence, called by the runner. The gap below is closed by migration
+  251, and a pre-check's checks reach its data operation through pre_check_request_id (10c). The redeploy without the
+  helper routes was done at s12e. /approve's line for a correction's Approve (as_rerun) is `run <id> reruns`;
+  /rerun and a write keep `run <id>`.
+- **Live (s12e, 2026-11-24):** 251 applied (action b32ebcc8-313e-418a-b85b-d88780f69dc2, run
+  80ed01f1-6c26-454d-8d7d-d376d4e0b42d, 21 statements, CONFORMANT, 123 tables); the first queue of it (170f9522) never
+  ran. switchboard-run-pages redeployed without the helper routes; smoke test: /preview with no JWT 401
+  {"ok":false,"error":"unauthorized"}, /evidence and /sample 404. 3_followup_test.sql queued with --test (action
+  566672f2-7d2d-4ecc-99c5-0b8b9319b502); its result is still to read.
+- **Was open, for a follow-up migration (found by B2's cold review, s11):** a correction page's Approve sets the link's
+  used_at, so once /evidence returns the request to its base page that link is "already used", and
+  switchboard_issue_run_link refuses a new run link for the same version: the corrected data operation can't be
+  approved. Proposed fix: a correction page's approval records like a rerun (rerun_at, rerun_action_id, the s6b
+  pattern) so the link stays unused, and /evidence reads rerun_action_id for a correction. Also to confirm: how a
+  pre-check request's passed checks reach its data operation request (today they land on the pre-check request).
+
+### 10c. The follow-up (s12): the correction gap closed, and the evidence in the database
+
+- **Alex's option A (s12):** the desktop helper talks only to switchboard-runner, never to switchboard-run-pages. The
+  runner takes the check results and the sample from the helper's result and writes them by calling database
+  functions with the service role. switchboard-run-pages loses /evidence, /sample and its pickup-key handling; its six
+  page routes are unchanged, and its service role now only writes the code review answers.
+- **The gap (10b) closed:** switchboard_consume_run_link is replaced so a correction page's Approve is recorded like a
+  rerun (rerun_at, rerun_action_id; reply as_rerun: true). The link stays unused; a second correction Approve is refused
+  while the first is approved and unfinished (picked up, or within its 15 minutes), and allowed again after it
+  finished. Once the reruns' evidence is in and the request is back on its base page, the same link approves the write
+  under every 250 rule (fresh checks, count, desktop, Q10, a reloaded fingerprint). Every other 250 rule is unchanged.
+- **For plumbing (the runner):** `switchboard_record_run_evidence(p_run_id uuid) returns jsonb`, service role only
+  (revoked from public, anon and authenticated). Call it after storing a run page pre-check's result on its
+  switchboard_runs row (finished_at set), with that run's id. It reads only that row: result `{ok: true, pass: true,
+  checks: [{check, org, commit?}]}` (check one of count, login, automation, backup, sample, rehearsal; org production
+  or sandbox; commit a hex hash, rehearsal only in practice), passed_at = finished_at. It refuses a run that hasn't
+  finished or didn't pass, a malformed check, a simulation, a voided link or one for an older version, a run that
+  finished before the last correction, and any run that isn't the link's pre-check (its approval on a pre-check page,
+  or its rerun, which a correction page's Approve now is); a data operation's own run is never evidence. It records a
+  run once (a repeat returns already: true), keeps older entries for the same checks voided, and returns a correction
+  to its base page once every voided check is in use again (and every write check, for a data operation). Returns
+  `{recorded, already, request_id, page}`.
+- **The sample:** `switchboard_store_run_sample(p_request_id uuid, p_sample jsonb)` (250) needs no change for the runner:
+  it is service role only, and the runner finds p_request_id from the action's payload.link_id
+  (switchboard_run_links.request_id). The sample is `{records: [one record, or two for an upsert]}`, stored only against
+  valid evidence, so the runner records the evidence first.
+- **After the cold review (s12):** only a write's correction (base page dataop or undo) is recorded like a rerun; a
+  pre-check's correction Approve spends the link as in 250, and its run (action_id) is accepted as evidence. A
+  simulation's Approve always spends its link. switchboard_cancel_run_link is replaced: Don't run is refused while the
+  link's rerun (a write's correction or a "Run the pre-check and rehearsal again") is approved and unfinished. The
+  evidence function refuses a result naming a check twice, and a run older than the evidence already in use for one of
+  its checks (an older run never replaces newer evidence).
+- **Notes for plumbing:** record the evidence (switchboard_record_run_evidence) before, or in the same transaction as,
+  moving the rerun action out of consumed: a second correction Approve can only come once it has left consumed, and it
+  moves rerun_action_id, after which the first run is no longer this link's rerun. A pre-check's result must name every
+  check the correction reran (a records edit reruns count, backup and sample), or the request stays a correction.
+- **Decided (Alex, s12b): the pre-check's checks reach the data operation (option A).** The chat queues a production
+  data operation with **`pre_check_request_id`**: the id of the Pre-check and Rehearsal request whose checks passed.
+  switchboard_queue_run_request (replaced in 251) copies that request's checks in use onto the new request, server-side;
+  the chat still never supplies evidence (an `evidence` key is refused, with or without the id). Its reply adds
+  `copied_checks`. The rules:
+  - Copied checks keep the time they first passed (and their org, run_id, commit), plus `copied_from`: nothing resets,
+    and the 24 hours count from the oldest in use. A copy over 24 hours old is accepted but can't be approved; its page
+    offers the rerun.
+  - Copied only when the data operation matches what the pre-check checked, by the correction table (3.2 d): the
+    object, the operation kind, the records or filter (selected_by without sandbox_text and not_rehearsed), the count
+    (the write's count is the pre-check's counts.total, else its expected, which it must have; expected and the other
+    counts equal), the field, the value, the file, the operation's other details
+    (external id, steps), the sandbox filter, the code commit and the target org. Wording, side effects and what
+    diagnosis allows may differ. Otherwise refused, naming every mismatch ("differs from what its pre-check checked: the
+    field, the value").
+  - Same user (another user's request is "no such pre-check request") and same project; a simulation and a real
+    request never share checks; the named request must be a pre-check on its pre-check page (not mid-correction) with
+    passed checks; only a data operation may name one.
+  - Added (s12b): one pre-check backs one approved write. The queue refuses a pre-check whose copied checks already
+    backed an approved data operation, and switchboard_consume_run_link checks it again at the click, under the
+    project's advisory lock, so two requests copied from one pre-check can't both write, nor one request twice (a used
+    link of an earlier version of the same request counts). Keys set to null count as left out.
+  - Closed (Alex, s12c, in 251): switchboard_correct_run_request is replaced so each edit kind changes only its own
+    row of the correction table, besides the wording keys and, for a kind that reruns a check, the run's own steps,
+    phases, details, kept, run_tag and still_valid: value operation.value; file operation.file; field operation.field
+    and undo; records selected_by (not its kind or sandbox filter), counts, operation.steps and undo; records_filter
+    all of selected_by (its sandbox filter too), counts, operation.steps and undo; sandbox_filter selected_by.sandbox_text
+    and not_rehearsed; code the code. Ids to a filter is a records_filter correction. Any other change is refused, naming the field (orgs, selected_by.text,
+    counts.total). 250's supersede of older reviews on a code correction is kept exactly.
+  - Closed (Alex, s12c): no correction changes or drops pre_check_request_id; refused, naming it.
+  - **Where the sample lives at the write (s12c):** when the queue copies a pre-check's checks it moves the pre-check's
+    switchboard_run_samples row to the new data operation request, expires_at unchanged (reply `moved_sample`). The
+    production approve page's preview shows it; the pre-check's page no longer does. The runner drops it from the
+    write's own request (switchboard_drop_run_sample with the data operation's request id) at the write's final
+    status. No sample on the pre-check: nothing moves. Open (for Alex): two data operations queued from one pre-check
+    before either is approved; the sample goes to the first, so if the second is approved its page shows none.
+- **Result line (Alex, s12b):** a correction's Approve (as_rerun) posts `run <link id> reruns`; a write approval stays
+  `run <link id>`. Plumbing adds "reruns" to the extension's POST_LINE. The page builds it (runRerunsLine) from the
+  approve reply's as_rerun; switchboard-run-pages' /approve follows at s12c.
+- **For B3 (the queue tool):** the code review of a data operation that carries code is recorded on the data
+  operation's own request (consume checks switchboard_code_reviews by request_id), not on the pre-check's.
 
 ## 11. Build order (CLI steps)
 

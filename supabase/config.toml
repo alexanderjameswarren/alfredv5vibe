@@ -135,6 +135,17 @@ verify_jwt = false
 import_map = "./functions/switchboard-runner/deno.json"
 entrypoint = "./functions/switchboard-runner/index.ts"
 
+[functions.switchboard-run-pages]
+enabled = true
+# 🛑 JWT verification OFF (sb3_pages-h6v B2). There are no helper routes (s12: the desktop helper talks only to
+# switchboard-runner). Every page route (/preview, /approve, /rerun, /resend, /cancel, /review) checks Alex's JWT itself
+# and calls the 250/251 functions with it, so RLS and the link rules decide; any other route is 404.
+#
+# ⚠️ Declared BEFORE THE FIRST DEPLOY, for the reason given under overwatch-ingest. Re-check after every deploy: a POST
+# to /preview without a JWT must come back 401 with this function's own body (`{"ok":false,"error":"unauthorized"}`).
+verify_jwt = false
+entrypoint = "./functions/switchboard-run-pages/index.ts"
+
 [functions.switchboard-panel]
 enabled = true
 # 🛑 JWT verification OFF. The Switchboard panel holds no Supabase session, and this function checks
