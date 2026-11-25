@@ -940,8 +940,8 @@ function.
 
 **Gated on client work:**
 
-**C2. The old data run links are retired, and new data runs use the run pages.** One CLI step, now s23 (s20 to s22
-went to the extension's marks, the run's end and the sql bar).
+**C2. The old data run links are retired, and new data runs use the run pages.** One CLI step, now s24 (s20 to s23b
+went to the extension's marks, the run's end, the sql bar and the run pages' wording).
 - Before it (all three, each named in the prompt):
   1. Alex says Common Defense Fix D and iwh_ab_codefix-p8v are finished. A read shows no sf_dataop or sf_datawrite
      action in switchboard_actions that is queued, linked, consumed or picked up and unfinished.
@@ -1149,3 +1149,25 @@ the /run-sim/ scenarios) carries none of these, and keeps `data-switchboard-kind
 - **No end state draws a result line or carries `data-switchboard-line`:** the helper posts the done and failed lines.
   Don't run's own cancelled line, posted by the page, keeps its s20 marks.
 - **Tests:** src/switchboard/runs/runEnd.test.jsx. The A7 test that pinned "stopped" now pins "failed".
+
+### 14.9 After the click on /run/ and /review/: the wording here, the tab close in the extension (s23, s23b)
+
+- **Wording (s23b).** On a real run or review page, ResultLine said "Paste this into the Claude chat, then close this
+  tab." The extension posts the line, so it now says "This line goes to the Claude chat by itself; you can close this
+  tab." (look.js REAL_LINE_NOTE).
+  - It shows whenever the tab is still open, for example before plumbing's close lands.
+  - Without the extension (missing, or not allowed on the host) nothing posts the line, though the sentence says it
+    goes by itself. Alex's words, kept; flagged for him in s23b.
+  - The simulation's sentence (SIM_LINE_NOTE) and every mark from s20 are unchanged.
+  - Today's /approve/ page has its own ResultLine and keeps its words.
+  - Tests: src/switchboard/runs/pageMarks.test.jsx.
+- **Closing the tab is plumbing's, after hand-over (s23).**
+  - The page never closes itself: ApprovePage has no `window.close`. The extension closes an /approve/ tab:
+    - for a posted line, once the chat confirms it (`did === "sent"`), with closesApproveTab (switchboard
+      extension/bridge.js:759, lib/bridge-core.js:350);
+    - for a git-shaped kind, once the host has it, with closesGitApproveTab (bridge.js:450, bridge-core.js:353).
+  - Both test the tab with isApprovePage → approveTokenOf (bridge-core.js:189-200), which matches only
+    `/approve/<token>`, so a /run/ or /review/ tab is never closed.
+  - Plumbing will close a watched /run/ or /review/ page on `did === "sent"`.
+- **The wake on a /run/ click is plumbing's too.** The click's wake of the helper probably doesn't reach it from a
+  /run/ page, for the same reason (approveTokenOf matches only /approve/).
