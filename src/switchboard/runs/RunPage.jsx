@@ -6,7 +6,7 @@ import {
 import {
   PHASE_HEADERS, RERUN_LABEL, STOPS_AT_FIRST_FAILURE, afterApproveLines, approveLabel, bannerLines, checkWord, clientOrgLine,
   countDetail, countSentence, daysLeftLine, groupedSteps, knockOnLines, notStarted, pageExpired, phaseWord, rehearsalOrg,
-  rerunRequest, selectedByText, runCancelledLine, runLine, runRerunsLine, runResentLine, sampleRoleLabel, stillValid, targetOrg, undoClosedReason,
+  rerunRequest, selectedByText, runCancelledLine, runEnd, runLine, runRerunsLine, runResentLine, sampleRoleLabel, stillValid, targetOrg, undoClosedReason,
   outcomeView, undoHasDeadline, undoLine, undoScopeLine, validUntil, whatChanges,
 } from './runContract';
 import { desktopLine, notReadyReason } from './desktopCheck';
@@ -87,10 +87,11 @@ function ProblemBox({ r, closed }) {
 /** Part 8: the status line. */
 function StatusLine({ r, run, closed }) {
   const until = validUntil(r.evidence);
-  // A used link (A7): the phase being run reads running or finished, from the stored run, not "waiting".
-  // A run that finished with a failure_reason stopped; it didn't finish.
-  const live = run?.finished_at
-    ? { word: run.failure_reason ? 'stopped' : 'finished', at: run.finished_at }
+  // A used link (A7): the phase being run reads running or how it ended (runEnd), from the stored run, not "waiting".
+  // s21b: a failed run reads failed, never finished.
+  const end = runEnd(run);
+  const live = end
+    ? { word: end.word, at: run.finished_at }
     : run?.picked_up_at ? { word: 'running', at: run.picked_up_at, lead: 'picked up ' } : null;
   return (
     <div data-testid="run-status" className="mb-4 text-sm text-dark break-words">
@@ -340,9 +341,12 @@ export default function RunPage({ source }) {
   const superseded = notStarted(stored) && Date.parse(r?.rerun_at ?? '') > Date.parse(stored?.consumed_at ?? '');
   const run = superseded ? null : stored;
   const unpicked = notStarted(run);
-  const waiting = Boolean(run?.consumed_at) && !unpicked && !run?.picked_up_at;
-  // Picked up or finished: the link is used, so the page only reports.
-  const used = Boolean(run?.consumed_at) && Boolean(run?.picked_up_at || run?.finished_at);
+  // s21b: a finished run is never waiting, even one closed before its pickup was recorded.
+  const waiting = Boolean(run?.consumed_at) && !unpicked && !run?.picked_up_at && !run?.finished_at;
+  // Picked up or finished: the link is used, so the page only reports. s21b: a run the expiry closed (finished, never
+  // picked up) never started, so it shows "Not started", not this.
+  const used = Boolean(run?.consumed_at) && !unpicked && Boolean(run?.picked_up_at || run?.finished_at);
+  const end = used ? runEnd(run) : null;
   // A rerun asked for and not yet passed: the evidence is still old, but a second rerun is refused (part 5).
   // B4: the real source marks a rerun (a correction's Approve too) approved and not yet finished as rerun_pending.
   const rerunWaiting = (Boolean(r?.rerun_at) && expired && !run?.consumed_at) || r?.rerun_pending === true;
@@ -494,8 +498,12 @@ export default function RunPage({ source }) {
         </div>
       )}
       {used && (
-        <div data-testid="run-used" className={PANEL}>
-          <p className="font-medium m-0 mb-1">{run.finished_at ? `${run.failure_reason ? 'Stopped' : 'Finished'} ${localTime(run.finished_at)}` : `Picked up ${localTime(run.picked_up_at)}, running`}</p>
+        // s21b: how it ended, with a failed run's reason. No result line and no line mark: the helper posts those.
+        <div data-testid="run-used" data-end={end?.state ?? 'running'} className={PANEL}>
+          <p className="font-medium m-0 mb-1">
+            {end ? `${end.state === 'failed' ? 'Failed' : 'Finished'} ${localTime(run.finished_at)}${end.state === 'pass' ? ': PASS' : end.state === 'fail' ? ': FAIL' : ''}` : `Picked up ${localTime(run.picked_up_at)}, running`}
+          </p>
+          {end?.reason && <p data-testid="run-end-reason" className="m-0 mb-1 break-words">Reason: {end.reason}</p>}
           <p className="m-0 break-words">Approved {localTime(run.consumed_at)}. This link is used; the results come back to Alfred.</p>
         </div>
       )}

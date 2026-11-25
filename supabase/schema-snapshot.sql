@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-25 06:18, through migration 254 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-25 12:44, through migration 255 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -11638,7 +11638,11 @@ begin
              'action_id', v_action.id, 'status', v_action.status, 'consumed_at', v_action.created_at,
              'picked_up_at', v_action.picked_up_at, 'finished_at', v_run.finished_at,
              'failure_reason', v_run.failure_reason, 'not_started', not v_started,
-             'rerun', v_action.id = v_link.rerun_action_id) end,
+             'rerun', v_action.id = v_link.rerun_action_id,
+             -- s21b: how the run ended. Null once switchboard_prune_runs clears result; summary is kept.
+             'ok', case when jsonb_typeof(v_run.result->'ok') = 'boolean' then (v_run.result->>'ok')::boolean end,
+             'pass', case when jsonb_typeof(v_run.result->'pass') = 'boolean' then (v_run.result->>'pass')::boolean end,
+             'summary', left(v_run.summary, 500)) end,
     'sample', case when v_sample.id is null then null else v_sample.sample end,
     'review', case when v_review.id is null then null else
                v_review.review || jsonb_build_object('id', v_review.id, 'commit', v_review.commit, 'status', v_review.status,
@@ -11650,7 +11654,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_run_preview"("p_token" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_run_preview"("p_token" "text") IS 'Switchboard 3: what a run or review page shows for its token, read at page open and at a click. Returns {link_id, request (with id, page, version, corrected_at, evidence, simulation, rerun_at), fingerprint, total_count (the request''s count, which switchboard_consume_run_link checks and the page sends with Approve; null when the request has none), outcome, outcome_run_id, outcome_recorded_at (254: the write''s outcome, null until recorded and on any link but the one whose approved run recorded it), link {version, current, used_at, rerun_at, voided_at, void_reason}, valid_until, expired (never for an undo), run (the newest sf_run for this link id: status, consumed_at, picked_up_at, finished_at, failure_reason, not_started, rerun), sample, review}. Deletes the sample when it is past expires_at. Called by switchboard-run-pages with Alex''s JWT.';
+COMMENT ON FUNCTION "public"."switchboard_run_preview"("p_token" "text") IS 'Switchboard 3: what a run or review page shows for its token, read at page open and at a click. Returns {link_id, request (with id, page, version, corrected_at, evidence, simulation, rerun_at), fingerprint, total_count (the request''s count, which switchboard_consume_run_link checks and the page sends with Approve; null when the request has none), outcome, outcome_run_id, outcome_recorded_at (254: the write''s outcome, null until recorded and on any link but the one whose approved run recorded it), link {version, current, used_at, rerun_at, voided_at, void_reason}, valid_until, expired (never for an undo), run (the newest sf_run for this link id: status, consumed_at, picked_up_at, finished_at, failure_reason, not_started, rerun, and from s21b ok and pass (result.ok and result.pass when booleans, null once the result is pruned) and summary (its first 500 characters)), sample, review}. Deletes the sample when it is past expires_at. Called by switchboard-run-pages with Alex''s JWT.';
 
 
 

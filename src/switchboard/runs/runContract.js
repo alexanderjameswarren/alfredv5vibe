@@ -386,6 +386,28 @@ export function notStarted(run, now = Date.now()) {
   return !Number.isNaN(t) && !run.picked_up_at && !run.finished_at && now - t > PICKUP_MS;
 }
 
+const FAILURE_WORDS = { stopped: 'The run stopped partway.' };
+/**
+ * s21b: how a finished run ended, from the preview's run (status, ok, pass, summary, failure_reason; spec 14.8), or
+ * null while it hasn't finished or never started. A failed run (status failed, ok false or a failure_reason) is
+ * failed, with its reason, never finished. A succeeded run is PASS or FAIL by pass; once the result is pruned pass is
+ * null and it reads plain finished. A run row finished while its action isn't yet succeeded (the runner still
+ * recording its evidence) hasn't ended: null, so the page reads running. A sample run with no status counts as
+ * succeeded. The helper posts the done and failed lines, so the page draws none.
+ */
+export function runEnd(run) {
+  if (!run?.finished_at || notStarted(run)) return null;
+  if (run.status === 'failed' || run.ok === false || run.failure_reason) {
+    const summary = typeof run.summary === 'string' ? run.summary.trim() : '';
+    const reason = summary || FAILURE_WORDS[run.failure_reason] || run.failure_reason || 'No reason was recorded.';
+    return { state: 'failed', word: 'failed', reason };
+  }
+  if (typeof run.status === 'string' && run.status !== 'succeeded') return null;
+  if (run.pass === true) return { state: 'pass', word: 'finished: PASS' };
+  if (run.pass === false) return { state: 'fail', word: 'finished: FAIL' };
+  return { state: 'finished', word: 'finished' };
+}
+
 /** The pre-check and rehearsal that "Run the pre-check and rehearsal again" runs, listed in full beneath it. */
 export function rerunRequest(r) {
   const count = r?.selected_by?.kind === 'filter' ? 'count_filter' : 'count_listed';
