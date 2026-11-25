@@ -7,7 +7,7 @@ import {
   PHASE_HEADERS, RERUN_LABEL, STOPS_AT_FIRST_FAILURE, afterApproveLines, approveLabel, bannerLines, checkWord, clientOrgLine,
   countDetail, countSentence, daysLeftLine, groupedSteps, knockOnLines, notStarted, pageExpired, phaseWord, rehearsalOrg,
   rerunRequest, selectedByText, runCancelledLine, runLine, runRerunsLine, runResentLine, sampleRoleLabel, stillValid, targetOrg, undoClosedReason,
-  undoHasDeadline, undoLine, undoScopeLine, validUntil, whatChanges,
+  outcomeView, undoHasDeadline, undoLine, undoScopeLine, validUntil, whatChanges,
 } from './runContract';
 import { desktopLine, notReadyReason } from './desktopCheck';
 
@@ -142,6 +142,54 @@ function ChangedBlock({ changed }) {
 }
 
 /** Part 10: the sample record, now and after. Not on the pre-check, which reads it. */
+const records = (v) => `${v.toLocaleString('en-US')} ${v === 1 ? 'record' : 'records'}`;
+
+/**
+ * s17: a data operation's or undo's outcome, below the status: only the parts outcomeView names, and only once this
+ * link is used (the database returns it only on the link whose run recorded it).
+ */
+function Outcome({ r, outcome, used }) {
+  const view = used && ['dataop', 'undo'].includes(r.page) ? outcomeView(outcome) : null;
+  if (!view) return null;
+  const shown = (v) => (v === null ? '' : typeof v === 'number' ? v.toLocaleString('en-US') : v);
+  return (
+    <section data-testid="run-outcome" className={PANEL}>
+      <h2 className="text-lg font-bold mb-2">What the run did</h2>
+      {view.changed !== null && <p data-testid="run-outcome-changed" className="m-0 mb-2 font-medium">Changed: {records(view.changed)}</p>}
+      {view.rows.length > 0 && (
+        <div className="mb-2 overflow-x-auto">
+          <table className="w-full border-collapse">
+            <thead><tr className="text-left border-b border-border"><th className="pr-3 py-1 font-medium">Check</th><th className="pr-3 py-1 font-medium">Before</th><th className="pr-3 py-1 font-medium">Goal</th><th className="py-1 font-medium">After</th></tr></thead>
+            <tbody>
+              {view.rows.map((row, i) => (
+                // eslint-disable-next-line react/no-array-index-key -- labels can repeat; the order is fixed
+                <tr key={i} data-testid="run-outcome-row" data-knock-on={row.knock_on ? 'true' : 'false'} className="border-b border-border">
+                  <td className="pr-3 py-1 break-words">{row.knock_on ? `Knock-on: ${row.label}` : row.label}</td>
+                  <td className="pr-3 py-1">{shown(row.before)}</td><td className="pr-3 py-1">{shown(row.goal)}</td><td className="py-1">{shown(row.after)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {view.stopped && (
+        <div data-testid="run-outcome-stopped">
+          {view.stopped.already_changed !== null && <p className="m-0 mb-1 font-medium">Stopped. Already changed: {records(view.stopped.already_changed)}</p>}
+          {view.stopped.saved_on_pc.length > 0 && (
+            <>
+              <p className="m-0">Saved on the PC:</p>
+              <ul className="list-disc pl-6 m-0 break-all">{view.stopped.saved_on_pc.map((s, i) => (
+                // eslint-disable-next-line react/no-array-index-key -- a path can repeat; the order is fixed
+                <li key={i} className="font-mono">{s}</li>
+              ))}</ul>
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SampleRecord({ r, sample }) {
   if (['precheck', 'correction', 'check'].includes(r.page) || !sample?.records?.length) return null;
   return (
@@ -393,6 +441,7 @@ export default function RunPage({ source }) {
       {sentence && <p data-testid="run-count-sentence" className="text-2xl font-bold text-dark mb-3 break-words">{sentence}</p>}
       <ProblemBox r={r} closed={closed} />
       <StatusLine r={r} run={used ? run : null} closed={closed} />
+      <Outcome r={r} outcome={loaded.outcome} used={used} />
       <ChangedBlock changed={r.changed} />
       <SampleRecord r={r} sample={loaded.sample} />
       {undo && <p data-testid="run-undo" className="mb-4 text-dark font-medium break-words">{undo}</p>}

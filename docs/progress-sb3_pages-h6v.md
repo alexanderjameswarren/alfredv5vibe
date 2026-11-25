@@ -22,6 +22,7 @@ Phase B 7), the switch-over (C, 2) later and approved separately. At double the 
 | B3 (s13, s13b) | MCP tools; deploy | 2 | s13 stopped (runContract not loadable). s13b: four tools, runContract shared, git keys and strict schema, tests, cold review; deploy waits for a gitsync (main moved: 268f2e2, 509bb49). s13c: synced, deployed, strict refusal confirmed live; the tool listing shows after a connector reconnect |
 | B3 follow-up (s14, s14b) | Migration 252: a write's correction gets its own steps back; a sandbox can be added | - | s14: drafted, cold-reviewed, db items claimed, numbered 252. s14b: 252_correction_steps.sql written (plus the queue's base_steps refusal), _pending_ deleted, queued (action af4a4305-53dd-4d48-b23c-e0733ea127cc). s14c: 252 live; 4_correction_steps_test queued (action 9283ede0-b2a8-4e95-bc02-db205f724c5c). Next: read its result, then the Checkpoint |
 | B4 (s15, s15b) | Real source; live routes; end to end on a sandbox | 1 | s15 stopped (new files undeclared). s15b: liveSource.js, LiveRunRoute.jsx, the /run/ and /review/ routes, status from the evidence, the function's lines; tests, build, cold review; Alex's screen tests passed. s16: the count (the preview's total_count, migration 253 drafted and numbered, 5_preview_count_test written; a write page whose shown count differs offers no Approve) and the error boundary; db:fn:switchboard_run_preview and db:migration:253 held. s16b: 253_preview_count.sql written, _pending_ deleted, App.js wraps the lazy routes in RunErrorBoundary, 253 queued (action 6b041669-0b30-4a6a-9eef-069205953db1). s16c: 253 live (run b11a37fb-4495-4e4d-8dfa-c0f63888d9a6, CONFORMANT); 5_preview_count_test queued (action 756bd1ca-160b-465c-8fd0-123fc42a9536). Next: read its result, then the Checkpoint |
+| B4 follow-up (s17) | Migration 254: the write's outcome on its request | - | B4 and 253 committed on the branch (bfb2e49), not yet on main. s17: 254 drafted (columns, switchboard_record_run_outcome, preview), 6_run_outcome_test (29 checks), the page's outcome display, cold-reviewed; db:table:switchboard_run_requests, db:fn:switchboard_record_run_outcome and db:migration:254 claimed. s17b: Alex chose A (no correction once a write ran); 254 adds the correction refusal, written, _pending_ deleted, queued (action 274a4371-64e1-46b8-b085-87c674e219d3); test 36 checks; db:fn:switchboard_correct_run_request claimed. s17c: 254 live (run fb4a48a5-051e-412a-acd4-b5b5ca632651, CONFORMANT); 6_run_outcome_test queued (action d9f8a2cc-1258-409c-9030-8555fc451d0c). Next: read its result, then the Checkpoint |
 | C | Switch-over (separate approval) | 2 | |
 
 ## A7: fixes from Alex's testing (recorded at s7, all built at s8)
@@ -47,18 +48,16 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-Run tag: sb3_pages-h6v-s16d-<4>, read 5_preview_count_test's result (action 756bd1ca-160b-465c-8fd0-123fc42a9536), note it in the spec, and stop
+Run tag: sb3_pages-h6v-s17d-<4>, read 6_run_outcome_test's result (action d9f8a2cc-1258-409c-9030-8555fc451d0c), note it in the spec, and stop
 
 Scope of this step:
 - create: nothing
 - update: docs/technical-spec-sb3_pages-h6v.md
 - delete: nothing
 - deploy: nothing
-- SQL: none (reading the result only; it must say all_passed, 19 of 19)
-- db items: db:fn:switchboard_run_preview and db:migration:253, held since s16; released by the Checkpoint
-Estimated run: 3m
-
-Then one Checkpoint for all of B4 and 253, listing only files that changed.
+- SQL: none (reading the result only; it must say all_passed, 36 of 36)
+- db items: db:fn:switchboard_run_preview, db:migration:253, db:table:switchboard_run_requests, db:fn:switchboard_record_run_outcome, db:fn:switchboard_correct_run_request and db:migration:254; released by the Checkpoint
+Estimated run: 3m Then one Checkpoint for B4, 253 and 254, listing only the files git shows as changed or new since bfb2e49, checked against git status.
 
 ## Timing log
 
@@ -143,3 +142,9 @@ Then one Checkpoint for all of B4 and 253, listing only files that changed.
 | s16b | Suites, build, spec, queue | 05:36:07 | 05:37:01 | 0m54s |
 | s16b | Report | 05:37:01 | 05:37:15 | 0m14s |
 | s16c | Queue test, spec, report | 05:40:22 | 05:41:00 | 0m38s |
+| s17 | Main's status, migration, test, page, tests | 05:48:10 | 05:53:38 | 5m28s |
+| s17 | Cold review, fixes, suites, build, spec, claim, number | 05:53:38 | 06:00:15 | 6m37s |
+| s17 | Report | 06:00:15 | 06:00:49 | 0m34s |
+| s17b | Claim, 254 with the correction refusal, test | 06:04:08 | 06:08:30 | 4m22s |
+| s17b | Cold review, fixes, spec, queue, report | 06:08:30 | 06:11:44 | 3m14s |
+| s17c | Queue test, spec, report | 06:14:16 | 06:15:00 | 0m44s |

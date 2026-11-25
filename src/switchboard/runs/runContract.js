@@ -657,6 +657,34 @@ export function reviewQuestionLine(id, question) {
   if (!lineText(question)) throw new Error('a question needs its text');
   return line('review', id, withText(' question', question));
 }
+/**
+ * s17: the parts of a write's outcome (switchboard_run_requests.outcome, 254) the page shows, and nothing else. Its
+ * shape belongs to the data runs thread; a part that is missing or malformed is left out, never guessed:
+ *   changed  a count (an integer, 0 or more): "Changed: N records"
+ *   rows     [{label, before, goal, after, knock_on?}]: a table, knock-on rows last, each cell a number or short text
+ *   stopped  {already_changed (a count), saved_on_pc (text, or a list of text)}: on a stop, what already changed and
+ *            what is saved on the PC
+ * Null when there is nothing to show.
+ */
+export function outcomeView(outcome) {
+  if (!outcome || typeof outcome !== 'object' || Array.isArray(outcome)) return null;
+  const count = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
+  const cell = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.length <= 200 ? v : null);
+  const text = (v) => (typeof v === 'string' && v.trim() && v.length <= 500 ? v : null);
+  const changed = count(outcome.changed);
+  const rows = (Array.isArray(outcome.rows) ? outcome.rows : [])
+    .filter((row) => row && typeof row === 'object' && text(row.label))
+    .map((row) => ({ label: row.label, before: cell(row.before), goal: cell(row.goal), after: cell(row.after), knock_on: row.knock_on === true }));
+  // Knock-on rows last, each group in its own order.
+  const ordered = [...rows.filter((row) => !row.knock_on), ...rows.filter((row) => row.knock_on)];
+  const s = outcome.stopped && typeof outcome.stopped === 'object' && !Array.isArray(outcome.stopped) ? outcome.stopped : null;
+  const saved = s ? (Array.isArray(s.saved_on_pc) ? s.saved_on_pc : [s.saved_on_pc]).map(text).filter(Boolean) : [];
+  const stopped = s && (count(s.already_changed) !== null || saved.length)
+    ? { already_changed: count(s.already_changed), saved_on_pc: saved } : null;
+  if (changed === null && !ordered.length && !stopped) return null;
+  return { changed, rows: ordered, stopped };
+}
+
 export function reviewChangesLine(id, change) {
   if (!lineText(change)) throw new Error('changes required needs the change');
   return line('review', id, withText(' changes required', change));

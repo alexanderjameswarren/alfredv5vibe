@@ -5,9 +5,35 @@ import {
   afterApproveLines, approveLabel, bannerLines, clientOrgLine, checkLine, checksExpired, codeReviewProblems, countSentence, EDIT_RERUNS, GROUPS, groupedSteps,
   LINE_TEXT_MAX, lineText, requestProblems, reviewChangesLine, reviewQuestionLine, reviewReviewedLine, runCancelledLine, runLine,
   rerunSteps, runRerunsLine, runResentLine, selectedByText, STEPS, statusFromEvidence, undoClosedReason, undoLine, validUntil, whatChanges,
-  WRITE_CHECKS,
+  WRITE_CHECKS, outcomeView,
 } from './runContract';
 import { BUTTON, RunShell, SECOND_BUTTON, localTime } from './look';
+
+describe('outcomeView (s17): only the named parts, a missing or malformed part left out', () => {
+  test('nothing to show: null', () => {
+    for (const o of [null, undefined, 'done', [1], {}, { raw: 1 }, { changed: -1 }, { changed: 1.5, rows: 'x' }, { stopped: {} }]) {
+      expect(outcomeView(o)).toBeNull();
+    }
+  });
+  test('the changed count, rows with knock-on last, and the stop', () => {
+    const v = outcomeView({
+      changed: 3, extra: 'never shown',
+      rows: [{ label: 'K', before: 0, goal: 1, after: 1, knock_on: true }, { label: 'A', before: 3, goal: 0, after: 0 }, { before: 1 }, null,
+        { label: 'B', before: { x: 1 }, goal: 'none', after: null }],
+      stopped: { already_changed: 2, saved_on_pc: 'backup.csv' },
+    });
+    expect(v).toEqual({
+      changed: 3,
+      rows: [{ label: 'A', before: 3, goal: 0, after: 0, knock_on: false }, { label: 'B', before: null, goal: 'none', after: null, knock_on: false },
+        { label: 'K', before: 0, goal: 1, after: 1, knock_on: true }],
+      stopped: { already_changed: 2, saved_on_pc: ['backup.csv'] },
+    });
+  });
+  test('a stop with only saved files, or only a count', () => {
+    expect(outcomeView({ stopped: { saved_on_pc: ['a.csv', 7, ''] } }).stopped).toEqual({ already_changed: null, saved_on_pc: ['a.csv'] });
+    expect(outcomeView({ stopped: { already_changed: 0 } }).stopped).toEqual({ already_changed: 0, saved_on_pc: [] });
+  });
+});
 
 jest.mock('../../supabaseClient', () => ({ supabaseUrl: 'https://db.example', supabaseAnonKey: 'anon', supabase: { auth: {} } }));
 

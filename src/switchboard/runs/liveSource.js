@@ -96,7 +96,8 @@ export function liveRunSource(token, preview, deps = {}) {
   const clickBody = () => ({ token, fingerprint: preview.fingerprint, desktop });
   return {
     kind: kindOf(preview),
-    load: async () => ({ link_id: preview.link_id, request, sample: preview.sample ?? null, run: rerun ? null : preview.run ?? null }),
+    load: async () => ({ link_id: preview.link_id, request, sample: preview.sample ?? null, run: rerun ? null : preview.run ?? null,
+      outcome: preview.outcome ?? null }),
     // The page asks at open, on Check again and at the click (Q9); the click sends the newest answer.
     checkDesktop: async () => { desktop = await ask(); return desktop; },
     approve: async () => ({ sent: true, ...(await call('approve', { ...clickBody(), count: approveCount(preview) })) }),

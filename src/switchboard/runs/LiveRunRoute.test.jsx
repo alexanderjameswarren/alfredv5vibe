@@ -161,6 +161,18 @@ describe('the live run route', () => {
     expect(screen.getByTestId('run-simulation')).toBeInTheDocument();
   });
 
+  test("s17: the outcome shows once the link's write ran, and never on an unused link", async () => {
+    const outcome = { changed: 45, rows: [{ label: 'Gifts with no campaign', before: 45, goal: 0, after: 0 }] };
+    const now = new Date().toISOString();
+    const run = { action_id: 'a1', status: 'succeeded', consumed_at: now, picked_up_at: now, finished_at: now, not_started: false, rerun: false };
+    const { unmount } = open(`/run/${TOKEN}`, fakeFetch({ preview: { body: runPreview({ outcome, run }) } }));
+    expect(await screen.findByTestId('run-outcome-changed')).toHaveTextContent('Changed: 45 records');
+    unmount();
+    open(`/run/${TOKEN}`, fakeFetch({ preview: { body: runPreview({ outcome }) } }));
+    await screen.findByTestId('run-approve');
+    expect(screen.queryByTestId('run-outcome')).toBeNull();
+  });
+
   test('a review link on /run/ is sent to /review/, in words', async () => {
     open(`/run/${TOKEN}`, fakeFetch({ preview: { body: { ...runPreview(), review: { id: 'r1' } } } }));
     expect(await screen.findByTestId('run-error')).toHaveTextContent('This is a code review link: open it as /review/ instead.');

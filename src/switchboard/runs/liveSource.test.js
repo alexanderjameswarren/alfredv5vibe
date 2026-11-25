@@ -142,6 +142,12 @@ test('countMismatch: a write page whose shown count is not total_count; never a 
   expect(countMismatch({ total_count: 1, request: { page: 'correction', counts: { total: 2 } } })).toBeNull();
 });
 
+test("the preview's outcome reaches the page; none is null", async () => {
+  const outcome = { changed: 45 };
+  expect((await liveRunSource(TOKEN, preview({ outcome }), deps(fakeFetch({}))).load()).outcome).toEqual(outcome);
+  expect((await liveRunSource(TOKEN, preview(), deps(fakeFetch({}))).load()).outcome).toBeNull();
+});
+
 test('a mismatched write carries count_mismatch into the page', async () => {
   const { request } = await liveRunSource(TOKEN, preview({ total_count: 47 }), deps(fakeFetch({}))).load();
   expect(request.count_mismatch).toMatch(/\(45\).*\(47\)/);
