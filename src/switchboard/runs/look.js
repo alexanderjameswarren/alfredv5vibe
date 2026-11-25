@@ -46,9 +46,13 @@ export const LOCKED_INPUT = 'bg-gray-100 text-gray-500 border-dashed cursor-not-
 /**
  * The line for the chat, to copy, as ApprovePage's ResultLine. On a real page the extension fills the hidden status and
  * wires its own post "Try again"; a simulation has no such block, so nothing there can be posted.
+ * s20: a real page also marks the container with the line, exactly as shown, and the page's link id, for the
+ * extension (spec 14.7). A simulation gets neither.
  */
-export function ResultLine({ line, sim }) {
-  return h('div', { 'data-testid': 'run-result-line' },
+export function ResultLine({ line, sim, linkId }) {
+  // No link id, no link-id mark: the extension sees it missing, never empty.
+  const marks = sim ? {} : { 'data-switchboard-line': line, ...(linkId ? { 'data-switchboard-link-id': linkId } : {}) };
+  return h('div', { 'data-testid': 'run-result-line', ...marks },
     h('p', { className: 'text-dark mb-2' }, sim ? 'A simulation posts nothing. This is the line a real page would send to the chat.' : 'Paste this into the Claude chat, then close this tab.'),
     h('div', { className: 'flex items-center gap-2' },
       h('code', { className: 'font-mono text-dark break-all' }, line),

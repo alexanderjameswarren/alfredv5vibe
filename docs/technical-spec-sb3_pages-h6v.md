@@ -1075,3 +1075,22 @@ isn't counted. The DB guard and the helper's link commands belong to plumbing an
   - Every word, mark, result line and status block is unchanged.
   - The pinned tests now assert the bar before acting and none after Approve and after Don't run, for every kind,
     plus the sql cases.
+
+### 14.7 The page side of the extension contract: marks on /run/ and /review/ (s20)
+
+For plumbing's L3 extension, which reads the live pages. Real pages only: a simulation page (the SIMULATION strip,
+the /run-sim/ scenarios) carries none of these, and keeps `data-switchboard-kind="simulation"`.
+
+- **Every result line** (ResultLine, look.js), on the run and the review page: its container carries
+  `data-switchboard-line` (the line exactly as shown in the copy block) and `data-switchboard-link-id` (the page's
+  link id).
+- **The run page's project element** (the one with `data-switchboard-project` and `data-switchboard-kind="run"`):
+  - `data-switchboard-running`, present only while the Approve or resend request is out. It goes when the request
+    returns, fails or throws. A desktop that isn't ready at the click sends nothing, so it never appears then.
+  - `data-switchboard-action-id`, set from the `action_id` that Approve (switchboard_consume_run_link) or resend
+    returns, never before. The expired-checks rerun sets neither mark: it is the pre-check, not the run. A
+    correction page's Approve (its reruns, reply `as_rerun`) shows running while out but sets no action id, for the
+    same reason. A reply with no action id sets none.
+- **The review page** has the line marks only: a review has no action, so no action id and no running mark.
+- Today's /approve/ pages keep their own marks unchanged.
+- Tests: src/switchboard/runs/pageMarks.test.jsx.

@@ -305,6 +305,10 @@ export default function RunPage({ source }) {
   const [reason, setReason] = useState('');
   const [sent, setSent] = useState(null);
   const [cancelled, setCancelled] = useState(null);
+  // s20, the extension's marks (spec 14.7): running only while the Approve or resend request is out; the action id
+  // once either has returned the run's action id (not a correction's reruns).
+  const [running, setRunning] = useState(false);
+  const [actionId, setActionId] = useState(null);
 
   // Read once when the page opens: the request, then the desktop. Never again by itself.
   useEffect(() => {
@@ -389,9 +393,13 @@ export default function RunPage({ source }) {
       setDesktop(d);
       setRechecked(true);
       if (d?.answer !== 'running') { setFocusTo('check'); return; }
-      if (mode === 'rerun') setSent(await source.rerun());
-      else if (mode === 'resend') setSent(await source.resend());
-      else setSent(await source.approve());
+      if (mode === 'rerun') { setSent(await source.rerun()); return; }
+      setRunning(true);
+      let out;
+      try { out = mode === 'resend' ? await source.resend() : await source.approve(); } finally { setRunning(false); }
+      // A correction's Approve (as_rerun) returns the reruns' action, the pre-check, not the run: no action-id mark.
+      if (typeof out?.action_id === 'string' && out.action_id && !out.as_rerun) setActionId(out.action_id);
+      setSent(out);
     } catch (e) {
       setNote(refusalNote(e, 'Nothing was approved.'));
     }
@@ -435,7 +443,10 @@ export default function RunPage({ source }) {
       {/* data-settled: the request and the desktop's first answer are both in, so the page is drawn whole. */}
       <p data-testid="run-headline" data-settled={desktop ? 'true' : 'false'} className="font-bold text-dark mb-2 break-words">{r.headline}</p>
       <p className="text-sm text-dark">Project</p>
-      <p className="font-mono text-dark mb-4 break-all" data-switchboard-project={r.project_code} data-switchboard-kind={sim ? 'simulation' : 'run'}>{r.project_code}</p>
+      <p
+        className="font-mono text-dark mb-4 break-all" data-switchboard-project={r.project_code} data-switchboard-kind={sim ? 'simulation' : 'run'}
+        data-switchboard-running={!sim && running ? '' : undefined} data-switchboard-action-id={!sim && actionId ? actionId : undefined}
+      >{r.project_code}</p>
       <h2 data-testid="run-phase-header" className="text-xl font-bold text-dark mb-1">{PHASE_HEADERS[r.page]}</h2>
       <p data-testid="run-client-org" className="text-dark mb-4 break-words">{clientOrgLine(r)}</p>
       {sentence && <p data-testid="run-count-sentence" className="text-2xl font-bold text-dark mb-3 break-words">{sentence}</p>}
@@ -510,7 +521,7 @@ export default function RunPage({ source }) {
         <div data-testid="run-cancelled" className={PANEL}>
           <p className="font-medium m-0 mb-1">Not run</p>
           <p className="m-0 mb-3 break-words">{cancelled.reason || 'No reason given.'}</p>
-          <ResultLine line={lineOf(cancelled, runCancelledLine(linkId, cancelled.reason))} sim={sim} />
+          <ResultLine line={lineOf(cancelled, runCancelledLine(linkId, cancelled.reason))} sim={sim} linkId={linkId} />
         </div>
       ) : closed ? (
         // After the undo deadline: why, and no buttons.
@@ -529,7 +540,7 @@ export default function RunPage({ source }) {
           </p>
           {/* as_rerun on an Approve: the database recorded a correction's Approve as its reruns (251), not the write.
               The expired-checks rerun (mode rerun) also replies as_rerun, and keeps the bare line. */}
-          <ResultLine line={lineOf(sent, sent.resent ? runResentLine(linkId) : mode === 'approve' && sent.as_rerun && !sent.rerun ? runRerunsLine(linkId) : runLine(linkId))} sim={sim} />
+          <ResultLine line={lineOf(sent, sent.resent ? runResentLine(linkId) : mode === 'approve' && sent.as_rerun && !sent.rerun ? runRerunsLine(linkId) : runLine(linkId))} sim={sim} linkId={linkId} />
         </div>
       ) : (
         <>
