@@ -44,16 +44,19 @@ export const LOCKED_TICK = 'appearance-none w-5 h-5 rounded border-2 border-dash
 export const LOCKED_INPUT = 'bg-gray-100 text-gray-500 border-dashed cursor-not-allowed';
 
 /**
- * The line for the chat, to copy, as ApprovePage's ResultLine. On a real page the extension fills the hidden status and
+ * The line for the chat, to copy, laid out and marked as ApprovePage's ResultLine (its sentence differs since s23b). On a real page the extension fills the hidden status and
  * wires its own post "Try again"; a simulation has no such block, so nothing there can be posted.
  * s20: a real page also marks the container with the line, exactly as shown, and the page's link id, for the
  * extension (spec 14.7). A simulation gets neither.
+ * s23b: the extension posts the line, so a real page says so; it shows when the tab hasn't been closed (spec 14.9).
  */
+export const REAL_LINE_NOTE = 'This line goes to the Claude chat by itself; you can close this tab.';
+export const SIM_LINE_NOTE = 'A simulation posts nothing. This is the line a real page would send to the chat.';
 export function ResultLine({ line, sim, linkId }) {
   // No link id, no link-id mark: the extension sees it missing, never empty.
   const marks = sim ? {} : { 'data-switchboard-line': line, ...(linkId ? { 'data-switchboard-link-id': linkId } : {}) };
   return h('div', { 'data-testid': 'run-result-line', ...marks },
-    h('p', { className: 'text-dark mb-2' }, sim ? 'A simulation posts nothing. This is the line a real page would send to the chat.' : 'Paste this into the Claude chat, then close this tab.'),
+    h('p', { className: 'text-dark mb-2' }, sim ? SIM_LINE_NOTE : REAL_LINE_NOTE),
     h('div', { className: 'flex items-center gap-2' },
       h('code', { className: 'font-mono text-dark break-all' }, line),
       h(CopyButton, { getText: () => line, title: 'Copy this line for the chat' })),

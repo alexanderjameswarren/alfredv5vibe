@@ -50,6 +50,9 @@ describe('the run page marks', () => {
     expect(box).toHaveAttribute('data-switchboard-line', `run ${LINK}`);
     expect(box).toHaveAttribute('data-switchboard-link-id', LINK);
     expect(box.querySelector('code').textContent).toBe(box.getAttribute('data-switchboard-line'));
+    // s23b: the extension posts the line, so the page says so (the exact words, pinned).
+    expect(box).toHaveTextContent('This line goes to the Claude chat by itself; you can close this tab.');
+    expect(box).not.toHaveTextContent(/Paste this into the Claude chat/);
   });
 
   test('a failed Approve drops running and sets no action id', async () => {
@@ -144,6 +147,9 @@ describe('the run page marks', () => {
     expect(box).not.toHaveAttribute('data-switchboard-line');
     expect(box).not.toHaveAttribute('data-switchboard-link-id');
     expect(document.querySelector('[data-switchboard-line], [data-switchboard-link-id], [data-switchboard-running], [data-switchboard-action-id]')).toBeNull();
+    // s23b: the simulation's sentence is unchanged.
+    expect(box).toHaveTextContent('A simulation posts nothing. This is the line a real page would send to the chat.');
+    expect(box).not.toHaveTextContent(/goes to the Claude chat by itself/);
   });
 });
 
@@ -160,6 +166,7 @@ describe('the code review page marks', () => {
     const box = await screen.findByTestId('run-result-line');
     expect(box).toHaveAttribute('data-switchboard-line', `review ${LINK} question: Why two places?`);
     expect(box).toHaveAttribute('data-switchboard-link-id', LINK);
+    expect(box).toHaveTextContent('This line goes to the Claude chat by itself; you can close this tab.');
     expect(document.querySelector('[data-switchboard-action-id], [data-switchboard-running]')).toBeNull();
   });
 

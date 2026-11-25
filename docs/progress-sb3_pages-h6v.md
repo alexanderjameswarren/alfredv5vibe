@@ -48,11 +48,11 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-s21b to s21e are on main (test 7: run 95b046e9-ae50-423c-b5bb-25c3212c2044, 49 of 49). s22: the sql approve page shows the bar first, "checking the SQL first…", with Approve disabled (spec 14.6). Next: its Checkpoint (gitpush Checkpoint, this worktree): src/switchboard/ApprovePage.jsx src/switchboard/ApprovePage.test.jsx src/switchboard/runs/look.js docs/technical-spec-sb3_pages-h6v.md docs/progress-sb3_pages-h6v.md. It ships today's /approve/ page, so approve it only while no /approve/ link is open.
+s22 is on main. s23: the extension closes /approve/ tabs, so closing /run/ and /review/ and the wake on a /run/ click are plumbing's, after hand-over (spec 14.9). s23b: the real page's sentence is now "This line goes to the Claude chat by itself; you can close this tab." Next: its Checkpoint (gitpush Checkpoint, this worktree): src/switchboard/runs/look.js src/switchboard/runs/pageMarks.test.jsx docs/technical-spec-sb3_pages-h6v.md docs/progress-sb3_pages-h6v.md
 
 Then C2, once its gates are met (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall.
 
-Run tag: sb3_pages-h6v-s23-<4>, C2: retire sf_dataop and sf_datawrite (they refuse with a pointer to the run request tools)
+Run tag: sb3_pages-h6v-s24-<4>, C2: retire sf_dataop and sf_datawrite (they refuse with a pointer to the run request tools)
 
 Scope of this step:
 - create: nothing
@@ -167,3 +167,6 @@ Estimated run: 20m
 | s21e | Queue test 7, spec, report | 12:37:35 | 12:37:54 | 0m19s |
 | s22 | Bar first, tests, spec, suites, build | 12:46:03 | 12:50:53 | 4m50s |
 | s22 | Cold review, fixes, suites again, report | 12:50:53 | 12:54:03 | 3m10s |
+| s23 | Find who closes /approve/ tabs, stop, report | 13:07:44 | 13:08:25 | 0m41s |
+| s23b | Wording, tests, spec, suites, build | 13:19:35 | 13:21:13 | 1m38s |
+| s23b | Cold review, fixes, report | 13:21:13 | 13:21:59 | 0m46s |
