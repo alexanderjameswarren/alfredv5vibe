@@ -1283,8 +1283,8 @@ test("pickup: sf_dataquery with only some of the kinds is refused and picks noth
 
 test("pickup: the 4-hour limit covers sf_dataop, sf_dataquery and sf_datawrite only; the stale query in index.ts uses LONG_PICK_KINDS", async () => {
   const core = await import("./core.ts");
-  // dataop_write-j5w added sf_datawrite.
-  assert.deepEqual(core.LONG_PICK_KINDS, ["sf_dataop", "sf_dataquery", "sf_datawrite"]);
+  // dataop_write-j5w added sf_datawrite; sb3_runner-r4q s4 sf_run.
+  assert.deepEqual(core.LONG_PICK_KINDS, ["sf_dataop", "sf_dataquery", "sf_datawrite", "sf_run"]);
   assert.equal(core.DATAOP_PICK_TIMEOUT_MS, 4 * 60 * 60 * 1000);
   assert.equal(core.PICK_TIMEOUT_MS, 30 * 60 * 1000);
   const now = Date.parse("2026-11-19T12:00:00Z");
@@ -1598,4 +1598,513 @@ test("sf_datawrite link: preview shows the payload; approve only spends the link
   const res = await handle(post("approve", { token: TOKEN, fingerprint: "fp-1" }, jwt()), deps);
   assert.deepEqual(await res.json(), { ok: true, action_id: "act-1", sent: true });
   nothingRan(calls);
+});
+
+// ---------------------------------------------------------------------------
+// sb3_runner-r4q s4: sf_run, a run page's approval (migrations 248, 250; 251 for the evidence function)
+// ---------------------------------------------------------------------------
+
+const EIGHT = [...SEVEN, "sf_run"];
+const LINK_ID = "5d0c3a8e-1b2f-4c6d-9e7a-0f1b2c3d4e5f";
+const REQ_ID = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+const LINK_ROW = {
+  id: LINK_ID, user_id: USER, request_id: REQ_ID, request_version: 1, review_id: null, token_hash: "f".repeat(64),
+  desktop: { panel: true, helper: true }, used_at: "2026-11-24T10:00:00Z", action_id: "sr-1", rerun_at: null,
+  rerun_action_id: null, voided_at: null, void_reason: null, created_at: "2026-11-24T09:00:00Z",
+};
+const REQ_ROW = {
+  id: REQ_ID, user_id: USER, project_code: "cd_fixc-q8d", page: "precheck", base_page: "precheck", version: 1,
+  corrected_at: null, simulation: false, request: { headline: "PRE-CHECK", steps: ["count", "login"] }, evidence: [],
+  total_count: null, created_at: "2026-11-24T08:00:00Z", updated_at: "2026-11-24T08:00:00Z",
+};
+const SR_PICKED = { action_id: "sr-1", run_id: "run-s", kind: "sf_run", project_code: "cd_fixc-q8d", payload: { link_id: LINK_ID },
+  fingerprint: "fp", headline: "H", chat_url: null };
+const CHECKS = [{ check: "count", org: "production" }, { check: "rehearsal", org: "sandbox", commit: "abc1234" }];
+const SAMPLE = { records: [{ Id: "003000000000001AAA", Name: "Sam Ple" }] };
+
+function srFakes({ link = LINK_ROW, request = REQ_ROW, action = {}, run = {}, evidence, sample } = {}) {
+  const order = [];
+  const f = fakes({
+    pickupHelper: async (u, k, p) => (order.push("pickup"), f.calls.helperArgs = [u, k, p], { ...SR_PICKED }),
+    runLink: async (id, u) => (order.push(`link ${id}`), f.calls.linkUser = u, link && id === link.id ? { ...link } : null),
+    runRequest: async (id, u) => (order.push(`request ${id}`), f.calls.requestUser = u, request && id === request.id ? { ...request } : null),
+    findPicked: async (a, r) => (a === "sr-1" && r === "run-s" ? {
+      action: { id: "sr-1", user_id: USER, kind: "sf_run", status: "consumed", picked_up_at: "2026-11-24T10:01:00Z",
+                payload: { link_id: LINK_ID }, ...action },
+      run: { id: "run-s", action_id: "sr-1", mode: "real", finished_at: null, result: null, ...run },
+    } : null),
+    finishRun: async (id, fields) => (order.push("finish"), (f.calls.finished ??= []).push({ id, ...fields })),
+    setStatus: async (id, status) => (order.push(`status ${status}`), f.calls.status.push({ id, status })),
+    recordRunEvidence: evidence ?? (async (id) => (order.push(`evidence ${id}`),
+      { recorded: 2, already: false, request_id: REQ_ID, page: "precheck" })),
+    storeRunSample: sample ?? (async (id, s) => (order.push(`sample ${id}`), f.calls.sample = s,
+      { stored: true, request_id: id, expires_at: "2026-11-25T10:00:00Z" })),
+    dropRunSample: async (id) => (order.push(`drop ${id}`), 0),
+  });
+  f.order = order;
+  return f;
+}
+/** /result reads the link and its request first, to tell a pre-check from a write. */
+const READS = [`link ${LINK_ID}`, `request ${REQ_ID}`];
+const srResult = (over = {}) => helper("result", {
+  action_id: "sr-1", run_id: "run-s", ok: true, pass: true, summary: "pre-check passed", checks: CHECKS, ...over,
+});
+
+test("sf_run kinds: a helper kind with the 4-hour limit; eight kinds passed whole; seven never get it", async () => {
+  const core = await import("./core.ts");
+  assert.ok(core.HELPER_KINDS.includes("sf_run"));
+  assert.ok(core.LONG_PICK_KINDS.includes("sf_run"));
+  const eight = kindsFakes();
+  assert.equal((await handle(helper("pickup", { kinds: [...EIGHT].reverse() }), eight.deps)).status, 200);
+  assert.deepEqual(eight.deps.args, [USER, EIGHT]);
+  const seven = kindsFakes();
+  assert.equal((await handle(helper("pickup", { kinds: SEVEN }), seven.deps)).status, 200);
+  assert.deepEqual(seven.deps.args, [USER, SEVEN]);
+  assert.ok(!seven.deps.args[1].includes("sf_run"));
+  for (const kinds of [["sf_run"], ["git", "sf_run"], [...SIX, "sf_run"]]) {
+    const { deps, calls } = fakes({ stalePicks: async () => { throw new Error("not reached"); } });
+    assert.equal((await handle(helper("pickup", { kinds }), deps)).status, 400, JSON.stringify(kinds));
+    assert.equal(calls.pickedHelper, undefined);
+  }
+  // index.ts's stale and pending queries take HELPER_KINDS and LONG_PICK_KINDS, so sf_run is in both.
+  const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  assert.match(src, /\.in\("kind", \[\.\.\.HELPER_KINDS\]\)\.is\("picked_up_at", null\)/);
+  assert.match(src, /\.in\("kind", LONG_PICK_KINDS\)/);
+});
+
+test("sf_run pending: an unpicked one is stale 15 minutes after created_at; a picked one blocks for 4 hours", async () => {
+  const { deps } = pendingFakes({
+    unpicked: [
+      { id: "s-new", kind: "sf_run", project_code: "p-a", status: "consumed", link_used_at: null, created_at: ago(14) },
+      { id: "s-old", kind: "sf_run", project_code: "p-b", status: "consumed", link_used_at: null, created_at: ago(16) },
+    ],
+    picked: [{ id: "s-run", kind: "sf_run", project_code: "p-c", picked_up_at: ago(200), run_id: "run-s" }],
+  });
+  const body = await (await handle(helper("pending"), deps, PENDING_NOW)).json();
+  assert.deepEqual(body.unpicked.map((e) => [e.action_id, e.approved_at, e.stale]), [["s-new", ago(14), false], ["s-old", ago(16), true]]);
+  assert.deepEqual(body.unreported.map((e) => [e.action_id, e.stale]), [["s-run", false]]);
+  assert.equal(body.clear, false);
+});
+
+test("sf_run pickup: reads the link by payload.link_id and its request; returns the request whole and the link without token_hash", async () => {
+  const { deps, calls, order } = srFakes();
+  const res = await handle(helper("pickup", { kinds: EIGHT, pickup_id: PID }), deps);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(calls.helperArgs, [USER, EIGHT, PID]);
+  assert.deepEqual(order, ["pickup", `link ${LINK_ID}`, `request ${REQ_ID}`]);
+  assert.equal(calls.linkUser, USER);
+  assert.equal(calls.requestUser, USER);
+  const { token_hash: _, ...link } = LINK_ROW;
+  assert.deepEqual(body.action, { ...SR_PICKED, link, request: REQ_ROW });
+  assert.ok(!JSON.stringify(body).includes("f".repeat(64)));
+  assert.deepEqual(calls.status, []);
+  assert.equal(calls.finished, undefined);
+});
+
+test("sf_run pickup: a missing link or request is refused with its fix, and the action fails so the project moves", async () => {
+  for (const [over, why] of [[{ link: null }, /no run link/], [{ request: null }, /no request/]]) {
+    const { deps, calls } = srFakes(over);
+    const res = await handle(helper("pickup", { kinds: EIGHT }), deps);
+    assert.equal(res.status, 409);
+    const body = await res.json();
+    assert.equal(body.ok, false);
+    assert.match(body.error, why);
+    assert.match(body.error, /^sf_run sr-1: .+ — .+/);
+    assert.equal(body.action, undefined);
+    assert.equal(body.line, `run ${LINK_ID} failed`);
+    assert.equal(calls.finished[0].id, "run-s");
+    assert.deepEqual(calls.finished[0].result, { ok: false });
+    assert.deepEqual(calls.status, [{ id: "sr-1", status: "failed" }]);
+  }
+});
+
+test("sf_run pickup: other kinds read no link", async () => {
+  const { deps, order } = srFakes();
+  deps.pickupHelper = async () => ({ ...PICKED, kind: "sf_check" });
+  const body = await (await handle(helper("pickup", { kinds: EIGHT }), deps)).json();
+  assert.equal(body.action.kind, "sf_check");
+  assert.deepEqual(order, []);
+});
+
+test("sf_run result: the sample never reaches the run row; evidence, then the sample, then the status", async () => {
+  const { deps, calls, order } = srFakes();
+  const res = await handle(srResult({ exit_code: 0, sample: SAMPLE, output: "window text 003000000000001AAA" }), deps);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body, {
+    ok: true, action_id: "sr-1", run_id: "run-s", run_kind: "pre-check", status: "succeeded", link_id: LINK_ID,
+    line: `run ${LINK_ID} done: PASS`, evidence: { recorded: 2, already: false, request_id: REQ_ID, page: "precheck" },
+    sample_stored: true,
+  });
+  assert.deepEqual(order, [...READS, "finish", "evidence run-s", `sample ${REQ_ID}`, "status succeeded"]);
+  assert.deepEqual(calls.finished[0].result, { ok: true, exit_code: 0, pass: true, checks: CHECKS });
+  assert.ok(calls.finished[0].finished_at);
+  assert.ok(!JSON.stringify(calls.finished).includes("Sam Ple"));
+  assert.deepEqual(calls.sample, SAMPLE);
+});
+
+test("sf_run result: the summary loses ids and emails", async () => {
+  const { deps, calls } = srFakes();
+  await handle(srResult({ summary: "checked 003000000000001AAA for a@b.org" }), deps);
+  assert.equal(calls.finished[0].summary, "checked [id] for [email]");
+});
+
+test("sf_run result: no sample, no sample write", async () => {
+  const { deps, order } = srFakes();
+  const body = await (await handle(srResult(), deps)).json();
+  assert.equal(body.sample_stored, false);
+  assert.deepEqual(order, [...READS, "finish", "evidence run-s", "status succeeded"]);
+});
+
+test("sf_run result: FAIL and failed record no evidence and drop the sample; the lines say done: FAIL and failed", async () => {
+  const fail = srFakes();
+  const r1 = await (await handle(srResult({ pass: false, sample: SAMPLE }), fail.deps)).json();
+  assert.equal(r1.line, `run ${LINK_ID} done: FAIL`);
+  assert.equal(r1.status, "succeeded");
+  assert.equal(r1.evidence, null);
+  assert.equal(r1.sample_stored, false);
+  assert.deepEqual(fail.order, [...READS, "finish", "status succeeded"]);
+  const failed = srFakes();
+  const r2 = await (await handle(srResult({ ok: false, pass: undefined, checks: undefined, sample: SAMPLE }), failed.deps)).json();
+  assert.equal(r2.line, `run ${LINK_ID} failed`);
+  assert.equal(r2.status, "failed");
+  assert.deepEqual(failed.calls.finished[0].result, { ok: false });
+  assert.deepEqual(failed.order, [...READS, "finish", "status failed"]);
+});
+
+test("sf_run result: a pass with no checks records no evidence", async () => {
+  const { deps, order } = srFakes();
+  const body = await (await handle(srResult({ checks: [] }), deps)).json();
+  assert.equal(body.evidence, null);
+  assert.deepEqual(order, [...READS, "finish", "status succeeded"]);
+});
+
+test("sf_run result: a report that doesn't fit is refused (400), closes the run as failed and stores nothing", async () => {
+  const bad = [
+    [{ pass: "yes" }, /pass must be true or false/],
+    [{ pass: undefined }, /must report pass/],
+    [{ ok: false, pass: true }, /pass can be true only when ok is true/],
+    [{ checks: "count" }, /checks must be a list/],
+    [{ checks: [{ check: "count" }] }, /\{check, org, commit\?\}/],
+    [{ checks: [{ check: "count", org: "staging" }] }, /\{check, org, commit\?\}/],
+    [{ checks: [{ check: "vibes", org: "production" }] }, /\{check, org, commit\?\}/],
+    [{ checks: [{ check: "rehearsal", org: "sandbox", commit: "XYZ" }] }, /\{check, org, commit\?\}/],
+    [{ checks: [{ check: "count", org: "production", note: "x" }] }, /\{check, org, commit\?\}/],
+    [{ sample: [SAMPLE] }, /sample must be an object/],
+    [{ sample: { records: [] } }, /one record, or two/],
+    [{ sample: { records: [{}, {}, {}] } }, /one record, or two/],
+    [{ checks: [{ check: "count", org: "production" }, { check: "count", org: "sandbox" }] }, /names a check twice/],
+  ];
+  for (const [over, why] of bad) {
+    const { deps, calls, order } = srFakes();
+    const res = await handle(srResult({ sample: SAMPLE, ...over }), deps);
+    assert.equal(res.status, 400, JSON.stringify(over));
+    const body = await res.json();
+    assert.match(body.error, why, JSON.stringify(over));
+    assert.equal(body.line, `run ${LINK_ID} failed`);
+    assert.deepEqual(calls.finished[0].result, { ok: false });
+    assert.match(calls.finished[0].summary, /^refused by the runner: /);
+    assert.ok(!JSON.stringify(calls.finished).includes("Sam Ple"));
+    assert.deepEqual(order, [...READS, "finish", "status failed"]);
+  }
+});
+
+test("sf_run write: a refused report still drops the write's sample", async () => {
+  const { deps, order } = srFakes({ request: WRITE_REQ });
+  deps.dropRunSample = async (id) => (order.push(`drop ${id}`), 1);
+  const res = await handle(srResult({ pass: "yes" }), deps);
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).sample_dropped, 1);
+  assert.deepEqual(order, [...READS, `drop ${REQ_ID}`, "finish", "status failed"]);
+});
+
+test("sf_run result: a run or status write that throws is retried (503), never a bare 500", async () => {
+  for (const which of ["finishRun", "setStatus"]) {
+    const { deps } = srFakes();
+    deps[which] = async () => { throw new Error("connection reset"); };
+    const res = await handle(srResult(), deps);
+    assert.equal(res.status, 503, which);
+    const body = await res.json();
+    assert.equal(body.retry, true);
+    assert.match(body.error, /^runner: connection reset/);
+  }
+});
+
+test("sf_run result: the shape check lives in one exported function", async () => {
+  const core = await import("./core.ts");
+  assert.equal(core.sfRunReportProblem({ ok: true, pass: true, checks: CHECKS, sample: SAMPLE }), null);
+  assert.equal(core.sfRunReportProblem({ ok: false }), null);
+  assert.match(core.sfRunReportProblem({ ok: true }), /must report pass/);
+});
+
+test("sf_run result: an evidence write that fails replies not ok naming it; the action stays consumed and a retry finishes it once", async () => {
+  let fail = true;
+  const evidenceCalls = [];
+  const evidence = async (id) => {
+    evidenceCalls.push(id);
+    if (fail) throw new Error("connection reset");
+    return { recorded: 0, already: false, request_id: REQ_ID, page: "precheck" };
+  };
+  const first = srFakes({ evidence });
+  const res = await handle(srResult({ sample: SAMPLE }), first.deps);
+  assert.equal(res.status, 503);
+  const body = await res.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.retry, true);
+  assert.match(body.error, /^evidence: /);
+  assert.match(body.error, /connection reset/);
+  assert.deepEqual(first.calls.status, []);
+  assert.equal(first.calls.sample, undefined);
+  // The retry: the run already holds the result, so it is not written again.
+  fail = false;
+  const stored = first.calls.finished[0];
+  const again = srFakes({ evidence, run: { finished_at: stored.finished_at, result: stored.result } });
+  const res2 = await handle(srResult({ sample: SAMPLE }), again.deps);
+  assert.equal(res2.status, 200);
+  assert.equal((await res2.json()).line, `run ${LINK_ID} done: PASS`);
+  assert.equal(again.calls.finished, undefined);
+  assert.deepEqual(again.calls.sample, SAMPLE);
+  assert.deepEqual(again.calls.status, [{ id: "sr-1", status: "succeeded" }]);
+  assert.deepEqual(evidenceCalls, ["run-s", "run-s"]);
+});
+
+test("sf_run result: a sample write that fails replies not ok naming it; the retry finds the evidence already recorded", async () => {
+  const sample = async () => { throw Object.assign(new Error("fetch failed"), { code: "" }); };
+  const first = srFakes({ sample });
+  const res = await handle(srResult({ sample: SAMPLE }), first.deps);
+  assert.equal(res.status, 503);
+  const body = await res.json();
+  assert.match(body.error, /^sample: /);
+  assert.equal(body.retry, true);
+  assert.deepEqual(first.order, [...READS, "finish", "evidence run-s"]);
+  assert.deepEqual(first.calls.status, []);
+  const stored = first.calls.finished[0];
+  const again = srFakes({
+    run: { finished_at: stored.finished_at, result: stored.result },
+    evidence: async () => ({ recorded: 0, already: true, request_id: REQ_ID, page: "precheck" }),
+  });
+  const body2 = await (await handle(srResult({ sample: SAMPLE }), again.deps)).json();
+  assert.equal(body2.evidence.already, true);
+  assert.equal(body2.sample_stored, true);
+  assert.deepEqual(again.calls.status, [{ id: "sr-1", status: "succeeded" }]);
+});
+
+test("sf_run result: a missing link or request at /result fails the run for good, naming the fix", async () => {
+  for (const [over, why] of [[{ link: null }, /no run link/], [{ request: null }, /has no request/]]) {
+    const { deps, calls } = srFakes(over);
+    const res = await handle(srResult({ sample: SAMPLE }), deps);
+    assert.equal(res.status, 422);
+    const body = await res.json();
+    assert.equal(body.retry, false);
+    assert.match(body.error, why);
+    assert.match(body.error, / — queue the request again/);
+    assert.equal(body.line, `run ${LINK_ID} failed`);
+    assert.equal(calls.finished.length, 1);
+    assert.equal(calls.finished[0].result.ok, false);
+    assert.equal(calls.sample, undefined);
+    assert.deepEqual(calls.status, [{ id: "sr-1", status: "failed" }]);
+  }
+});
+
+test("sf_run result: a link read that throws is retried and writes nothing", async () => {
+  const { deps, calls } = srFakes();
+  deps.runLink = async () => { throw new Error("fetch failed"); };
+  const res = await handle(srResult(), deps);
+  assert.equal(res.status, 503);
+  const body = await res.json();
+  assert.equal(body.retry, true);
+  assert.match(body.error, /^link: fetch failed/);
+  assert.equal(calls.finished, undefined);
+  assert.deepEqual(calls.status, []);
+});
+
+const WRITE_REQ = { ...REQ_ROW, page: "dataop", base_page: "dataop", total_count: 45 };
+const coded = (code, message = "refused") => Object.assign(new Error(message), { code });
+
+test("sf_run kind: 251's rule, from the link's action_id and rerun_action_id and the request's base_page", async () => {
+  const { sfRunKind } = await import("./core.ts");
+  const link = { action_id: "a1", rerun_action_id: "a2" };
+  assert.equal(sfRunKind("a1", link, { page: "precheck", base_page: "precheck" }), "pre-check");
+  assert.equal(sfRunKind("a1", link, { page: "correction", base_page: "precheck" }), "pre-check");
+  assert.equal(sfRunKind("a1", link, { page: "dataop", base_page: "dataop" }), "write");
+  assert.equal(sfRunKind("a1", link, { page: "undo", base_page: "undo" }), "write");
+  // A rerun, or a write's correction Approve (recorded as one, 251), is the link's pre-check even on a dataop request.
+  assert.equal(sfRunKind("a2", link, { page: "dataop", base_page: "dataop" }), "pre-check");
+  assert.equal(sfRunKind("a2", link, { page: "correction", base_page: "dataop" }), "pre-check");
+  assert.equal(sfRunKind("a2", link, { page: "correction", base_page: "undo" }), "pre-check");
+  // A write approved before its request was corrected is still the write.
+  assert.equal(sfRunKind("a1", link, { page: "correction", base_page: "dataop" }), "write");
+  assert.equal(sfRunKind("a1", link, { page: "check", base_page: "check" }), "other");
+  assert.equal(sfRunKind("a9", link, { page: "precheck", base_page: "precheck" }), "other");
+});
+
+test("sf_run write: no evidence, no sample stored; the sample is dropped by its own request id at its final status", async () => {
+  for (const [over, status, line] of [[{}, "succeeded", "done: PASS"], [{ ok: false, pass: undefined }, "failed", "failed"]]) {
+    const drops = [];
+    const { deps, calls, order } = srFakes({ request: WRITE_REQ });
+    deps.dropRunSample = async (id) => (order.push(`drop ${id}`), drops.push(id), 1);
+    const res = await handle(srResult({ sample: SAMPLE, ...over }), deps);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.run_kind, "write");
+    assert.equal(body.status, status);
+    assert.equal(body.line, `run ${LINK_ID} ${line}`);
+    assert.equal(body.evidence, null);
+    assert.equal(body.sample_stored, false);
+    assert.equal(body.sample_dropped, 1);
+    assert.deepEqual(drops, [REQ_ID]);
+    assert.deepEqual(order, [...READS, "finish", `drop ${REQ_ID}`, `status ${status}`]);
+    assert.equal(calls.sample, undefined);
+  }
+});
+
+test("sf_run write: a failed drop doesn't fail the write; the run summary says so", async () => {
+  const { deps, calls } = srFakes({ request: WRITE_REQ });
+  deps.dropRunSample = async () => { throw new Error("fetch failed"); };
+  const res = await handle(srResult({ summary: "write done: 45 changed".padEnd(290, ".") }), deps);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.status, "succeeded");
+  assert.equal(body.sample_dropped, null);
+  const note = calls.finished[1].summary;
+  assert.ok(note.length <= 300);
+  assert.match(note, /\(sample not dropped: fetch failed; the 24-hour prune removes it\)$/);
+  assert.deepEqual(calls.status, [{ id: "sr-1", status: "succeeded" }]);
+});
+
+test("sf_run other: a check page's run, or one the link no longer names, records nothing but its run", async () => {
+  for (const over of [{ request: { ...REQ_ROW, page: "check", base_page: "check" } }, { link: { ...LINK_ROW, action_id: "sr-0" } }]) {
+    const { deps, order } = srFakes(over);
+    deps.dropRunSample = async () => { throw new Error("not called"); };
+    const body = await (await handle(srResult({ sample: SAMPLE }), deps)).json();
+    assert.equal(body.run_kind, "other");
+    assert.equal(body.evidence, null);
+    assert.deepEqual(order, [...READS, "finish", "status succeeded"]);
+  }
+});
+
+test("sf_run result: a sample refused after the evidence is in is noted, not fatal; the run keeps its PASS", async () => {
+  for (const code of ["P0002", "23514", "55000"]) {
+    const { deps, calls } = srFakes({ sample: async () => { throw coded(code, "no valid checks to hold it against"); } });
+    const res = await handle(srResult({ sample: SAMPLE }), deps);
+    assert.equal(res.status, 200, code);
+    const body = await res.json();
+    assert.equal(body.status, "succeeded");
+    assert.equal(body.line, `run ${LINK_ID} done: PASS`);
+    assert.equal(body.evidence.recorded, 2);
+    assert.equal(body.sample_stored, false);
+    assert.match(calls.finished.at(-1).summary, new RegExp(`\\(sample refused \\(${code}\\): no valid checks`));
+    assert.deepEqual(calls.finished[0].result, { ok: true, pass: true, checks: CHECKS });
+  }
+});
+
+test("sf_run result: an evidence refusal with P0002, 23514 or 55000 fails the run at once, names the fix, and isn't retried", async () => {
+  const { FINAL_SQLSTATES } = await import("./core.ts");
+  assert.deepEqual(FINAL_SQLSTATES, ["P0002", "23514", "55000"]);
+  for (const code of FINAL_SQLSTATES) {
+    for (const which of ["evidence"]) {
+      const throws = async () => { throw coded(code, `switchboard_x: refused for 003000000000001AAA`); };
+      const { deps, calls } = srFakes({ evidence: throws });
+      const res = await handle(srResult({ sample: SAMPLE }), deps);
+      assert.equal(res.status, 422, `${which} ${code}`);
+      const body = await res.json();
+      assert.equal(body.ok, false);
+      assert.equal(body.retry, false);
+      assert.equal(body.status, "failed");
+      assert.equal(body.line, `run ${LINK_ID} failed`);
+      assert.match(body.error, new RegExp(`^${which} refused \\(${code}\\): .+ — .+`));
+      assert.ok(!body.error.includes("003000000000001AAA"));
+      const last = calls.finished.at(-1);
+      assert.match(last.summary, new RegExp(`^${which} refused \\(${code}\\)`));
+      assert.deepEqual(last.result, { ok: false, pass: true, checks: CHECKS, refused: which, sqlstate: code });
+      assert.ok(!JSON.stringify(calls.finished).includes("Sam Ple"));
+      assert.deepEqual(calls.status, [{ id: "sr-1", status: "failed" }]);
+    }
+  }
+});
+
+test("sf_run result: any other code (network, PostgREST, server) keeps the 503 retry", async () => {
+  for (const code of ["", "PGRST301", "57014", "08006", undefined]) {
+    const { deps, calls } = srFakes({ evidence: async () => { throw code === undefined ? new Error("boom") : coded(code); } });
+    const res = await handle(srResult(), deps);
+    assert.equal(res.status, 503, String(code));
+    assert.equal((await res.json()).retry, true);
+    assert.deepEqual(calls.status, []);
+  }
+});
+
+test("sf_run result: a repeat after it finished records nothing and answers already, with the stored line", async () => {
+  const { deps, order } = srFakes({
+    action: { status: "succeeded" },
+    run: { finished_at: "2026-11-24T10:05:00Z", result: { ok: true, pass: false, checks: CHECKS } },
+  });
+  const res = await handle(srResult({ sample: SAMPLE }), deps);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {
+    ok: true, already: true, action_id: "sr-1", run_id: "run-s", status: "succeeded", link_id: LINK_ID,
+    line: `run ${LINK_ID} done: FAIL`,
+  });
+  assert.deepEqual(order, []);
+});
+
+test("sf_run result: a run recorded PASS whose action the stale check failed answers failed, never PASS", async () => {
+  const { deps, order } = srFakes({
+    action: { status: "failed" },
+    run: { finished_at: "2026-11-24T10:05:00Z", result: { ok: true, pass: true, checks: CHECKS } },
+  });
+  const body = await (await handle(srResult(), deps)).json();
+  assert.equal(body.line, `run ${LINK_ID} failed`);
+  assert.deepEqual(order, []);
+});
+
+test("sf_run pickup: a payload with no link_id fails it with no empty-id line", async () => {
+  const { deps, calls } = srFakes();
+  deps.pickupHelper = async () => ({ ...SR_PICKED, payload: {} });
+  const res = await handle(helper("pickup", { kinds: EIGHT }), deps);
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).line, undefined);
+  assert.deepEqual(calls.status, [{ id: "sr-1", status: "failed" }]);
+});
+
+test("sf_run result: a late result after the 4-hour timeout, or before any pickup, is refused", async () => {
+  const late = srFakes({
+    action: { status: "failed" },
+    run: { finished_at: "2026-11-24T14:05:00Z", result: { ok: false, timed_out: true } },
+  });
+  assert.equal((await handle(srResult(), late.deps)).status, 409);
+  assert.deepEqual(late.order, []);
+  const unpicked = srFakes({ action: { picked_up_at: null } });
+  assert.equal((await handle(srResult(), unpicked.deps)).status, 409);
+  assert.deepEqual(unpicked.order, []);
+});
+
+test("sf_run link: the runner's approve routes never serve one", async () => {
+  const { deps, calls, action } = gitFakes();
+  Object.assign(action, { kind: "sf_run", payload: { link_id: LINK_ID } });
+  for (const route of ["preview", "approve", "cancel"]) {
+    const res = await handle(post(route, { token: TOKEN, fingerprint: "fp-1" }, jwt()), deps);
+    assert.equal(res.status, 409, route);
+  }
+  nothingRan(calls);
+});
+
+test("index.ts: the link read names its columns and leaves token_hash out; never reads samples; the two writes by rpc", () => {
+  const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  const cols = /const RUN_LINK_COLUMNS =\s*"([^"]+)"/.exec(src)?.[1];
+  assert.ok(cols, "RUN_LINK_COLUMNS");
+  assert.ok(!cols.includes("token_hash"));
+  for (const c of ["id", "user_id", "request_id", "request_version", "review_id", "desktop", "used_at", "action_id", "rerun_at",
+                   "rerun_action_id", "voided_at", "void_reason", "created_at"]) {
+    assert.ok(cols.split(", ").includes(c), c);
+  }
+  assert.match(src, /from\("switchboard_run_links"\)\.select\(RUN_LINK_COLUMNS\)/);
+  assert.match(src, /from\("switchboard_run_requests"\)\.select\("\*"\)/);
+  assert.ok(!src.includes("switchboard_run_samples"));
+  assert.match(src, /coded\(await db\.rpc\("switchboard_store_run_sample", \{ p_request_id: requestId, p_sample: sample \}\)\)/);
+  assert.match(src, /coded\(await db\.rpc\("switchboard_record_run_evidence", \{ p_run_id: runId \}\)\)/);
+  assert.match(src, /coded\(await db\.rpc\("switchboard_drop_run_sample", \{ p_request_id: requestId \}\)\)/);
+  // The SQLSTATE rides on the thrown error, so core can tell a refusal from a network error.
+  assert.match(src, /throw Object\.assign\(new Error\(res\.error\.message\), \{ code: res\.error\.code \?\? "" \}\)/);
+  assert.match(src, /select\("id, action_id, mode, finished_at, result"\)/);
 });

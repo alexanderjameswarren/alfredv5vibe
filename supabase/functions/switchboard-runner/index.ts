@@ -33,6 +33,10 @@ import {
 //                  sb3_runner-r4q r4: optional pickup_id, a uuid the helper makes per approve click and sends on every
 //                  retry; passed as p_pickup_id, so a repeat gets the same action (migration 247). Anything else is
 //                  refused with its fix.
+//                  sb3_runner-r4q s4: all eight kinds (sf_run too) are passed whole; the seven never get an sf_run.
+//                  A picked sf_run comes with link (its switchboard_run_links row by payload.link_id, without
+//                  token_hash) and request (that link's switchboard_run_requests row, whole); a missing one fails the
+//                  action and answers 409 with the fix. sf_run picks get 4 hours.
 //   POST /pending  x-switchboard-pickup-key. {} -> { ok, clear, unpicked: [{action_id, kind, project_code, status,
 //                  approved_at, stale}], unreported: [{action_id, run_id, kind, project_code, picked_up_at, stale}] }.
 //                  Read-only, for B's reinstall check at Alex's click, never on a timer. An unpicked stale one never
@@ -46,6 +50,14 @@ import {
 //                  ok, exit_code, pass and datawrite {stage, query_counts, gate, write, check}, every number checked
 //                  against the payload, and the reply carries the line "datawrite <id> done|failed"; any other key,
 //                  output included, is refused (dataop_write-j5w).
+//                  An sf_run's body adds pass, checks [{check, org, commit?}] and sample?. Its run keeps only ok,
+//                  exit_code, pass and checks, never the sample or output; then switchboard_record_run_evidence (251)
+//                  for a pass with checks, then switchboard_store_run_sample (250) by the link's request_id, then the
+//                  status. A failed write answers 503 {retry: true} naming it and leaves the action consumed; a repeat
+//                  records nothing twice. The reply's line is "run <link id> done: PASS|done: FAIL|failed".
+//                  s4b: the link and request are read first; a data operation's write (sfRunKind) records no evidence
+//                  or sample, and drops the request's sample (switchboard_drop_run_sample) at its final status. A
+//                  refusal with SQLSTATE P0002, 23514 or 55000 fails the run at once (422, retry: false, the fix named).
 //   POST /sf-result x-switchboard-pickup-key. { action_id, run_id, ok, summary, level, object, production_full_data, count,
 //                  rows, query? } or { ..., ok: false, reason } -> { stored }. An sf_read's rows, before its /result (s89e):
 //                  into switchboard_sf_results for at most 10 minutes, plus a switchboard_sf_read_log row. The run is untouched.
@@ -110,11 +122,18 @@ async function conformance(): Promise<string> {
 }
 
 const ACTION_COLUMNS = "id, user_id, kind, payload, fingerprint, headline, status, link_used_at, link_expires_at, project_code";
+/** Every switchboard_run_links column but token_hash (250). */
+const RUN_LINK_COLUMNS =
+  "id, user_id, request_id, request_version, review_id, desktop, used_at, action_id, rerun_at, rerun_action_id, voided_at, void_reason, created_at";
 
 function deps(): Deps {
   const db = createServiceClient();
   const must = <T>(res: { data: T | null; error: { message: string } | null }): T => {
     if (res.error) throw new Error(res.error.message);
+    return res.data as T;
+  };
+  const coded = <T>(res: { data: T | null; error: { message: string; code?: string } | null }): T => {
+    if (res.error) throw Object.assign(new Error(res.error.message), { code: res.error.code ?? "" });
     return res.data as T;
   };
   const latestDryRun: Deps["latestDryRun"] = async (actionId) =>
@@ -166,7 +185,7 @@ function deps(): Deps {
       const action = must(await db.from("switchboard_actions").select("id, user_id, kind, status, picked_up_at, payload")
         .eq("id", actionId).maybeSingle()) as Picked["action"] | null;
       if (!action) return null;
-      const run = must(await db.from("switchboard_runs").select("id, action_id, mode, finished_at")
+      const run = must(await db.from("switchboard_runs").select("id, action_id, mode, finished_at, result")
         .eq("id", runId).maybeSingle()) as Picked["run"];
       return { action, run };
     },
@@ -214,6 +233,20 @@ function deps(): Deps {
     logSfRead: async (row) => {
       must(await db.from("switchboard_sf_read_log").insert(row));
     },
+    // sb3_runner-r4q s4: an sf_run's link and request (250). Named columns, so token_hash is never read.
+    runLink: async (linkId, userId) =>
+      must(await db.from("switchboard_run_links").select(RUN_LINK_COLUMNS).eq("id", linkId).eq("user_id", userId)
+        .maybeSingle()) as Record<string, unknown> | null,
+    runRequest: async (requestId, userId) =>
+      must(await db.from("switchboard_run_requests").select("*").eq("id", requestId).eq("user_id", userId)
+        .maybeSingle()) as Record<string, unknown> | null,
+    // The three rpcs keep the SQLSTATE on the error, so core can tell a refusal (final) from a network error (retried).
+    storeRunSample: async (requestId, sample) =>
+      coded(await db.rpc("switchboard_store_run_sample", { p_request_id: requestId, p_sample: sample })),
+    recordRunEvidence: async (runId) =>
+      coded(await db.rpc("switchboard_record_run_evidence", { p_run_id: runId })) as Record<string, unknown>,
+    dropRunSample: async (requestId) =>
+      Number(coded(await db.rpc("switchboard_drop_run_sample", { p_request_id: requestId })) ?? 0),
   };
 }
 
