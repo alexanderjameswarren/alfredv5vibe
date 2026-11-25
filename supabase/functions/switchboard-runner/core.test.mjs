@@ -46,6 +46,7 @@ function fakes(over = {}) {
       run: { id: "run-g", action_id: "git-1", mode: "real", finished_at: null },
     } : null),
     finishRun: async (id, fields) => (calls.finished ??= []).push({ id, ...fields }),
+    expiredSince: async () => [],
     ...over,
   };
   return { deps, calls, action };
@@ -525,7 +526,7 @@ test("pickup and result: refused with no key, a wrong or short one, the queue ke
 test("pickup: returns the next git action for Alex's user, or null", async () => {
   const { deps, calls } = fakes();
   const body = await (await handle(helper("pickup"), deps)).json();
-  assert.deepEqual(body, { ok: true, action: { ...PICKED, kind: "git" }, timed_out: [] });
+  assert.deepEqual(body, { ok: true, action: { ...PICKED, kind: "git" }, timed_out: [], expired: [] });
   assert.equal(calls.picked, USER);
   assert.equal(calls.pickedHelper, undefined);
   const none = fakes({ pickupGit: async () => null });
@@ -2259,6 +2260,99 @@ test("sf_run pickup: the 409 refusal carries the action's project_code", async (
     assert.equal(res.status, 409);
     assert.equal((await res.json()).project_code, "cd_fixc-q8d");
   }
+});
+
+// s6: M's runner part. /pickup tells the helper which approved actions were failed for never being picked up.
+const EXP_NOW = Date.parse("2026-11-25T10:00:00Z");
+const EXPIRED_ROWS = [
+  { action_id: "x-1", kind: "sf_run", project_code: "cd_fixc-q8d", finished_at: "2026-11-25T09:59:59Z", run_id: "r-x1" },
+  { action_id: "x-2", kind: "git", project_code: "p-x", finished_at: "2026-11-25T09:58:00Z" },
+  { action_id: "x-1", kind: "sf_run", project_code: "cd_fixc-q8d" },
+];
+const expFakes = (over = {}) => {
+  const order = [];
+  const f = fakes({
+    pickupGit: async (u) => (order.push("pickup"), PICKED),
+    pickupHelper: async () => (order.push("pickup"), { ...PICKED, kind: "sf_check" }),
+    expiredSince: async (u, since) => (order.push("expired"), f.calls.expiredArgs = [u, since], EXPIRED_ROWS),
+    ...over,
+  });
+  f.order = order;
+  return f;
+};
+
+test("pickup expired: read after the pickup functions run, over the lookback window, as {action_id, kind, project_code}, once each", async () => {
+  const { EXPIRED_LOOKBACK_MS } = await import("./core.ts");
+  assert.equal(EXPIRED_LOOKBACK_MS, 24 * 60 * 60 * 1000);
+  for (const body of [{}, { kinds: EIGHT }]) {
+    const { deps, calls, order } = expFakes();
+    const res = await handle(helper("pickup", body), deps, EXP_NOW);
+    assert.equal(res.status, 200);
+    const out = await res.json();
+    assert.deepEqual(order, ["pickup", "expired"]);
+    assert.deepEqual(calls.expiredArgs, [USER, "2026-11-24T10:00:00.000Z"]);
+    assert.deepEqual(out.expired, [
+      { action_id: "x-1", kind: "sf_run", project_code: "cd_fixc-q8d" },
+      { action_id: "x-2", kind: "git", project_code: "p-x" },
+    ]);
+  }
+});
+
+test("pickup expired: with nothing to pick up, and on an sf_run pick, 200 and 409 alike", async () => {
+  const none = expFakes({ pickupGit: async () => null });
+  const body = await (await handle(helper("pickup"), none.deps, EXP_NOW)).json();
+  assert.equal(body.action, null);
+  assert.equal(body.expired.length, 2);
+  for (const over of [{}, { link: null }]) {
+    const { deps } = srFakes(over);
+    deps.expiredSince = async () => EXPIRED_ROWS;
+    const res = await handle(helper("pickup", { kinds: EIGHT }), deps, EXP_NOW);
+    assert.equal(res.status, over.link === null ? 409 : 200);
+    assert.deepEqual((await res.json()).expired.map((e) => e.action_id), ["x-1", "x-2"]);
+  }
+});
+
+test("pickup expired: a failed read never fails the pickup; the field is left out and the next pickup's window repeats it", async () => {
+  const { deps } = expFakes({ expiredSince: async () => { throw new Error("fetch failed"); } });
+  const res = await handle(helper("pickup"), deps, EXP_NOW);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.action.action_id, "git-1");
+  assert.equal("expired" in body, false);
+});
+
+test("pickup expired: a read that fails once is tried again", async () => {
+  let tries = 0;
+  const { deps } = expFakes({ expiredSince: async () => { if (++tries === 1) throw new Error("fetch failed"); return EXPIRED_ROWS; } });
+  const body = await (await handle(helper("pickup"), deps, EXP_NOW)).json();
+  assert.equal(tries, 2);
+  assert.equal(body.expired.length, 2);
+});
+
+test("pickup expired: an sf_run pick whose link read throws is a 500; the retry's reply carries the expiry again", async () => {
+  const { deps } = srFakes();
+  deps.expiredSince = async () => EXPIRED_ROWS;
+  deps.runLink = async () => { throw new Error("fetch failed"); };
+  await assert.rejects(handle(helper("pickup", { kinds: EIGHT, pickup_id: PID }), deps, EXP_NOW));
+  deps.runLink = async () => ({ ...LINK_ROW });
+  const again = await (await handle(helper("pickup", { kinds: EIGHT, pickup_id: PID }), deps, EXP_NOW + 60000)).json();
+  assert.deepEqual(again.expired.map((e) => e.action_id), ["x-1", "x-2"]);
+});
+
+test("pickup expired: not read for a refused pickup", async () => {
+  const { deps, order } = expFakes();
+  assert.equal((await handle(helper("pickup", { kinds: ["nope"] }), deps, EXP_NOW)).status, 400);
+  assert.equal((await handle(helper("pickup", {}, "wrong".repeat(10)), deps, EXP_NOW)).status, 401);
+  assert.deepEqual(order, []);
+});
+
+test("index.ts: expiries come from 247's run rows, for helper kinds only", () => {
+  const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  const q = /expiredSince: async[\s\S]*?\n    \},/.exec(src)?.[0] ?? "";
+  assert.match(q, /from\("switchboard_runs"\)\.select\("action_id"\)\.eq\("user_id", userId\)/);
+  assert.match(q, /\.eq\("failure_reason", "expired_not_picked_up"\)\.gte\("finished_at", since\)\s*\.order\("finished_at", \{ ascending: false \}\)/);
+  assert.match(q, /from\("switchboard_actions"\)\.select\("id, kind, project_code"\)\.eq\("user_id", userId\)/);
+  assert.match(q, /\.in\("kind", \[\.\.\.HELPER_KINDS\]\)/);
 });
 
 test("index.ts: the outcome goes by rpc with the run id and the helper's write", () => {
