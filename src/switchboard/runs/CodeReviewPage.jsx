@@ -262,7 +262,7 @@ export default function CodeReviewPage({ source }) {
       )}
       {note && <p data-testid="run-note" role="alert" className="mb-4 text-dark break-words">{note}</p>}
 
-      {lines.map((l, i) => <div key={i} className="mb-2"><ResultLine line={l} sim={sim} /></div>)}
+      {lines.map((l, i) => <div key={i} className="mb-2"><ResultLine line={l} sim={sim} linkId={linkId} /></div>)}
 
       {!superseded && !done && (
         <>
