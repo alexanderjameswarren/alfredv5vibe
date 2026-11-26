@@ -1171,3 +1171,503 @@ the /run-sim/ scenarios) carries none of these, and keeps `data-switchboard-kind
   - Plumbing will close a watched /run/ or /review/ page on `did === "sent"`.
 - **The wake on a /run/ click is plumbing's too.** The click's wake of the helper probably doesn't reach it from a
   /run/ page, for the same reason (approveTokenOf matches only /approve/).
+
+## 15. Five items for the data runs thread (s25, 2026-11-25; a plan only)
+
+sb3_dataruns-t8m asked for these, Alex agreed them, and the hub recorded them. Item a comes first: it blocks slice 1's
+walk. Every migration below is unnumbered until its numbering step. Estimates come from the timing log:
+- a page step with tests and a cold review: 7 to 11 minutes (s20, s21b, s22);
+- a migration with its test: about 11 minutes (s21b);
+- numbering, queueing and a test's queueing: about 1 minute each (s21c to s21e).
+
+### 15.1 Where things stand today
+
+- **A simulated request has no action.** consume spends the link and makes no action and no run (251:608, live as
+  9629 in the snapshot).
+- **Every write refuses a simulation:**
+  - switchboard_record_run_evidence: "a simulation records no evidence", and `mode <> 'real'` is refused;
+  - switchboard_store_run_sample: "a simulation holds no client data";
+  - switchboard_record_run_outcome: refused for a simulation and for `mode <> 'real'`.
+- **switchboard_runs.mode** allows only dry_run and real (189:155).
+- **Both pickups** (switchboard_pickup_helper and switchboard_pickup_git, owned by the runner thread) open their runs
+  as `real` (snapshot 10732, 10846).
+- **Five inserts write an unpicked sf_run's expired run as `real`:**
+  - consume (9649);
+  - retry_run (11541);
+  - pickup_helper's 10- and 15-minute expiries (10783, 10798);
+  - pickup_git (10689), which expires sf_run too.
+- **Other `mode = 'real'` filters:**
+  - pickup_helper's replay (10809);
+  - the runner's pendingActions and stalePicks (switchboard-runner/index.ts:173, 200);
+  - _shared/tools/switchboard.ts:1368, which is sf_read only and harmless.
+- **The runner** refuses an sf_run whose run isn't `real` at core.ts:869, the only sf_run mode check. (1046 is the
+  non-sf_run /result path, and 1264 is sf_read's /sf-result.) sfRunLine (core.ts:747) builds only `run <id> …` lines.
+  It keeps `{ok, exit_code, pass, checks}` on the run row (963-967).
+- **The helper** (switchboard repo, helper/lib/core.mjs:541) refuses any simulation request today.
+- **The extension** (bridge-core.js:387-392) drops a page line unless its kind is `run` and its first word is run,
+  check or review. bridge-core.js:422 says "Never a SIMULATION line".
+- **The pages:**
+  - liveSource and LiveRunRoute (line 43) make any `simulation: true` request a `sim` source. That source gets the
+    SIMULATION strip, no marks, no status block and "A simulation posts nothing" (s20, s23b). RunPage gates running and
+    action-id on `!sim`.
+  - switchboard-run-pages prefixes "SIMULATION " to a simulation's line (resultLine), except resend, which hard-codes
+    `simulated: false` (core.ts:139).
+
+### 15.2 Item a: pretend mode (blocks slice 1)
+
+**Settled (recommendations, for Alex and the hub):**
+1. **Pretend implies simulation.**
+   - A request with `pretend: true` must have `simulation: true`. The queue refuses pretend without simulation.
+   - So every simulation behaviour stays (strip, SIMULATION-prefixed lines, the real logs and real orgs untouched),
+     and pretend adds only: consume makes the action and the run, and the run's made-up data is recorded.
+   - A plain simulation, with no action, stays as it is for the design pages, /run-sim/ and the fixtures.
+   - A pre-check and its data operation must agree on pretend, as they already must on simulation.
+   - It also fails safe: a helper that hasn't learnt pretend refuses it as a simulation (core.mjs:541) and touches no
+     org.
+   - Pretend makes a live action, so Q10 ("one running per project", consume, retry and both pickups) applies to it.
+     A pretend walk blocks its project's git and real runs while it runs, or for up to 15 to 30 minutes if never
+     picked up. **Walk on a project code of its own.**
+2. **The queue tool and runContract.**
+   - requestProblems (runContract.js) refuses a non-boolean pretend, and pretend without simulation.
+   - queue_switchboard_run_request passes `pretend` through to switchboard_queue_run_request, which stores it in a
+     new column, switchboard_run_requests.pretend (boolean, not null, default false, with a check that pretend implies
+     simulation).
+   - The queue strips `pretend` from the stored request jsonb, as it strips `simulation` (11167). That way it lives
+     only in the column and stays out of the fingerprint.
+   - switchboard_correct_run_request lists `pretend` with `simulation` in c_set and c_words (9700, 9705), so a
+     correction can never change it.
+   - The mcp function imports runContract.js (_shared/tools/switchboard-runs.ts:19), so **mcp needs a redeploy**.
+     switchboard-run-pages needs one too: its resend line must take `simulated` from the preview, not hard-code false.
+3. **How the runner tells a pretend run apart, and keeps it off every org:**
+   - consume puts `pretend: true` in the sf_run payload (`{link_id, pretend}`), so the helper knows before it reads the
+     request.
+   - Both pickups open the run as `mode 'pretend'`. So do all five expiry inserts (15.1) for a pretend action.
+   - Every sf_run `mode = 'real'` filter becomes `in ('real', 'pretend')`, so a lost pickup reply's replay and the
+     runner's stalePicks still find and close a pretend run:
+     - pickup_helper's replay;
+     - the runner's index.ts:173 and 200;
+     - core.ts:869.
+   - The runner accepts `pretend` only when the request is pretend. It refuses a real run on a pretend request, and the
+     reverse.
+   - get_switchboard_run returns a pretend run with its `mode`, so a reader must check it: a pretend PASS is made up.
+   - Its lines start "SIMULATION " for a pretend run (`SIMULATION run <link id> done: PASS`).
+   - Keeping off the orgs is the helper's and module's job (data runs thread, switchboard repo): on a pretend payload
+     they make the data up and open no org connection.
+     - The helper drops its simulation refusal for pretend only.
+     - The made-up request may still name a real target alias. **Ask the data runs thread for a test that a pretend
+       plan opens no sf connection, whatever org it names.**
+     - The database side guarantees only that made-up data lands in `pretend` rows on a pretend request, never in a
+       real one.
+   - The evidence and outcome functions accept a `pretend` run on a pretend request (the data is made up), and keep
+     refusing a plain simulation.
+   - store_run_sample takes a request, not a run, so it accepts a pretend request.
+   - **Order:** until s29 lands (s28 before s26's renumbering), the runner refuses a pretend result (core.ts:869).
+     So s26 to s29 ship before any pretend walk.
+4. **The page's Approve line on a pretend page: marked, with a SIMULATION prefix.**
+   - The page is still a simulation: the strip shows, `data-switchboard-simulation` stays on the root, and the copy
+     sentence says a pretend run reaches no org.
+   - It also carries the s20 marks:
+     - `data-switchboard-line="SIMULATION run <link id>"`, the function's reply line;
+     - the link id, the action id and running;
+     - ResultLine's hidden status block with Try again.
+   - `data-switchboard-kind` stays `run`, and a new `data-switchboard-pretend` mark is added. The extension already
+     drops a line whose kind isn't its route (bridge-core.js:387-392), so this is the smaller change.
+   - **The tap rule:** every line the page makes at a click posts at the click, as on a real page. That covers
+     Approve, Don't run's cancelled line, resent and reruns. The runner's later done and failed lines wait on the tile
+     for Alex's tap, each starting SIMULATION.
+   - liveSource and LiveRunRoute give the source `kind: 'pretend'`, and isSimulation stays true for it.
+     - RunPage's `!sim` gates for the marks and the status block become "not a plain simulation".
+     - The sent text "Nothing was sent… no org was touched" (RunPage.jsx:546) gets a pretend wording: "Sent to the
+       desktop helper as a pretend run: its data is made up and no org is touched."
+   - **Contract change for the hub and the data runs thread:** today the extension never posts a SIMULATION line
+     (bridge-core.js:422). It must post a SIMULATION-prefixed run line from a page marked `data-switchboard-pretend`.
+     s26: that is the data runs thread's, not plumbing's (Alex told them). The /run/ wake and tab close stay
+     plumbing's (14.9).
+
+**Conflicts with what's live:**
+- **s20** said a simulation page carries no marks. Pretend is the one exception, by its kind; a plain simulation
+  stays unmarked.
+- **Spec 4.4** says a simulation line is "never posted". That changes with item c's spec update.
+- **s21's end states** (runEnd) work as they are: a pretend run has the same status, ok, pass and summary.
+- **s23b's sentence** must not say "goes to the Claude chat" without saying it is a simulation, so pretend gets its
+  own sentence.
+- **C1, s19c and s22** concern /approve/ only: untouched.
+- **The tap rule** holds: only the Approve line posts at the click, and later lines wait for a tap.
+
+**Files and items:**
+- **Migration:** `supabase/migrations/256_pretend.sql` (the pending file, numbered at s27b, written and queued at s27c).
+  - Tables: switchboard_run_requests (adds pretend) and switchboard_runs (its mode check adds pretend).
+  - Functions:
+    - switchboard_queue_run_request and switchboard_correct_run_request;
+    - switchboard_consume_run_link and switchboard_retry_run;
+    - switchboard_pickup_helper and switchboard_pickup_git;
+    - switchboard_record_run_evidence, switchboard_store_run_sample and switchboard_record_run_outcome;
+    - switchboard_run_preview, which returns request.pretend.
+
+    The comments on the simulation column and on consume ("creates nothing else") change too.
+  - Read: switchboard_actions, switchboard_run_links, switchboard_run_samples and switchboard_code_reviews.
+  - **Ownership, settled at s26:** this thread changes switchboard_pickup_helper, switchboard_pickup_git and
+    supabase/functions/switchboard-runner/ (once the runner thread's, sb3_runner-r4q, now finished).
+- **Test:** `supabase/tests/sb3_pages-h6v/8_pretend_test.sql` (drafted at s27). It covers:
+  - the schema: the column, its two checks, the run mode, the grants;
+  - the shape: `{scenario}` accepted (40 characters too), 14 refused forms, and pretend without simulation;
+  - the column check, both ways, and pretend without simulation in the columns;
+  - a pre-check and data operation that disagree on pretend, both ways; differing scenario names accepted;
+  - consume making an sf_run with exactly `{link_id, pretend: true}`, and the preview returning request.pretend;
+  - pickup_helper opening it as pretend, and replaying it on a repeated pickup id;
+  - evidence, sample and outcome accepted pretend on pretend, refused across real and pretend, both ways, and
+    refused for a plain simulation;
+  - a plain simulation still making no action;
+  - the correction keeping the stored object (wording and a rerun kind), and dropping a real request's pretend;
+  - the 15-minute expiry: retry's and pickup_git's expired run is pretend, and the resend keeps pretend;
+  - O5's undo_of.request_id (below);
+  - conformance.
+- **Pages:** runContract.js, liveSource.js, LiveRunRoute.jsx, look.js, RunPage.jsx, CodeReviewPage.jsx, a new
+  pretend.test.jsx, and switchboard-run-pages/core.ts with its test.
+- **Tool:** _shared/tools/switchboard-runs.ts and its test.
+- **Runner:** switchboard-runner/core.ts and index.ts with their tests (named for this thread at s26).
+- **Deploys:** mcp, switchboard-run-pages and switchboard-runner, each holding db:deploy.
+- **Other threads, needed before slice 1's walk:** the helper's pretend path (data runs thread) and the extension's
+  pretend line (also the data runs thread's, since s26).
+
+**Ownership (settled at s26, 2026-11-26):** Alex and the hub confirmed that this thread changes
+switchboard_pickup_helper, switchboard_pickup_git and, in s29, supabase/functions/switchboard-runner/. The runner
+worktree (sb3_runner-r4q) is finished. The extension's pretend line belongs to the data runs thread, not plumbing.
+The data runs thread confirmed that the page's own Approve line starts with SIMULATION too ("SIMULATION run <link
+id>"), as the runner's later lines do, which wait for Alex's tap.
+
+**What the s26 draft settled** (now `supabase/migrations/256_pretend.sql`, queued at s27c):
+- **Sources.** Each function is its live definition (md5 of the live body equal to the source's, checked
+  2026-11-26), changed only for pretend:
+  - switchboard_queue_run_request and switchboard_record_run_evidence from 252;
+  - switchboard_correct_run_request and switchboard_record_run_outcome from 254;
+  - switchboard_consume_run_link from 251;
+  - switchboard_retry_run and switchboard_store_run_sample from 250;
+  - switchboard_pickup_helper and switchboard_pickup_git from 248.
+  - switchboard_run_preview (255) is no longer replaced (s26b): it returns the stored request, so request.pretend
+    comes back as stored.
+- **The shape (s26b, from the data runs thread):** `request.pretend = {scenario: "<name>"}`. The name is 1 to 40
+  characters of a-z, 0-9, hyphen and underscore: a name only, never a path. It stays in the stored request, and so
+  in the fingerprint. The s26 draft had a boolean stripped into the column; that is replaced.
+- **Tables.** switchboard_run_requests.pretend (boolean, not null, default false) with two checks:
+  - `switchboard_run_requests_pretend_simulation`: not pretend or simulation;
+  - `switchboard_run_requests_pretend_request` (s26b): pretend = (request ? 'pretend'). So the column is true
+    exactly when request.pretend is present.
+
+  switchboard_runs_mode_valid takes pretend. New comments on the simulation, pretend and mode columns, and on
+  switchboard_actions.payload (sf_run's `pretend` key).
+- **The queue** refuses any other pretend: a boolean, null, a missing or bad scenario, or other keys. A `case`
+  guards the key removal, which fails on a scalar, so a bad shape gets the refusal, not an SQL error. It
+  refuses pretend without simulation, and a pre-check and a data operation unless both have pretend or neither does.
+  The scenario names may differ.
+- **The correction** lists pretend in c_words (never compared) and c_set (the chat's is dropped). Then it adds the
+  stored `request.pretend` back (`v_keep`), in both of its updates. So a correction never changes the object or the
+  column, and the second check holds.
+- **Consume** goes on for `simulation and pretend`, as for a real request. The payload is
+  `{link_id, pretend: true}`; a real request's payload is unchanged, `{link_id}` with no pretend key. It returns
+  `simulated: true, pretend: true`, so run-pages builds the `SIMULATION run <link id>` line from `simulated`, as it
+  does today. A real request returns `pretend: false`. A plain simulation's return is unchanged and has no pretend key.
+- **Mode.** The run's mode is read from the action's payload (`payload.pretend = true` on an sf_run), never from the
+  request. Consume is the only writer of that key, and the guard (248) never lets a payload change.
+- **Four expiry inserts change, not five.** consume, retry_run, and the 15-minute expiry in both pickups. The
+  10-minute expiry in pickup_helper fails only queued no-click actions, and an sf_run always needs a click
+  (switchboard_actions_sf_run_click), so it never reaches one. It stays `real`.
+- **pickup_git** hands out git only. Its replay and its own pickup stay `real`; only its expiry changes. 15.1 had the
+  two pickups' snapshot lines the wrong way round: pickup_git is 10689 to 10732, pickup_helper 10783 to 10846.
+- **pickup_helper** opens a pretend sf_run's run as `pretend`, and its replay finds `real` or `pretend`.
+- **Evidence and outcome** take `mode in ('real', 'pretend')`. They refuse a plain simulation, as today. They also
+  refuse `(run is pretend) <> (request is pretend)`, in both directions. store_run_sample refuses only a plain
+  simulation.
+- **The preview** is unchanged and returns `request.pretend` as stored (s26b). The page tests whether it is present.
+- **record_run_evidence** rewrites the request only from the stored row (`v_req := v_row.request`), so it keeps
+  pretend.
+- **O5, added at s27 (the data runs thread confirmed 15.6a's proposal).** In the queue, an `undo_of.request_id` must
+  be a lower-case uuid naming the caller's own request whose base page is dataop, in the same project, agreeing on
+  simulation and on pretend. Only an undo may carry it. Each refusal is one sentence naming what is wrong: not an
+  undo, not a uuid, not found (another user's reads as not found), not a data operation, another project, a
+  simulation mismatch, a pretend mismatch. undo_of without request_id queues as before. A correction can't add or
+  change it: undo_of is no kind's field, so the diff refuses it. Re-diffed against live 252: the queue differs only
+  by pretend and this block.
+- **s27 cold review** (one round): no drift, no SQL errors, no hole; every test 8 check passes when right and fails
+  when broken. Added at its suggestion: the other direction of both undo mismatches. Noted, not changed: a
+  correction may add `undo_of.request_id: null` (jsonb_strip_nulls reads null as absent), stored as given; s28's
+  runContract check treats null as absent. The pickups in test 8, like tests 1 to 7, would take a real ready sf_run
+  of Alex's if one existed at the run (rolled back; the check would fail and say so).
+- **s27b (Alex, for O2):** the correction lists `allows` in c_words beside `diagnosis_allows`, so any correction may
+  change it, as it may diagnosis_allows. Re-diffed against live 254 (md5 unchanged): the correction differs only by
+  pretend (c_words, c_set, v_keep) and `allows` in c_words.
+- **Number:** 256, from claims.cmd number-migration (s27b), claimed as db:migration:256. The file is
+  `supabase/migrations/256_pretend.sql`, written at s27c from the pending file (identical but for its two header
+  lines), after a drift check: all nine live bodies equal their sources' (md5, 2026-11-26).
+- **Applied (s27d):** 256 ran as run b3f3799f-bc5c-4378-b8ec-a5fce699c45d, all 44 statements, with conformance
+  "CONFORMANT — all 123 non-exempt public tables satisfy platform contract v1, and anon reaches nothing undecided."
+  Checked live at s27d: all nine bodies' md5 equal 256's, the pretend column is boolean not null default false, and
+  the two request checks and the three-mode run check are as written. Test 8 queued with --test (action
+  f16ddab2-7097-4726-94fa-91a362ee1b48); its result is recorded when it has run.
+- **The break (s27e, 2026-11-26).** Test 8's run 734bef6c-e8b2-4f76-a540-6a30bb7b518e passed its six schema checks,
+  then failed at its first queue call: "operator is not unique: unknown - unknown" (42725). A plain simulated
+  pre-check through the MCP tool failed the same way, so **every queue call failed** from 256 on.
+  - **Cause:** 256 line 148, `(p_request->'pretend' - 'scenario')`. In PostgreSQL `-` binds tighter than `->`, so it
+    parsed as `p_request -> ('pretend' - 'scenario')`, unknown minus unknown. PL/pgSQL plans an IF's whole condition
+    the first time it reaches it, so the error came whether or not the request had pretend. Reproduced read-only:
+    `select '{...}'::jsonb->'pretend' - 'scenario'` gives the same error.
+  - **Why it was missed:** the md5 checks compare text, not behaviour; both cold reviews read the guard's logic and
+    not its parse; and the migration's dry run on the approve page only creates the functions, never calls them.
+  - **The other eight functions:** no other `->` lookup followed by `-`, `+`, `*` or `/`.
+  - **Fix:** `supabase/migrations/257_fix_queue.sql` (numbered at s27e; written at s27f from the pending file,
+    identical but for its two header lines, after a drift check: the live queue body's md5 equal to 256's): only
+    switchboard_queue_run_request, with `((p_request->'pretend') - 'scenario'::text)`; comment and grants as 256. It
+    ends with a smoke check that calls the function twice as a made-up user, each refused on purpose after the
+    pretend check (and the undo_of check), and stops the migration on any other error. So its own dry run proves
+    the fix before Approve.
+  - **Lesson:** run a migration's test in a dry run before applying it, and give a migration that replaces a
+    function a smoke call, so the approve page's dry run plans it.
+  - **Applied (s27g):** 257 ran as run d50075fa-7153-46f7-b15f-3f8a5c2f966b (17:58:04Z to 17:58:05Z): all six
+    statements ran (create function, comment, revoke, grant, the smoke check's DO block, the conformance select). The
+    smoke check passed, and conformance was "CONFORMANT — all 123 non-exempt public tables satisfy platform contract
+    v1, and anon reaches nothing undecided." The live queue body's md5 equals 257's. A plain simulated pre-check
+    then queued through the MCP tool (request b9e6807e-993d-455c-b8a4-7336f774cb58, project h6v-sim-c).
+  - **Outage:** the queue was down from 256's apply (17:45Z) to 257's (about 17:58Z), about 13 minutes.
+  - Test 8 queued again with --test as action 2e163d8b-273e-428e-9a2b-9d412fda4dd9 (the first run, 734bef6c, stopped
+    at the break); its result is recorded when it has run.
+- **No other function changes.** switchboard_issue_link, switchboard_cancel_run_link and the rest need nothing for
+  pretend. The cold review's list of other places that read `mode` is under "s26 cold review" below.
+
+**Steps** (revised at s26: test 8 moves to s27, so the pages step is s28 and the runner step s29):
+
+| Step | What | Estimate |
+|---|---|---|
+| s26 | Draft the pretend migration, with a cold review | 30m |
+| s27 | Draft test 8, and O5 in the queue, with a cold review (done) | 20m |
+| s27b, s27c, s27d | gitsync if behind, number it, write and queue it, then queue test 8 | 1m + 2m + 1m |
+| s28 | Pages, runContract (with O17, O2 and O5), the tool, run-pages core (and item c); tests; cold review | 40m |
+| s28b | Deploy mcp and switchboard-run-pages | 5m |
+| s29 | The runner's pretend handling (core.ts, index.ts), tests, deploy | 20m |
+
+**s28 in detail** (planned at s27; the data runs thread confirmed O1, O17, O2, O5 and failed_check):
+- **runContract.js** (requestProblems), with runContract.test.js:
+  - pretend: absent, or exactly `{scenario}` with the queue's name rule, and only with simulation true;
+  - O17: an `ids` request (selected_by.kind `ids`) must carry exactly one `details.queries` entry labelled `records`;
+  - O2: a top-level `allows`, when present, is `{mode: 'frozen' | 'moving', kinds: [{kind, limit, reason}],
+    integrations: {allowed, reason}, failure_tolerance: {rows, reason}}`; anything else is refused, naming the key.
+    Absent stays allowed (their module applies the design's default). `diagnosis_allows` stays the sentences;
+  - O5: `undo_of.request_id`, when present, is a lower-case uuid, on an undo only (the queue checks the rest).
+  - Spec 4.1 and 4.6 get the three fields; EDIT_RERUNS keeps `allows` with no reruns.
+- **The page drawing allows** (RunPage.jsx, under "Diagnosis allows"): the mode, one row per kind (kind, limit,
+  reason), integrations allowed or not with the reason, and the failure tolerance in rows with the reason. Counts and
+  short text only; a malformed `allows` draws nothing (runContract refuses it at queue time anyway).
+- **The pretend page** (liveSource.js, LiveRunRoute.jsx, look.js, RunPage.jsx, CodeReviewPage.jsx for the shared
+  gates): the source `kind: 'pretend'` when request.pretend is present; isSimulation stays true, so the strip and
+  `data-switchboard-simulation` stay; RunPage's `!sim` gates become "not a plain simulation"; the sent sentence
+  "Sent to the desktop helper as a pretend run: its data is made up and no org is touched."; and look.js's line note
+  gets a pretend sentence that names a simulation (s23b's must not be used alone).
+- **The marks:** a pretend page carries the s20 marks with `data-switchboard-line="SIMULATION run <link id>"`, the link
+  id, the action id and running, ResultLine's hidden status block with Try again, `data-switchboard-kind="run"`, and a
+  new `data-switchboard-pretend` mark. A plain simulation stays unmarked. Tests in a new pretend.test.jsx.
+- **switchboard-run-pages core.ts** (and core.test.mjs): the resend line takes `simulated` from the preview, not a
+  hard-coded false (core.ts:140), so a pretend resend's line starts SIMULATION.
+- **The tool** (_shared/tools/switchboard-runs.ts, switchboard-runs.test.mjs): passes `pretend` and `allows` through;
+  it imports runContract.js, so the new checks apply at queue time.
+- **Item c:** the undo page's "No sample record here" line, and spec 4.4, section 8, 14.2 and 14.7 updated (15.4).
+- **One database change O2 needs** (not in s28's files): switchboard_correct_run_request must list `allows` with
+  `diagnosis_allows` in c_words, or a correction can't change it (today any change to an unknown top-level key is
+  refused as a diff). Added at s27b, in 256 (Alex agreed).
+- **Redeploys (s28b):** mcp (the tool and runContract) and switchboard-run-pages, each holding db:deploy. The pages
+  ship with the app build.
+- **Estimate:** 40m: the s25 plan's 25m, plus O17 about 3m, O2 about 10m (contract, page, tests) and O5 about 2m.
+
+The Checkpoints follow s27d, s28b and s29. Until s29 lands the runner refuses a pretend result (core.ts:869), so no
+pretend walk starts before then.
+
+**s26 cold review** (one round, against the live bodies). Its verdict on the file:
+- No drift: every function matches its source except the pretend change, with the same signatures, defaults and
+  grants.
+- No SQL errors, and every comment matches its code.
+- The table changes hold on the existing rows.
+- The payload comment equals 248's text plus the pretend clause.
+- The file stays inside the declared scope.
+
+Two notes, kept as they are:
+- A correction that sends `pretend` is now dropped, where before it was refused as a changed field. No live request
+  has a `pretend` key in its jsonb (0 of 4, checked 2026-11-26), so nothing is lost. Since s26b the stored one is
+  then put back, so the object never changes.
+- A plain simulation's consume reply has no `pretend` key; the other replies have one. Readers take a missing key
+  as false.
+
+Other places that must learn pretend, all already planned:
+- s29: the runner's core.ts:869 refuses a non-real run; index.ts:200 (stalePicks) and 173 (pendingActions) filter
+  `mode = 'real'`. Without them a pretend run's result is refused, and a timed-out pick is never finished.
+- s28: switchboard-run-pages core.ts:140 hard-codes `simulated: false` on resend. RunPage.jsx:543-546 says "Nothing
+  was sent". liveSource.js has no pretend kind.
+
+No other live SQL function reads switchboard_runs.mode.
+
+**s26b cold review** (the revised draft, one round): no drift, no SQL errors. It confirmed:
+- every shape the queue must refuse is refused;
+- `pretend = (request ? 'pretend')` holds for every function that writes the request;
+- keeping pretend in the request breaks nothing: the fingerprint, the pre-check comparison, the correction diff,
+  requestProblems and the tool's passthrough schema;
+- the live 255 preview returns it as stored.
+
+Two comment wordings were fixed: "fails on a scalar", and "set by consume, copied by a resend". Its other findings
+are the runner's core.ts:869 and index.ts:173, already in s29.
+
+### 15.3 Item b: a pre-check that fails at the sandbox rehearsal keeps the checks that passed
+
+- **Today:** the runner records evidence only when `ok && pass === true` (core.ts:983), and
+  switchboard_record_run_evidence refuses a run that didn't pass. So a rehearsal failure records nothing, and a
+  correction to the value (EDIT_RERUNS: rehearsal only) can't reuse the production reads.
+- **Change:**
+  - record_run_evidence accepts a finished run with `ok true, pass false` when its result says it stopped at the
+    rehearsal (`failed_check: 'rehearsal'`, named by the helper). It records only the checks listed as passed, and
+    never `rehearsal`.
+  - The runner calls it in that case too.
+  - Kept checks keep their own `passed_at`, so they still expire 24 hours after they first passed (valid until =
+    oldest + 24 hours, unchanged).
+  - The sample is still stored only on a full pass.
+  - **The runner stores `failed_check` on the run row** next to `{ok, exit_code, pass, checks}`. It validates it in
+    sfRunReportProblem (core.ts:963-967), since the evidence function reads only that row.
+  - **A rehearsal failure's record also voids any rehearsal entry still in use.** Otherwise a correction that keeps
+    an earlier rehearsal (`records`: count, backup, sample), followed by a rerun whose rehearsal fails, would leave
+    the old rehearsal valid. The data operation would then be approvable just after a rehearsal failed.
+  - The queue refuses a data operation whose pre-check has no rehearsal in use. Today it refuses only one with no
+    passed checks at all (11155).
+  - A refusal of this kept-checks record is noted on the run, never `final()` (core.ts:988-989). So a FAIL stays
+    "finished: FAIL" (s21), not "failed".
+- **Contract change for the hub and the data runs thread:** on a rehearsal failure the helper reports
+  `{ok: true, pass: false, failed_check: 'rehearsal', checks: [the production checks that passed]}`.
+- **Conflicts:**
+  - 251's copied_from rule (a pre-check's checks back one data operation) is unchanged.
+  - s21's page shows the run as "finished: FAIL", and the correction page's "Still valid" lists the kept checks.
+- **Files:**
+  - a migration, `_pending_sb3_pages-h6v_kept_checks.sql` (switchboard_record_run_evidence; reads
+    switchboard_runs, switchboard_actions, switchboard_run_links and switchboard_run_requests);
+  - test 9, `9_kept_checks_test.sql`;
+  - runner core.ts:983 and its test, with Alex's naming as in a.
+- **Deploy:** switchboard-runner.
+- **Steps:**
+
+| Step | What | Estimate |
+|---|---|---|
+| s30 | Draft the migration (evidence and queue) and test 9, the runner change, cold review | 25m |
+| s30b to s30d | Number, queue, test | 4m |
+| s30e | Deploy the runner | 3m |
+
+(Renumbered at s26 from s29: item a's runner step took s29.)
+
+### 15.4 Item c: the undo page's sample, and spec 4.4
+
+- **Undo:** an undo has no pre-check, so store_run_sample (250:951, which needs valid evidence) can never give it a
+  sample. The terminal shows a fresh sample before the count.
+  - The undo page then shows a line where the sample would be: "No sample record here: an undo has no pre-check. The
+    terminal shows a fresh sample before it counts."
+  - Today the section is simply missing. Page only (RunPage.jsx SampleRecord, its test).
+- **Spec 4.4's Simulation row** becomes: "`SIMULATION run …`: shown to copy; a pretend run's Approve line is marked
+  and posted, and its later lines post on a tile tap, each starting SIMULATION". The line above it is updated to match.
+  So are the other places that say a simulation never posts or never runs:
+  - section 8 (line 441: "never makes a helper action, a run or a sample");
+  - 14.2's skills note (around line 982);
+  - 14.7 (around line 1098).
+- **Conflicts:** none. Folded into s28 (the pages step, s27 before s26's renumbering), at no extra cost: about 3
+  minutes.
+
+### 15.5 Item d: more of the outcome on the page
+
+- **record_run_outcome is shape-free** (254: any JSON object up to 64 KB, never read inside). It needs no change and
+  no migration.
+- **outcomeView** (runContract.js) learns three keys, and drops anything malformed, never guessing:
+  - `stopped.next`: one sentence, text of at most 200 characters, shown as "Next: …";
+  - `stopped.by_step`: `{step, object}`, both short text, shown as "Stopped at <step> on <object>";
+  - `skipped`: `[{kind, count}]`, with kind short text and count an integer of 0 or more, shown as one row each.
+  - Counts and names only: any other key, or any value inside these keys that isn't these types, is left out.
+  - `stopped` is kept when any of its four keys is valid. Today it needs already_changed or saved_on_pc
+    (runContract.js:704), so a `stopped` with only `next` would show nothing.
+- The Outcome component in RunPage.jsx draws them. Tests go in runContract.test.js and runEnd.test.jsx.
+- **Contract change:** these three keys join the outcome shape the data runs thread owns.
+- **Steps:**
+
+| Step | What | Estimate |
+|---|---|---|
+| s31 | Page and contract, tests, cold review | 10m |
+
+### 15.6 Item e (slice 2, not urgent): the "Check what happened" page's line and result
+
+- **The line:** the runner builds `check <link id> done: job <state>; <a> at goal, <b> at backup, <c> neither`
+  (spec 4.4) from the helper's `{job, at_goal, at_backup, neither}` for a check page's sf_run. checkLine in
+  runContract.js has the shape. Runner core.ts sfRunLine and its test, with Alex's naming as in a.
+- **The result:** switchboard_record_run_outcome accepts a check page's run (today only dataop and undo), storing
+  `{job, at_goal, at_backup, neither}`. The page then shows it.
+  - The runner must call it: sfRunKind returns "other" for a check page (core.ts:815-821), and recordOutcome runs
+    only for "write".
+  - RunPage's Outcome renders only for dataop and undo (RunPage.jsx:153), so it learns check pages too.
+  - Files: a migration `_pending_sb3_pages-h6v_check_result.sql` (switchboard_record_run_outcome,
+    switchboard_run_requests), test 10, and the page with its test.
+- **Steps:** s32 drafts both (20m), then numbering, queueing, the test and a runner deploy (8m). Planned in detail
+  when slice 2 starts.
+
+### 15.6a The data runs thread's four questions (s26b, read only; all four proposals confirmed at s27)
+
+At s27: O5 is in the pending migration (15.2); O17, O2 and O5's runContract check are s28's; failed_check is s30's,
+with the data runs thread sending `{ok: true, pass: false, failed_check: 'rehearsal', checks}`.
+
+
+- **O17, an Id list's Ids.** There is no field for the Ids themselves.
+  - selected_by is `{kind ids or filter, text, sandbox_text?, not_rehearsed?}` (4.1, line 166): a sentence, not a
+    list.
+  - details is `{run_folder, hashes, queries [{label, soql}], added_ids?}` (4.1, line 175). added_ids are Ids added by
+    a correction, shown as "Added Ids" (RunPage.jsx:286-287).
+  - Nothing checks details or its labels: runContract.js requestProblems (508-579) and the queue function never read
+    it. RunPage.jsx:280-285 draws each query as its label and its SOQL.
+  - So reading `details.queries`' query labelled `records` works today, but only by convention.
+  - **Smallest addition:** fix the label as `records` in 4.1, and have requestProblems check that an `ids` request
+    has exactly one such query.
+- **O2, what diagnosis allows.**
+  - Stored as `diagnosis_allows`: a list of sentences, or absent (4.1, line 164).
+  - requestProblems refuses anything else (runContract.js:535-536). The queue stores it as sent, and a correction
+    treats it as wording (c_words).
+  - The page draws it as "Diagnosis allows", one sentence per line (RunPage.jsx:77-81).
+  - There is no structured field. Their `details.allows` would be stored, since nothing checks details, but never
+    drawn.
+  - **Smallest addition:** keep `diagnosis_allows` as the sentences the page shows, and add a structured
+    `allows` beside it. requestProblems would check its shape (mode frozen or moving; kinds [{kind, limit, reason}];
+    integrations {allowed, reason}; failure_tolerance {rows, reason}), and the correction would treat it as wording
+    with diagnosis_allows. It must not go under details, which describes the run's folder and queries.
+- **O5, undo_of.**
+  - Today it is `{run_tag, stopped?, changed?, deadline?, deadline_reason?}` (4.6, line 295).
+  - requestProblems checks only run_tag and the deadline rules (runContract.js:541-543, 549-550). The queue function
+    never reads undo_of.
+  - So `undo_of.request_id` can be sent today and would be stored. Nothing checks it, nothing draws it, and nothing
+    ties it to a real request.
+  - **Smallest addition:** requestProblems checks that it is a lower-case uuid. The queue checks it names the
+    caller's own data operation request in the same project (base_page dataop, simulation and pretend matching), as
+    it does for pre_check_request_id. A correction leaves it unchanged, as it does pre_check_request_id.
+- **failed_check (item b, s30).** Their shape `{ok: false, pass: false, failed_check: 'rehearsal', checks}` doesn't
+  fit as it stands, for two reasons:
+  - **ok false reads as failed.** The runner sets the action failed when ok is false (core.ts:1014-1015). runEnd shows
+    any `ok === false` as "failed" (runContract.js:400). 15.3 asks for `{ok: true, pass: false, failed_check,
+    checks}`, so the run reads "finished: FAIL", as a pre-check that ran and found a problem should.
+  - **The runner drops failed_check.** It accepts the report (sfRunReportProblem, core.ts:785-806, ignores unknown
+    keys), but keeps only `{ok, exit_code, pass, checks}` on switchboard_runs.result (core.ts:970-974). It also
+    records evidence only when `ok && pass === true` (core.ts:983).
+
+  **What s30 must read:** switchboard_runs.result as the runner stores it. That is `ok` true, `pass` false,
+  `failed_check` exactly 'rehearsal', and `checks` the production checks that passed, never rehearsal.
+  record_run_evidence reads only that row (v_run.result). So s30's runner change must:
+  - validate `failed_check`;
+  - keep it in the stored result;
+  - call record_run_evidence for that case.
+
+  **Ask the data runs thread to send `ok: true`** for a rehearsal that ran and failed. `ok: false` stays for a run
+  that broke.
+
+### 15.7 Totals
+
+- **a:** about 120m of this thread's work (s27 took O5; s28 took O17 and O2), plus the helper's pretend path and the extension's pretend line (both the
+  data runs thread's, settled at s26).
+- **b:** about 32m.
+- **c:** 3m, inside a.
+- **d:** 10m.
+- **e:** about 30m, later.
+- **Before slice 1's walk:** a only, about 120 minutes over s26 to s29 plus three Checkpoints, and the data runs
+  thread's parts.
+

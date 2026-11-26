@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-25 12:44, through migration 255 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-26 10:02, through migration 257 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -9626,7 +9626,8 @@ begin
     end if;
   end if;
 
-  if v_row.simulation then
+  -- s26: a pretend request goes on below, as a real one does: its sf_run carries pretend, and the helper makes its data up.
+  if v_row.simulation and not v_row.pretend then
     -- Q7: accepted, the link is spent, but no helper action and no run: the real logs never see a simulation. A
     -- simulation's Approve always spends its link (as 250), a correction's too: no evidence ever comes back for it.
     update public.switchboard_run_links
@@ -9640,20 +9641,25 @@ begin
 
   -- A rerun on a link whose run never started: fail its stale action first (consumed -> failed), as the pickup would.
   -- Only if still consumed and unpicked: a pickup failing it at the same moment leaves one failed run, not two.
+  -- s26: a pretend action's expired run is mode pretend.
   if v_as_rerun and v_stuck and v_newest.status = 'consumed' then
     update public.switchboard_actions set status = 'failed'
      where id = v_newest.id and status = 'consumed' and picked_up_at is null;
     get diagnostics v_failed = row_count;
     if v_failed = 1 then
       insert into public.switchboard_runs (user_id, action_id, mode, summary, result, failure_reason, finished_at)
-      values (v_user, v_newest.id, 'real', 'expired: approved over 15 minutes ago and never picked up, never run',
+      values (v_user, v_newest.id, case when coalesce(v_newest.payload->'pretend' = 'true'::jsonb, false) then 'pretend' else 'real' end,
+              'expired: approved over 15 minutes ago and never picked up, never run',
               jsonb_build_object('ok', false, 'expired', true, 'reason', 'expired_not_picked_up'), 'expired_not_picked_up', now());
     end if;
   end if;
 
-  -- The approval: an sf_run, consumed at insert by the guard (248), carrying only the link id.
+  -- The approval: an sf_run, consumed at insert by the guard (248), carrying only the link id, and (s26) pretend: true
+  -- for a pretend request.
   insert into public.switchboard_actions (user_id, kind, project_code, payload, headline, created_by)
-  values (v_user, 'sf_run', v_row.project_code, jsonb_build_object('link_id', v_link.id::text),
+  values (v_user, 'sf_run', v_row.project_code,
+          jsonb_build_object('link_id', v_link.id::text)
+            || case when v_row.pretend then jsonb_build_object('pretend', true) else '{}'::jsonb end,
           left(coalesce(nullif(btrim(v_row.request->>'headline'), ''), 'Run page ' || v_row.page), 300), 'claude')
   returning id into v_action;
   -- A rerun on a link whose approval never started makes the link unused again (s6b), so once the rerun passes the
@@ -9665,8 +9671,9 @@ begin
          rerun_action_id = case when v_as_rerun then v_action else rerun_action_id end,
          desktop         = p_desktop
    where id = v_link.id;
-  return jsonb_build_object('consumed', true, 'simulated', false, 'link_id', v_link.id, 'mode', p_mode, 'action_id', v_action,
-                            'as_rerun', v_as_rerun);
+  -- s26: a pretend run is still a simulation (its lines start SIMULATION); pretend says it has an action.
+  return jsonb_build_object('consumed', true, 'simulated', v_row.simulation, 'pretend', v_row.pretend, 'link_id', v_link.id,
+                            'mode', p_mode, 'action_id', v_action, 'as_rerun', v_as_rerun);
 end;
 $$;
 
@@ -9674,7 +9681,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_consume_run_link"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb", "p_count" integer, "p_mode" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_consume_run_link"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb", "p_count" integer, "p_mode" "text") IS 'Switchboard 3: Approve (p_mode approve) or "Run the pre-check and rehearsal again" (rerun) on a run page. Approves only when the link is the caller''s, not voided and (approve) unused, no other link of the same request version was used, the request is at the link''s version with the fingerprint the page showed, no check is dated in the future, the checks are within 24 hours of the oldest in use, copied ones included (not for an undo; a delete''s undo before its deadline), a data operation has every pre-check check (count, login, automation, backup, rehearsal) passed and in use, p_count equals the request''s count (dataop, undo), the code (if any) was rehearsed (rehearsal evidence carrying its commit) and reviewed at that commit, p_desktop says running with panel and helper up, no link or run is live for the project (Q10, under the same advisory lock as switchboard_issue_link), and (s12b) the pre-check whose checks it copied backs no other approved write. Locks the request, then the link. Rerun only on expired checks, not while the last rerun is approved and unfinished, and on a used link only when its run never started (s6b), which fails the stale action and frees the link. A correction page''s Approve (s12) is recorded like a rerun (rerun_at, rerun_action_id; refused while one is approved and unfinished), so the link stays unused and approves the write once the reruns pass. A simulation spends the link and creates nothing else (Q7). Otherwise inserts an sf_run with payload {link_id}, which the guard stores consumed (248). Returns {consumed, simulated, link_id, mode, action_id, as_rerun}. Called by switchboard-run-pages with Alex''s JWT.';
+COMMENT ON FUNCTION "public"."switchboard_consume_run_link"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb", "p_count" integer, "p_mode" "text") IS 'Switchboard 3: Approve (p_mode approve) or "Run the pre-check and rehearsal again" (rerun) on a run page. Approves only when the link is the caller''s, not voided and (approve) unused, no other link of the same request version was used, the request is at the link''s version with the fingerprint the page showed, no check is dated in the future, the checks are within 24 hours of the oldest in use, copied ones included (not for an undo; a delete''s undo before its deadline), a data operation has every pre-check check (count, login, automation, backup, rehearsal) passed and in use, p_count equals the request''s count (dataop, undo), the code (if any) was rehearsed (rehearsal evidence carrying its commit) and reviewed at that commit, p_desktop says running with panel and helper up, no link or run is live for the project (Q10, under the same advisory lock as switchboard_issue_link), and (s12b) the pre-check whose checks it copied backs no other approved write. Locks the request, then the link. Rerun only on expired checks, not while the last rerun is approved and unfinished, and on a used link only when its run never started (s6b), which fails the stale action and frees the link. A correction page''s Approve (s12) is recorded like a rerun (rerun_at, rerun_action_id; refused while one is approved and unfinished), so the link stays unused and approves the write once the reruns pass. A plain simulation spends the link and creates nothing else (Q7). Otherwise inserts an sf_run with payload {link_id}, plus pretend: true for a pretend request (s26), which the guard stores consumed (248); a pretend action''s expired run is mode pretend. Returns {consumed, simulated, link_id, mode, action_id, as_rerun}, and pretend when an action was made (simulated is true for a pretend request). Called by switchboard-run-pages with Alex''s JWT.';
 
 
 
@@ -9694,15 +9701,17 @@ declare
   v_diff    text[];
   v_base    jsonb;
   v_wrote   uuid;
-  -- Words only: what every kind may change (250's wording rule), what the database sets, and (252) the base steps
-  -- and phases the database keeps.
-  c_words   constant text[] := array['headline', 'side_effects', 'problem', 'diagnosis_allows', 'changed', 'page', 'id', 'version',
-                                     'corrected_at', 'simulation', 'base_steps', 'base_phases'];
+  v_keep    jsonb;
+  -- Words only: what every kind may change (250's wording rule), what the database sets, (252) the base steps and
+  -- phases the database keeps, (s26b) pretend, which the database keeps as stored (v_keep below), and (s27b, O2) the
+  -- structured allows, which changes as diagnosis_allows does.
+  c_words   constant text[] := array['headline', 'side_effects', 'problem', 'diagnosis_allows', 'allows', 'changed', 'page', 'id', 'version',
+                                     'corrected_at', 'simulation', 'pretend', 'base_steps', 'base_phases'];
   -- What a correction run carries of its own, for a kind that reruns a check: its steps and phases, its run folder and
   -- hashes, what it keeps, its run tag, and the still-valid list.
   c_run     constant text[] := array['steps', 'phases', 'details', 'kept', 'run_tag', 'still_valid'];
   -- Keys the chat never sends: the database's own.
-  c_set     constant text[] := array['id', 'version', 'corrected_at', 'evidence', 'simulation', 'base_steps', 'base_phases'];
+  c_set     constant text[] := array['id', 'version', 'corrected_at', 'evidence', 'simulation', 'pretend', 'base_steps', 'base_phases'];
 begin
   if v_user is null then
     raise exception 'switchboard_correct_run_request: no signed-in user.' using errcode = '28000';
@@ -9880,6 +9889,8 @@ begin
                    || case when v_row.request ? 'base_phases' then jsonb_build_object('base_phases', v_row.request->'base_phases') else '{}'::jsonb end
                  else case when v_row.request ? 'steps' then jsonb_build_object('base_steps', v_row.request->'steps') else '{}'::jsonb end
                    || case when v_row.request ? 'phases' then jsonb_build_object('base_phases', v_row.request->'phases') else '{}'::jsonb end end;
+  -- s26b: the stored request.pretend, kept as it was (the chat's is dropped by c_set), so the column still matches.
+  v_keep := case when v_row.request ? 'pretend' then jsonb_build_object('pretend', v_row.request->'pretend') else '{}'::jsonb end;
 
   if cardinality(v_reruns) = 0 then
     -- Wording or what diagnosis allows: nothing runs again, nothing is voided, no page of its own; the next page carries
@@ -9894,7 +9905,8 @@ begin
                                                            then (v_row.request->'changed') || jsonb_build_object('wording',
                                                                   p_changed || jsonb_build_object('edit_kind', p_edit_kind, 'from_version', v_row.version))
                                                            else p_changed || jsonb_build_object('edit_kind', p_edit_kind, 'from_version', v_row.version) end)
-                     || case when v_row.page = 'correction' then v_base else '{}'::jsonb end,
+                     || case when v_row.page = 'correction' then v_base else '{}'::jsonb end
+                     || v_keep,
            updated_at = now()
      where id = v_row.id;
     return jsonb_build_object('request_id', v_row.id, 'version', v_row.version, 'voided_checks', 0, 'voided_links', 0);
@@ -9907,7 +9919,8 @@ begin
          request      = (p_request - c_set)
                         || jsonb_build_object('page', 'correction',
                                               'changed', p_changed || jsonb_build_object('edit_kind', p_edit_kind, 'from_version', v_row.version))
-                        || v_base,
+                        || v_base
+                        || v_keep,
          evidence     = (select coalesce(jsonb_agg(case when e->>'check' = any(v_reruns) then e || '{"voided": true}'::jsonb else e end), '[]'::jsonb)
                            from jsonb_array_elements(v_row.evidence) e),
          total_count  = case when jsonb_typeof(v_total) = 'number' and v_total::text ~ '^[0-9]{1,9}$' then v_total::text::integer else v_row.total_count end,
@@ -9935,7 +9948,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") IS 'Switchboard 3: correct a run request (part 5 "Corrected"). Refuses (254, Alex s17b) every correction of a data operation or undo, wording included, once an approved write on it has started or may still start (its link''s approved action was picked up, has a run other than expired_not_picked_up, or is consumed within its 15 minutes): a further change is a new request through diagnosis; a write that never started leaves it correctable, and a pre-check is unaffected. Refuses an object or operation edit (a new request through diagnosis), and (s12c) any change to pre_check_request_id. Each kind changes only its own row of the correction table, besides the wording (headline, side effects, problem, what diagnosis allows) and, for a kind that reruns a check, the run''s own steps, phases, details, kept, run_tag and still_valid: value operation.value; file operation.file; field operation.field and undo; records selected_by (not its kind or sandbox filter), counts, operation.steps and undo; records_filter all of selected_by, counts, operation.steps and undo; sandbox_filter selected_by.sandbox_text and not_rehearsed; code the code. A kind that reruns the rehearsal may also add one role-rehearsal sandbox org to a request with none (252). Any other change is refused, naming the field (a key set to null counts as left out). A wording or allowance edit voids nothing and keeps the version and the page. Any other edit raises the version by one, makes it a correction page, keeps the request''s own steps and phases as base_steps and base_phases (252; restored by switchboard_record_run_evidence on return), voids the evidence its kind reruns (field: rehearsal, login, backup, sample; Alex s8b) and the request''s live links, and for a code edit marks older reviews superseded, in one transaction. Returns {request_id, version, voided_checks, voided_links}.';
+COMMENT ON FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") IS 'Switchboard 3: correct a run request (part 5 "Corrected"). Refuses (254, Alex s17b) every correction of a data operation or undo, wording included, once an approved write on it has started or may still start (its link''s approved action was picked up, has a run other than expired_not_picked_up, or is consumed within its 15 minutes): a further change is a new request through diagnosis; a write that never started leaves it correctable, and a pre-check is unaffected. Refuses an object or operation edit (a new request through diagnosis), and (s12c) any change to pre_check_request_id. Each kind changes only its own row of the correction table, besides the wording (headline, side effects, problem, what diagnosis allows: diagnosis_allows and, s27b, the structured allows) and, for a kind that reruns a check, the run''s own steps, phases, details, kept, run_tag and still_valid: value operation.value; file operation.file; field operation.field and undo; records selected_by (not its kind or sandbox filter), counts, operation.steps and undo; records_filter all of selected_by, counts, operation.steps and undo; sandbox_filter selected_by.sandbox_text and not_rehearsed; code the code. A kind that reruns the rehearsal may also add one role-rehearsal sandbox org to a request with none (252). Any other change is refused, naming the field (a key set to null counts as left out). A correction never changes simulation or pretend: simulation lives in its column, and (s26b) the stored request.pretend is kept as it was, whatever the corrected request sends. A wording or allowance edit voids nothing and keeps the version and the page. Any other edit raises the version by one, makes it a correction page, keeps the request''s own steps and phases as base_steps and base_phases (252; restored by switchboard_record_run_evidence on return), voids the evidence its kind reruns (field: rehearsal, login, backup, sample; Alex s8b) and the request''s live links, and for a code edit marks older reviews superseded, in one transaction. Returns {request_id, version, voided_checks, voided_links}.';
 
 
 
@@ -10676,17 +10689,18 @@ begin
     raise exception 'switchboard_pickup_git: no user.' using errcode = '22004';
   end if;
 
-  -- r2: an approved action of any helper kind not picked up within 15 minutes of its approval never runs.
+  -- r2: an approved action of any helper kind not picked up within 15 minutes of its approval never runs. s26: a
+  -- pretend sf_run's expired run is mode pretend.
   with stale as (
     update public.switchboard_actions
        set status = 'failed'
      where user_id = p_user and kind = any(c_all) and status = 'consumed' and picked_up_at is null
        and (coalesce(link_used_at, created_at) < now() - interval '15 minutes'
             or (kind = any(c_prod) and link_used_at is null))
-    returning id
+    returning id, coalesce(kind = 'sf_run' and payload->'pretend' = 'true'::jsonb, false) as pretend
   )
   insert into public.switchboard_runs (user_id, action_id, mode, summary, result, failure_reason, finished_at)
-  select p_user, id, 'real', 'expired: approved over 15 minutes ago and never picked up, never run',
+  select p_user, id, case when pretend then 'pretend' else 'real' end, 'expired: approved over 15 minutes ago and never picked up, never run',
          jsonb_build_object('ok', false, 'expired', true, 'reason', 'expired_not_picked_up'), 'expired_not_picked_up', now()
     from stale;
 
@@ -10743,7 +10757,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid") IS 'Switchboard: hand the helper the oldest git action of p_user that is ready to run: clicked within 15 minutes, or queued and needing no click. One at a time per project code. Any helper action, of any kind (sf_run included), approved (consumed) over 15 minutes ago, by coalesce(link_used_at, created_at), and never picked up is marked failed first, with a finished run, result {ok: false, expired: true, reason: expired_not_picked_up} and failure_reason expired_not_picked_up (sb3_runner-r4q r2). Sets picked_up_at, marks it consumed and opens a real run row. With p_pickup_id the run row carries result {pickup_id} until the helper''s result replaces it, and a repeat with the same id while that run is open returns the same action and run. Returns {action_id, run_id, project_code, payload, fingerprint, headline, chat_url}, or null when nothing is ready. Called by switchboard-runner with the service role after it checks the pickup key; no other role can call it.';
+COMMENT ON FUNCTION "public"."switchboard_pickup_git"("p_user" "uuid", "p_pickup_id" "uuid") IS 'Switchboard: hand the helper the oldest git action of p_user that is ready to run: clicked within 15 minutes, or queued and needing no click. One at a time per project code. Any helper action, of any kind (sf_run included), approved (consumed) over 15 minutes ago, by coalesce(link_used_at, created_at), and never picked up is marked failed first, with a finished run, result {ok: false, expired: true, reason: expired_not_picked_up} and failure_reason expired_not_picked_up (sb3_runner-r4q r2); the run is mode pretend for an sf_run whose payload has pretend: true (s26), else real. Sets picked_up_at, marks it consumed and opens a real run row. With p_pickup_id the run row carries result {pickup_id} until the helper''s result replaces it, and a repeat with the same id while that run is open returns the same action and run. Returns {action_id, run_id, project_code, payload, fingerprint, headline, chat_url}, or null when nothing is ready. Called by switchboard-runner with the service role after it checks the pickup key; no other role can call it.';
 
 
 
@@ -10785,28 +10799,28 @@ begin
     from expired;
 
   -- r2: an approved action of any helper kind not picked up within 15 minutes of its approval never runs. A production
-  -- kind consumed without a click is failed at once, as before (O6).
+  -- kind consumed without a click is failed at once, as before (O6). s26: a pretend sf_run's expired run is mode pretend.
   with stale as (
     update public.switchboard_actions
        set status = 'failed'
      where user_id = p_user and kind = any(c_all) and status = 'consumed' and picked_up_at is null
        and (coalesce(link_used_at, created_at) < now() - interval '15 minutes'
             or (kind = any(c_prod) and link_used_at is null))
-    returning id
+    returning id, coalesce(kind = 'sf_run' and payload->'pretend' = 'true'::jsonb, false) as pretend
   )
   insert into public.switchboard_runs (user_id, action_id, mode, summary, result, failure_reason, finished_at)
-  select p_user, id, 'real', 'expired: approved over 15 minutes ago and never picked up, never run',
+  select p_user, id, case when pretend then 'pretend' else 'real' end, 'expired: approved over 15 minutes ago and never picked up, never run',
          jsonb_build_object('ok', false, 'expired', true, 'reason', 'expired_not_picked_up'), 'expired_not_picked_up', now()
     from stale;
 
   -- r2: a repeat of a pickup whose reply was lost gets the same action and run, while that run is open. A repeat
-  -- sent while the first is still running waits for it here, so it sees the first one's run.
+  -- sent while the first is still running waits for it here, so it sees the first one's run. s26: a pretend run too.
   if p_pickup_id is not null then
     perform pg_advisory_xact_lock(hashtextextended('switchboard_pickup:' || p_pickup_id::text, 0));
     select r.id, a.id into v_run, v_again
       from public.switchboard_runs r
       join public.switchboard_actions a on a.id = r.action_id
-     where r.user_id = p_user and r.finished_at is null and r.mode = 'real'
+     where r.user_id = p_user and r.finished_at is null and r.mode in ('real', 'pretend')
        and r.result is not null and r.result->>'pickup_id' = p_pickup_id::text
        and a.user_id = p_user and a.kind = any(v_kinds) and a.status = 'consumed' and a.picked_up_at is not null
      order by r.started_at desc
@@ -10842,8 +10856,12 @@ begin
   update public.switchboard_actions
      set picked_up_at = now(), status = 'consumed'
    where id = v_action.id;
+  -- s26: a pretend sf_run (payload pretend: true, set by consume, copied by a resend) opens a pretend run; everything
+  -- else a real one.
   insert into public.switchboard_runs (user_id, action_id, mode, summary, result)
-  values (p_user, v_action.id, 'real', 'picked up by the helper',
+  values (p_user, v_action.id,
+          case when v_action.kind = 'sf_run' and coalesce(v_action.payload->'pretend' = 'true'::jsonb, false) then 'pretend' else 'real' end,
+          'picked up by the helper',
           case when p_pickup_id is null then null else jsonb_build_object('pickup_id', p_pickup_id) end)
   returning id into v_run;
 
@@ -10857,7 +10875,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[], "p_pickup_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[], "p_pickup_id" "uuid") IS 'Switchboard: hand the helper the oldest action of p_user, of a kind in p_kinds (default git, sf_check, sf_read, sb_setup; sf_dataop, sf_dataquery, sf_datawrite and sf_run only when named), that is ready to run: clicked within 15 minutes, or queued and needing no click. An sf_dataop, sf_dataquery or sf_datawrite only when consumed by Alex''s click on its link; an sf_run is consumed at insert by its run page''s consume, so its 15 minutes count from created_at. Any helper action approved (consumed) over 15 minutes ago, by coalesce(link_used_at, created_at), and never picked up is marked failed with a finished run, result {ok: false, expired: true, reason: expired_not_picked_up} and failure_reason expired_not_picked_up (sb3_runner-r4q r2; O6). A queued no-click action over 10 minutes old is marked failed the same way, without the reason. One running at a time per project code, across every helper kind. Sets picked_up_at, marks it consumed and opens a real run row. With p_pickup_id the run row carries result {pickup_id} until the helper''s result replaces it, and a repeat with the same id while that run is open returns the same action and run. Returns {action_id, run_id, kind, project_code, payload, fingerprint, headline, chat_url}, or null. Called by switchboard-runner with the service role after it checks the pickup key (dataops_alfred-d4x; dataop_link-k7d; dataop_write-j5w; sb3_runner-r4q).';
+COMMENT ON FUNCTION "public"."switchboard_pickup_helper"("p_user" "uuid", "p_kinds" "text"[], "p_pickup_id" "uuid") IS 'Switchboard: hand the helper the oldest action of p_user, of a kind in p_kinds (default git, sf_check, sf_read, sb_setup; sf_dataop, sf_dataquery, sf_datawrite and sf_run only when named), that is ready to run: clicked within 15 minutes, or queued and needing no click. An sf_dataop, sf_dataquery or sf_datawrite only when consumed by Alex''s click on its link; an sf_run is consumed at insert by its run page''s consume, so its 15 minutes count from created_at. Any helper action approved (consumed) over 15 minutes ago, by coalesce(link_used_at, created_at), and never picked up is marked failed with a finished run, result {ok: false, expired: true, reason: expired_not_picked_up} and failure_reason expired_not_picked_up (sb3_runner-r4q r2; O6). A queued no-click action over 10 minutes old is marked failed the same way, without the reason. One running at a time per project code, across every helper kind. Sets picked_up_at, marks it consumed and opens a real run row, or (s26) a pretend one for an sf_run whose payload has pretend: true; that action''s expired run is pretend too. With p_pickup_id the run row carries result {pickup_id} until the helper''s result replaces it, and a repeat with the same id while that run (real or pretend) is open returns the same action and run. Returns {action_id, run_id, kind, project_code, payload, fingerprint, headline, chat_url}, or null. Called by switchboard-runner with the service role after it checks the pickup key (dataops_alfred-d4x; dataop_link-k7d; dataop_write-j5w; sb3_runner-r4q).';
 
 
 
@@ -10992,10 +11010,12 @@ declare
   v_page   text := p_request->>'page';
   v_code   text := p_request->>'project_code';
   v_sim    boolean;
+  v_pretend boolean;
   v_total  jsonb;
   v_id     uuid;
   v_pre_id uuid;
   v_pre    public.switchboard_run_requests;
+  v_undone public.switchboard_run_requests;
   v_why    text[] := '{}';
   v_copied jsonb := '[]'::jsonb;
   v_used   uuid;
@@ -11054,10 +11074,59 @@ begin
     raise exception 'switchboard_queue_run_request: simulation must be true or false.' using errcode = '23514';
   end if;
   v_sim := coalesce((p_request->>'simulation')::boolean, false);
+  -- s26: pretend, a simulation whose run the helper makes up (spec 15.2). Never without simulation. s26b: its shape is
+  -- {scenario: "<name>"}, a name only, never a path (the data runs thread's).
+  -- The case guards the key removal, which fails on a scalar; coalesce makes a missing scenario a refusal.
+  -- s27e: the lookup is parenthesised, since `-` binds tighter than `->`.
+  if p_request ? 'pretend'
+     and not coalesce(case when jsonb_typeof(p_request->'pretend') = 'object'
+                           then ((p_request->'pretend') - 'scenario'::text) = '{}'::jsonb
+                                and jsonb_typeof(p_request->'pretend'->'scenario') = 'string'
+                                and p_request->'pretend'->>'scenario' ~ '^[a-z0-9_-]{1,40}$'
+                           else false end, false) then
+    raise exception 'switchboard_queue_run_request: pretend must be {"scenario": "<name>"}, the name 1 to 40 lower-case letters, digits, hyphens or underscores, and nothing else. No link was issued.' using errcode = '23514';
+  end if;
+  v_pretend := p_request ? 'pretend';
+  if v_pretend and not v_sim then
+    raise exception 'switchboard_queue_run_request: pretend needs simulation true: a pretend run is a simulation whose data the helper makes up. No link was issued.' using errcode = '23514';
+  end if;
   v_total := case when v_page = 'undo' then coalesce(p_request->'counts'->'undo_up_to', p_request->'counts'->'expected')
                   else coalesce(p_request->'counts'->'total', p_request->'counts'->'expected') end;
   if v_page in ('dataop', 'undo') and (jsonb_typeof(v_total) is distinct from 'number' or v_total::text !~ '^[0-9]{1,9}$') then
     raise exception 'switchboard_queue_run_request: add counts.total (or expected; undo_up_to on an undo): the count the run writes.' using errcode = '23514';
+  end if;
+  -- s27 (O5): an undo may name the data operation it undoes, undo_of.request_id: the caller's own data operation
+  -- request in the same project, as pre_check_request_id is checked. Without it, undo_of queues as before.
+  if jsonb_typeof(p_request->'undo_of') = 'object' and p_request->'undo_of' ? 'request_id' then
+    if v_page <> 'undo' then
+      raise exception 'switchboard_queue_run_request: only an undo names the data operation it undoes (undo_of.request_id). No link was issued.' using errcode = '23514';
+    end if;
+    if jsonb_typeof(p_request->'undo_of'->'request_id') is distinct from 'string'
+       or p_request->'undo_of'->>'request_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+      raise exception 'switchboard_queue_run_request: undo_of.request_id must be the data operation request''s id (a lower-case uuid). No link was issued.' using errcode = '23514';
+    end if;
+    -- Same user: another user's request is not found.
+    select * into v_undone from public.switchboard_run_requests
+     where id = (p_request->'undo_of'->>'request_id')::uuid and user_id = v_user;
+    if not found then
+      raise exception 'switchboard_queue_run_request: no such data operation request (%) for undo_of.request_id. No link was issued.', p_request->'undo_of'->>'request_id'
+        using errcode = 'P0002';
+    end if;
+    if v_undone.base_page <> 'dataop' then
+      raise exception 'switchboard_queue_run_request: request % is not a data operation (it is a %); undo_of.request_id names the data operation this undoes. No link was issued.', v_undone.id, v_undone.base_page
+        using errcode = '23514';
+    end if;
+    if v_undone.project_code <> v_code then
+      raise exception 'switchboard_queue_run_request: the data operation is for project %, not %; an undo undoes a data operation in its own project. No link was issued.', v_undone.project_code, v_code
+        using errcode = '23514';
+    end if;
+    -- As 15.6a proposed and the data runs thread confirmed: simulation and pretend match, as for a pre-check.
+    if v_undone.simulation <> v_sim then
+      raise exception 'switchboard_queue_run_request: a simulation and a real request never undo each other; the undo and its data operation must both be simulations, or neither. No link was issued.' using errcode = '23514';
+    end if;
+    if v_undone.pretend <> v_pretend then
+      raise exception 'switchboard_queue_run_request: a pretend request and a plain simulation never undo each other; the undo and its data operation must both have pretend, or neither. No link was issued.' using errcode = '23514';
+    end if;
   end if;
 
   -- s12b: a data operation names the pre-check whose checks passed; its checks in use are copied with their times.
@@ -11085,6 +11154,11 @@ begin
     end if;
     if v_pre.simulation <> v_sim then
       raise exception 'switchboard_queue_run_request: a simulation and a real request never share checks. No link was issued.' using errcode = '23514';
+    end if;
+    -- s26: nor a pretend request and a plain simulation (pretend implies simulation, so both are simulations here).
+    -- s26b: both have pretend or neither does; the scenario names may differ.
+    if v_pre.pretend <> v_pretend then
+      raise exception 'switchboard_queue_run_request: a pretend request and a plain simulation never share checks; the pre-check and the data operation must both have pretend, or neither. No link was issued.' using errcode = '23514';
     end if;
     -- What the pre-check checked must be what the write does (the correction table: an edit that reruns a check
     -- changes something the pre-check checked; wording, side effects and what diagnosis allows may differ). Each side
@@ -11162,8 +11236,9 @@ begin
     end if;
   end if;
 
-  insert into public.switchboard_run_requests (user_id, project_code, page, base_page, simulation, request, evidence, total_count)
-  values (v_user, v_code, v_page, v_page, v_sim,
+  -- s26b: request.pretend stays in the stored request (and so in the fingerprint); the column says whether it is there.
+  insert into public.switchboard_run_requests (user_id, project_code, page, base_page, simulation, pretend, request, evidence, total_count)
+  values (v_user, v_code, v_page, v_page, v_sim, v_pretend,
           p_request - array['id', 'version', 'corrected_at', 'evidence', 'simulation'],
           v_copied,
           case when jsonb_typeof(v_total) = 'number' and v_total::text ~ '^[0-9]{1,9}$' then v_total::text::integer end)
@@ -11183,7 +11258,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_queue_run_request"("p_request" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_queue_run_request"("p_request" "jsonb") IS 'Switchboard 3: queue a run request (spec 4.1) for the signed-in caller. Refuses, before any link, a request without page, project_code, the problem label and sentence, side_effects, headline or steps; one with a sample, evidence, base_steps or base_phases (252: only a correction keeps those); a correction (use switchboard_correct_run_request); and a data operation or undo without its count. A simulation (Q7) is accepted and flagged. A data operation may name its pre-check (pre_check_request_id, s12b): the caller''s own Pre-check and Rehearsal request in the same project, on its pre-check page, with passed checks, whose object, operation, records or filter, count (the write''s count is the pre-check''s total, else expected; other counts equal), field, value, file, other operation details, sandbox filter, code commit and target org all match; its checks in use are copied with their original passed_at and copied_from, so the 24 hours count from the oldest; the pre-check''s sample row moves to the new request, expires_at unchanged (s12c). Refused, naming every mismatch, otherwise, and when that pre-check already backed an approved write. Returns {request_id, version, copied_checks, moved_sample}. Called by the queue_switchboard_run_request tool (B3).';
+COMMENT ON FUNCTION "public"."switchboard_queue_run_request"("p_request" "jsonb") IS 'Switchboard 3: queue a run request (spec 4.1) for the signed-in caller. Refuses, before any link, a request without page, project_code, the problem label and sentence, side_effects, headline or steps; one with a sample, evidence, base_steps or base_phases (252: only a correction keeps those); a correction (use switchboard_correct_run_request); and a data operation or undo without its count. A simulation (Q7) is accepted and flagged. Pretend (s26, s26b) is request.pretend = {scenario: "<name>"} (1 to 40 of a-z, 0-9, hyphen, underscore; nothing else), only with simulation; it is kept in the stored request and sets the pretend column. An undo may name the data operation it undoes (undo_of.request_id, s27): a lower-case uuid naming the caller''s own request whose base page is dataop, in the same project, agreeing on simulation and on pretend; refused on any other page, and otherwise refused naming what is wrong. A data operation may name its pre-check (pre_check_request_id, s12b): the caller''s own Pre-check and Rehearsal request in the same project, on its pre-check page, with passed checks, agreeing on simulation and on pretend (both or neither; scenario names may differ), whose object, operation, records or filter, count (the write''s count is the pre-check''s total, else expected; other counts equal), field, value, file, other operation details, sandbox filter, code commit and target org all match; its checks in use are copied with their original passed_at and copied_from, so the 24 hours count from the oldest; the pre-check''s sample row moves to the new request, expires_at unchanged (s12c). Refused, naming every mismatch, otherwise, and when that pre-check already backed an approved write. Returns {request_id, version, copied_checks, moved_sample}. Called by the queue_switchboard_run_request tool (B3).';
 
 
 
@@ -11257,7 +11332,8 @@ begin
   if v_action.id is null or v_action.kind <> 'sf_run' then
     raise exception 'switchboard_record_run_evidence: that run is not a run page''s (sf_run) run.' using errcode = '23514';
   end if;
-  if v_run.mode <> 'real' or v_run.finished_at is null then
+  -- s26: a pretend run is accepted here; it must be on a pretend request (checked below, once the request is read).
+  if v_run.mode not in ('real', 'pretend') or v_run.finished_at is null then
     raise exception 'switchboard_record_run_evidence: the run has not finished.' using errcode = '55000';
   end if;
   if coalesce(v_run.result->'ok', 'false'::jsonb) <> 'true'::jsonb or coalesce(v_run.result->'pass', 'false'::jsonb) <> 'true'::jsonb then
@@ -11283,8 +11359,12 @@ begin
   end if;
   select * into v_row from public.switchboard_run_requests where id = v_link.request_id for update;
   select * into v_link from public.switchboard_run_links where id = v_linkid for update;
-  if v_row.simulation then
+  if v_row.simulation and not v_row.pretend then
     raise exception 'switchboard_record_run_evidence: a simulation records no evidence.' using errcode = '55000';
+  end if;
+  -- s26: made-up evidence only on a pretend request, and a pretend request's evidence only from a pretend run.
+  if (v_run.mode = 'pretend') <> v_row.pretend then
+    raise exception 'switchboard_record_run_evidence: a pretend run records evidence only on a pretend request, and a pretend request only from a pretend run; no evidence is recorded.' using errcode = '55000';
   end if;
   if v_link.voided_at is not null or v_link.request_version <> v_row.version then
     raise exception 'switchboard_record_run_evidence: the link is voided or for an older version of the request; no evidence is recorded.' using errcode = '55000';
@@ -11371,7 +11451,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_record_run_evidence"("p_run_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_record_run_evidence"("p_run_id" "uuid") IS 'Switchboard 3: record the passed checks of a finished run page pre-check run (the link''s approval on a pre-check page, or its rerun, which a correction page''s Approve is) as its request''s evidence. Reads only that run''s own switchboard_runs row: result {ok: true, pass: true, checks: [{check, org, commit?}]}, passed_at = finished_at; nothing from the caller but the run id. Refused for a run not finished or not passed, a malformed check, a simulation, a voided link or one for an older version, a run finished before the last correction, and a data operation''s own run; recorded once per run. Older entries for the same checks are kept, voided. A correction returns to its base page once every check it voided is in use again (and every write check, for a data operation), and (252) gets its own steps and phases back from base_steps and base_phases, a multi-object run''s write_step entries following operation.steps. Returns {recorded, already, request_id, page}. Service role only: called by switchboard-runner after a helper''s result (Alex''s option A, s12).';
+COMMENT ON FUNCTION "public"."switchboard_record_run_evidence"("p_run_id" "uuid") IS 'Switchboard 3: record the passed checks of a finished run page pre-check run (the link''s approval on a pre-check page, or its rerun, which a correction page''s Approve is) as its request''s evidence. Reads only that run''s own switchboard_runs row: result {ok: true, pass: true, checks: [{check, org, commit?}]}, passed_at = finished_at; nothing from the caller but the run id. Refused for a run not finished or not passed, a malformed check, a plain simulation, a voided link or one for an older version, a run finished before the last correction, and a data operation''s own run; recorded once per run. A pretend run (s26) records only on a pretend request, and a pretend request only from a pretend run. Older entries for the same checks are kept, voided. A correction returns to its base page once every check it voided is in use again (and every write check, for a data operation), and (252) gets its own steps and phases back from base_steps and base_phases, a multi-object run''s write_step entries following operation.steps. Returns {recorded, already, request_id, page}. Service role only: called by switchboard-runner after a helper''s result (Alex''s option A, s12).';
 
 
 
@@ -11395,8 +11475,9 @@ begin
   if v_run.id is null then
     raise exception 'switchboard_record_run_outcome: no such run (%).', p_run_id using errcode = 'P0002';
   end if;
-  if v_run.mode <> 'real' then
-    raise exception 'switchboard_record_run_outcome: run % is a %, not a real run.', p_run_id, v_run.mode using errcode = '55000';
+  -- s26: a pretend run is accepted here; it must be on a pretend request (checked below, once the request is read).
+  if v_run.mode not in ('real', 'pretend') then
+    raise exception 'switchboard_record_run_outcome: run % is a %, not a real or pretend run.', p_run_id, v_run.mode using errcode = '55000';
   end if;
   if v_run.finished_at is null then
     raise exception 'switchboard_record_run_outcome: run % has not finished.', p_run_id using errcode = '55000';
@@ -11427,8 +11508,13 @@ begin
     raise exception 'switchboard_record_run_outcome: run % is a % run; only a data operation or undo has an outcome. Nothing was recorded.', p_run_id, v_row.base_page
       using errcode = '55000';
   end if;
-  if v_row.simulation then
+  if v_row.simulation and not v_row.pretend then
     raise exception 'switchboard_record_run_outcome: request % is a simulation; it has no outcome. Nothing was recorded.', v_row.id using errcode = '55000';
+  end if;
+  -- s26: a made-up outcome only on a pretend request, and a pretend request's outcome only from a pretend run.
+  if (v_run.mode = 'pretend') <> v_row.pretend then
+    raise exception 'switchboard_record_run_outcome: a pretend run''s outcome is kept only on a pretend request, and a pretend request''s only from a pretend run. Nothing was recorded.'
+      using errcode = '55000';
   end if;
   if v_row.outcome_run_id = p_run_id then
     return jsonb_build_object('recorded', false, 'already', true, 'request_id', v_row.id);
@@ -11453,7 +11539,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") IS 'Switchboard 3: keep a data operation''s or undo''s outcome on its request (outcome, outcome_run_id, outcome_recorded_at), since the run''s own result is pruned after 30 days. Accepted only for a finished real run of the sf_run action its link approved (link.action_id), on a request whose base page is dataop or undo, not a simulation; p_outcome is a JSON object of at most 64 KB, stored as given. A pre-check''s run, a rerun, an unfinished run and a run that never started are refused. Once per run: the same run again returns already true. A later run of the same link (a resend) replaces it; a run approved through another link of the request never does. Never touches evidence, the 24-hour clock or what can be approved. Returns {recorded, already, request_id}. Service role only: called by switchboard-runner after a write''s result.';
+COMMENT ON FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") IS 'Switchboard 3: keep a data operation''s or undo''s outcome on its request (outcome, outcome_run_id, outcome_recorded_at), since the run''s own result is pruned after 30 days. Accepted only for a finished real run of the sf_run action its link approved (link.action_id), on a request whose base page is dataop or undo, not a plain simulation; or (s26) a finished pretend run on a pretend request, whose outcome is made up; a pretend run on a real request and a real run on a pretend one are refused. p_outcome is a JSON object of at most 64 KB, stored as given. A pre-check''s run, a rerun, an unfinished run and a run that never started are refused. Once per run: the same run again returns already true. A later run of the same link (a resend) replaces it; a run approved through another link of the request never does. Never touches evidence, the 24-hour clock or what can be approved. Returns {recorded, already, request_id}. Service role only: called by switchboard-runner after a write''s result.';
 
 
 
@@ -11531,14 +11617,16 @@ begin
   end if;
 
   -- Agreed with the hub (4.5 point 2): the stale action fails in the same step that creates the resend; only if still
-  -- consumed and unpicked, so a pickup failing it at the same moment leaves one failed run.
+  -- consumed and unpicked, so a pickup failing it at the same moment leaves one failed run. s26: a pretend action's
+  -- expired run is mode pretend.
   if v_newest.status = 'consumed' then
     update public.switchboard_actions set status = 'failed'
      where id = v_newest.id and status = 'consumed' and picked_up_at is null;
     get diagnostics v_failed = row_count;
     if v_failed = 1 then
       insert into public.switchboard_runs (user_id, action_id, mode, summary, result, failure_reason, finished_at)
-      values (v_user, v_newest.id, 'real', 'expired: approved over 15 minutes ago and never picked up, never run',
+      values (v_user, v_newest.id, case when coalesce(v_newest.payload->'pretend' = 'true'::jsonb, false) then 'pretend' else 'real' end,
+              'expired: approved over 15 minutes ago and never picked up, never run',
               jsonb_build_object('ok', false, 'expired', true, 'reason', 'expired_not_picked_up'), 'expired_not_picked_up', now());
     end if;
   end if;
@@ -11559,7 +11647,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_retry_run"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_retry_run"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb") IS 'Switchboard 3: "Try again: resend this run". Only when the newest sf_run for the link never started (failed expired_not_picked_up, or consumed, never picked up, over 15 minutes old), the request is unchanged, the checks are valid (not for an undo), the desktop is ready and nothing else is live for the project (Q10). Fails a still-consumed stale action (consumed -> failed, with its run) in the same step, then inserts the same sf_run again with the same payload, so the same link id (4.5 points 2, 3). Returns {resent, link_id, action_id, replaces}. Called by switchboard-run-pages with Alex''s JWT.';
+COMMENT ON FUNCTION "public"."switchboard_retry_run"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb") IS 'Switchboard 3: "Try again: resend this run". Only when the newest sf_run for the link never started (failed expired_not_picked_up, or consumed, never picked up, over 15 minutes old), the request is unchanged, the checks are valid (not for an undo), the desktop is ready and nothing else is live for the project (Q10). Fails a still-consumed stale action (consumed -> failed, with its run, mode pretend for a pretend action, s26) in the same step, then inserts the same sf_run again with the same payload, pretend included, so the same link id (4.5 points 2, 3). Returns {resent, link_id, action_id, replaces}. Called by switchboard-run-pages with Alex''s JWT.';
 
 
 
@@ -11709,7 +11797,8 @@ begin
   if not found then
     raise exception 'switchboard_store_run_sample: no such request.' using errcode = 'P0002';
   end if;
-  if v_row.simulation then
+  -- s26: a pretend request's sample is made up by the helper, so it is held like a real one.
+  if v_row.simulation and not v_row.pretend then
     raise exception 'switchboard_store_run_sample: a simulation holds no client data.' using errcode = '23514';
   end if;
   if jsonb_typeof(p_sample) is distinct from 'object' or jsonb_typeof(p_sample->'records') is distinct from 'array'
@@ -11733,7 +11822,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_store_run_sample"("p_request_id" "uuid", "p_sample" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_store_run_sample"("p_request_id" "uuid", "p_sample" "jsonb") IS 'Switchboard 3: store (or replace) a request''s sample record from its pre-check, held until the checks'' valid-until and never more than 24 hours (part 7). Refused for a simulation and without valid evidence. Service role only: called by the data runs thread through plumbing.';
+COMMENT ON FUNCTION "public"."switchboard_store_run_sample"("p_request_id" "uuid", "p_sample" "jsonb") IS 'Switchboard 3: store (or replace) a request''s sample record from its pre-check, held until the checks'' valid-until and never more than 24 hours (part 7). Refused for a plain simulation and without valid evidence; a pretend request (s26) holds its made-up sample like a real one. Service role only: called by the data runs thread through plumbing.';
 
 
 
@@ -21379,7 +21468,7 @@ COMMENT ON COLUMN "public"."switchboard_actions"."chat_url" IS 'Address of the c
 
 
 
-COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...}, and a gitnewtree may name its "repo", an absolute path (spec 11.3). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], "folder" with from_sandbox, ...} (spec 11.5). sf_read: {"alias", "production", "level": "objects|metadata|ids|data", "object" (or "objects", 1 to 20, at metadata), "count" or "fields" with "limit", "filters"}, never SOQL text (spec 10). sf_dataop: {"alias", "repo", "plan", "stamp", "preflight_at", "object", "problem", "expected", "write", "rows", "rehearsal"?} (docs/technical-spec-dataops_alfred-d4x.md). sf_dataquery: {"alias", "org_type": "sandbox|production" (required on insert since dataquery_fixes-v3n), "repo", "run", "run_tag", "request_sha256"?, "queries": [{"step", "soql", "sha256", "file" | "label"}]} (docs/technical-spec-dataop_link-k7d.md). sf_run: {"link_id": "<run page link id, a uuid>", ...the data runs thread''s keys} (sb3_runner-r4q, for sb3_pages-h6v). Fixed after insert.';
+COMMENT ON COLUMN "public"."switchboard_actions"."payload" IS 'What will run. sql: {"sql": "..."}. git: {"command": "gitcom|gitsync|gitnewtree|gitpush", ...}, and a gitnewtree may name its "repo", an absolute path (spec 11.3). sf_check: {"check", "alias", "metadata_type" for metadata} (spec 11.4). sb_setup: {"command": "client start|org add", "client", "orgs": [...], "folder" with from_sandbox, ...} (spec 11.5). sf_read: {"alias", "production", "level": "objects|metadata|ids|data", "object" (or "objects", 1 to 20, at metadata), "count" or "fields" with "limit", "filters"}, never SOQL text (spec 10). sf_dataop: {"alias", "repo", "plan", "stamp", "preflight_at", "object", "problem", "expected", "write", "rows", "rehearsal"?} (docs/technical-spec-dataops_alfred-d4x.md). sf_dataquery: {"alias", "org_type": "sandbox|production" (required on insert since dataquery_fixes-v3n), "repo", "run", "run_tag", "request_sha256"?, "queries": [{"step", "soql", "sha256", "file" | "label"}]} (docs/technical-spec-dataop_link-k7d.md). sf_run: {"link_id": "<run page link id, a uuid>", "pretend": true on a pretend request''s run only (s26), ...the data runs thread''s keys} (sb3_runner-r4q, for sb3_pages-h6v). Fixed after insert.';
 
 
 
@@ -21749,11 +21838,14 @@ CREATE TABLE IF NOT EXISTS "public"."switchboard_run_requests" (
     "outcome" "jsonb",
     "outcome_run_id" "uuid",
     "outcome_recorded_at" timestamp with time zone,
+    "pretend" boolean DEFAULT false NOT NULL,
     CONSTRAINT "switchboard_run_requests_base_page_check" CHECK (("base_page" = ANY (ARRAY['precheck'::"text", 'dataop'::"text", 'undo'::"text", 'check'::"text"]))),
     CONSTRAINT "switchboard_run_requests_evidence_check" CHECK (("jsonb_typeof"("evidence") = 'array'::"text")),
     CONSTRAINT "switchboard_run_requests_outcome_check" CHECK ((("outcome" IS NULL) OR (("jsonb_typeof"("outcome") = 'object'::"text") AND ("octet_length"(("outcome")::"text") <= 65536)))),
     CONSTRAINT "switchboard_run_requests_outcome_whole" CHECK (((("outcome" IS NULL) = ("outcome_run_id" IS NULL)) AND (("outcome" IS NULL) = ("outcome_recorded_at" IS NULL)))),
     CONSTRAINT "switchboard_run_requests_page_check" CHECK (("page" = ANY (ARRAY['precheck'::"text", 'dataop'::"text", 'undo'::"text", 'correction'::"text", 'check'::"text"]))),
+    CONSTRAINT "switchboard_run_requests_pretend_request" CHECK (("pretend" = ("request" ? 'pretend'::"text"))),
+    CONSTRAINT "switchboard_run_requests_pretend_simulation" CHECK (((NOT "pretend") OR "simulation")),
     CONSTRAINT "switchboard_run_requests_project_code_check" CHECK (("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text")),
     CONSTRAINT "switchboard_run_requests_request_check" CHECK ((("jsonb_typeof"("request") = 'object'::"text") AND ("octet_length"(("request")::"text") <= 200000))),
     CONSTRAINT "switchboard_run_requests_total_count_check" CHECK ((("total_count" IS NULL) OR ("total_count" >= 0))),
@@ -21796,7 +21888,7 @@ COMMENT ON COLUMN "public"."switchboard_run_requests"."corrected_at" IS 'When th
 
 
 
-COMMENT ON COLUMN "public"."switchboard_run_requests"."simulation" IS 'Sample data (Q7): its link is spent, but no helper action or run is ever created.';
+COMMENT ON COLUMN "public"."switchboard_run_requests"."simulation" IS 'Sample data (Q7). A plain simulation''s link is spent, but no helper action or run is ever created. A pretend one (pretend true, s26) makes its action and a pretend run, with made-up data.';
 
 
 
@@ -21829,6 +21921,10 @@ COMMENT ON COLUMN "public"."switchboard_run_requests"."outcome_run_id" IS 'The s
 
 
 COMMENT ON COLUMN "public"."switchboard_run_requests"."outcome_recorded_at" IS 'When the outcome was recorded.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_run_requests"."pretend" IS 'Pretend (s26, spec 15.2): a simulation whose run goes to the desktop helper, which makes its data up from request.pretend = {scenario: "<name>"} and opens no org connection. True exactly when request.pretend is present, and only with simulation. Consume makes its sf_run, payload {link_id, pretend: true}, and its run is mode pretend; its made-up evidence, sample and outcome are recorded on this request only. Set by switchboard_queue_run_request; never changed by a correction.';
 
 
 
@@ -21916,7 +22012,7 @@ CASE
     WHEN ("jsonb_typeof"((("result" -> 'datawrite'::"text") -> 'query_counts'::"text")) = 'array'::"text") THEN ("jsonb_array_length"((("result" -> 'datawrite'::"text") -> 'query_counts'::"text")) >= 2)
     ELSE false
 END)) AND ((("result" -> 'pass'::"text") IS DISTINCT FROM 'true'::"jsonb") OR ((("result" -> 'ok'::"text") = 'true'::"jsonb") AND "jsonb_path_exists"("result", '$."datawrite"?((@."write"."changed" + @."write"."failed") + @."write"."excluded" == @."write"."expected" && @."check"."problems" == 0)'::"jsonpath", '{}'::"jsonb", true)))), false))),
-    CONSTRAINT "switchboard_runs_mode_valid" CHECK (("mode" = ANY (ARRAY['dry_run'::"text", 'real'::"text"])))
+    CONSTRAINT "switchboard_runs_mode_valid" CHECK (("mode" = ANY (ARRAY['dry_run'::"text", 'real'::"text", 'pretend'::"text"])))
 );
 
 
@@ -21939,7 +22035,7 @@ COMMENT ON COLUMN "public"."switchboard_runs"."action_id" IS 'The action this ra
 
 
 
-COMMENT ON COLUMN "public"."switchboard_runs"."mode" IS 'dry_run (rolled back) or real.';
+COMMENT ON COLUMN "public"."switchboard_runs"."mode" IS 'dry_run (rolled back), real, or pretend (s26: the run of a pretend request''s sf_run; its data is made up and it touches no org).';
 
 
 
