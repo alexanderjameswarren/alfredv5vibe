@@ -48,7 +48,30 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-s22 is on main. s23: the extension closes /approve/ tabs, so closing /run/ and /review/ and the wake on a /run/ click are plumbing's, after hand-over (spec 14.9). s23b: the real page's sentence is now "This line goes to the Claude chat by itself; you can close this tab." Next: its Checkpoint (gitpush Checkpoint, this worktree): src/switchboard/runs/look.js src/switchboard/runs/pageMarks.test.jsx docs/technical-spec-sb3_pages-h6v.md docs/progress-sb3_pages-h6v.md
+s27: O5 (undo_of.request_id) is in the pending migration's queue function, and test 8 is drafted (supabase/tests/sb3_pages-h6v/8_pretend_test.sql); s28 is planned in spec 15.2 with O17 and O2 (40m). s26b: pretend is request.pretend = {scenario: "<name>"}; nine functions replaced. s26: the pretend migration drafted (supabase/migrations/_pending_sb3_pages-h6v_pretend.sql, unnumbered, not queued). Steps (15.2): s27b to s27d number and queue, s28 pages, s28b deploys, s29 runner; item b is s30, d s31, e s32.
+
+s27c: drift check clean; supabase/migrations/256_pretend.sql written (the pending file, header renumbered) and queued as action a184baeb-e35e-401f-8d1f-65cef3b9ed09; the pending file deleted. db: claims held: db:table:switchboard_run_requests, db:table:switchboard_runs, db:fn: for the nine functions, db:migration:256. s27b: `allows` in the correction's c_words (O2); number 256.
+
+s27d: 256 is applied (run b3f3799f-bc5c-4378-b8ec-a5fce699c45d, CONFORMANT) and checked live; test 8 queued with --test as action f16ddab2-7097-4726-94fa-91a362ee1b48.
+
+s27e: 256 broke every queue call (line 148's `->` and `-` precedence); the fix is drafted (supabase/migrations/_pending_sb3_pages-h6v_fix_queue.sql) and numbered 257 (supabase/migrations/257_fix_queue.sql, db:migration:257 claimed).
+
+s27f: supabase/migrations/257_fix_queue.sql written (the pending file, header renumbered), the pending file deleted, and 257 queued as action eafded11-f30c-46a7-b2b2-54bc84535aa4.
+
+s27g: 257 applied (run d50075fa-7153-46f7-b15f-3f8a5c2f966b, smoke check passed, CONFORMANT) and checked live; the queue was down 17:45Z to about 17:58Z. Test 8 queued again as action 2e163d8b-273e-428e-9a2b-9d412fda4dd9.
+
+Before s27h: test 8 has run, and its run id is passed on.
+
+Run tag: sb3_pages-h6v-s27h-<4>, record test 8's result, then Checkpoint (spec 15.2)
+
+Scope of this step:
+- create: nothing
+- update: docs/technical-spec-sb3_pages-h6v.md, and supabase/tests/sb3_pages-h6v/8_pretend_test.sql only if a failing check is the test's own fault
+- delete: nothing
+- deploy: nothing
+- SQL: none (read test 8's run only)
+Estimated run: 3m
+(Once test 8 passes: ask Alex for gitpush Checkpoint of supabase/migrations/256_pretend.sql, supabase/migrations/257_fix_queue.sql, supabase/tests/sb3_pages-h6v/8_pretend_test.sql, docs/technical-spec-sb3_pages-h6v.md and docs/progress-sb3_pages-h6v.md, then check with claims.cmd status that the db: claims went. Then s28.)
 
 Then C2, once its gates are met (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall.
 
@@ -170,3 +193,16 @@ Estimated run: 20m
 | s23 | Find who closes /approve/ tabs, stop, report | 13:07:44 | 13:08:25 | 0m41s |
 | s23b | Wording, tests, spec, suites, build | 13:19:35 | 13:21:13 | 1m38s |
 | s23b | Cold review, fixes, report | 13:21:13 | 13:21:59 | 0m46s |
+| s25 | Research, section 15, claims check, cold review | 13:34:57 | 13:43:47 | 8m50s |
+| s25 | Revisions from the review, progress, report | 13:43:47 | 13:44:07 | 0m20s |
+| s26 | Read the ten definitions, check them against live (md5) | 07:19:12 | 07:21:52 | 2m40s |
+| s26 | Draft the migration (claim, write), diff each function | 07:21:52 | 07:31:18 | 9m26s |
+| s26 | Cold review, spec 15.2, progress | 07:31:18 | 07:37:10 | 5m52s |
+| s26b | Shape change, re-diff, four answers, cold review, spec | 07:42:56 | 07:49:19 | 6m23s |
+| s27 | O5 in the queue, re-diff, test 8, s28 plan, cold review, spec | 09:22:00 | 09:31:13 | 9m13s |
+| s27b | allows in c_words, re-diff, number 256, spec | 09:33:03 | 09:34:00 | 0m57s |
+| s27c | Claims, drift check, write 256, delete pending, spec, queue | 09:35:49 | 09:42:36 | 6m47s |
+| s27d | Live check of 256, queue test 8, spec | 09:45:32 | 09:46:05 | 0m33s |
+| s27e | Find 256's break, reproduce, draft fix, number 257, cold review, spec | 09:48:40 | 09:52:40 | 4m00s |
+| s27f | Claims, drift check, write 257, delete pending, spec, queue | 09:54:50 | 09:56:27 | 1m37s |
+| s27g | Check 257's run and live body, queue test 8, spec | 09:58:38 | 09:59:08 | 0m30s |
