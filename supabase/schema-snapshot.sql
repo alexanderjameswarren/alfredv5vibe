@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-27 07:38, through migration 258 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-27 12:57, through migration 259 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -9455,6 +9455,10 @@ declare
   v_failed  integer;
   v_as_rerun boolean;
   v_other   uuid;
+  v_tp      public.switchboard_run_requests;
+  v_sum     bigint;
+  v_ids     uuid[];
+  v_sbok    boolean;
   -- The checks a data operation's write needs, each passed and not voided (the pre-check and rehearsal, spec 3.2 a).
   c_write_checks constant text[] := array['count', 'login', 'automation', 'backup', 'rehearsal'];
 begin
@@ -9553,9 +9557,35 @@ begin
       raise exception 'switchboard_consume_run_link: the undo deadline has passed (%). No undo is offered.', coalesce(v_row.request->'undo_of'->>'deadline_reason', 'no deadline')
         using errcode = '55000';
     end if;
-    if v_row.page in ('dataop', 'undo') and p_count is distinct from v_row.total_count then
+    if v_row.page in ('dataop', 'undo', 'delete_test_data') and p_count is distinct from v_row.total_count then
       raise exception 'switchboard_consume_run_link: the count approved (%) is not the request''s count (%). Nothing was approved.', p_count, v_row.total_count
         using errcode = '55000';
+    end if;
+    -- s35 (O24, 17.2): a delete page approves only while its one org is a sandbox target and the pre-check's kept sets
+    -- not yet deleted are exactly the ones it was queued for, their sum its count. The pre-check is locked after this
+    -- request and its link, as the outcome locks it; nothing locks a pre-check and then a delete page.
+    if v_row.page = 'delete_test_data' then
+      if (case when jsonb_typeof(v_row.request->'orgs') = 'array' then jsonb_array_length(v_row.request->'orgs') else 0 end) <> 1
+         or (v_row.request->'orgs'->0->>'org_type') is distinct from 'sandbox'
+         or (v_row.request->'orgs'->0->>'role') is distinct from 'target' then
+        raise exception 'switchboard_consume_run_link: a delete page runs on one sandbox only, and this one names another org. Nothing was approved.' using errcode = '55000';
+      end if;
+      select * into v_tp from public.switchboard_run_requests
+       where id = (v_row.request->'test_data_of'->>'request_id')::uuid and user_id = v_user for update;
+      select coalesce(sum((e->>'count')::bigint), 0)::bigint,
+             coalesce(array_agg((e->>'run_id')::uuid order by (e->>'run_id')::uuid), '{}'::uuid[]),
+             coalesce(bool_and(coalesce((e->>'sandbox') = (v_row.request->'orgs'->0->>'alias'), false)), true)
+        into v_sum, v_ids, v_sbok
+        from jsonb_array_elements(case when jsonb_typeof(v_tp.kept_test_records) = 'array' then v_tp.kept_test_records else '[]'::jsonb end) e
+       where (e->>'deleted_by') is null;
+      if v_ids is distinct from (select coalesce(array_agg(x order by x), '{}'::uuid[]) from unnest(v_row.test_run_ids) x)
+         or v_sum is distinct from v_row.total_count::bigint then
+        raise exception 'switchboard_consume_run_link: the kept TEST records changed since this delete page was queued (% now, % on the page); queue a new delete page. Nothing was approved.', v_sum, v_row.total_count
+          using errcode = '55000';
+      end if;
+      if not v_sbok then
+        raise exception 'switchboard_consume_run_link: the TEST records were kept in another sandbox than this page''s org. Nothing was approved.' using errcode = '55000';
+      end if;
     end if;
     -- Code: the data operation runs only the commit that was rehearsed and reviewed (part 5 "Code changed").
     -- The rehearsal is proved by its evidence carrying the commit, never by the chat's code.rehearsed_at.
@@ -9625,6 +9655,22 @@ begin
         using errcode = '55000';
     end if;
   end if;
+  -- s35 (O24): a second delete page for the same pre-check waits while another is approved and unfinished. A backstop:
+  -- both are in the pre-check's project, so the project lock above refuses it first.
+  if p_mode = 'approve' and v_row.page = 'delete_test_data' then
+    select r.id into v_other
+      from public.switchboard_run_requests r
+      join public.switchboard_run_links l on l.request_id = r.id
+      join public.switchboard_actions a on a.id = l.action_id
+     where r.user_id = v_user and r.id <> v_row.id and r.base_page = 'delete_test_data'
+       and (r.request->'test_data_of'->>'request_id') = (v_row.request->'test_data_of'->>'request_id')
+       and a.status = 'consumed' and (a.picked_up_at is not null or a.created_at >= now() - interval '15 minutes')
+     limit 1;
+    if v_other is not null then
+      raise exception 'switchboard_consume_run_link: another delete page (request %) is deleting these TEST records now. Nothing was approved.', v_other
+        using errcode = '55000';
+    end if;
+  end if;
 
   -- s26: a pretend request goes on below, as a real one does: its sf_run carries pretend, and the helper makes its data up.
   if v_row.simulation and not v_row.pretend then
@@ -9681,7 +9727,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_consume_run_link"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb", "p_count" integer, "p_mode" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_consume_run_link"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb", "p_count" integer, "p_mode" "text") IS 'Switchboard 3: Approve (p_mode approve) or "Run the pre-check and rehearsal again" (rerun) on a run page. Approves only when the link is the caller''s, not voided and (approve) unused, no other link of the same request version was used, the request is at the link''s version with the fingerprint the page showed, no check is dated in the future, the checks are within 24 hours of the oldest in use, copied ones included (not for an undo; a delete''s undo before its deadline), a data operation has every pre-check check (count, login, automation, backup, rehearsal) passed and in use, p_count equals the request''s count (dataop, undo), the code (if any) was rehearsed (rehearsal evidence carrying its commit) and reviewed at that commit, p_desktop says running with panel and helper up, no link or run is live for the project (Q10, under the same advisory lock as switchboard_issue_link), and (s12b) the pre-check whose checks it copied backs no other approved write. Locks the request, then the link. Rerun only on expired checks, not while the last rerun is approved and unfinished, and on a used link only when its run never started (s6b), which fails the stale action and frees the link. A correction page''s Approve (s12) is recorded like a rerun (rerun_at, rerun_action_id; refused while one is approved and unfinished), so the link stays unused and approves the write once the reruns pass. A plain simulation spends the link and creates nothing else (Q7). Otherwise inserts an sf_run with payload {link_id}, plus pretend: true for a pretend request (s26), which the guard stores consumed (248); a pretend action''s expired run is mode pretend. Returns {consumed, simulated, link_id, mode, action_id, as_rerun}, and pretend when an action was made (simulated is true for a pretend request). Called by switchboard-run-pages with Alex''s JWT.';
+COMMENT ON FUNCTION "public"."switchboard_consume_run_link"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb", "p_count" integer, "p_mode" "text") IS 'Switchboard 3: Approve (p_mode approve) or "Run the pre-check and rehearsal again" (rerun) on a run page. Approves only when the link is the caller''s, not voided and (approve) unused, no other link of the same request version was used, the request is at the link''s version with the fingerprint the page showed, no check is dated in the future, the checks are within 24 hours of the oldest in use, copied ones included (not for an undo; a delete''s undo before its deadline), a data operation has every pre-check check (count, login, automation, backup, rehearsal) passed and in use, p_count equals the request''s count (dataop, undo, and s35 a delete page), the code (if any) was rehearsed (rehearsal evidence carrying its commit) and reviewed at that commit, p_desktop says running with panel and helper up, no link or run is live for the project (Q10, under the same advisory lock as switchboard_issue_link), (s12b) the pre-check whose checks it copied backs no other approved write, and (s35, O24) a delete page''s one org is a sandbox target, its pre-check''s kept sets not yet deleted are exactly test_run_ids with their sum its count, kept in that sandbox, and no other delete page for that pre-check is approved and unfinished. Locks the request, then the link, then (a delete page) its pre-check. Rerun only on expired checks, not while the last rerun is approved and unfinished, and on a used link only when its run never started (s6b), which fails the stale action and frees the link. A correction page''s Approve (s12) is recorded like a rerun (rerun_at, rerun_action_id; refused while one is approved and unfinished), so the link stays unused and approves the write once the reruns pass. A plain simulation spends the link and creates nothing else (Q7). Otherwise inserts an sf_run with payload {link_id}, plus pretend: true for a pretend request (s26), which the guard stores consumed (248); a pretend action''s expired run is mode pretend. Returns {consumed, simulated, link_id, mode, action_id, as_rerun}, and pretend when an action was made (simulated is true for a pretend request). Called by switchboard-run-pages with Alex''s JWT.';
 
 
 
@@ -9702,6 +9748,7 @@ declare
   v_base    jsonb;
   v_wrote   uuid;
   v_keep    jsonb;
+  v_codes   text[];
   -- Words only: what every kind may change (250's wording rule), what the database sets, (252) the base steps and
   -- phases the database keeps, (s26b) pretend, which the database keeps as stored (v_keep below), and (s27b, O2) the
   -- structured allows, which changes as diagnosis_allows does.
@@ -9727,7 +9774,8 @@ begin
   -- write that never started (failed as expired_not_picked_up, or consumed, unpicked and past 15 minutes) leaves the
   -- request correctable. Consume locks the request first, so an Approve and a correction never cross; a pickup locks
   -- only its action, so every approved action of the request is locked first and read after any pickup commits.
-  if v_row.base_page in ('dataop', 'undo') then
+  -- s35: a delete page writes too.
+  if v_row.base_page in ('dataop', 'undo', 'delete_test_data') then
     perform 1 from public.switchboard_actions a
      where a.id in (select l.action_id from public.switchboard_run_links l where l.request_id = v_row.id and l.action_id is not null)
        for update;
@@ -9769,6 +9817,13 @@ begin
   -- check has nothing to rehearse; so a field or value edit, which would move it off that operation, is refused.
   if v_row.base_page = 'check' and p_edit_kind in ('field', 'value') then
     raise exception 'switchboard_correct_run_request: a check page''s operation must stay the interrupted data operation''s, so a % edit is refused; queue a new check instead. No link was issued.', p_edit_kind
+      using errcode = '23514';
+  end if;
+  -- s35 (O24): a delete page's count, sets and sandbox are the database's, taken when it was queued, and it reruns no
+  -- check; so only its wording (and what diagnosis allows) changes here. test_data_of never changes: the diff below
+  -- refuses it, as every key outside c_words.
+  if v_row.base_page = 'delete_test_data' and p_edit_kind not in ('wording', 'allows') then
+    raise exception 'switchboard_correct_run_request: a delete page changes only its wording, so a % edit is refused; queue a new delete page instead. No link was issued.', p_edit_kind
       using errcode = '23514';
   end if;
   if jsonb_typeof(p_request) is distinct from 'object' or jsonb_typeof(p_changed) is distinct from 'object'
@@ -9884,6 +9939,20 @@ begin
   if cardinality(v_reruns) = 0 and (p_request->'problem'->>'label') is distinct from (v_row.request->'problem'->>'label') then
     raise exception 'switchboard_correct_run_request: the problem label never changes in a wording edit.' using errcode = '23514';
   end if;
+  -- s35 (O18, 17.1): the steps are the run's own (c_run), so a correction that reruns the rehearsal could swap
+  -- keep_test back to delete_test; the rule is checked again on the corrected steps. keep_test_records itself never
+  -- changes here: it is outside c_words and c_run, so the diff above refuses it. ->> gives null for a step that is
+  -- not an object.
+  select array_remove(coalesce(array_agg(s->>'code'), '{}'), null) into v_codes
+    from jsonb_array_elements(case when jsonb_typeof(p_request->'steps') = 'array' then p_request->'steps' else '[]'::jsonb end) s;
+  if coalesce((v_row.request->'keep_test_records') = 'true'::jsonb, false) and 'delete_test' = any(v_codes) then
+    raise exception 'switchboard_correct_run_request: this pre-check keeps its TEST records, so its rehearsal lists keep_test, not delete_test. No link was issued.'
+      using errcode = '23514';
+  end if;
+  if not coalesce((v_row.request->'keep_test_records') = 'true'::jsonb, false) and 'keep_test' = any(v_codes) then
+    raise exception 'switchboard_correct_run_request: keep_test needs keep_test_records true, which this request does not have; its rehearsal lists delete_test. No link was issued.'
+      using errcode = '23514';
+  end if;
   v_total := case when v_row.page = 'undo' then coalesce(p_request->'counts'->'undo_up_to', p_request->'counts'->'expected')
                   else coalesce(p_request->'counts'->'total', p_request->'counts'->'expected') end;
 
@@ -9954,7 +10023,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") IS 'Switchboard 3: correct a run request (part 5 "Corrected"). Refuses (254, Alex s17b) every correction of a data operation or undo, wording included, once an approved write on it has started or may still start (its link''s approved action was picked up, has a run other than expired_not_picked_up, or is consumed within its 15 minutes): a further change is a new request through diagnosis; a write that never started leaves it correctable, and a pre-check is unaffected. Refuses an object or operation edit (a new request through diagnosis), (s12c) any change to pre_check_request_id, and (s31b) a field or value edit on a check page, whose operation stays the interrupted data operation''s (queue a new check instead). Each kind changes only its own row of the correction table, besides the wording (headline, side effects, problem, what diagnosis allows: diagnosis_allows and, s27b, the structured allows) and, for a kind that reruns a check, the run''s own steps, phases, details, kept, run_tag and still_valid: value operation.value; file operation.file; field operation.field and undo; records selected_by (not its kind or sandbox filter), counts, operation.steps and undo; records_filter all of selected_by, counts, operation.steps and undo; sandbox_filter selected_by.sandbox_text and not_rehearsed; code the code. A kind that reruns the rehearsal may also add one role-rehearsal sandbox org to a request with none (252). Any other change is refused, naming the field (a key set to null counts as left out). A correction never changes simulation or pretend: simulation lives in its column, and (s26b) the stored request.pretend is kept as it was, whatever the corrected request sends. A wording or allowance edit voids nothing and keeps the version and the page. Any other edit raises the version by one, makes it a correction page, keeps the request''s own steps and phases as base_steps and base_phases (252; restored by switchboard_record_run_evidence on return), voids the evidence its kind reruns (field: rehearsal, login, backup, sample; Alex s8b) and the request''s live links, and for a code edit marks older reviews superseded, in one transaction. Returns {request_id, version, voided_checks, voided_links}.';
+COMMENT ON FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") IS 'Switchboard 3: correct a run request (part 5 "Corrected"). Refuses (254, Alex s17b) every correction of a data operation, undo or (s35) delete page, wording included, once an approved write on it has started or may still start (its link''s approved action was picked up, has a run other than expired_not_picked_up, or is consumed within its 15 minutes): a further change is a new request through diagnosis; a write that never started leaves it correctable, and a pre-check is unaffected. Refuses an object or operation edit (a new request through diagnosis), (s12c) any change to pre_check_request_id, (s31b) a field or value edit on a check page, whose operation stays the interrupted data operation''s (queue a new check instead), (s35, O24) any edit but wording and allows on a delete page (queue a new delete page), and (s35, O18) corrected steps listing delete_test on a request that keeps its TEST records, or keep_test on one that does not. Each kind changes only its own row of the correction table, besides the wording (headline, side effects, problem, what diagnosis allows: diagnosis_allows and, s27b, the structured allows) and, for a kind that reruns a check, the run''s own steps, phases, details, kept, run_tag and still_valid: value operation.value; file operation.file; field operation.field and undo; records selected_by (not its kind or sandbox filter), counts, operation.steps and undo; records_filter all of selected_by, counts, operation.steps and undo; sandbox_filter selected_by.sandbox_text and not_rehearsed; code the code. A kind that reruns the rehearsal may also add one role-rehearsal sandbox org to a request with none (252). Any other change is refused, naming the field (a key set to null counts as left out), so keep_test_records and test_data_of never change. A correction never changes simulation or pretend: simulation lives in its column, and (s26b) the stored request.pretend is kept as it was, whatever the corrected request sends. A wording or allowance edit voids nothing and keeps the version and the page. Any other edit raises the version by one, makes it a correction page, keeps the request''s own steps and phases as base_steps and base_phases (252; restored by switchboard_record_run_evidence on return), voids the evidence its kind reruns (field: rehearsal, login, backup, sample; Alex s8b) and the request''s live links, and for a code edit marks older reviews superseded, in one transaction. Returns {request_id, version, voided_checks, voided_links}.';
 
 
 
@@ -11035,6 +11104,13 @@ declare
   v_cnt_p  jsonb;
   v_moved  integer := 0;
   v_key    text;
+  v_codes  text[];
+  v_tp     public.switchboard_run_requests;
+  v_sum    bigint;
+  v_n_open integer;
+  v_ids    uuid[];
+  v_sbok   boolean;
+  v_other  uuid;
 begin
   if v_user is null then
     raise exception 'switchboard_queue_run_request: no signed-in user.' using errcode = '28000';
@@ -11042,8 +11118,8 @@ begin
   if jsonb_typeof(p_request) is distinct from 'object' then
     raise exception 'switchboard_queue_run_request: the request must be a JSON object. No link was issued.' using errcode = '23514';
   end if;
-  if v_page is null or v_page not in ('precheck', 'dataop', 'undo', 'correction', 'check') then
-    raise exception 'switchboard_queue_run_request: add page: one of precheck, dataop, undo, correction, check.' using errcode = '23514';
+  if v_page is null or v_page not in ('precheck', 'dataop', 'undo', 'correction', 'check', 'delete_test_data') then
+    raise exception 'switchboard_queue_run_request: add page: one of precheck, dataop, undo, correction, check, delete_test_data.' using errcode = '23514';
   end if;
   if v_page = 'correction' then
     raise exception 'switchboard_queue_run_request: a correction is made with switchboard_correct_run_request on the request it corrects.' using errcode = '23514';
@@ -11098,9 +11174,40 @@ begin
   if v_pretend and not v_sim then
     raise exception 'switchboard_queue_run_request: pretend needs simulation true: a pretend run is a simulation whose data the helper makes up. No link was issued.' using errcode = '23514';
   end if;
+  -- s35 (O18, 17.1): keep_test_records, the value true only, on a pre-check with a rehearsal sandbox; its rehearsal
+  -- ends with keep_test, never delete_test. keep_test without it is refused on any page. The step codes are read
+  -- with ->>, which gives null for a step that is not an object, so a malformed step never errors here.
+  -- (cold review) Nulls are removed, so a malformed step can't make the tests below null and skip a refusal.
+  select array_remove(coalesce(array_agg(s->>'code'), '{}'), null) into v_codes from jsonb_array_elements(p_request->'steps') s;
+  if p_request ? 'keep_test_records' then
+    if v_page <> 'precheck' then
+      raise exception 'switchboard_queue_run_request: only a pre-check keeps its TEST records (keep_test_records). No link was issued.' using errcode = '23514';
+    end if;
+    if (p_request->'keep_test_records') is distinct from 'true'::jsonb then
+      raise exception 'switchboard_queue_run_request: keep_test_records is true, or left out. No link was issued.' using errcode = '23514';
+    end if;
+    if not exists (select 1 from jsonb_array_elements(case when jsonb_typeof(p_request->'orgs') = 'array' then p_request->'orgs' else '[]'::jsonb end) o
+                    where jsonb_typeof(o) = 'object' and (o->>'role') = 'rehearsal' and (o->>'org_type') = 'sandbox'
+                      and coalesce(btrim(o->>'alias'), '') <> ''
+                      -- (cold review) Never one of the request's other orgs under another name, as 252's rule for a
+                      -- correction: a delete page later trusts this alias as a sandbox.
+                      and not exists (select 1 from jsonb_array_elements(p_request->'orgs') q
+                                       where q is distinct from o and (q->>'alias') = (o->>'alias'))) then
+      raise exception 'switchboard_queue_run_request: keep_test_records needs the rehearsal sandbox (an org with role rehearsal, org_type sandbox): the TEST records are kept there. No link was issued.' using errcode = '23514';
+    end if;
+    if 'delete_test' = any(v_codes) or not ('keep_test' = any(v_codes)) then
+      raise exception 'switchboard_queue_run_request: a pre-check that keeps its TEST records lists keep_test, not delete_test. No link was issued.' using errcode = '23514';
+    end if;
+  elsif 'keep_test' = any(v_codes) then
+    raise exception 'switchboard_queue_run_request: keep_test needs keep_test_records true; otherwise the rehearsal lists delete_test. No link was issued.' using errcode = '23514';
+  end if;
+  -- s35 (O24): a delete page counts only what the pre-check kept (counts.expected); queue's total reads total first.
+  if v_page = 'delete_test_data' and coalesce((p_request->'counts') ? 'total', false) then
+    raise exception 'switchboard_queue_run_request: leave counts.total out: a delete page counts only what the pre-check kept (counts.expected). No link was issued.' using errcode = '23514';
+  end if;
   v_total := case when v_page = 'undo' then coalesce(p_request->'counts'->'undo_up_to', p_request->'counts'->'expected')
                   else coalesce(p_request->'counts'->'total', p_request->'counts'->'expected') end;
-  if v_page in ('dataop', 'undo') and (jsonb_typeof(v_total) is distinct from 'number' or v_total::text !~ '^[0-9]{1,9}$') then
+  if v_page in ('dataop', 'undo', 'delete_test_data') and (jsonb_typeof(v_total) is distinct from 'number' or v_total::text !~ '^[0-9]{1,9}$') then
     raise exception 'switchboard_queue_run_request: add counts.total (or expected; undo_up_to on an undo): the count the run writes.' using errcode = '23514';
   end if;
   -- s27 (O5): an undo may name the data operation it undoes, undo_of.request_id: the caller's own data operation
@@ -11187,6 +11294,88 @@ begin
     end if;
     if cardinality(v_diff) > 0 then
       raise exception 'switchboard_queue_run_request: the check''s operation is not the interrupted data operation''s (%). No link was issued.', array_to_string(v_diff, '; ')
+        using errcode = '23514';
+    end if;
+  end if;
+  -- s35 (O24, 17.2, 17.7): a delete page names the pre-check whose kept TEST records it deletes, test_data_of
+  -- {request_id, run_tag}: the caller's own pre-check in the same project, agreeing on simulation and pretend, as
+  -- undo_of.request_id is checked. Its count and sandbox are the database's, never the chat's: counts.expected must be
+  -- every kept set not yet deleted, summed, and each set's sandbox its one org, a sandbox with role target. The run
+  -- ids of those sets are kept in test_run_ids. A second delete page for the same pre-check waits while one runs.
+  if p_request ? 'test_data_of' and v_page <> 'delete_test_data' then
+    raise exception 'switchboard_queue_run_request: only a delete page names the pre-check whose TEST records it deletes (test_data_of). No link was issued.' using errcode = '23514';
+  end if;
+  if v_page = 'delete_test_data' then
+    if (case when jsonb_typeof(p_request->'orgs') = 'array' then jsonb_array_length(p_request->'orgs') else 0 end) <> 1
+       or jsonb_typeof(p_request->'orgs'->0) is distinct from 'object'
+       or (p_request->'orgs'->0->>'org_type') is distinct from 'sandbox'
+       or (p_request->'orgs'->0->>'role') is distinct from 'target'
+       or coalesce(btrim(p_request->'orgs'->0->>'alias'), '') = '' then
+      raise exception 'switchboard_queue_run_request: a delete page runs on one sandbox only: one org, org_type sandbox, role target. No link was issued.' using errcode = '23514';
+    end if;
+    if (p_request->'operation'->>'kind') is distinct from 'delete' then
+      raise exception 'switchboard_queue_run_request: a delete page''s operation kind is delete. No link was issued.' using errcode = '23514';
+    end if;
+    if jsonb_typeof(p_request->'test_data_of') is distinct from 'object'
+       or jsonb_typeof(p_request->'test_data_of'->'request_id') is distinct from 'string'
+       or (p_request->'test_data_of'->>'request_id') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       or jsonb_typeof(p_request->'test_data_of'->'run_tag') is distinct from 'string'
+       or coalesce(btrim(p_request->'test_data_of'->>'run_tag'), '') = '' then
+      raise exception 'switchboard_queue_run_request: add test_data_of: {request_id, run_tag}, the pre-check whose kept TEST records this deletes, its id a lower-case uuid. No link was issued.' using errcode = '23514';
+    end if;
+    -- Same user: another user's request is not found. Locked, so no kept set is added while this one is counted.
+    select * into v_tp from public.switchboard_run_requests
+     where id = (p_request->'test_data_of'->>'request_id')::uuid and user_id = v_user for update;
+    if not found then
+      raise exception 'switchboard_queue_run_request: no such pre-check request (%) for test_data_of.request_id. No link was issued.', p_request->'test_data_of'->>'request_id'
+        using errcode = 'P0002';
+    end if;
+    if v_tp.base_page <> 'precheck' then
+      raise exception 'switchboard_queue_run_request: request % is not a pre-check (it is a %); test_data_of.request_id names the pre-check whose TEST records this deletes. No link was issued.', v_tp.id, v_tp.base_page
+        using errcode = '23514';
+    end if;
+    if v_tp.project_code <> v_code then
+      raise exception 'switchboard_queue_run_request: the pre-check is for project %, not %; a delete page cleans up after a pre-check in its own project. No link was issued.', v_tp.project_code, v_code
+        using errcode = '23514';
+    end if;
+    if v_tp.simulation <> v_sim then
+      raise exception 'switchboard_queue_run_request: a simulation and a real request never clean up after each other; the delete page and its pre-check must both be simulations, or neither. No link was issued.' using errcode = '23514';
+    end if;
+    if v_tp.pretend <> v_pretend then
+      raise exception 'switchboard_queue_run_request: a pretend request and a plain simulation never clean up after each other; the delete page and its pre-check must both have pretend, or neither. No link was issued.' using errcode = '23514';
+    end if;
+    if (p_request->'test_data_of'->>'run_tag') is distinct from (v_tp.request->>'run_tag') then
+      raise exception 'switchboard_queue_run_request: test_data_of.run_tag (%) is not the pre-check''s run tag (%). No link was issued.', p_request->'test_data_of'->>'run_tag', coalesce(v_tp.request->>'run_tag', 'none')
+        using errcode = '23514';
+    end if;
+    -- 17.7 (answer 3): every kept set not yet deleted, whatever run tag it was kept under.
+    select count(*), coalesce(sum((e->>'count')::bigint), 0)::bigint,
+           coalesce(array_agg((e->>'run_id')::uuid order by (e->>'run_id')::uuid), '{}'::uuid[]),
+           coalesce(bool_and(coalesce((e->>'sandbox') = (p_request->'orgs'->0->>'alias'), false)), true)
+      into v_n_open, v_sum, v_ids, v_sbok
+      from jsonb_array_elements(case when jsonb_typeof(v_tp.kept_test_records) = 'array' then v_tp.kept_test_records else '[]'::jsonb end) e
+     where (e->>'deleted_by') is null;
+    if v_n_open = 0 then
+      raise exception 'switchboard_queue_run_request: the pre-check has no kept TEST records left to delete. No link was issued.' using errcode = '23514';
+    end if;
+    if v_total::text::bigint <> v_sum then
+      raise exception 'switchboard_queue_run_request: counts.expected (%) is not the TEST records the pre-check kept and has not deleted (%, in % sets). No link was issued.', v_total, v_sum, v_n_open
+        using errcode = '23514';
+    end if;
+    if not v_sbok then
+      raise exception 'switchboard_queue_run_request: the TEST records were kept in another sandbox than this page''s org (%). No link was issued.', p_request->'orgs'->0->>'alias'
+        using errcode = '23514';
+    end if;
+    select r.id into v_other
+      from public.switchboard_run_requests r
+      join public.switchboard_run_links l on l.request_id = r.id
+      join public.switchboard_actions a on a.id = l.action_id
+     where r.user_id = v_user and r.base_page = 'delete_test_data'
+       and (r.request->'test_data_of'->>'request_id') = v_tp.id::text
+       and a.status = 'consumed' and (a.picked_up_at is not null or a.created_at >= now() - interval '15 minutes')
+     limit 1;
+    if v_other is not null then
+      raise exception 'switchboard_queue_run_request: another delete page (request %) is deleting this pre-check''s TEST records now; queue again once it ends. No link was issued.', v_other
         using errcode = '23514';
     end if;
   end if;
@@ -11305,11 +11494,13 @@ begin
   end if;
 
   -- s26b: request.pretend stays in the stored request (and so in the fingerprint); the column says whether it is there.
-  insert into public.switchboard_run_requests (user_id, project_code, page, base_page, simulation, pretend, request, evidence, total_count)
+  -- s35: a delete page keeps the run ids it deletes (test_run_ids), taken above from the database.
+  insert into public.switchboard_run_requests (user_id, project_code, page, base_page, simulation, pretend, request, evidence, total_count, test_run_ids)
   values (v_user, v_code, v_page, v_page, v_sim, v_pretend,
           p_request - array['id', 'version', 'corrected_at', 'evidence', 'simulation'],
           v_copied,
-          case when jsonb_typeof(v_total) = 'number' and v_total::text ~ '^[0-9]{1,9}$' then v_total::text::integer end)
+          case when jsonb_typeof(v_total) = 'number' and v_total::text ~ '^[0-9]{1,9}$' then v_total::text::integer end,
+          case when v_page = 'delete_test_data' then v_ids end)
   returning id into v_id;
   -- s12c: the sample moves with the checks (same expires_at), so the write's page shows it and the runner drops it
   -- from the write's own request at its final status. No sample on the pre-check: nothing moves.
@@ -11326,7 +11517,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_queue_run_request"("p_request" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_queue_run_request"("p_request" "jsonb") IS 'Switchboard 3: queue a run request (spec 4.1) for the signed-in caller. Refuses, before any link, a request without page, project_code, the problem label and sentence, side_effects, headline or steps; one with a sample, evidence, base_steps or base_phases (252: only a correction keeps those); a correction (use switchboard_correct_run_request); and a data operation or undo without its count. A simulation (Q7) is accepted and flagged. Pretend (s26, s26b) is request.pretend = {scenario: "<name>"} (1 to 40 of a-z, 0-9, hyphen, underscore; nothing else), only with simulation; it is kept in the stored request and sets the pretend column. An undo may name the data operation it undoes (undo_of.request_id, s27): a lower-case uuid naming the caller''s own request whose base page is dataop, in the same project, agreeing on simulation and on pretend; refused on any other page, and otherwise refused naming what is wrong. A check may name the data operation that was interrupted (interrupted.request_id, s31): checked as undo_of.request_id is, and the check''s operation object and kind, and field when the data operation has one, must be that data operation''s; refused on any other page, and with no operation. A data operation may name its pre-check (pre_check_request_id, s12b): the caller''s own Pre-check and Rehearsal request in the same project, on its pre-check page, with passed checks including a rehearsal in use (s31), agreeing on simulation and on pretend (both or neither; scenario names may differ), whose object, operation, records or filter, count (the write''s count is the pre-check''s total, else expected; other counts equal), field, value, file, other operation details, sandbox filter, code commit and target org all match; its checks in use are copied with their original passed_at and copied_from, so the 24 hours count from the oldest; the pre-check''s sample row moves to the new request, expires_at unchanged (s12c). Refused, naming every mismatch, otherwise, and when that pre-check already backed an approved write. Returns {request_id, version, copied_checks, moved_sample}. Called by the queue_switchboard_run_request tool (B3).';
+COMMENT ON FUNCTION "public"."switchboard_queue_run_request"("p_request" "jsonb") IS 'Switchboard 3: queue a run request (spec 4.1) for the signed-in caller. Refuses, before any link, a request without page, project_code, the problem label and sentence, side_effects, headline or steps; one with a sample, evidence, base_steps or base_phases (252: only a correction keeps those); a correction (use switchboard_correct_run_request); and a data operation, undo or delete page without its count. A simulation (Q7) is accepted and flagged. Pretend (s26, s26b) is request.pretend = {scenario: "<name>"} (1 to 40 of a-z, 0-9, hyphen, underscore; nothing else), only with simulation; it is kept in the stored request and sets the pretend column. A pre-check may keep its TEST records (s35, O18): keep_test_records true only, with a rehearsal sandbox org, its steps listing keep_test and not delete_test; keep_test without it is refused on any page. An undo may name the data operation it undoes (undo_of.request_id, s27): a lower-case uuid naming the caller''s own request whose base page is dataop, in the same project, agreeing on simulation and on pretend; refused on any other page, and otherwise refused naming what is wrong. A check may name the data operation that was interrupted (interrupted.request_id, s31): checked as undo_of.request_id is, and the check''s operation object and kind, and field when the data operation has one, must be that data operation''s; refused on any other page, and with no operation. A delete page (s35, O24, page delete_test_data) runs on one org, a sandbox with role target, kind delete, and names its pre-check in test_data_of {request_id, run_tag}: the caller''s own pre-check request, same project, simulation and pretend matching, run tag its own; counts.expected (no counts.total) must be every kept set not yet deleted, summed, each kept in that sandbox; refused while another delete page for the same pre-check is approved and unfinished; the sets'' run ids are kept in test_run_ids; test_data_of on any other page is refused. A data operation may name its pre-check (pre_check_request_id, s12b): the caller''s own Pre-check and Rehearsal request in the same project, on its pre-check page, with passed checks including a rehearsal in use (s31), agreeing on simulation and on pretend (both or neither; scenario names may differ), whose object, operation, records or filter, count (the write''s count is the pre-check''s total, else expected; other counts equal), field, value, file, other operation details, sandbox filter, code commit and target org all match; its checks in use are copied with their original passed_at and copied_from, so the 24 hours count from the oldest; the pre-check''s sample row moves to the new request, expires_at unchanged (s12c). Refused, naming every mismatch, otherwise, and when that pre-check already backed an approved write. Returns {request_id, version, copied_checks, moved_sample}. Called by the queue_switchboard_run_request tool (B3).';
 
 
 
@@ -11369,6 +11560,101 @@ ALTER FUNCTION "public"."switchboard_record_code_review"("p_request_id" "uuid", 
 
 
 COMMENT ON FUNCTION "public"."switchboard_record_code_review"("p_request_id" "uuid", "p_review" "jsonb") IS 'Switchboard 3: record a code review (spec 4.3) of a request''s code at one commit. Older reviews of the request at another commit are marked superseded by it. The finer checks (notes on changed lines, labels) are codeReviewProblems'', run by the queue tool (B3) before this. Returns {review_id, commit, superseded}.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."switchboard_record_kept_test_records"("p_run_id" "uuid") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $_$
+declare
+  v_run    public.switchboard_runs;
+  v_action public.switchboard_actions;
+  v_linkid uuid;
+  v_link   public.switchboard_run_links;
+  v_row    public.switchboard_run_requests;
+  v_kept   jsonb;
+  v_list   jsonb;
+begin
+  select * into v_run from public.switchboard_runs where id = p_run_id;
+  if not found then
+    raise exception 'switchboard_record_kept_test_records: no such run.' using errcode = 'P0002';
+  end if;
+  select * into v_action from public.switchboard_actions where id = v_run.action_id and user_id = v_run.user_id;
+  if v_action.id is null or v_action.kind <> 'sf_run' then
+    raise exception 'switchboard_record_kept_test_records: that run is not a run page''s (sf_run) run.' using errcode = '23514';
+  end if;
+  if v_run.mode not in ('real', 'pretend') or v_run.finished_at is null then
+    raise exception 'switchboard_record_kept_test_records: the run has not finished.' using errcode = '55000';
+  end if;
+  -- 17.7 (answer 1): kept on a pass, and on a FAIL at the rehearsal (item b's failed_check rehearsal); never ok false.
+  if coalesce((v_run.result->'ok') = 'true'::jsonb, false) is not true
+     or not coalesce((v_run.result->'pass') = 'true'::jsonb
+                     or ((v_run.result->'pass') = 'false'::jsonb and (v_run.result->'failed_check') = '"rehearsal"'::jsonb), false) then
+    raise exception 'switchboard_record_kept_test_records: TEST records are kept only on a pass, or a FAIL at the rehearsal (ok true, pass false, failed_check rehearsal); nothing is recorded.'
+      using errcode = '55000';
+  end if;
+  -- Exactly {count, sandbox}: count 1 to 999,999,999, sandbox a name. The case guards the key removal on a scalar.
+  v_kept := v_run.result->'kept_test_records';
+  if not coalesce(case when jsonb_typeof(v_kept) = 'object'
+                       then (v_kept - array['count', 'sandbox']) = '{}'::jsonb
+                            and jsonb_typeof(v_kept->'count') = 'number' and (v_kept->'count')::text ~ '^[1-9][0-9]{0,8}$'
+                            and jsonb_typeof(v_kept->'sandbox') = 'string' and coalesce(btrim(v_kept->>'sandbox'), '') <> ''
+                       else false end, false) then
+    raise exception 'switchboard_record_kept_test_records: the run''s kept_test_records is exactly {"count", "sandbox"}: count a whole number from 1 to 999,999,999, sandbox the rehearsal sandbox''s alias. Nothing is recorded.'
+      using errcode = '23514';
+  end if;
+
+  -- The link and its request, locked request first, as the link functions do.
+  v_linkid := (v_action.payload->>'link_id')::uuid;
+  select * into v_link from public.switchboard_run_links where id = v_linkid and user_id = v_run.user_id;
+  if v_link.id is null then
+    raise exception 'switchboard_record_kept_test_records: no link for that run.' using errcode = 'P0002';
+  end if;
+  select * into v_row from public.switchboard_run_requests where id = v_link.request_id for update;
+  select * into v_link from public.switchboard_run_links where id = v_linkid for update;
+  if v_row.simulation and not v_row.pretend then
+    raise exception 'switchboard_record_kept_test_records: a simulation keeps no TEST records.' using errcode = '55000';
+  end if;
+  if (v_run.mode = 'pretend') <> v_row.pretend then
+    raise exception 'switchboard_record_kept_test_records: a pretend run records only on a pretend request, and a pretend request only from a pretend run; nothing is recorded.' using errcode = '55000';
+  end if;
+  -- The run must be the link's pre-check, by evidence's rule (its approval on a pre-check page or a pre-check's
+  -- correction, or its rerun), on a request whose base page is precheck. Unlike evidence, a voided link, an older
+  -- version or a run finished before a correction still records: the records are in the sandbox either way.
+  if v_row.base_page <> 'precheck'
+     or not (v_action.id = v_link.rerun_action_id
+             or (v_action.id = v_link.action_id and v_row.page in ('precheck', 'correction'))) then
+    raise exception 'switchboard_record_kept_test_records: that run is not a pre-check''s run or rerun.' using errcode = '55000';
+  end if;
+  if coalesce((v_row.request->'keep_test_records') = 'true'::jsonb, false) is not true then
+    raise exception 'switchboard_record_kept_test_records: the request does not keep its TEST records (keep_test_records); nothing is recorded.' using errcode = '55000';
+  end if;
+  if not exists (select 1 from jsonb_array_elements(case when jsonb_typeof(v_row.request->'orgs') = 'array' then v_row.request->'orgs' else '[]'::jsonb end) o
+                  where jsonb_typeof(o) = 'object' and (o->>'role') = 'rehearsal' and (o->>'org_type') = 'sandbox'
+                    and (o->>'alias') = (v_kept->>'sandbox')) then
+    raise exception 'switchboard_record_kept_test_records: the TEST records were kept in %, which is not the request''s rehearsal sandbox. Nothing is recorded.', v_kept->>'sandbox'
+      using errcode = '23514';
+  end if;
+  v_list := case when jsonb_typeof(v_row.kept_test_records) = 'array' then v_row.kept_test_records else '[]'::jsonb end;
+  if exists (select 1 from jsonb_array_elements(v_list) e where (e->>'run_id') = v_run.id::text) then
+    return jsonb_build_object('recorded', false, 'already', true, 'request_id', v_row.id,
+                              'kept', (select coalesce(sum((e->>'count')::bigint), 0) from jsonb_array_elements(v_list) e where (e->>'deleted_by') is null));
+  end if;
+  v_list := v_list || jsonb_build_array(jsonb_build_object(
+              'run_id', v_run.id::text, 'run_tag', v_row.request->>'run_tag', 'count', v_kept->'count',
+              'sandbox', v_kept->>'sandbox', 'recorded_at', now(), 'deleted_by', null));
+  update public.switchboard_run_requests set kept_test_records = v_list, updated_at = now() where id = v_row.id;
+  return jsonb_build_object('recorded', true, 'already', false, 'request_id', v_row.id,
+                            'kept', (select coalesce(sum((e->>'count')::bigint), 0) from jsonb_array_elements(v_list) e where (e->>'deleted_by') is null));
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."switchboard_record_kept_test_records"("p_run_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."switchboard_record_kept_test_records"("p_run_id" "uuid") IS 'Switchboard 3 (s35, O18): record the TEST records a finished pre-check run kept in its rehearsal sandbox, from that run''s own switchboard_runs row only: result {ok: true, pass: true, or pass: false with failed_check "rehearsal", kept_test_records: {count, sandbox}}, count 1 to 999,999,999, sandbox the request''s rehearsal org. Appends {run_id, run_tag, count, sandbox, recorded_at, deleted_by: null} to the request''s kept_test_records, once per run (a repeat returns already true). Refused for ok false or any other FAIL, a malformed kept_test_records, another sandbox, a request without keep_test_records true, a run that is not the link''s pre-check or rerun on a base-page precheck request, a plain simulation, and a pretend/real mismatch. Unlike switchboard_record_run_evidence it records on a voided link, an older version and a run finished before a correction: the records are in the sandbox either way. Returns {recorded, already, request_id, kept}, kept the TEST records not yet deleted. Service role only: called by switchboard-runner, before the evidence, after a pre-check''s result.';
 
 
 
@@ -11595,8 +11881,8 @@ begin
   if v_run.failure_reason = 'expired_not_picked_up' then
     raise exception 'switchboard_record_run_outcome: run % never started; it has no outcome. Nothing was recorded.', p_run_id using errcode = '55000';
   end if;
-  if v_row.base_page not in ('dataop', 'undo', 'check') then
-    raise exception 'switchboard_record_run_outcome: run % is a % run; only a data operation, undo or check has an outcome. Nothing was recorded.', p_run_id, v_row.base_page
+  if v_row.base_page not in ('dataop', 'undo', 'check', 'delete_test_data') then
+    raise exception 'switchboard_record_run_outcome: run % is a % run; only a data operation, undo or check has an outcome, and a delete page. Nothing was recorded.', p_run_id, v_row.base_page
       using errcode = '55000';
   end if;
   -- s31 (item e, 16.3): a check's outcome is exactly {check: {job, at_goal, at_backup, neither}}. Checked here, before
@@ -11639,6 +11925,20 @@ begin
   update public.switchboard_run_requests
      set outcome = p_outcome, outcome_run_id = p_run_id, outcome_recorded_at = now(), updated_at = now()
    where id = v_row.id;
+  -- s35 (O24, 17.7 answer 5): a delete page's run that passed (ok true, pass true: every record found was deleted and
+  -- confirmed gone) marks the pre-check's kept sets it was queued for (test_run_ids) deleted, by this request's id. The
+  -- pre-check is locked after this request and its link, as consume locks it. A failed run marks nothing.
+  if v_row.base_page = 'delete_test_data'
+     and (v_run.result->'ok') = 'true'::jsonb and (v_run.result->'pass') = 'true'::jsonb then
+    update public.switchboard_run_requests p
+       set kept_test_records = (select coalesce(jsonb_agg(case when (t.e->>'run_id')::uuid = any(v_row.test_run_ids) and (t.e->>'deleted_by') is null
+                                                               then t.e || jsonb_build_object('deleted_by', v_row.id::text) else t.e end
+                                                          order by t.ord), '[]'::jsonb)
+                                  from jsonb_array_elements(p.kept_test_records) with ordinality t(e, ord)),
+           updated_at = now()
+     where p.id = (v_row.request->'test_data_of'->>'request_id')::uuid and p.user_id = v_row.user_id
+       and jsonb_typeof(p.kept_test_records) = 'array';
+  end if;
   return jsonb_build_object('recorded', true, 'already', false, 'request_id', v_row.id);
 end;
 $_$;
@@ -11647,7 +11947,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") IS 'Switchboard 3: keep a data operation''s, undo''s or (s31) check''s outcome on its request (outcome, outcome_run_id, outcome_recorded_at), since the run''s own result is pruned after 30 days. Accepted only for a finished real run of the sf_run action its link approved (link.action_id), on a request whose base page is dataop, undo or check, not a plain simulation; or (s26) a finished pretend run on a pretend request, whose outcome is made up; a pretend run on a real request and a real run on a pretend one are refused. p_outcome is a JSON object of at most 64 KB, stored as given; on a check (item e) it is exactly {check: {job, at_goal, at_backup, neither}}, job one of Queued, Preparing, Processing, Holding, InProgress, Completed, Failed, Aborted or none, each count a whole number of 0 or more, checked before the once-per-run return. A pre-check''s run, a rerun, an unfinished run and a run that never started are refused. Once per run: the same run again returns already true. A later run of the same link (a resend) replaces it; a run approved through another link of the request never does. Never touches evidence, the 24-hour clock or what can be approved. Returns {recorded, already, request_id}. Service role only: called by switchboard-runner after a write''s or check''s result.';
+COMMENT ON FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") IS 'Switchboard 3: keep a data operation''s, undo''s, (s31) check''s or (s35) delete page''s outcome on its request (outcome, outcome_run_id, outcome_recorded_at), since the run''s own result is pruned after 30 days. Accepted only for a finished real run of the sf_run action its link approved (link.action_id), on a request whose base page is dataop, undo, check or delete_test_data, not a plain simulation; or (s26) a finished pretend run on a pretend request, whose outcome is made up; a pretend run on a real request and a real run on a pretend one are refused. p_outcome is a JSON object of at most 64 KB, stored as given; on a check (item e) it is exactly {check: {job, at_goal, at_backup, neither}}, job one of Queued, Preparing, Processing, Holding, InProgress, Completed, Failed, Aborted or none, each count a whole number of 0 or more, checked before the once-per-run return. A delete page''s outcome is shape-free, as a data operation''s; when its run''s result has ok true and pass true, the pre-check''s kept sets named in test_run_ids get deleted_by (this request''s id), in the same transaction. A pre-check''s run, a rerun, an unfinished run and a run that never started are refused. Once per run: the same run again returns already true. A later run of the same link (a resend) replaces it; a run approved through another link of the request never does. Never touches evidence, the 24-hour clock or what can be approved. Returns {recorded, already, request_id}. Service role only: called by switchboard-runner after a write''s or check''s result.';
 
 
 
@@ -11666,6 +11966,11 @@ declare
   v_action  uuid;
   v_req     uuid;
   v_failed  integer;
+  v_tp      public.switchboard_run_requests;
+  v_sum     bigint;
+  v_ids     uuid[];
+  v_sbok    boolean;
+  v_other   uuid;
 begin
   if v_user is null then
     raise exception 'switchboard_retry_run: no signed-in user.' using errcode = '28000';
@@ -11692,6 +11997,31 @@ begin
    where e ? 'passed_at' and coalesce((e->>'voided')::boolean, false) = false;
   if v_row.page <> 'undo' and v_until is not null and v_until <= now() then
     raise exception 'switchboard_retry_run: the checks expired at %; run the pre-check and rehearsal again instead.', v_until using errcode = '55000';
+  end if;
+  -- s35 (O24, 17.2): a resend of a delete page re-checks what consume checked at the Approve: once its run is past
+  -- its 15 minutes the project is free, so the pre-check may have run again and kept more, or another page deleted.
+  if v_row.page = 'delete_test_data' then
+    if (case when jsonb_typeof(v_row.request->'orgs') = 'array' then jsonb_array_length(v_row.request->'orgs') else 0 end) <> 1
+       or (v_row.request->'orgs'->0->>'org_type') is distinct from 'sandbox'
+       or (v_row.request->'orgs'->0->>'role') is distinct from 'target' then
+      raise exception 'switchboard_retry_run: a delete page runs on one sandbox only, and this one names another org. Nothing was resent.' using errcode = '55000';
+    end if;
+    select * into v_tp from public.switchboard_run_requests
+     where id = (v_row.request->'test_data_of'->>'request_id')::uuid and user_id = v_user for update;
+    select coalesce(sum((e->>'count')::bigint), 0)::bigint,
+           coalesce(array_agg((e->>'run_id')::uuid order by (e->>'run_id')::uuid), '{}'::uuid[]),
+           coalesce(bool_and(coalesce((e->>'sandbox') = (v_row.request->'orgs'->0->>'alias'), false)), true)
+      into v_sum, v_ids, v_sbok
+      from jsonb_array_elements(case when jsonb_typeof(v_tp.kept_test_records) = 'array' then v_tp.kept_test_records else '[]'::jsonb end) e
+     where (e->>'deleted_by') is null;
+    if v_ids is distinct from (select coalesce(array_agg(x order by x), '{}'::uuid[]) from unnest(v_row.test_run_ids) x)
+       or v_sum is distinct from v_row.total_count::bigint then
+      raise exception 'switchboard_retry_run: the kept TEST records changed since this delete page was queued (% now, % on the page); queue a new delete page. Nothing was resent.', v_sum, v_row.total_count
+        using errcode = '55000';
+    end if;
+    if not v_sbok then
+      raise exception 'switchboard_retry_run: the TEST records were kept in another sandbox than this page''s org. Nothing was resent.' using errcode = '55000';
+    end if;
   end if;
 
   select * into v_newest from public.switchboard_actions
@@ -11722,6 +12052,21 @@ begin
   if v_live is not null then
     raise exception 'switchboard_retry_run: action % is live for %; one at a time per project. Nothing was resent.', v_live, v_row.project_code
       using errcode = '55000';
+  end if;
+  -- s35 (O24): nor while another delete page for the same pre-check is approved and unfinished (a backstop, as in consume).
+  if v_row.page = 'delete_test_data' then
+    select r.id into v_other
+      from public.switchboard_run_requests r
+      join public.switchboard_run_links l on l.request_id = r.id
+      join public.switchboard_actions a on a.id = l.action_id
+     where r.user_id = v_user and r.id <> v_row.id and r.base_page = 'delete_test_data'
+       and (r.request->'test_data_of'->>'request_id') = (v_row.request->'test_data_of'->>'request_id')
+       and a.status = 'consumed' and (a.picked_up_at is not null or a.created_at >= now() - interval '15 minutes')
+     limit 1;
+    if v_other is not null then
+      raise exception 'switchboard_retry_run: another delete page (request %) is deleting these TEST records now. Nothing was resent.', v_other
+        using errcode = '55000';
+    end if;
   end if;
 
   -- Agreed with the hub (4.5 point 2): the stale action fails in the same step that creates the resend; only if still
@@ -11755,7 +12100,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_retry_run"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_retry_run"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb") IS 'Switchboard 3: "Try again: resend this run". Only when the newest sf_run for the link never started (failed expired_not_picked_up, or consumed, never picked up, over 15 minutes old), the request is unchanged, the checks are valid (not for an undo), the desktop is ready and nothing else is live for the project (Q10). Fails a still-consumed stale action (consumed -> failed, with its run, mode pretend for a pretend action, s26) in the same step, then inserts the same sf_run again with the same payload, pretend included, so the same link id (4.5 points 2, 3). Returns {resent, link_id, action_id, replaces}. Called by switchboard-run-pages with Alex''s JWT.';
+COMMENT ON FUNCTION "public"."switchboard_retry_run"("p_token" "text", "p_fingerprint" "text", "p_desktop" "jsonb") IS 'Switchboard 3: "Try again: resend this run". Only when the newest sf_run for the link never started (failed expired_not_picked_up, or consumed, never picked up, over 15 minutes old), the request is unchanged, the checks are valid (not for an undo), (s35, O24) a delete page''s one org is a sandbox target, its pre-check''s kept sets not yet deleted are still exactly test_run_ids with their sum its count, kept in that sandbox, and no other delete page for that pre-check is approved and unfinished, the desktop is ready and nothing else is live for the project (Q10). Fails a still-consumed stale action (consumed -> failed, with its run, mode pretend for a pretend action, s26) in the same step, then inserts the same sf_run again with the same payload, pretend included, so the same link id (4.5 points 2, 3). Returns {resent, link_id, action_id, replaces}. Called by switchboard-run-pages with Alex''s JWT.';
 
 
 
@@ -11815,9 +12160,11 @@ begin
 
   return jsonb_build_object(
     'link_id', v_link.id,
+    -- s35 (O18): a pre-check's kept sets (the column), only when it has some, so no other request's preview changes.
     'request', v_row.request || jsonb_build_object('id', v_row.id, 'page', v_row.page, 'base_page', v_row.base_page, 'version', v_row.version,
                                                    'corrected_at', v_row.corrected_at, 'evidence', v_row.evidence,
-                                                   'simulation', v_row.simulation, 'rerun_at', v_link.rerun_at),
+                                                   'simulation', v_row.simulation, 'rerun_at', v_link.rerun_at)
+               || case when v_row.kept_test_records is not null then jsonb_build_object('kept_test_records', v_row.kept_test_records) else '{}'::jsonb end,
     'fingerprint', public.switchboard_fingerprint(v_row.request || jsonb_build_object('version', v_row.version)),
     -- The count switchboard_consume_run_link checks; the page sends exactly this with Approve.
     'total_count', v_row.total_count,
@@ -11838,7 +12185,10 @@ begin
              -- s21b: how the run ended. Null once switchboard_prune_runs clears result; summary is kept.
              'ok', case when jsonb_typeof(v_run.result->'ok') = 'boolean' then (v_run.result->>'ok')::boolean end,
              'pass', case when jsonb_typeof(v_run.result->'pass') = 'boolean' then (v_run.result->>'pass')::boolean end,
-             'summary', left(v_run.summary, 500)) end,
+             'summary', left(v_run.summary, 500))
+             -- s35 (O18): the run's own kept_test_records, only when its result carries an object.
+             || case when jsonb_typeof(v_run.result->'kept_test_records') = 'object'
+                     then jsonb_build_object('kept_test_records', v_run.result->'kept_test_records') else '{}'::jsonb end end,
     'sample', case when v_sample.id is null then null else v_sample.sample end,
     'review', case when v_review.id is null then null else
                v_review.review || jsonb_build_object('id', v_review.id, 'commit', v_review.commit, 'status', v_review.status,
@@ -11850,7 +12200,7 @@ $$;
 ALTER FUNCTION "public"."switchboard_run_preview"("p_token" "text") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_run_preview"("p_token" "text") IS 'Switchboard 3: what a run or review page shows for its token, read at page open and at a click. Returns {link_id, request (with id, page, version, corrected_at, evidence, simulation, rerun_at), fingerprint, total_count (the request''s count, which switchboard_consume_run_link checks and the page sends with Approve; null when the request has none), outcome, outcome_run_id, outcome_recorded_at (254: the write''s outcome, null until recorded and on any link but the one whose approved run recorded it), link {version, current, used_at, rerun_at, voided_at, void_reason}, valid_until, expired (never for an undo), run (the newest sf_run for this link id: status, consumed_at, picked_up_at, finished_at, failure_reason, not_started, rerun, and from s21b ok and pass (result.ok and result.pass when booleans, null once the result is pruned) and summary (its first 500 characters)), sample, review}. Deletes the sample when it is past expires_at. Called by switchboard-run-pages with Alex''s JWT.';
+COMMENT ON FUNCTION "public"."switchboard_run_preview"("p_token" "text") IS 'Switchboard 3: what a run or review page shows for its token, read at page open and at a click. Returns {link_id, request (with id, page, version, corrected_at, evidence, simulation, rerun_at, and from s35 kept_test_records when the request has kept sets), fingerprint, total_count (the request''s count, which switchboard_consume_run_link checks and the page sends with Approve; null when the request has none), outcome, outcome_run_id, outcome_recorded_at (254: the write''s outcome, null until recorded and on any link but the one whose approved run recorded it), link {version, current, used_at, rerun_at, voided_at, void_reason}, valid_until, expired (never for an undo), run (the newest sf_run for this link id: status, consumed_at, picked_up_at, finished_at, failure_reason, not_started, rerun, and from s21b ok and pass (result.ok and result.pass when booleans, null once the result is pruned) and summary (its first 500 characters), and from s35 kept_test_records when the result carries one), sample, review}. Deletes the sample when it is past expires_at. Called by switchboard-run-pages with Alex''s JWT.';
 
 
 
@@ -21947,11 +22297,14 @@ CREATE TABLE IF NOT EXISTS "public"."switchboard_run_requests" (
     "outcome_run_id" "uuid",
     "outcome_recorded_at" timestamp with time zone,
     "pretend" boolean DEFAULT false NOT NULL,
-    CONSTRAINT "switchboard_run_requests_base_page_check" CHECK (("base_page" = ANY (ARRAY['precheck'::"text", 'dataop'::"text", 'undo'::"text", 'check'::"text"]))),
+    "kept_test_records" "jsonb",
+    "test_run_ids" "uuid"[],
+    CONSTRAINT "switchboard_run_requests_base_page_check" CHECK (("base_page" = ANY (ARRAY['precheck'::"text", 'dataop'::"text", 'undo'::"text", 'check'::"text", 'delete_test_data'::"text"]))),
     CONSTRAINT "switchboard_run_requests_evidence_check" CHECK (("jsonb_typeof"("evidence") = 'array'::"text")),
+    CONSTRAINT "switchboard_run_requests_kept_test_records_check" CHECK ((("kept_test_records" IS NULL) OR ("jsonb_typeof"("kept_test_records") = 'array'::"text"))),
     CONSTRAINT "switchboard_run_requests_outcome_check" CHECK ((("outcome" IS NULL) OR (("jsonb_typeof"("outcome") = 'object'::"text") AND ("octet_length"(("outcome")::"text") <= 65536)))),
     CONSTRAINT "switchboard_run_requests_outcome_whole" CHECK (((("outcome" IS NULL) = ("outcome_run_id" IS NULL)) AND (("outcome" IS NULL) = ("outcome_recorded_at" IS NULL)))),
-    CONSTRAINT "switchboard_run_requests_page_check" CHECK (("page" = ANY (ARRAY['precheck'::"text", 'dataop'::"text", 'undo'::"text", 'correction'::"text", 'check'::"text"]))),
+    CONSTRAINT "switchboard_run_requests_page_check" CHECK (("page" = ANY (ARRAY['precheck'::"text", 'dataop'::"text", 'undo'::"text", 'correction'::"text", 'check'::"text", 'delete_test_data'::"text"]))),
     CONSTRAINT "switchboard_run_requests_pretend_request" CHECK (("pretend" = ("request" ? 'pretend'::"text"))),
     CONSTRAINT "switchboard_run_requests_pretend_simulation" CHECK (((NOT "pretend") OR "simulation")),
     CONSTRAINT "switchboard_run_requests_project_code_check" CHECK (("project_code" ~ '^[a-z0-9_-]{1,40}$'::"text")),
@@ -22033,6 +22386,14 @@ COMMENT ON COLUMN "public"."switchboard_run_requests"."outcome_recorded_at" IS '
 
 
 COMMENT ON COLUMN "public"."switchboard_run_requests"."pretend" IS 'Pretend (s26, spec 15.2): a simulation whose run goes to the desktop helper, which makes its data up from request.pretend = {scenario: "<name>"} and opens no org connection. True exactly when request.pretend is present, and only with simulation. Consume makes its sf_run, payload {link_id, pretend: true}, and its run is mode pretend; its made-up evidence, sample and outcome are recorded on this request only. Set by switchboard_queue_run_request; never changed by a correction.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_run_requests"."kept_test_records" IS 'O18 (s35): on a pre-check that keeps its TEST records, one entry per run that kept some: {run_id, run_tag, count, sandbox, recorded_at, deleted_by}, deleted_by the delete page request''s id once its write passed, else null. Written only by switchboard_record_kept_test_records and switchboard_record_run_outcome; the run''s own result is pruned after 30 days, so this is the durable record.';
+
+
+
+COMMENT ON COLUMN "public"."switchboard_run_requests"."test_run_ids" IS 'O24 (s35): on a delete_test_data request, the run ids of the pre-check''s kept sets it deletes, taken by switchboard_queue_run_request when it was queued (never from the chat); the outcome marks exactly those deleted.';
 
 
 
@@ -31065,6 +31426,11 @@ GRANT ALL ON FUNCTION "public"."switchboard_queue_run_request"("p_request" "json
 REVOKE ALL ON FUNCTION "public"."switchboard_record_code_review"("p_request_id" "uuid", "p_review" "jsonb") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."switchboard_record_code_review"("p_request_id" "uuid", "p_review" "jsonb") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."switchboard_record_code_review"("p_request_id" "uuid", "p_review" "jsonb") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."switchboard_record_kept_test_records"("p_run_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."switchboard_record_kept_test_records"("p_run_id" "uuid") TO "service_role";
 
 
 

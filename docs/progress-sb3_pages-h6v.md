@@ -48,19 +48,23 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-s33: plan for O18 and O24, spec 17. s34: the page and contract side built (spec 17.7 answers, 17.8 as built); no database change, no deploy.
+s33: plan for O18 and O24, spec 17. s34: the page and contract side built (on main). s35: the slice 2b migration (pending) and test 10 drafted and cold-reviewed (spec 17.9). s35b: numbered 259. s35c: no drift; db: items claimed; 259_slice2b.sql written (only the header differs from the draft), pending file deleted; queued as action 5309be01-b801-4361-b404-52fc7f36617c (not applied).
 
-Next: Alex runs gitpush Checkpoint for s34's files if he wants them on main before the database steps (front end only, harmless before the migration). Then s35, the migration and test 10 drafted (17.4, 17.5), not queued. Later C2 (s24), once its gates are met (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall. C2's scope: update switchboard.ts, switchboard.test.mjs, mcp/index.ts, mcp/index.test.mjs and the spec; deploy mcp; one read-only check on switchboard_actions; 20m.
+s35e: 5309be01's dry run failed (a CASE at the top level of three IF conditions; spec 17.9). Fixed with parentheses and requeued as 6068885d-4db3-4b4b-807b-c6f42fd8b1d6.
 
-Run tag: sb3_pages-h6v-s35-<4>, slice 2b migration drafted: kept_test_records and test_run_ids columns, delete_test_data in both constraints, queue, consume, retry, correct, outcome and preview replaced, switchboard_record_kept_test_records, with the smoke check; test 10 drafted; cold review; nothing queued
+s35d: 259 applied (run 8ca554d1, all 37 statements, CONFORMANT); the seven live md5s match 17.9; test 10 queued with --test as 7f57eae0-85b2-49f2-83bb-0f1f42809dc4. s35f: that run (a3e0fd1e) stopped at the test's own precedence slip, `v_kept->0 - array[...]`; bracketed and requeued as 33f3e475-143b-48b9-b0fa-3f098d2d95f7.
+
+Next: test 10's result. If it passes, Alex runs gitpush Checkpoint for this worktree with supabase/migrations/259_slice2b.sql, supabase/tests/sb3_pages-h6v/10_slice2b_test.sql, docs/technical-spec-sb3_pages-h6v.md and docs/progress-sb3_pages-h6v.md (it releases the db: claims). Then s36: runner, tool and mcp, deployed. Later C2 (s24), once its gates are met (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall. C2's scope: update switchboard.ts, switchboard.test.mjs, mcp/index.ts, mcp/index.test.mjs and the spec; deploy mcp; one read-only check on switchboard_actions; 20m.
+
+Run tag: sb3_pages-h6v-s36-<4>, O18 and O24 runner, tool and mcp: kept_test_records accepted, checked and recorded (switchboard_record_kept_test_records, before the evidence), the delete page as a write, lowerIds for test_data_of, the queue tool's description; deploy switchboard-runner and mcp
 
 Scope of this step:
-- create: supabase/migrations/_pending_sb3_pages-h6v_slice2b.sql, supabase/tests/sb3_pages-h6v/10_slice2b_test.sql
-- update: docs/technical-spec-sb3_pages-h6v.md
+- create: nothing
+- update: supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs, supabase/functions/_shared/tools/switchboard-runs.ts, supabase/functions/_shared/tools/switchboard-runs.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, docs/technical-spec-sb3_pages-h6v.md
 - delete: nothing
-- deploy: nothing
-- SQL: none (read-only reads of the live definitions with get_sql_read only)
-Estimated run: 45m
+- deploy: switchboard-runner and mcp (db:deploy, with main's commits present)
+- SQL: none (read-only checks with get_sql_read only)
+Estimated run: 35m
 
 ## Timing log
 
@@ -196,3 +200,9 @@ Estimated run: 45m
 | s32b | deno.json, wake lines, tests, suites, build, deploy and boot check, cold review and fixes, spec | 07:50:17 | 07:55:29 | 5m12s |
 | s33 | read live definitions, plan spec 17 (O18, O24), cold review and fixes, progress, report | 11:19:01 | 11:27:18 | 8m17s |
 | s34 | contract, page, liveSource, simulations, tests, suites, build, cold review and fixes, spec 17.7 and 17.8 | 11:32:38 | 11:43:48 | 11m10s |
+| s35 | md5s, read sources, draft migration (six bodies, new function, smoke) and test 10, diffs, cold review and fixes, spec 17.9 | 11:46:05 | 12:08:16 | 22m11s |
+| s35b | level check, number-migration (259), spec, progress, report | 12:17:40 | 12:18:14 | 0m34s |
+| s35c | level and drift checks, eight claims, write 259 in four parts with diffs, delete pending, queue, spec, report | 12:20:12 | 12:29:11 | 8m59s |
+| s35e | run the runner's splitter over 259 and 258, find the cut IF conditions, fix three lines, recheck IFs and RAISEs, spec, requeue, report | 12:35:17 | 12:38:26 | 3m09s |
+| s35d | live md5s, columns and constraints; split and check test 10; queue it; spec, progress, report | 12:47:00 | 12:48:11 | 1m11s |
+| s35f | bracket test 10's arrow, search both files, recheck, requeue, spec, report | 12:51:04 | 12:51:37 | 0m33s |
