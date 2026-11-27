@@ -48,25 +48,18 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-s29: the runner takes a pretend sf_run's result and prefixes its lines SIMULATION; deployed 2026-11-26 20:51 local (spec 15.2 "s29 as built"). The data runs thread's pretend walk can start. Open for Alex: a runner-side mode check (15.2 "Open, for Alex"). s28 and s28b are on main. Steps (15.2): s29b data runs items 2 to 4; item b is s30, d s31, e s32.
+s30: the runner's mode check, the filter fields and AND rule, the simulation cutoff, O23's runContract part and checkLine's flag (spec 16.8); mcp and switchboard-runner deployed. Its files go into main with s30's Checkpoint.
 
-Before s29b: Alex runs gitpush Checkpoint of the s29 files, then gitsync in this worktree if it is behind main.
-
-Run tag: sb3_pages-h6v-s29b-<4>, data runs items 2 to 4: filter fields, their correction shape, a fixed simulation cutoff (spec 15.2)
+Run tag: sb3_pages-h6v-s31-<4>, no deploy, no SQL queued: draft the one slice 2 migration (item b, O23, item e) and test 9, with the smoke check calling every replaced function past its changed lines (spec 16.6, 16.7)
 
 Scope of this step:
-- create: nothing
-- update: src/switchboard/runs/runContract.js, src/switchboard/runs/runContract.test.js, src/switchboard/runs/simulation.js, src/switchboard/runs/simulation.test.js, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, docs/technical-spec-sb3_pages-h6v.md
+- create: supabase/migrations/_pending_sb3_pages-h6v_slice2.sql, supabase/tests/sb3_pages-h6v/9_slice2_test.sql
+- update: docs/technical-spec-sb3_pages-h6v.md
 - delete: nothing
-- deploy: mcp (db:deploy, claimed at this step, Alex's permission prompt), with main's commits present; it imports runContract.js
-- SQL: none (the live correction function is read with get_sql_read; any change it needs is planned as its own step)
-Estimated run: 30m
-(Item 2:
-- details.queries accepts "records" and "sandbox records";
-- selected_by {kind: "filter", text, sandbox_text?, not_rehearsed?};
-- runContract refuses a filter with anything but comparisons joined by AND.
-Item 3: check their correction shape {page: "correction", base_page, version, changed: {edit_kind, reason, still_valid: [{check, passed_at}]}} against the live switchboard_correct_run_request, whose changed is {reason, items} today, and report the gap.
-Item 4: simulation.js's filter gets a fixed cutoff, CreatedDate < 2026-11-20T00:00:00Z.)
+- deploy: none
+- SQL: none (drafted only; s31b numbers and queues it)
+Estimated run: 40m
+(Then s31b: gitsync if behind, drift check, claim the db: items, number, write and queue it; s31c: after a clean dry run and Alex's approval, test 9 with --test; s32: the runner's b and e, the check page's outcome, item d, and not_rehearsed's rewording with RunPage.test.jsx.)
 
 Then C2, once its gates are met (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall.
 
@@ -204,3 +197,5 @@ Estimated run: 20m
 | s28 | Pages, runContract, tool, run-pages core, item c, tests, cold review and fixes, spec | 10:03:09 | 10:16:51 | 13m42s |
 | s28b | Check, claim, deploy mcp and switchboard-run-pages, live check, spec | 20:41:52 | 20:44:08 | 2m16s |
 | s29 | Runner pretend: core, index, 7 tests, cold review and fixes, deploy, spec | 20:47:02 | 20:51:53 | 4m51s |
+| s29b | Plan: live reads, spec section 16, cold review and fixes | 21:18:23 | 21:27:18 | 8m55s |
+| s30 | Mode check, filter rule, cutoff, O23 contract, checkLine flag, tests, cold review and fixes, deploy mcp and runner, spec | 06:04:58 | 06:19:04 | 14m06s |

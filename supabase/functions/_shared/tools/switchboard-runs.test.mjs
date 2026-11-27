@@ -124,6 +124,44 @@ test("queue (s28): runContract refuses a bad pretend, a bad allows, an Id list w
   await refusal(m.queueSwitchboardRunRequestTool, { request: { ...DATAOP(), undo_of: { run_tag: "x", request_id: PRE_ID } } }, /only an undo names/);
 });
 
+// s30: a check page, and a filter data operation (16.2).
+const CHECK = (interrupted = {}) => ({ ...DATAOP(), page: "check", orgs: [DATAOP().orgs[0]],
+  interrupted: { run_tag: "demo-x1y-s5-cd34", at: "2026-11-23T10:00:00Z", where: "Write, after about 20 of 45.", ...interrupted },
+  steps: [{ code: "job_state" }, { code: "compare_records" }, { code: "find_temp_code" }] });
+const FILTER_SOQL = "SELECT Id FROM Gift__c WHERE CreatedDate < 2026-11-20T00:00:00Z AND Status__c = 'Open'";
+const FILTER_OP = (over = {}) => ({ ...DATAOP(), selected_by: { kind: "filter", text: "Open gifts created before 20 November 2026." },
+  details: { queries: [{ label: "records", soql: FILTER_SOQL }] }, ...over });
+
+test("queue (s30, O23): interrupted.request_id is lower-cased on a check page; runContract refuses it malformed or off a check", async () => {
+  const { db } = await run(m.queueSwitchboardRunRequestTool, { request: CHECK({ request_id: ` ${PRE_ID.toUpperCase()} ` }) });
+  assert.equal(db.calls[0][1].p_request.interrupted.request_id, PRE_ID);
+  const none = await run(m.queueSwitchboardRunRequestTool, { request: CHECK() });
+  assert.ok(!("request_id" in none.db.calls[0][1].p_request.interrupted));
+  const bad = await refusal(m.queueSwitchboardRunRequestTool, { request: CHECK({ request_id: "not-a-uuid" }) }, /Fix interrupted\.request_id: .*a lower-case uuid/);
+  assert.equal(bad.calls.length, 0);
+  await refusal(m.queueSwitchboardRunRequestTool, { request: { ...DATAOP(), interrupted: { run_tag: "x", request_id: PRE_ID } } }, /only a check names/);
+});
+
+test("queue (s30, 16.2): a filter needs its records query (and sandbox records with sandbox_text), each WHERE clause ANDs only", async () => {
+  const ok = await run(m.queueSwitchboardRunRequestTool, { request: FILTER_OP() });
+  assert.equal(ok.db.calls[0][0], "switchboard_queue_run_request");
+  const sb = FILTER_OP({ selected_by: { kind: "filter", text: "t", sandbox_text: "s" },
+    details: { queries: [{ label: "records", soql: FILTER_SOQL }, { label: "sandbox records", soql: FILTER_SOQL }] } });
+  assert.equal((await run(m.queueSwitchboardRunRequestTool, { request: sb })).db.calls.length, 1);
+  await refusal(m.queueSwitchboardRunRequestTool, { request: FILTER_OP({ details: {} }) }, /exactly one entry labelled "records", the filter's query on production/);
+  await refusal(m.queueSwitchboardRunRequestTool, { request: FILTER_OP({ selected_by: { kind: "filter", text: "t", sandbox_text: "s" } }) }, /labelled "sandbox records"/);
+  await refusal(m.queueSwitchboardRunRequestTool, { request: FILTER_OP({ details: { queries: [{ label: "records", soql: "SELECT Id FROM Gift__c WHERE A__c = 1 OR B__c = 2" }] } }) }, /joined by AND .*; it has OR/);
+  await refusal(m.queueSwitchboardRunRequestTool, { request: FILTER_OP({ details: { queries: [{ label: "records", soql: "SELECT Id FROM Gift__c WHERE CreatedDate = LAST_N_DAYS:30" }] } }) }, /no relative date such as LAST_N_DAYS:30/);
+});
+
+test("correct (s30): an echoed undo_of or interrupted request_id in capitals is lower-cased before the database", async () => {
+  const changed = { reason: "r", items: [{ what: "w", old: "o", new: "n" }] };
+  const db = fakeDb({ data: { ok: true }, error: null }, { page: "check", base_page: "check" });
+  await m.correctSwitchboardRunRequestTool.handler({ request_id: REQ_ID, edit_kind: "wording",
+    request: CHECK({ request_id: PRE_ID.toUpperCase() }), changed }, { db });
+  assert.equal(rpcs(db)[0][1].p_request.interrupted.request_id, PRE_ID);
+});
+
 test("queue: the chat never supplies evidence or a sample; pre_check_request_id only on a data operation, a uuid", async () => {
   await refusal(m.queueSwitchboardRunRequestTool, { request: { ...DATAOP(), evidence: [] } }, /leave evidence out/);
   await refusal(m.queueSwitchboardRunRequestTool, { request: { ...DATAOP(), sample: {} } }, /leave the sample out/);

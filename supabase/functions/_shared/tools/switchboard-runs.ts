@@ -23,6 +23,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const REFUSALS = new Set(["28000", "P0002", "55000", "23514", "22023", "22P02"]);
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+/** undo_of.request_id (O5) and interrupted.request_id (O23, s30), trimmed and lower-cased in place when text. */
+function lowerIds(r: Record<string, unknown>) {
+  for (const k of ["undo_of", "interrupted"]) {
+    const o = r[k];
+    if (isObject(o) && typeof o.request_id === "string") o.request_id = o.request_id.trim().toLowerCase();
+  }
+}
 
 function requireUuid(tool: string, name: string, v: unknown): string {
   if (typeof v !== "string" || !UUID_RE.test(v.trim())) throw fail(tool, `\`${name}\` must be a UUID.`);
@@ -54,6 +61,9 @@ export const queueSwitchboardRunRequestTool = defineTool({
   },
   handler: async (args: Record<string, unknown>, ctx) => {
     const tool = "queue_switchboard_run_request";
+    // s28 (O5) and s30 (O23): undo_of.request_id and interrupted.request_id are lower-cased, as pre_check_request_id
+    // is; requestProblems then checks each is a lower-case uuid on its own page, and the queue (257; O23's in s31)
+    // that it names the caller's own data operation.
     const r = args.request;
     if (!isObject(r)) throw fail(tool, "`request` must be the run request object (spec 4.1).");
     // The chat never supplies evidence or a sample: the pre-check's result does, in the database.
@@ -65,9 +75,7 @@ export const queueSwitchboardRunRequestTool = defineTool({
       requireUuid(tool, "pre_check_request_id", r.pre_check_request_id);
       r.pre_check_request_id = (r.pre_check_request_id as string).trim().toLowerCase();
     }
-    // s28 (O5): undo_of.request_id is lower-cased, as pre_check_request_id is; requestProblems then checks it is a
-    // lower-case uuid, and the queue (257) that it names the caller's own data operation.
-    if (isObject(r.undo_of) && typeof r.undo_of.request_id === "string") r.undo_of.request_id = r.undo_of.request_id.trim().toLowerCase();
+    lowerIds(r);
     // s28: pretend ({scenario}, with simulation) and the structured allows go on as sent; runContract checks their shape.
     const problems = requestProblems(r) as string[];
     if (problems.length) refuseProblems(tool, problems);
@@ -98,6 +106,8 @@ export const correctSwitchboardRunRequestTool = defineTool({
     if (!isObject(changed)) throw fail(tool, "`changed` must be {reason, items: [{what, old, new}]}.");
     if ("evidence" in r || "sample" in r) throw fail(tool, "a correction carries no evidence or sample.");
     if (typeof r.pre_check_request_id === "string") r.pre_check_request_id = r.pre_check_request_id.trim().toLowerCase();
+    // s30: an echoed id in capitals matches what the queue stored, so the database's diff doesn't refuse it.
+    lowerIds(r);
     // The page's rules on the request as it will be: its base page's rules (counts, undo, deadlines) for everything
     // but the steps; and for a kind that reruns a check, the correction page's rule that its steps are only what the
     // edit reruns. A wording or allowance edit keeps the request's own steps, checked on its base page.

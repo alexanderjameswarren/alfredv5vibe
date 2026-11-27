@@ -1772,4 +1772,290 @@ with the data runs thread sending `{ok: true, pass: false, failed_check: 'rehear
 - **e:** about 30m, later.
 - **Before slice 1's walk:** a only, about 120 minutes over s26 to s29 plus three Checkpoints, and the data runs
   thread's parts.
+- **s29b:** section 16 replans b, d and e with O22, O23, items 2 to 4 and the runner's mode check (16.7).
+
+## 16. What the data runs thread asked for after s29 (s29b, 2026-11-26; a plan only)
+
+Read against the live definitions with get_sql_read on 2026-11-26. The md5 of each prosrc:
+- switchboard_correct_run_request 44d03965 (254, with 256's pretend);
+- switchboard_run_preview b34e0d6c;
+- switchboard_queue_run_request 76893e08 (257);
+- switchboard_record_run_evidence e9893467;
+- switchboard_record_run_outcome 5a69fdbc;
+- switchboard_consume_run_link cd9e7672.
+
+Live data: 5 requests, all precheck with `selected_by.kind` ids. No evidence or `changed` is stored yet.
+
+### 16.1 O22, the correction shape: what a corrected request carries today
+
+- **page:** `'correction'`, in the column and in request.page.
+- **base_page:** a column only (precheck, dataop, undo or check), never in the request jsonb. The preview adds it to
+  `request`. The helper's pickup gets the request row whole (runner index.ts runRequest, `select *`), so it reads
+  `base_page` from the row.
+- **version:** the column, which a correction strips from the jsonb (c_set). The preview adds `request.version`,
+  and the pickup row has the column.
+  - **An edit that reruns checks** (value, file, field, records, records_filter, sandbox_filter, code) moves the
+    request to page `correction`. It sets version = `changed.from_version` + 1 and corrected_at.
+  - **A wording or allows edit** reruns nothing. The version, page and corrected_at stay, and
+    `changed.from_version` equals version. So `changed` can be on a base page.
+- **changed:** `request.changed` is exactly what the chat sent as p_changed, with two keys the database adds:
+  `{reason, items: [...]} || {edit_kind, from_version}`. So edit_kind is `changed.edit_kind`. It is also the
+  function's p_edit_kind argument, which the database copies in.
+  - The database checks only that reason is non-blank and that items is a non-empty array.
+  - runContract checks `changed.edit_kind`, `changed.reason` and `changed.items` (4.1: `[{what, old, new}]`).
+  - On a correction page, a later wording edit nests under `changed.wording`.
+- **still_valid:** the database never stores a checked one. On an edit that reruns checks, `still_valid` is a c_run
+  key that the diff ignores, so whatever the chat sends is kept unchecked. On a wording or allows edit it is
+  compared, so adding one is refused. No live request has one. The truth is `evidence`:
+  - Each entry is `{check, org, passed_at, run_id, commit?, voided?}` (record_run_evidence).
+  - A correction marks the checks it reruns `voided: true`.
+  - A newer pass of the same check voids the older entry.
+  - "Still valid, not run again" = the entries not voided whose passed_at is at or before `corrected_at` (a column;
+    the preview also returns `request.corrected_at` and `request.evidence`).
+    runContract's statusFromEvidence already builds `changed.still_valid` this way for a correction page, as
+    `[{check, passed_at}]`. With no corrected_at it keeps every entry in use.
+- **After the reruns pass,** record_run_evidence moves the page back to base_page and keeps `changed`.
+
+**Proposal: no database change.**
+- Read page, base_page and version (from the pickup row, or the preview's request), and changed.edit_kind,
+  changed.reason and changed.items.
+- Derive still_valid from evidence and corrected_at, by statusFromEvidence's rule.
+- Their `changed.still_valid` is then a derived view, never a field anyone sends.
+- If they would rather not derive it, the preview could return it, as one line in a function we replace anyway. Not
+  planned unless they ask.
+
+### 16.2 Items 2 to 4: filter fields, the filter rule, the simulation cutoff
+
+- **Contract (4.1):**
+  - `selected_by` is `{kind: "filter", text, sandbox_text?, not_rehearsed?}`, unchanged from today.
+  - **details.queries:**
+    - A filter request has exactly one query labelled `records`, the production filter, as O17 does for ids.
+    - It has exactly one labelled `sandbox records` when selected_by.sandbox_text is present, and none otherwise.
+    - An ids request with a `sandbox records` query is refused.
+- **The filter rule:**
+  - **What it checks:** requestProblems checks the WHERE clause of the `records` and `sandbox records` SOQL, not
+    selected_by.text. text is the page's sentence (simulation.js: "created in the last 30 days, with no campaign").
+  - **What it allows:** comparisons `<field> <op> <value>` joined by AND only.
+    - op is one of = != < <= > >=.
+    - value is a quoted string, a number, true, false, null, or an ISO date or datetime.
+    - No OR, NOT, IN, LIKE, INCLUDES or EXCLUDES, no brackets, and no relative date literal (LAST_N_DAYS:30,
+      TODAY), since a moving filter changes the count between the pre-check and the write.
+  - **The parser:**
+    - It reads the WHERE clause only, stopping at ORDER BY or LIMIT.
+    - It skips quoted strings, so an AND inside quotes isn't a join.
+    - It takes `<>` as `!=`, and field paths with dots (`Account.Name`).
+    - It accepts an unquoted ISO date or datetime as a value, which Salesforce takes only against date fields; the
+      run's own query checks the type.
+  - **Refusals:** each one names its fix ("Fix details.queries "records": only comparisons joined by AND …").
+  - **Where it runs:** runContract only, as O17. The queue function doesn't read details.
+- **simulation.js:**
+  - FILTER_SOQL's `CreatedDate = LAST_N_DAYS:30` becomes `CreatedDate < 2026-11-20T00:00:00Z`.
+  - The filter queries are labelled `records` (and `sandbox records` where sandbox_text is), and the texts say
+    "created before 20 November 2026".
+  - The 45-day correction scenario becomes a moved cutoff, and not_rehearsed ("The 30-day limit on CreatedDate.")
+    becomes "The CreatedDate cutoff.".
+- **Files:**
+  - runContract.js and runContract.test.js;
+  - simulation.js and simulation.test.js;
+  - mcp/index.ts and index.test.mjs (the description names the labels and the rule).
+- **Deploy:** mcp, which imports runContract.js. No table or SQL.
+- **The data runs thread's answers (s30):**
+  - the rule checks the WHERE clause of the `records` and `sandbox records` SOQL, not selected_by.text. It refuses
+    OR, IN, LIKE, brackets, NOT and relative dates (LAST_N_DAYS, TODAY, YESTERDAY, THIS_ and LAST_ literals and the
+    like);
+  - `sandbox records` is required whenever selected_by.sandbox_text is present, and refused when it isn't;
+  - the five live ids requests are untouched (filter only).
+  - They accepted the O22 answer (16.1) as written: no preview change.
+
+### 16.3 Item e, the check line and the check result
+
+- **The runner:**
+  - sfRunKind gains `check`: the link's approval (link.action_id) on a request whose base_page is check. Consume sets
+    action_id for a check page's Approve (it is not a rerun), so 254's link test already passes.
+  - The body may carry `check: {job, at_goal, at_backup, neither}`, on a check run only; it is refused on any other
+    kind.
+    - `job` is Salesforce's job state: Queued, Preparing, Processing, Holding, InProgress, Completed, Failed or
+      Aborted, or `none` for a small run with no job. Letters only (the data runs thread's answer, s30; built in
+      s32, and the database's shape check in s31 takes the same list).
+    - at_goal, at_backup and neither are whole numbers, 0 or more, at most MAX_QUERY_COUNT.
+    - No other key.
+  - On ok true, `check` is required. The runner stores `{check: {...}}` through switchboard_record_run_outcome,
+    before the status, as a write's outcome is (refusals noted, a network error retried).
+  - **Runner changes this needs:**
+    - recordOutcome is gated on `kind === "write" && body.write`, and learns the check kind with `body.check`;
+    - sfRunReportProblem checks `check`'s shape only once the kind is known (after the link and request read), so
+      the check moves after the read;
+    - FINAL_FIX and the notes name the check page.
+  - The line comes from runContract's checkLine(linkId, check, simulated): "check <link id> done: job <job>; <a> at
+    goal, <b> at backup, <c> neither", starting "SIMULATION " for a pretend run.
+  - checkLine gains the `simulated` flag, as runLine did at s28.
+  - The runner imports runContract.js as the mcp tool does (`../../../src/switchboard/runs/runContract.js`).
+  - A failed check run keeps `run <link id> failed`.
+- **The database:** record_run_outcome allows base_page check, beside dataop and undo.
+  - On a check request, the outcome must be exactly `{check: {job, at_goal, at_backup, neither}}`, with job matching
+    the runner's rule and three non-negative integers, else 22023.
+    - The shape check runs once the request is read, before the `outcome_run_id = p_run_id` early return. So a bad
+      outcome is refused even on a run that already has one.
+  - The 55000 wording changes from "only a data operation or undo" to "… or a check".
+  - dataop and undo are unchanged.
+  - Every other rule stands: a finished real or pretend run, its link's approval, not expired, the pretend match, and
+    one outcome per request.
+- **The page:** RunPage's Outcome learns the check page (RunPage.jsx:153 draws only dataop and undo). It shows the
+  job state and the three counts.
+- **Files:**
+  - runner core.ts and core.test.mjs;
+  - runContract.js and its test (checkLine);
+  - RunPage.jsx with a test;
+  - the migration (16.7) and test 9 (16.7).
+- **Tables:** switchboard_run_requests (outcome columns), read: switchboard_runs, switchboard_actions,
+  switchboard_run_links.
+- **Deploys:** switchboard-runner; mcp only if runContract's change lands in the same step.
+
+### 16.4 O23, interrupted.request_id on a check page
+
+- **Contract (4.6):** `interrupted.request_id` is optional on a check page: the data operation the interrupted run
+  was.
+- **runContract:**
+  - a lower-case uuid;
+  - refused on any page but check, as O5's undo_of.request_id is.
+  - The tool lower-cases it, as it does undo_of.request_id.
+- **The queue** (switchboard_queue_run_request), beside 257's undo_of block, and with the same error forms:
+  - It must name the caller's own request (P0002 if none).
+  - That request's base_page must be dataop.
+  - It must be in the same project.
+  - Simulation and pretend must match.
+  - The check page's `operation.object` and `operation.kind` must equal the data operation's, and so must
+    `operation.field` when the data operation has one: an insert, delete or undelete has none (23514, naming both
+    sides). A check page with no operation is refused, naming what to add.
+- **A correction** can't change it. interrupted is in neither c_words nor c_run, so any difference is refused by the
+  diff.
+- **Files:** runContract.js and its test; _shared/tools/switchboard-runs.ts and its test; mcp/index.ts and its test;
+  the migration and test 9.
+- **Tables:** switchboard_run_requests, read.
+- **Deploy:** mcp.
+
+### 16.5 The runner's own mode check (from s29)
+
+- **The check:** sfRunRecord, right after the request is read: if `(r.mode === 'pretend') !== (request.pretend ===
+  true)`, then a final refusal. The reply is 422 with retry false; the line is "run <link id> failed", with
+  SIMULATION on a pretend run; the fix is PRETEND_MISMATCH_FIX.
+  - `final()` today drops a write's sample and calls recordOutcome, so the mismatch takes its own path, or a flag
+    on `final()`. That path finishes the run and fails the action, and calls neither.
+- **What it covers:** every kind, a failed pre-check and a write included. The database's 55000 stays the backstop.
+- **Tests:**
+  - both directions refused before any evidence, sample or outcome call;
+  - s29's mismatch tests move to the database backstop: the fakes' request agrees, and the evidence or outcome fake
+    still throws 55000.
+- **Files:** runner core.ts and core.test.mjs.
+- **Deploy:** switchboard-runner. No table.
+
+### 16.6 How each database change is proven before Alex approves it (the lesson of 256)
+
+- **The test file first:** test 9 (`supabase/tests/sb3_pages-h6v/9_slice2_test.sql`, run with --test; it replaces
+  15.3's `9_kept_checks_test.sql`) is drafted
+  and cold-reviewed with the migration, before the migration is queued.
+  - It covers item b's kept checks (15.3), O23's refusals and acceptance, item e's outcome on a check request, and
+    the unchanged dataop and undo outcomes.
+  - It is one self-undoing block that returns its checks as one row (CLAUDE.md).
+- **The smoke check:** the migration ends with a DO block that calls each replaced function past its changed lines.
+  So the approve page's dry run fails if any of them doesn't parse or run.
+  - **switchboard_queue_run_request.** It sets the JWT claims as 257 does and keeps 257's two cases. It adds a check
+    page with `interrupted.request_id` 'not-a-uuid', caught only as check_violation with O23's message. It also adds
+    the queue part of item b (15.3).
+  - **switchboard_record_run_evidence and switchboard_record_run_outcome.**
+    - **Setup:** inside an inner begin … exception block, as Alex (as test 6 does), it queues a pretend check
+      request, issues and consumes its link, and inserts a finished pretend run.
+    - **Outcome:** it calls record_run_outcome with a bad `{check}` first, expecting 22023, then a valid one,
+      expecting recorded true.
+    - **Evidence:** a second setup gives a pre-check request with rehearsal evidence in use, a link, and a finished
+      run with `failed_check: 'rehearsal'`. It calls record_run_evidence, which reaches the voiding lines. It also
+      reaches the queue's "no rehearsal in use" refusal (15.3).
+    - Only the queue, consume and the preview read auth.uid(); outcome and evidence use the run's user_id.
+    - **Undo:** it ends by raising a sentinel, caught by name, so every row it made is undone even on the real run.
+  - Then `select public.platform_check_conformance()`.
+- **The dry run is the proof.** Alex approves only after the approve page's dry run is clean, which it can't be if a
+  smoke call fails. After applying, test 9 runs with --test.
+
+### 16.7 One migration, and the step breakdown from s30
+
+Item b (15.3) already planned a migration replacing switchboard_record_run_evidence and the queue. O23 and item e
+add the queue and switchboard_record_run_outcome. So there is **one migration**,
+`supabase/migrations/_pending_sb3_pages-h6v_slice2.sql`:
+- it replaces switchboard_queue_run_request (b's part, O23), switchboard_record_run_evidence (b) and
+  switchboard_record_run_outcome (e);
+- grants as today, revoked from public and anon;
+- the smoke check, then conformance.
+
+Its db: items, claimed at the step that queues it:
+- db:fn:switchboard_queue_run_request;
+- db:fn:switchboard_record_run_evidence;
+- db:fn:switchboard_record_run_outcome;
+- db:table:switchboard_run_requests.
+
+| Step | What | Estimate |
+|---|---|---|
+| s30 | No database. Runner mode check (16.5), filter fields, rule and cutoff (16.2), O23's runContract and tool part (16.4), checkLine's flag; tests; cold review; claim db:deploy, deploy mcp and the runner | 35m |
+| s31 | Draft the one migration (b, O23, e) and test 9; cold review of both against the live bodies | 40m |
+| s31b | gitsync if behind, drift check, claim the db: items, number it, write it, queue it | 4m |
+| s31c | After Alex approves (on a clean dry run): queue test 9 with --test, check it | 3m |
+| s32 | Runner: item b (15.3) and item e's check kind, body, outcome and line; RunPage's check outcome; item d (15.5); tests; cold review; claim db:deploy, deploy the runner | 35m |
+
+That totals about 117 minutes, plus Checkpoints after s30, s31c and s32. s30 can ship before the migration:
+- O23 in runContract alone refuses only malformed ids;
+- the queue's check of the named request waits for s31.
+Item e's runner side waits for s32, after the slice 2 migration accepts a check page.
+
+**s29b cold review** (one round, against five of the six live bodies; its read budget ran out before evidence,
+which s29b had read in full).
+- **The one must-fix, fixed:** 16.1 said version is always one up from from_version. A wording or allows edit
+  keeps it.
+- **Should-fixes, all taken:**
+  - still_valid is compared on a wording edit;
+  - the outcome's shape check comes before its early return;
+  - the runner's recordOutcome gate, the kind-aware shape check and the 55000 wording;
+  - O23 compares field only when the data operation has one;
+  - the mode check skips final()'s drop and outcome;
+  - the evidence smoke test's own setup;
+  - db:deploy in s30 and s32;
+  - one name for test 9;
+  - the filter parser's details and the not_rehearsed wording.
+- **Confirmed:** consume sets action_id on a check page's Approve, and O23 matches 257's codes. interrupted can't be
+  changed by a correction.
+
+### 16.8 s30 as built (2026-11-27), deployed
+
+- **16.5, the runner's mode check** (core.ts sfRunRecord):
+  - right after the link and request are read, before the report's shape check, so before any evidence, sample,
+    drop or outcome call: `(r.mode === 'pretend') !== (request.pretend === true)` fails the run.
+  - The reply is 422, retry false, status failed, the line "run <link id> failed" (SIMULATION on a pretend run), and the
+    error "refused by the runner: a pretend run on a real request — <PRETEND_MISMATCH_FIX>" (or the other way round).
+  - `final(…, touch = false)` skips the drop, the outcome and the write reply. The run row gets `{exit_code?,
+    refused: 'mode', ok: false}`; on a retry of a run already finished, only its summary changes.
+  - s29's mismatch tests now test the database backstop: the fakes agree on mode, and 251's or 254's 55000 is still
+    reported.
+- **16.2, the filter** (runContract.js):
+  - A filter needs exactly one `records` query, and one `sandbox records` exactly when sandbox_text is set (refused
+    otherwise); an ids request with `sandbox records` is refused; a blank sandbox_text is refused.
+  - `filterQueryProblem(label, soql)` checks each one's WHERE clause, to ORDER, LIMIT, GROUP, OFFSET, FOR or WITH. It
+    refuses OR, NOT, IN, LIKE, INCLUDES and EXCLUDES and brackets, there or after the end keyword; WITH other than
+    SECURITY_ENFORCED, USER_MODE or SYSTEM_MODE (WITH DATA CATEGORY); a relative date in a value's place only (so
+    `Last_Name__c` is a field); and anything not `<field> <op> <value>`. Quoted strings are one token.
+  - `SELECT Id FROM Gift__c WHERE CreatedDate < 2026-11-20T00:00:00Z AND Status__c = 'Open'` is accepted (tested).
+  - simulation.js: FILTER_SOQL's cutoff is `CreatedDate < 2026-11-20T00:00:00Z`; the four filter scenarios carry
+    `records` (and `sandbox records` with sandbox_text), the texts say "created before 20 November 2026", and the
+    records_filter correction moves the cutoff to 22 November.
+  - **Deferred to s32:** precheck-filter-differs keeps not_rehearsed "The 30-day limit on CreatedDate.", because
+    RunPage.test.jsx:72 pins it and wasn't in s30's scope. correction-sandbox-filter has "The CreatedDate cutoff.".
+- **16.4, O23's runContract part:** interrupted.request_id is a lower-case uuid on a check page only. The tool
+  lower-cases it on the queue, and on a correction both undo_of.request_id and interrupted.request_id (so a capitalised
+  echo isn't refused by the database's diff). The queue's check of the named request comes in s31.
+- **checkLine(id, check, simulated = false):** SIMULATION on a pretend check run; a real line is unchanged.
+- **mcp:** queue_switchboard_run_request's description names the filter labels, the AND rule and
+  interrupted.request_id.
+- **Cold review** (one round): no must-fix. Both should-fixes taken: the clause's tail is checked, and the mode
+  check keeps a finished run's result. It confirmed no real run's line changed and the live ids requests are untouched.
+- **Tests:** runner 175, _shared/tools 975, mcp index 56 and tables 1, switchboard folder 605, app 3892 (7 skipped),
+  scripts 77; the build compiles.
+- **Deployed** holding db:deploy, from e97de96 with main's commits present: mcp at 06:18:03 and switchboard-runner
+  at 06:18:08. Without a token, mcp, /queue and /result answer 401.
 

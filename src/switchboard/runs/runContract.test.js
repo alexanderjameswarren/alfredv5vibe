@@ -5,7 +5,7 @@ import {
   afterApproveLines, approveLabel, bannerLines, clientOrgLine, checkLine, checksExpired, codeReviewProblems, countSentence, EDIT_RERUNS, GROUPS, groupedSteps,
   LINE_TEXT_MAX, lineText, requestProblems, reviewChangesLine, reviewQuestionLine, reviewReviewedLine, runCancelledLine, runLine,
   rerunSteps, runRerunsLine, runResentLine, selectedByText, STEPS, statusFromEvidence, undoClosedReason, undoLine, validUntil, whatChanges,
-  WRITE_CHECKS, outcomeView,
+  WRITE_CHECKS, outcomeView, filterQueryProblem,
 } from './runContract';
 import { BUTTON, RunShell, SECOND_BUTTON, localTime } from './look';
 
@@ -126,12 +126,77 @@ describe('requestProblems, s28: pretend, O17, O2 and O5', () => {
     expect(requestProblems(precheck({ pretend: { scenario: 'ok' } }))).toEqual([expect.stringMatching(/^Fix pretend: it needs simulation true/)]);
     expect(requestProblems(precheck({ simulation: false, pretend: { scenario: 'ok' } }))).toEqual([expect.stringMatching(/needs simulation true/)]);
   });
-  test('O17: an Id list needs exactly one details.queries entry labelled records; a filter needs none', () => {
+  test('O17: an Id list needs exactly one details.queries entry labelled records, and no sandbox records', () => {
     const msg = (n) => [`Add details.queries: exactly one entry labelled "records", the query that lists the Ids (it has ${n}).`];
     expect(requestProblems(precheck({ details: undefined }))).toEqual(msg(0));
     expect(requestProblems(precheck({ details: { queries: [{ label: 'The listed records', soql: 's' }] } }))).toEqual(msg(0));
     expect(requestProblems(precheck({ details: { queries: [{ label: 'records', soql: 'a' }, { label: 'records', soql: 'b' }] } }))).toEqual(msg(2));
-    expect(requestProblems(precheck({ selected_by: { kind: 'filter', text: 'f' }, details: undefined, steps: [{ code: 'count_filter' }] }))).toEqual([]);
+    expect(requestProblems(precheck({ details: { queries: [{ label: 'records', soql: 'a' }, { label: 'sandbox records', soql: 'b' }] } })))
+      .toEqual(['Leave out details.queries "sandbox records": only a filter has a sandbox query.']);
+  });
+  describe('s30 (16.2): a filter request', () => {
+    const PLAIN = "SELECT Id FROM Gift__c WHERE CreatedDate < 2026-11-20T00:00:00Z AND Status__c = 'Open'";
+    const filter = (sel, queries) => precheck({ selected_by: { kind: 'filter', text: 'f', ...sel }, details: { queries }, steps: [{ code: 'count_filter' }] });
+    const rec = (soql) => ({ label: 'records', soql });
+    test('needs one records query, and one sandbox records query exactly when sandbox_text is set', () => {
+      expect(requestProblems(filter({}, [rec(PLAIN)]))).toEqual([]);
+      expect(requestProblems(filter({ sandbox_text: 's' }, [rec(PLAIN), { label: 'sandbox records', soql: PLAIN }]))).toEqual([]);
+      expect(requestProblems(filter({}, []))).toEqual(['Add details.queries: exactly one entry labelled "records", the filter\'s query on production (it has 0).']);
+      expect(requestProblems(filter({}, [rec(PLAIN), rec(PLAIN)]))).toEqual(['Add details.queries: exactly one entry labelled "records", the filter\'s query on production (it has 2).']);
+      expect(requestProblems(filter({ sandbox_text: 's' }, [rec(PLAIN)])))
+        .toEqual(['Add details.queries: exactly one entry labelled "sandbox records", the filter\'s query on the sandbox, since selected_by.sandbox_text is set (it has 0).']);
+      expect(requestProblems(filter({}, [rec(PLAIN), { label: 'sandbox records', soql: PLAIN }])))
+        .toEqual(['Leave out details.queries "sandbox records", or add selected_by.sandbox_text: a sandbox query goes with the sandbox\'s filter in words.']);
+      expect(requestProblems(filter({ sandbox_text: ' ' }, [rec(PLAIN)]))).toEqual(["Fix selected_by.sandbox_text: the sandbox's filter in words, or leave it out."]);
+    });
+    test('the AND rule checks the SOQL WHERE clause, never selected_by.text', () => {
+      expect(requestProblems(filter({ text: 'created in the last 30 days, or today' }, [rec(PLAIN)]))).toEqual([]);
+      for (const soql of [
+        PLAIN,
+        "SELECT Id, Campaign__c FROM Gift__c\nWHERE Source__c = 'Spring import'\n  AND CreatedDate < 2026-11-20T00:00:00Z\n  AND Campaign__c = null",
+        "SELECT Id FROM Gift__c WHERE Note__c = 'this OR that AND (more)' and Amount__c >= -10.5 ORDER BY Id LIMIT 200",
+        'SELECT Id FROM Contact WHERE Account.Name != null AND Last_Name__c <> \'x\' AND Closed__c = TRUE AND Day__c <= 2026-11-01',
+        "select id from Gift__c where CreatedDate > 2026-11-01T00:00:00.000+00:00",
+      ]) expect(filterQueryProblem('records', soql)).toBeNull();
+    });
+    test('it refuses OR, NOT, IN, LIKE, INCLUDES, EXCLUDES, brackets and relative dates, naming the label and the fix', () => {
+      const RULE = 'only comparisons <field> <op> <value> joined by AND (op = != < <= > >=; value a quoted string, a number, true, false, null, or an ISO date or datetime)';
+      const w = (clause) => `SELECT Id FROM Gift__c WHERE ${clause}`;
+      expect(filterQueryProblem('records', w("A__c = 1 OR B__c = 2"))).toBe(`Fix details.queries "records": ${RULE}; it has OR.`);
+      expect(filterQueryProblem('records', w("NOT A__c = 1"))).toBe(`Fix details.queries "records": ${RULE}; it has NOT.`);
+      expect(filterQueryProblem('records', w("Id in ('a', 'b')"))).toBe(`Fix details.queries "records": ${RULE}; it has IN.`);
+      expect(filterQueryProblem('sandbox records', w("Name LIKE 'A%'"))).toBe(`Fix details.queries "sandbox records": ${RULE}; it has LIKE.`);
+      expect(filterQueryProblem('records', w("Tags__c includes ('x')"))).toMatch(/it has INCLUDES\.$/);
+      expect(filterQueryProblem('records', w("Tags__c EXCLUDES ('x')"))).toMatch(/it has EXCLUDES\.$/);
+      expect(filterQueryProblem('records', w("(A__c = 1 AND B__c = 2)"))).toBe(`Fix details.queries "records": ${RULE}; it has brackets.`);
+      for (const rel of ['LAST_N_DAYS:30', 'TODAY', 'YESTERDAY', 'THIS_MONTH', 'LAST_WEEK', 'NEXT_N_DAYS:5', 'LAST_90_DAYS', 'N_DAYS_AGO:3', 'THIS_FISCAL_YEAR']) {
+        expect(filterQueryProblem('records', w(`CreatedDate = ${rel} AND A__c = 1`)))
+          .toBe(`Fix details.queries "records": no relative date such as ${rel}: a moving filter changes the count between the pre-check and the write; use a fixed date or datetime.`);
+      }
+      for (const soql of [w('A__c'), w('A__c = '), w('A__c = 1 AND'), w('A__c == 1'), w('A__c = 1 B__c = 2'), w('A__c = Foo'), w('A__c = 1; DELETE'),
+        w('A__c = 1, B__c = 2'), 'SELECT Id FROM Gift__c']) {
+        expect(filterQueryProblem('records', soql)).toMatch(/^Fix details\.queries "records": (a WHERE clause of )?only comparisons .*\)\.$/);
+      }
+      expect(filterQueryProblem('records', w("A__c = 'open"))).toBe(`Fix details.queries "records": ${RULE}; it has an unclosed quote.`);
+      // s30 cold review: what follows the clause's end is checked too.
+      expect(filterQueryProblem('records', w('A__c = 1 LIMIT 5 OR B__c = 2'))).toBe(`Fix details.queries "records": ${RULE}; it has OR.`);
+      expect(filterQueryProblem('records', w('A__c = 1 WITH DATA CATEGORY Geo__c AT usa__c'))).toBe(`Fix details.queries "records": ${RULE}; it has WITH DATA.`);
+      expect(filterQueryProblem('records', w('A__c = 1 WITH SECURITY_ENFORCED ORDER BY Id LIMIT 10'))).toBeNull();
+      expect(filterQueryProblem('records', undefined)).toBe('Fix details.queries "records": its soql, the query, as text.');
+      expect(requestProblems(filter({}, [rec(w("A__c = 1 OR B__c = 2"))]))).toEqual([`Fix details.queries "records": ${RULE}; it has OR.`]);
+    });
+  });
+  test('s30 (O23): interrupted.request_id, a lower-case uuid, on a check page only', () => {
+    const check = (interrupted) => dataop({ page: 'check', steps: [], interrupted });
+    const base = requestProblems(check({ run_tag: 'x-s1-ab12' }));
+    expect(requestProblems(check({ run_tag: 'x-s1-ab12', request_id: ID }))).toEqual(base);
+    for (const bad of [ID.toUpperCase(), 'not-a-uuid', 5, null, '']) {
+      const got = requestProblems(check({ run_tag: 'x-s1-ab12', request_id: bad }));
+      expect(got.filter((p) => !base.includes(p))).toEqual(["Fix interrupted.request_id: the interrupted data operation request's id, a lower-case uuid."]);
+      expect(got.length).toBe(base.length + 1);
+    }
+    expect(requestProblems(dataop({ interrupted: { run_tag: 'x', request_id: ID } })))
+      .toEqual(['Leave interrupted.request_id out: only a check names the data operation that was interrupted.']);
   });
   test('O2: a whole allows is fine beside the sentences; a malformed one is refused, naming its key', () => {
     const allows = { mode: 'moving', kinds: [], integrations: { allowed: false, reason: 'r' }, failure_tolerance: { rows: 0, reason: 'r' } };
@@ -277,6 +342,11 @@ describe('result lines', () => {
     expect(runRerunsLine('sim-correction-field')).toBe('SIMULATION run sim-correction-field reruns');
     expect(checkLine(ID, { job: 'Aborted', at_goal: 30, at_backup: 15, neither: 0 }))
       .toBe(`check ${ID} done: job Aborted; 30 at goal, 15 at backup, 0 neither`);
+    // s30: a pretend check run's line starts SIMULATION; a real one's is unchanged.
+    expect(checkLine(ID, { job: 'Completed', at_goal: 45, at_backup: 0, neither: 0 }, true))
+      .toBe(`SIMULATION check ${ID} done: job Completed; 45 at goal, 0 at backup, 0 neither`);
+    expect(checkLine(ID, { job: 'Completed', at_goal: 45, at_backup: 0, neither: 0 }, false))
+      .toBe(`check ${ID} done: job Completed; 45 at goal, 0 at backup, 0 neither`);
     expect(reviewReviewedLine(ID)).toBe(`review ${ID} reviewed`);
     expect(reviewQuestionLine(ID, 'Why 200?')).toBe(`review ${ID} question: Why 200?`);
     expect(reviewChangesLine(ID, 'Use the batch size from settings.')).toBe(`review ${ID} changes required: Use the batch size from settings.`);

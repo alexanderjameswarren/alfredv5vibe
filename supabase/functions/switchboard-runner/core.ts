@@ -965,17 +965,27 @@ async function sfRunRecord(
     ? { sample_dropped: sampleDropped, outcome: outcome.reply,
         ...(outcome.refused ? { outcome_refused: outcome.refused } : {}), ...(outcome.error ? { outcome_error: outcome.error } : {}) }
     : {});
-  // Fail the run for good: the run row says why and the fix; the helper is told not to retry.
-  const final = async (why: string, kept: Record<string, unknown>, status = 422) => {
-    const reason = noted(why, await drop());
-    await deps.finishRun(r.id, { summary: reason, result: { ...kept, ok: false }, finished_at: r.finished_at ?? finished_at });
+  // Fail the run for good: the run row says why and the fix; the helper is told not to retry. `touch` false (s30, the
+  // mode check) leaves the sample and the outcome alone: the run isn't this request's, so it may change neither.
+  const final = async (why: string, kept: Record<string, unknown>, status = 422, touch = true) => {
+    const reason = touch ? noted(why, await drop()) : why;
+    // The mode check on a retry keeps the result the run already holds (s30 cold review): only the summary changes.
+    await deps.finishRun(r.id, !touch && r.finished_at ? { summary: reason }
+      : { summary: reason, result: { ...kept, ok: false }, finished_at: r.finished_at ?? finished_at });
     // The write may still have run, so its outcome is kept; here a failure to keep it is only noted.
-    const { note } = await recordOutcome(false);
+    const { note } = touch ? await recordOutcome(false) : { note: "" };
     if (note) await deps.finishRun(r.id, { summary: noted(reason, note) });
     await deps.setStatus(a.id, "failed");
     return json({ ok: false, retry: false, error: why, ...ids, status: "failed", line: sfRunLine(linkId, false, undefined, simulated),
-                  ...writeReply() }, status);
+                  ...(touch ? writeReply() : {}) }, status);
   };
+
+  // s30 (16.5): the run's mode must match its request's pretend, on every kind, before any evidence, sample or
+  // outcome call. The database's 55000 (251, 254) stays the backstop.
+  if (link && request && simulated !== (request.pretend === true)) {
+    return final(`refused by the runner: a ${simulated ? "pretend" : "real"} run on a ${request.pretend === true ? "pretend" : "real"} request — ${PRETEND_MISMATCH_FIX}`,
+      { ...exit, refused: "mode" }, 422, false);
+  }
 
   const problem = sfRunReportProblem(body);
   if (problem) {
