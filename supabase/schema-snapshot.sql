@@ -1,4 +1,4 @@
--- schema snapshot 2026-11-26 10:02, through migration 257 (supabase db dump --linked --schema public,platform)
+-- schema snapshot 2026-11-27 07:38, through migration 258 (supabase db dump --linked --schema public,platform)
 
 
 
@@ -9765,6 +9765,12 @@ begin
   if v_reruns is null then
     raise exception 'switchboard_correct_run_request: unknown edit kind %.', coalesce(p_edit_kind, 'null') using errcode = '23514';
   end if;
+  -- s31b (O23): a check page's operation is the interrupted data operation's, checked when the check was queued, and a
+  -- check has nothing to rehearse; so a field or value edit, which would move it off that operation, is refused.
+  if v_row.base_page = 'check' and p_edit_kind in ('field', 'value') then
+    raise exception 'switchboard_correct_run_request: a check page''s operation must stay the interrupted data operation''s, so a % edit is refused; queue a new check instead. No link was issued.', p_edit_kind
+      using errcode = '23514';
+  end if;
   if jsonb_typeof(p_request) is distinct from 'object' or jsonb_typeof(p_changed) is distinct from 'object'
      or coalesce(btrim(p_changed->>'reason'), '') = ''
      or jsonb_typeof(p_changed->'items') is distinct from 'array' or jsonb_array_length(p_changed->'items') = 0 then
@@ -9948,7 +9954,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") IS 'Switchboard 3: correct a run request (part 5 "Corrected"). Refuses (254, Alex s17b) every correction of a data operation or undo, wording included, once an approved write on it has started or may still start (its link''s approved action was picked up, has a run other than expired_not_picked_up, or is consumed within its 15 minutes): a further change is a new request through diagnosis; a write that never started leaves it correctable, and a pre-check is unaffected. Refuses an object or operation edit (a new request through diagnosis), and (s12c) any change to pre_check_request_id. Each kind changes only its own row of the correction table, besides the wording (headline, side effects, problem, what diagnosis allows: diagnosis_allows and, s27b, the structured allows) and, for a kind that reruns a check, the run''s own steps, phases, details, kept, run_tag and still_valid: value operation.value; file operation.file; field operation.field and undo; records selected_by (not its kind or sandbox filter), counts, operation.steps and undo; records_filter all of selected_by, counts, operation.steps and undo; sandbox_filter selected_by.sandbox_text and not_rehearsed; code the code. A kind that reruns the rehearsal may also add one role-rehearsal sandbox org to a request with none (252). Any other change is refused, naming the field (a key set to null counts as left out). A correction never changes simulation or pretend: simulation lives in its column, and (s26b) the stored request.pretend is kept as it was, whatever the corrected request sends. A wording or allowance edit voids nothing and keeps the version and the page. Any other edit raises the version by one, makes it a correction page, keeps the request''s own steps and phases as base_steps and base_phases (252; restored by switchboard_record_run_evidence on return), voids the evidence its kind reruns (field: rehearsal, login, backup, sample; Alex s8b) and the request''s live links, and for a code edit marks older reviews superseded, in one transaction. Returns {request_id, version, voided_checks, voided_links}.';
+COMMENT ON FUNCTION "public"."switchboard_correct_run_request"("p_request_id" "uuid", "p_edit_kind" "text", "p_request" "jsonb", "p_changed" "jsonb") IS 'Switchboard 3: correct a run request (part 5 "Corrected"). Refuses (254, Alex s17b) every correction of a data operation or undo, wording included, once an approved write on it has started or may still start (its link''s approved action was picked up, has a run other than expired_not_picked_up, or is consumed within its 15 minutes): a further change is a new request through diagnosis; a write that never started leaves it correctable, and a pre-check is unaffected. Refuses an object or operation edit (a new request through diagnosis), (s12c) any change to pre_check_request_id, and (s31b) a field or value edit on a check page, whose operation stays the interrupted data operation''s (queue a new check instead). Each kind changes only its own row of the correction table, besides the wording (headline, side effects, problem, what diagnosis allows: diagnosis_allows and, s27b, the structured allows) and, for a kind that reruns a check, the run''s own steps, phases, details, kept, run_tag and still_valid: value operation.value; file operation.file; field operation.field and undo; records selected_by (not its kind or sandbox filter), counts, operation.steps and undo; records_filter all of selected_by, counts, operation.steps and undo; sandbox_filter selected_by.sandbox_text and not_rehearsed; code the code. A kind that reruns the rehearsal may also add one role-rehearsal sandbox org to a request with none (252). Any other change is refused, naming the field (a key set to null counts as left out). A correction never changes simulation or pretend: simulation lives in its column, and (s26b) the stored request.pretend is kept as it was, whatever the corrected request sends. A wording or allowance edit voids nothing and keeps the version and the page. Any other edit raises the version by one, makes it a correction page, keeps the request''s own steps and phases as base_steps and base_phases (252; restored by switchboard_record_run_evidence on return), voids the evidence its kind reruns (field: rehearsal, login, backup, sample; Alex s8b) and the request''s live links, and for a code edit marks older reviews superseded, in one transaction. Returns {request_id, version, voided_checks, voided_links}.';
 
 
 
@@ -11016,7 +11022,9 @@ declare
   v_pre_id uuid;
   v_pre    public.switchboard_run_requests;
   v_undone public.switchboard_run_requests;
+  v_broke  public.switchboard_run_requests;
   v_why    text[] := '{}';
+  v_diff   text[] := '{}';
   v_copied jsonb := '[]'::jsonb;
   v_used   uuid;
   v_op_n   jsonb;
@@ -11128,6 +11136,60 @@ begin
       raise exception 'switchboard_queue_run_request: a pretend request and a plain simulation never undo each other; the undo and its data operation must both have pretend, or neither. No link was issued.' using errcode = '23514';
     end if;
   end if;
+  -- s31 (O23): a check page may name the data operation that was interrupted, interrupted.request_id: the caller's own
+  -- data operation request in the same project, agreeing on simulation and pretend, as undo_of.request_id is checked;
+  -- and the check page's operation is that data operation's (object and kind, and field when it has one: an insert,
+  -- delete or undelete has none). Without it, interrupted queues as before.
+  if jsonb_typeof(p_request->'interrupted') = 'object' and p_request->'interrupted' ? 'request_id' then
+    if v_page <> 'check' then
+      raise exception 'switchboard_queue_run_request: only a check names the data operation that was interrupted (interrupted.request_id). No link was issued.' using errcode = '23514';
+    end if;
+    if jsonb_typeof(p_request->'interrupted'->'request_id') is distinct from 'string'
+       or p_request->'interrupted'->>'request_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+      raise exception 'switchboard_queue_run_request: interrupted.request_id must be the interrupted data operation request''s id (a lower-case uuid). No link was issued.' using errcode = '23514';
+    end if;
+    -- Same user: another user's request is not found.
+    select * into v_broke from public.switchboard_run_requests
+     where id = (p_request->'interrupted'->>'request_id')::uuid and user_id = v_user;
+    if not found then
+      raise exception 'switchboard_queue_run_request: no such data operation request (%) for interrupted.request_id. No link was issued.', p_request->'interrupted'->>'request_id'
+        using errcode = 'P0002';
+    end if;
+    if v_broke.base_page <> 'dataop' then
+      raise exception 'switchboard_queue_run_request: request % is not a data operation (it is a %); interrupted.request_id names the data operation that was interrupted. No link was issued.', v_broke.id, v_broke.base_page
+        using errcode = '23514';
+    end if;
+    if v_broke.project_code <> v_code then
+      raise exception 'switchboard_queue_run_request: the data operation is for project %, not %; a check looks at a data operation in its own project. No link was issued.', v_broke.project_code, v_code
+        using errcode = '23514';
+    end if;
+    if v_broke.simulation <> v_sim then
+      raise exception 'switchboard_queue_run_request: a simulation and a real request never check each other; the check and its data operation must both be simulations, or neither. No link was issued.' using errcode = '23514';
+    end if;
+    if v_broke.pretend <> v_pretend then
+      raise exception 'switchboard_queue_run_request: a pretend request and a plain simulation never check each other; the check and its data operation must both have pretend, or neither. No link was issued.' using errcode = '23514';
+    end if;
+    if jsonb_typeof(p_request->'operation') is distinct from 'object' then
+      raise exception 'switchboard_queue_run_request: add operation: the interrupted data operation''s object and kind, and its field when it has one. No link was issued.' using errcode = '23514';
+    end if;
+    if (p_request->'operation'->'object') is distinct from (v_broke.request->'operation'->'object') then
+      v_diff := v_diff || format('object: the check has %s, the data operation %s',
+                                 coalesce(p_request->'operation'->>'object', '(none)'), coalesce(v_broke.request->'operation'->>'object', '(none)'));
+    end if;
+    if (p_request->'operation'->'kind') is distinct from (v_broke.request->'operation'->'kind') then
+      v_diff := v_diff || format('kind: the check has %s, the data operation %s',
+                                 coalesce(p_request->'operation'->>'kind', '(none)'), coalesce(v_broke.request->'operation'->>'kind', '(none)'));
+    end if;
+    if jsonb_typeof(v_broke.request->'operation'->'field') = 'string'
+       and (p_request->'operation'->'field') is distinct from (v_broke.request->'operation'->'field') then
+      v_diff := v_diff || format('field: the check has %s, the data operation %s',
+                                 coalesce(p_request->'operation'->>'field', '(none)'), v_broke.request->'operation'->>'field');
+    end if;
+    if cardinality(v_diff) > 0 then
+      raise exception 'switchboard_queue_run_request: the check''s operation is not the interrupted data operation''s (%). No link was issued.', array_to_string(v_diff, '; ')
+        using errcode = '23514';
+    end if;
+  end if;
 
   -- s12b: a data operation names the pre-check whose checks passed; its checks in use are copied with their times.
   if p_request ? 'pre_check_request_id' then
@@ -11234,6 +11296,12 @@ begin
     if jsonb_array_length(v_copied) = 0 then
       raise exception 'switchboard_queue_run_request: the pre-check has no passed checks yet; queue the data operation once its result is in. No link was issued.' using errcode = '23514';
     end if;
+    -- s31 (item b, 15.3): the write needs a rehearsal in use. A pre-check that failed at the rehearsal keeps its passed
+    -- production checks with its rehearsal voided, so it backs no data operation until a rehearsal passes.
+    if not exists (select 1 from jsonb_array_elements(v_copied) e where e->>'check' = 'rehearsal') then
+      raise exception 'switchboard_queue_run_request: the pre-check has no rehearsal in use (it failed at the rehearsal, or a correction voided it); queue the data operation once a rehearsal passes. No link was issued.'
+        using errcode = '23514';
+    end if;
   end if;
 
   -- s26b: request.pretend stays in the stored request (and so in the fingerprint); the column says whether it is there.
@@ -11258,7 +11326,7 @@ $_$;
 ALTER FUNCTION "public"."switchboard_queue_run_request"("p_request" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_queue_run_request"("p_request" "jsonb") IS 'Switchboard 3: queue a run request (spec 4.1) for the signed-in caller. Refuses, before any link, a request without page, project_code, the problem label and sentence, side_effects, headline or steps; one with a sample, evidence, base_steps or base_phases (252: only a correction keeps those); a correction (use switchboard_correct_run_request); and a data operation or undo without its count. A simulation (Q7) is accepted and flagged. Pretend (s26, s26b) is request.pretend = {scenario: "<name>"} (1 to 40 of a-z, 0-9, hyphen, underscore; nothing else), only with simulation; it is kept in the stored request and sets the pretend column. An undo may name the data operation it undoes (undo_of.request_id, s27): a lower-case uuid naming the caller''s own request whose base page is dataop, in the same project, agreeing on simulation and on pretend; refused on any other page, and otherwise refused naming what is wrong. A data operation may name its pre-check (pre_check_request_id, s12b): the caller''s own Pre-check and Rehearsal request in the same project, on its pre-check page, with passed checks, agreeing on simulation and on pretend (both or neither; scenario names may differ), whose object, operation, records or filter, count (the write''s count is the pre-check''s total, else expected; other counts equal), field, value, file, other operation details, sandbox filter, code commit and target org all match; its checks in use are copied with their original passed_at and copied_from, so the 24 hours count from the oldest; the pre-check''s sample row moves to the new request, expires_at unchanged (s12c). Refused, naming every mismatch, otherwise, and when that pre-check already backed an approved write. Returns {request_id, version, copied_checks, moved_sample}. Called by the queue_switchboard_run_request tool (B3).';
+COMMENT ON FUNCTION "public"."switchboard_queue_run_request"("p_request" "jsonb") IS 'Switchboard 3: queue a run request (spec 4.1) for the signed-in caller. Refuses, before any link, a request without page, project_code, the problem label and sentence, side_effects, headline or steps; one with a sample, evidence, base_steps or base_phases (252: only a correction keeps those); a correction (use switchboard_correct_run_request); and a data operation or undo without its count. A simulation (Q7) is accepted and flagged. Pretend (s26, s26b) is request.pretend = {scenario: "<name>"} (1 to 40 of a-z, 0-9, hyphen, underscore; nothing else), only with simulation; it is kept in the stored request and sets the pretend column. An undo may name the data operation it undoes (undo_of.request_id, s27): a lower-case uuid naming the caller''s own request whose base page is dataop, in the same project, agreeing on simulation and on pretend; refused on any other page, and otherwise refused naming what is wrong. A check may name the data operation that was interrupted (interrupted.request_id, s31): checked as undo_of.request_id is, and the check''s operation object and kind, and field when the data operation has one, must be that data operation''s; refused on any other page, and with no operation. A data operation may name its pre-check (pre_check_request_id, s12b): the caller''s own Pre-check and Rehearsal request in the same project, on its pre-check page, with passed checks including a rehearsal in use (s31), agreeing on simulation and on pretend (both or neither; scenario names may differ), whose object, operation, records or filter, count (the write''s count is the pre-check''s total, else expected; other counts equal), field, value, file, other operation details, sandbox filter, code commit and target org all match; its checks in use are copied with their original passed_at and copied_from, so the 24 hours count from the oldest; the pre-check''s sample row moves to the new request, expires_at unchanged (s12c). Refused, naming every mismatch, otherwise, and when that pre-check already backed an approved write. Returns {request_id, version, copied_checks, moved_sample}. Called by the queue_switchboard_run_request tool (B3).';
 
 
 
@@ -11323,6 +11391,8 @@ declare
   v_page   text;
   v_req    jsonb;
   v_steps  jsonb;
+  v_failed boolean;
+  v_void   text[];
 begin
   select * into v_run from public.switchboard_runs where id = p_run_id;
   if not found then
@@ -11336,7 +11406,17 @@ begin
   if v_run.mode not in ('real', 'pretend') or v_run.finished_at is null then
     raise exception 'switchboard_record_run_evidence: the run has not finished.' using errcode = '55000';
   end if;
-  if coalesce(v_run.result->'ok', 'false'::jsonb) <> 'true'::jsonb or coalesce(v_run.result->'pass', 'false'::jsonb) <> 'true'::jsonb then
+  -- s31 (item b, 15.3): a pre-check that stopped at the sandbox rehearsal reports {ok: true, pass: false,
+  -- failed_check: 'rehearsal', checks: [the production checks that passed]}. Those are kept; any rehearsal still in
+  -- use is voided. failed_check is only 'rehearsal', and only on such a result.
+  v_failed := coalesce((v_run.result->'ok') = 'true'::jsonb
+                       and (v_run.result->'pass') = 'false'::jsonb
+                       and (v_run.result->'failed_check') = '"rehearsal"'::jsonb, false);
+  if coalesce(v_run.result ? 'failed_check', false) and not v_failed then
+    raise exception 'switchboard_record_run_evidence: failed_check is only "rehearsal", on a result with ok true and pass false; no evidence is recorded.' using errcode = '23514';
+  end if;
+  if not v_failed
+     and (coalesce(v_run.result->'ok', 'false'::jsonb) <> 'true'::jsonb or coalesce(v_run.result->'pass', 'false'::jsonb) <> 'true'::jsonb) then
     raise exception 'switchboard_record_run_evidence: the run did not pass; no evidence is recorded.' using errcode = '55000';
   end if;
   if jsonb_typeof(v_run.result->'checks') is distinct from 'array' or jsonb_array_length(v_run.result->'checks') = 0 then
@@ -11349,6 +11429,9 @@ begin
                  or (c ? 'commit' and coalesce(c->>'commit', '') !~ '^[0-9a-f]{7,40}$')
                  or (c - array['check', 'org', 'commit']) <> '{}'::jsonb) then
     raise exception 'switchboard_record_run_evidence: the run''s result has a check that isn''t {check, org, commit?}.' using errcode = '23514';
+  end if;
+  if v_failed and exists (select 1 from jsonb_array_elements(v_run.result->'checks') c where c->>'check' = 'rehearsal') then
+    raise exception 'switchboard_record_run_evidence: a run that failed at the rehearsal never records a rehearsal; list only the production checks that passed. No evidence is recorded.' using errcode = '23514';
   end if;
 
   -- The link and its request, locked request first, as the link functions do.
@@ -11380,14 +11463,18 @@ begin
     raise exception 'switchboard_record_run_evidence: the run finished before the request was corrected; no evidence is recorded.' using errcode = '55000';
   end if;
   if exists (select 1 from jsonb_array_elements(v_row.evidence) e where e->>'run_id' = v_run.id::text) then
-    return jsonb_build_object('recorded', 0, 'already', true, 'request_id', v_row.id, 'page', v_row.page);
+    return jsonb_build_object('recorded', 0, 'already', true, 'request_id', v_row.id, 'page', v_row.page, 'rehearsal_failed', v_failed);
   end if;
   -- Each check once per result, and never older than the evidence it would replace.
   if (select count(distinct c->>'check') from jsonb_array_elements(v_run.result->'checks') c) <> jsonb_array_length(v_run.result->'checks') then
     raise exception 'switchboard_record_run_evidence: the run''s result names a check twice.' using errcode = '23514';
   end if;
-  if exists (select 1 from jsonb_array_elements(v_row.evidence) e, jsonb_array_elements(v_run.result->'checks') c
-              where e->>'check' = c->>'check' and coalesce((e->>'voided')::boolean, false) = false
+  -- s31: the checks this run replaces: its own, and on a rehearsal failure the rehearsal too.
+  select array_agg(c->>'check') || (case when v_failed then array['rehearsal'] else array[]::text[] end)
+    into v_void
+    from jsonb_array_elements(v_run.result->'checks') c;
+  if exists (select 1 from jsonb_array_elements(v_row.evidence) e
+              where e->>'check' = any(v_void) and coalesce((e->>'voided')::boolean, false) = false
                 and (e->>'passed_at')::timestamptz > v_run.finished_at) then
     raise exception 'switchboard_record_run_evidence: newer evidence for these checks is already in use; an older run never replaces it.' using errcode = '55000';
   end if;
@@ -11397,8 +11484,9 @@ begin
          array_agg(c->>'check')
     into v_fresh, v_names
     from jsonb_array_elements(v_run.result->'checks') c;
-  -- Older entries for the same checks stay, voided; the new ones are in use.
-  select coalesce(jsonb_agg(case when e->>'check' = any(v_names) and coalesce((e->>'voided')::boolean, false) = false
+  -- Older entries for the same checks stay, voided; the new ones are in use. s31: on a rehearsal failure the
+  -- rehearsal in use is voided too, and none replaces it.
+  select coalesce(jsonb_agg(case when e->>'check' = any(v_void) and coalesce((e->>'voided')::boolean, false) = false
                                  then e || '{"voided": true}'::jsonb else e end), '[]'::jsonb) || v_fresh
     into v_evid
     from jsonb_array_elements(v_row.evidence) e;
@@ -11443,7 +11531,8 @@ begin
          request = v_req,
          updated_at = now()
    where id = v_row.id;
-  return jsonb_build_object('recorded', jsonb_array_length(v_fresh), 'already', false, 'request_id', v_row.id, 'page', v_page);
+  return jsonb_build_object('recorded', jsonb_array_length(v_fresh), 'already', false, 'request_id', v_row.id, 'page', v_page,
+                            'rehearsal_failed', v_failed);
 end;
 $_$;
 
@@ -11451,15 +11540,17 @@ $_$;
 ALTER FUNCTION "public"."switchboard_record_run_evidence"("p_run_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_record_run_evidence"("p_run_id" "uuid") IS 'Switchboard 3: record the passed checks of a finished run page pre-check run (the link''s approval on a pre-check page, or its rerun, which a correction page''s Approve is) as its request''s evidence. Reads only that run''s own switchboard_runs row: result {ok: true, pass: true, checks: [{check, org, commit?}]}, passed_at = finished_at; nothing from the caller but the run id. Refused for a run not finished or not passed, a malformed check, a plain simulation, a voided link or one for an older version, a run finished before the last correction, and a data operation''s own run; recorded once per run. A pretend run (s26) records only on a pretend request, and a pretend request only from a pretend run. Older entries for the same checks are kept, voided. A correction returns to its base page once every check it voided is in use again (and every write check, for a data operation), and (252) gets its own steps and phases back from base_steps and base_phases, a multi-object run''s write_step entries following operation.steps. Returns {recorded, already, request_id, page}. Service role only: called by switchboard-runner after a helper''s result (Alex''s option A, s12).';
+COMMENT ON FUNCTION "public"."switchboard_record_run_evidence"("p_run_id" "uuid") IS 'Switchboard 3: record the passed checks of a finished run page pre-check run (the link''s approval on a pre-check page, or its rerun, which a correction page''s Approve is) as its request''s evidence. Reads only that run''s own switchboard_runs row: result {ok: true, pass: true, checks: [{check, org, commit?}]}, passed_at = finished_at; nothing from the caller but the run id. A run that stopped at the sandbox rehearsal (s31, item b) reports {ok: true, pass: false, failed_check: "rehearsal", checks: [the production checks that passed]}: those are recorded, never a rehearsal, and any rehearsal still in use is voided, so its pre-check backs no data operation until a rehearsal passes; failed_check is refused on any other result. Refused for a run not finished or not passed, a malformed check, a plain simulation, a voided link or one for an older version, a run finished before the last correction, and a data operation''s own run; recorded once per run. A pretend run (s26) records only on a pretend request, and a pretend request only from a pretend run. Older entries for the same checks are kept, voided. A correction returns to its base page once every check it voided is in use again (and every write check, for a data operation), and (252) gets its own steps and phases back from base_steps and base_phases, a multi-object run''s write_step entries following operation.steps. Returns {recorded, already, request_id, page, rehearsal_failed}, already true with recorded 0 on a repeat. Service role only: called by switchboard-runner after a helper''s result (Alex''s option A, s12).';
 
 
 
 CREATE OR REPLACE FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public', 'pg_temp'
-    AS $$
+    AS $_$
 declare
+  -- s31 (item e): Salesforce's job states, and none for a small run with no job (the data runs thread's answer).
+  c_jobs   constant text[] := array['Queued', 'Preparing', 'Processing', 'Holding', 'InProgress', 'Completed', 'Failed', 'Aborted', 'none'];
   v_run    public.switchboard_runs;
   v_action public.switchboard_actions;
   v_link   public.switchboard_run_links;
@@ -11504,9 +11595,26 @@ begin
   if v_run.failure_reason = 'expired_not_picked_up' then
     raise exception 'switchboard_record_run_outcome: run % never started; it has no outcome. Nothing was recorded.', p_run_id using errcode = '55000';
   end if;
-  if v_row.base_page not in ('dataop', 'undo') then
-    raise exception 'switchboard_record_run_outcome: run % is a % run; only a data operation or undo has an outcome. Nothing was recorded.', p_run_id, v_row.base_page
+  if v_row.base_page not in ('dataop', 'undo', 'check') then
+    raise exception 'switchboard_record_run_outcome: run % is a % run; only a data operation, undo or check has an outcome. Nothing was recorded.', p_run_id, v_row.base_page
       using errcode = '55000';
+  end if;
+  -- s31 (item e, 16.3): a check's outcome is exactly {check: {job, at_goal, at_backup, neither}}. Checked here, before
+  -- the once-per-run return below, so a bad outcome is refused even on a run that already has one. A data operation's
+  -- and an undo's stay shape-free. The case guards the key removal, which fails on a scalar.
+  if v_row.base_page = 'check'
+     and not coalesce(case when jsonb_typeof(p_outcome->'check') = 'object'
+                           then (p_outcome - 'check'::text) = '{}'::jsonb
+                                and ((p_outcome->'check') - array['job', 'at_goal', 'at_backup', 'neither']) = '{}'::jsonb
+                                and ((p_outcome->'check') ?& array['job', 'at_goal', 'at_backup', 'neither'])
+                                and jsonb_typeof(p_outcome->'check'->'job') = 'string'
+                                and (p_outcome->'check'->>'job') = any(c_jobs)
+                                and not exists (select 1 from unnest(array['at_goal', 'at_backup', 'neither']) k
+                                                 where jsonb_typeof(p_outcome->'check'->k) is distinct from 'number'
+                                                    or (p_outcome->'check'->k)::text !~ '^[0-9]{1,9}$')
+                           else false end, false) then
+    raise exception 'switchboard_record_run_outcome: a check''s outcome is exactly {"check": {"job", "at_goal", "at_backup", "neither"}}: job one of %, and each count a whole number, 0 or more. Nothing was recorded.', array_to_string(c_jobs, ', ')
+      using errcode = '22023';
   end if;
   if v_row.simulation and not v_row.pretend then
     raise exception 'switchboard_record_run_outcome: request % is a simulation; it has no outcome. Nothing was recorded.', v_row.id using errcode = '55000';
@@ -11533,13 +11641,13 @@ begin
    where id = v_row.id;
   return jsonb_build_object('recorded', true, 'already', false, 'request_id', v_row.id);
 end;
-$$;
+$_$;
 
 
 ALTER FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") IS 'Switchboard 3: keep a data operation''s or undo''s outcome on its request (outcome, outcome_run_id, outcome_recorded_at), since the run''s own result is pruned after 30 days. Accepted only for a finished real run of the sf_run action its link approved (link.action_id), on a request whose base page is dataop or undo, not a plain simulation; or (s26) a finished pretend run on a pretend request, whose outcome is made up; a pretend run on a real request and a real run on a pretend one are refused. p_outcome is a JSON object of at most 64 KB, stored as given. A pre-check''s run, a rerun, an unfinished run and a run that never started are refused. Once per run: the same run again returns already true. A later run of the same link (a resend) replaces it; a run approved through another link of the request never does. Never touches evidence, the 24-hour clock or what can be approved. Returns {recorded, already, request_id}. Service role only: called by switchboard-runner after a write''s result.';
+COMMENT ON FUNCTION "public"."switchboard_record_run_outcome"("p_run_id" "uuid", "p_outcome" "jsonb") IS 'Switchboard 3: keep a data operation''s, undo''s or (s31) check''s outcome on its request (outcome, outcome_run_id, outcome_recorded_at), since the run''s own result is pruned after 30 days. Accepted only for a finished real run of the sf_run action its link approved (link.action_id), on a request whose base page is dataop, undo or check, not a plain simulation; or (s26) a finished pretend run on a pretend request, whose outcome is made up; a pretend run on a real request and a real run on a pretend one are refused. p_outcome is a JSON object of at most 64 KB, stored as given; on a check (item e) it is exactly {check: {job, at_goal, at_backup, neither}}, job one of Queued, Preparing, Processing, Holding, InProgress, Completed, Failed, Aborted or none, each count a whole number of 0 or more, checked before the once-per-run return. A pre-check''s run, a rerun, an unfinished run and a run that never started are refused. Once per run: the same run again returns already true. A later run of the same link (a resend) replaces it; a run approved through another link of the request never does. Never touches evidence, the 24-hour clock or what can be approved. Returns {recorded, already, request_id}. Service role only: called by switchboard-runner after a write''s or check''s result.';
 
 
 

@@ -1980,9 +1980,9 @@ Live data: 5 requests, all precheck with `selected_by.kind` ids. No evidence or 
 
 Item b (15.3) already planned a migration replacing switchboard_record_run_evidence and the queue. O23 and item e
 add the queue and switchboard_record_run_outcome. So there is **one migration**,
-`supabase/migrations/_pending_sb3_pages-h6v_slice2.sql`:
-- it replaces switchboard_queue_run_request (b's part, O23), switchboard_record_run_evidence (b) and
-  switchboard_record_run_outcome (e);
+`supabase/migrations/258_slice2.sql` (drafted as `_pending_sb3_pages-h6v_slice2.sql`, numbered at s31b):
+- it replaces switchboard_queue_run_request (b's part, O23), switchboard_record_run_evidence (b),
+  switchboard_record_run_outcome (e) and, from s31b, switchboard_correct_run_request (16.9);
 - grants as today, revoked from public and anon;
 - the smoke check, then conformance.
 
@@ -2058,4 +2058,108 @@ which s29b had read in full).
   scripts 77; the build compiles.
 - **Deployed** holding db:deploy, from e97de96 with main's commits present: mcp at 06:18:03 and switchboard-runner
   at 06:18:08. Without a token, mcp, /queue and /result answer 401.
+
+### 16.9 s31 to s31d: the slice 2 migration (258) and test 9 (2026-11-27; 258 applied, test 9 queued)
+
+Files: `supabase/migrations/258_slice2.sql` (the pending draft until s31c) and
+`supabase/tests/sb3_pages-h6v/9_slice2_test.sql`.
+
+- **Bases:** live md5s are unchanged since s29b. The bodies in 257 (queue) and 256 (evidence, outcome) hash to
+  them, so each new body is that file's, changed only for these items. A diff of each body shows nothing else.
+  interrupted is in neither c_words nor c_run of switchboard_correct_run_request, so its diff refuses any change to
+  interrupted.request_id (test 9 proves it). s31b replaces that function too, for field and value (below).
+- **Item b, evidence:**
+  - `v_failed` = ok true, pass false and failed_check `"rehearsal"`, coalesced to false.
+  - failed_check on any other result is 23514.
+  - A failure skips the "did not pass" refusal; listing a rehearsal is 23514; empty checks are still 23514.
+  - `v_void` (the run's checks, plus rehearsal on a failure) drives both the newer-evidence refusal and the voiding,
+    so an older failure never voids a newer rehearsal.
+  - The reply gains `rehearsal_failed`. The runner reads no field of evidence's reply and only passes it on, so the
+    new key changes nothing.
+- **Item b, queue:** after the copy, the data operation is refused when no rehearsal is in use among the copied
+  checks (23514).
+- **O23, queue:** after the undo_of block, with the same codes:
+  - interrupted.request_id is refused off a check page, and when not a lower-case uuid;
+  - P0002 when it isn't the caller's;
+  - refused when its base_page isn't dataop, or the project, simulation or pretend differ;
+  - refused with no operation;
+  - then one 23514 names each of object, kind and field (field only when the data operation has one), both sides.
+- **Item e, outcome:**
+  - base_page check joins dataop and undo, with the new 55000 words.
+  - On a check, the shape check comes right after that gate, before the simulation, pretend and once-per-run lines:
+    exactly `{check: {job, at_goal, at_backup, neither}}`, job in the nine states, counts matching `^[0-9]{1,9}$`
+    (22023). It sits inside a case on jsonb_typeof, so the key removal never meets a scalar.
+- **Expressions checked before review:** the outcome shape, v_failed, v_void and the diff format were each run with
+  get_sql_read on literals (15 outcomes and 8 results). All gave the intended answer.
+- **Smoke check (section 5 since s31b)**, inside the migration:
+  - 4a: 257's two cases, as a made-up user.
+  - 4b: as Alex, on pretend requests in smoke-slice2 projects, made, linked and approved through the functions,
+    with runs inserted by hand (no pickup). It ends with a sentinel that undoes everything.
+
+| Call | Reaches |
+|---|---|
+| evidence, failed_check on a pass | v_failed, the failed_check refusal |
+| evidence, rehearsal listed on a failure | the new pass test, the rehearsal refusal |
+| evidence, the failure | v_void, the newer test on it, the voiding, the reply's rehearsal_failed |
+| queue, data operation on that pre-check | the copy and the no-rehearsal refusal |
+| outcome on the pre-check's run | the new base-page refusal and its words |
+| queue, interrupted.request_id on a dataop | the off-check refusal |
+| queue, 'not-a-uuid'; a random uuid; a pre-check's id | the uuid test; the lookup and P0002; the base_page refusal |
+| queue, other project; real check; plain-simulation check | the project, simulation and pretend refusals |
+| queue, no operation; another object, kind and field | the operation refusal; the three comparisons and the diff message |
+| queue, the matching check | every condition in the block, to the insert |
+| outcome, a bad job | the gate passing a check, the shape refusal |
+| outcome, a good check; then a bad count on that run | the update; the shape refusal before the once-per-run return |
+| correction (s31b), a field edit on the check page | the new base-page test and its refusal, its % argument |
+| correction (s31b), a value edit on the check page | the same test and refusal, for the other kind |
+| correction (s31b), a field edit on the data operation | the new test passing a non-check page, to the version raise |
+
+- **Test 9:** one self-undoing block returning one row, in test 8's style. It covers:
+  - item b's failure, each refused form, the newer rehearsal, the full pass, a records correction that stays a
+    correction, and the queue refusing and accepting;
+  - O23's acceptance (field skipped for a delete), interrupted without request_id, 19 refusals, and the correction
+    refusing a change or removal;
+  - item e's 19 refused shapes, each of the nine jobs, already, a bad shape after one is kept, the pretend and plain
+    simulation rules, the pre-check refusal, and the dataop and undo outcomes unchanged;
+  - 256 and 257's rules, the grants, the comments, and conformance.
+- **Cold review** (one round, against the live bodies; md5s rechecked): no must-fix. It confirmed:
+  - unchanged lines are byte-identical;
+  - every new jsonb `-` or `?&` is guarded;
+  - the smoke check executes every changed statement, catches only by SQLSTATE and words, and undoes everything;
+  - no Q10 lock is hit;
+  - each test 9 check passes against this draft.
+  Taken:
+  - the "already" reply carries `rehearsal_failed` too;
+  - test 9's correction checks assert 23514 and the wording edit's words;
+  - interrupted.request_id on an undo is refused;
+  - 999999999 is accepted.
+  Left: "(none)" on both sides when one has JSON null (cosmetic); no other-user or dataop-correction-rerun case.
+- **Answered at s31b (Alex: yes):** a `field` correction on a check page passed switchboard_correct_run_request's
+  diff, so a check could be corrected off the interrupted data operation's field. The migration now also replaces
+  switchboard_correct_run_request (256's, live 44d03965). Right after the unknown-kind check, on base_page check, a
+  field or value edit is refused with 23514: "a check page's operation must stay the interrupted data operation's,
+  so a % edit is refused; queue a new check instead." Every other page's corrections are unchanged; a diff against
+  256 shows only that block and the comment's new clause.
+  - Smoke: three calls (the table above).
+  - s31b cold review (one round, against live 44d03965): no must-fix. It confirmed the diff, the parse
+    (`=` and `in` bind tighter than `and`; a null base_page is false; a null kind is refused earlier), and that each
+    smoke call and test 9 check passes. Kept as is: the refusal comes before the request-shape checks, so a malformed
+    field or value edit on a check gets this sentence first, still 23514. The tool passes the words through and
+    matches on none.
+  - Test 9: field and value refused on the check, the check unchanged; a wording edit on it still made; field and
+    value edits on a pre-check still made; the comment and grants.
+- **Number:** 258, from claims.cmd number-migration at s31b (claimed as db:migration:258). The file is
+  `supabase/migrations/258_slice2.sql`, written at s31c from the pending one.
+- **s31c:** the db: items were claimed (db:fn ×4, db:table:switchboard_run_requests; db:migration:258 from s31b). The
+  drift check after the gitsync found no new migration, and all four live md5s still matched the bases (44d03965,
+  76893e08, e9893467, 5a69fdbc). `258_slice2.sql` was written from the pending file; a diff shows only the
+  header's first two lines changed. The pending file was deleted under its claim, and 258 was queued (action id in
+  the s31c report).
+- **Applied (s31d):** Alex approved 258 as run 04cb994c-b322-48de-9231-7c6ca496d162, ok: all 19 statements,
+  including both smoke-check DO blocks (4a, 257's cases; 4b, the slice 2 calls, undone). Conformance: "CONFORMANT —
+  all 123 non-exempt public tables satisfy platform contract v1, and anon reaches nothing undecided."
+  - Live md5s after the run, each equal to its body in 258: queue 934acd07, evidence 5548ba77, outcome 3b5e3903,
+    correction 47ae4fc0.
+  - Test 9 queued with --test as action adf5d443-59ce-4c17-874e-3ddded6e0882 (one run, undone); its result is still
+    to come.
 
