@@ -286,6 +286,10 @@ test("sb3 B3: the four run page tools are registered, say approval is only on th
   assert.match(q.cfg.description, /failure_tolerance: \{rows, reason\}/);
   assert.match(q.cfg.description, /pretend \{scenario: "<name>"\}/);
   assert.match(q.cfg.description, /undo_of\.request_id/);
+  // s30: a filter's query labels and the AND rule, and O23's interrupted.request_id.
+  assert.match(q.cfg.description, /labelled "sandbox records" when selected_by\.sandbox_text is set/);
+  assert.match(q.cfg.description, /joined by AND: no OR, NOT, IN, LIKE, INCLUDES, EXCLUDES or brackets, and no relative date/);
+  assert.match(q.cfg.description, /interrupted\.request_id, that request's id, on a check page only/);
   assert.deepEqual(Object.keys(registered.find((r) => r.name === "correct_switchboard_run_request").cfg.inputSchema).sort(),
     ["changed", "edit_kind", "request", "request_id"]);
   assert.deepEqual(Object.keys(registered.find((r) => r.name === "issue_switchboard_run_link").cfg.inputSchema).sort(), ["request_id", "review_id"]);

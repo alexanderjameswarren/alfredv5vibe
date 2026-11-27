@@ -512,8 +512,62 @@ export const isPretendRequest = (r) => r?.simulation === true && isPlain(r?.pret
 /** s28 (item c): why an undo page has no sample record. */
 export const UNDO_NO_SAMPLE = 'No sample record here: an undo has no pre-check. The terminal shows a fresh sample before it counts.';
 
-/** s28 (O17): the details.queries label that carries an Id list's Ids. */
+/** s28 (O17): the details.queries label that carries an Id list's Ids, or a filter's production query (s30). */
 export const RECORDS_QUERY = 'records';
+/** s30 (16.2): the label of a filter's sandbox query, there exactly when selected_by.sandbox_text is. */
+export const SANDBOX_RECORDS_QUERY = 'sandbox records';
+
+// s30 (16.2): a filter's WHERE clause is comparisons joined by AND, nothing else, so the count can't move between the
+// pre-check and the write. Tokens: a quoted string, an operator, a bracket, a word (fields, values, keywords), or any
+// other one character (a comma in the SELECT list; inside the WHERE clause it breaks a comparison).
+const SOQL_TOKEN = /\s*('(?:\\.|[^'\\])*'|<=|>=|!=|<>|=|<|>|\(|\)|[A-Za-z0-9_.:+-]+|[^\s'])/y;
+const SOQL_END = /^(ORDER|LIMIT|GROUP|OFFSET|FOR|WITH)$/i;
+const SOQL_REFUSED = /^(OR|NOT|IN|LIKE|INCLUDES|EXCLUDES)$/i;
+const SOQL_FIELD = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$/;
+const SOQL_OPS = ['=', '!=', '<>', '<', '<=', '>', '>='];
+const SOQL_VALUE = /^('(?:\\.|[^'\\])*'|-?\d+(\.\d+)?|true|false|null|\d{4}-\d{2}-\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:?\d{2}))$/i;
+// Salesforce's relative date literals: TODAY, YESTERDAY, TOMORROW, THIS_WEEK, LAST_N_DAYS:30, NEXT_90_DAYS and the like.
+const SOQL_RELATIVE = /^(TODAY|YESTERDAY|TOMORROW|(THIS|LAST|NEXT)_[A-Z0-9_]+(:\d+)?|N_[A-Z_]+_AGO:\d+)$/i;
+const FILTER_RULE = 'only comparisons <field> <op> <value> joined by AND (op = != < <= > >=; value a quoted string, a number, true, false, null, or an ISO date or datetime)';
+
+/**
+ * s30 (16.2): the one problem with a filter query's WHERE clause, as a sentence starting `Fix details.queries "<label>"`,
+ * or null when it is comparisons joined by AND. Quoted strings are skipped, so an AND inside quotes isn't a join.
+ */
+export function filterQueryProblem(label, soql) {
+  const fix = (why) => `Fix details.queries "${label}": ${why}.`;
+  if (typeof soql !== 'string' || !soql.trim()) return fix('its soql, the query, as text');
+  const tokens = [];
+  let pos = 0;
+  for (;;) {
+    SOQL_TOKEN.lastIndex = pos;
+    const m = SOQL_TOKEN.exec(soql);
+    if (!m) break;
+    tokens.push(m[1]);
+    pos = SOQL_TOKEN.lastIndex;
+  }
+  // An unclosed quote is the one thing left over.
+  if (soql.slice(pos).trim()) return fix(`${FILTER_RULE}; it has an unclosed quote`);
+  const start = tokens.findIndex((t) => /^WHERE$/i.test(t));
+  if (start < 0) return fix(`a WHERE clause of ${FILTER_RULE}`);
+  const end = tokens.findIndex((t, i) => i > start && SOQL_END.test(t));
+  const where = tokens.slice(start + 1, end < 0 ? undefined : end);
+  // What follows ORDER BY, LIMIT and the like is checked too (s30 cold review), so nothing slips in after them; WITH
+  // is only a security or user mode, never WITH DATA CATEGORY (a filter of its own).
+  const after = end < 0 ? [] : tokens.slice(end);
+  const bad = [...where, ...after].find((t) => SOQL_REFUSED.test(t));
+  if (bad) return fix(`${FILTER_RULE}; it has ${bad.toUpperCase()}`);
+  if ([...where, ...after].some((t) => t === '(' || t === ')')) return fix(`${FILTER_RULE}; it has brackets`);
+  const w = after.findIndex((t) => /^WITH$/i.test(t));
+  if (w >= 0 && !/^(SECURITY_ENFORCED|USER_MODE|SYSTEM_MODE)$/i.test(after[w + 1] ?? '')) return fix(`${FILTER_RULE}; it has WITH ${after[w + 1] ?? ''}`.trimEnd());
+  const groups = [[]];
+  where.forEach((t) => (/^AND$/i.test(t) ? groups.push([]) : groups[groups.length - 1].push(t)));
+  // A relative date is a value: only the token after an operator, so a field such as Last_Name__c isn't one.
+  const rel = groups.map(([, op, v]) => (SOQL_OPS.includes(op) && SOQL_RELATIVE.test(v ?? '') ? v : null)).find(Boolean);
+  if (rel) return fix(`no relative date such as ${rel}: a moving filter changes the count between the pre-check and the write; use a fixed date or datetime`);
+  const whole = groups.every(([f, op, v, ...more]) => !more.length && SOQL_FIELD.test(f ?? '') && SOQL_OPS.includes(op) && SOQL_VALUE.test(v ?? ''));
+  return whole ? null : fix(FILTER_RULE);
+}
 
 /** s28 (O2): the allowed modes of the structured allows. */
 export const ALLOWS_MODES = ['frozen', 'moving'];
@@ -599,16 +653,40 @@ export function requestProblems(r, opts = {}) {
     }
   }
   // s28 (O17): an Id list's Ids are the details.queries entry labelled "records", exactly one.
+  const qs = Array.isArray(r.details?.queries) ? r.details.queries : [];
+  const labelled = (label) => qs.filter((q) => q?.label === label);
   if (r.selected_by?.kind === 'ids') {
-    const qs = Array.isArray(r.details?.queries) ? r.details.queries : [];
-    const n = qs.filter((q) => q?.label === RECORDS_QUERY).length;
+    const n = labelled(RECORDS_QUERY).length;
     if (n !== 1) out.push(`Add details.queries: exactly one entry labelled "${RECORDS_QUERY}", the query that lists the Ids (it has ${n}).`);
+    if (labelled(SANDBOX_RECORDS_QUERY).length) out.push(`Leave out details.queries "${SANDBOX_RECORDS_QUERY}": only a filter has a sandbox query.`);
+  }
+  // s30 (16.2): a filter's production query is "records"; its sandbox query is "sandbox records", there exactly when
+  // selected_by.sandbox_text is. Each one's WHERE clause is comparisons joined by AND.
+  if (r.selected_by?.kind === 'filter') {
+    const sel = r.selected_by;
+    const rec = labelled(RECORDS_QUERY);
+    if (rec.length !== 1) out.push(`Add details.queries: exactly one entry labelled "${RECORDS_QUERY}", the filter's query on production (it has ${rec.length}).`);
+    if (sel.sandbox_text !== undefined && !text(sel.sandbox_text)) out.push("Fix selected_by.sandbox_text: the sandbox's filter in words, or leave it out.");
+    const sb = labelled(SANDBOX_RECORDS_QUERY);
+    if (text(sel.sandbox_text) && sb.length !== 1) out.push(`Add details.queries: exactly one entry labelled "${SANDBOX_RECORDS_QUERY}", the filter's query on the sandbox, since selected_by.sandbox_text is set (it has ${sb.length}).`);
+    if (!text(sel.sandbox_text) && sb.length) out.push(`Leave out details.queries "${SANDBOX_RECORDS_QUERY}", or add selected_by.sandbox_text: a sandbox query goes with the sandbox's filter in words.`);
+    for (const q of [...rec, ...sb]) {
+      const p = filterQueryProblem(q.label, q.soql);
+      if (p) out.push(p);
+    }
   }
   // s28 (O5): undo_of.request_id names the data operation an undo undoes; the queue checks it is the caller's own.
   if (isPlain(r.undo_of) && Object.hasOwn(r.undo_of, 'request_id')) {
     if (r.page !== 'undo') out.push('Leave undo_of.request_id out: only an undo names the data operation it undoes.');
     else if (typeof r.undo_of.request_id !== 'string' || !LOWER_UUID.test(r.undo_of.request_id)) {
       out.push("Fix undo_of.request_id: the data operation request's id, a lower-case uuid.");
+    }
+  }
+  // s30 (O23): interrupted.request_id names the data operation the interrupted run was; the queue (s31) checks it.
+  if (isPlain(r.interrupted) && Object.hasOwn(r.interrupted, 'request_id')) {
+    if (r.page !== 'check') out.push('Leave interrupted.request_id out: only a check names the data operation that was interrupted.');
+    else if (typeof r.interrupted.request_id !== 'string' || !LOWER_UUID.test(r.interrupted.request_id)) {
+      out.push("Fix interrupted.request_id: the interrupted data operation request's id, a lower-case uuid.");
     }
   }
   if (r.page === 'precheck' && r.sample) out.push('Leave the sample out of a pre-check: the pre-check reads it.');
@@ -748,8 +826,9 @@ export const runCancelledLine = (id, reason, simulated) => line('run', id, withT
 export const runResentLine = (id, simulated) => line('run', id, ' resent', simulated);
 // A correction page's Approve runs its reruns, not the write (s12b): its own word. A write approval stays runLine.
 export const runRerunsLine = (id, simulated) => line('run', id, ' reruns', simulated);
-export function checkLine(id, { job, at_goal: goal, at_backup: backup, neither }) {
-  return line('check', id, ` done: job ${lineText(job) || 'unknown'}; ${n(goal)} at goal, ${n(backup)} at backup, ${n(neither)} neither`);
+// s30: `simulated` as runLine's, for a pretend check run (its link is a real one).
+export function checkLine(id, { job, at_goal: goal, at_backup: backup, neither }, simulated = false) {
+  return line('check', id, ` done: job ${lineText(job) || 'unknown'}; ${n(goal)} at goal, ${n(backup)} at backup, ${n(neither)} neither`, simulated);
 }
 export const reviewReviewedLine = (id) => line('review', id, ' reviewed');
 export function reviewQuestionLine(id, question) {

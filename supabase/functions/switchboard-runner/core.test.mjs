@@ -2133,17 +2133,54 @@ test("real sf_run lines are unchanged: no SIMULATION, whatever the request says"
     const body = await (await handle(srResult(over), srFakes().deps)).json();
     assert.equal(body.line, `run ${LINK_ID} ${line}`);
   }
-  // A real run on a pretend request still takes the real line: the line follows the run's mode.
-  const body = await (await handle(srResult(), srFakes({ request: PRETEND_REQ, evidence: async () => { throw coded("55000", "pretend mismatch"); } }).deps)).json();
+  // A real run on a pretend request (refused by the runner's mode check) still takes the real line: the line follows
+  // the run's mode.
+  const body = await (await handle(srResult(), srFakes({ request: PRETEND_REQ }).deps)).json();
   assert.equal(body.line, `run ${LINK_ID} failed`);
   // A real pickup refusal too.
   const pick = srFakes({ link: null });
   assert.equal((await (await handle(helper("pickup", { kinds: EIGHT }), pick.deps)).json()).line, `run ${LINK_ID} failed`);
 });
 
-test("pretend mismatch: the database's 55000 is reported (422, retry false, the fix named), never thrown", async () => {
-  // A pretend run on a real request, and a real run on a pretend request: 251 refuses both.
-  for (const f of [pretendFakes({ request: REQ_ROW }), srFakes({ request: PRETEND_REQ })]) {
+test("s30 mode check: a run whose mode doesn't match its request's pretend is refused before any evidence, sample or outcome call", async () => {
+  const dataop = { ...REQ_ROW, page: "dataop", base_page: "dataop" };
+  const cases = [
+    [pretendFakes({ request: REQ_ROW }), "a pretend run on a real request", true, {}],
+    [srFakes({ request: PRETEND_REQ }), "a real run on a pretend request", false, {}],
+    [pretendFakes({ link: { ...LINK_ROW }, request: dataop }), "a pretend run on a real request", true, { checks: undefined, write: { updated: 3 } }],
+    [srFakes({ link: { ...LINK_ROW }, request: { ...PRETEND_REQ, page: "dataop", base_page: "dataop" } }), "a real run on a pretend request", false, { checks: undefined, write: { updated: 3 } }],
+    [pretendFakes({ request: REQ_ROW }), "a pretend run on a real request", true, { ok: false, pass: undefined, checks: undefined }],
+  ];
+  for (const [f, words, simulated, over] of cases) {
+    let touched = 0;
+    for (const k of ["recordRunEvidence", "storeRunSample", "dropRunSample", "recordRunOutcome"]) f.deps[k] = async () => { touched++; throw new Error(`${k} called`); };
+    const res = await handle(srResult({ sample: SAMPLE, ...over }), f.deps);
+    assert.equal(res.status, 422, words);
+    const body = await res.json();
+    assert.equal(body.ok, false);
+    assert.equal(body.retry, false);
+    assert.equal(body.status, "failed");
+    assert.equal(body.error, `refused by the runner: ${words} — the run and its request disagree on pretend; queue the request again and approve its new link.`);
+    assert.equal(body.line, `${simulated ? "SIMULATION " : ""}run ${LINK_ID} failed`);
+    assert.equal(touched, 0, words);
+    assert.ok(!("outcome" in body) && !("sample_dropped" in body));
+    assert.deepEqual(f.calls.finished.at(-1).result, { refused: "mode", ok: false });
+    assert.deepEqual(f.calls.status, [{ id: "sr-1", status: "failed" }]);
+  }
+});
+
+test("s30 mode check on a retry keeps the result the run already holds; only the summary changes", async () => {
+  const held = { ok: true, pass: true, checks: CHECKS };
+  const f = pretendFakes({ request: REQ_ROW, run: { finished_at: "2026-11-24T10:05:00Z", result: held } });
+  const res = await handle(srResult(), f.deps);
+  assert.equal(res.status, 422);
+  assert.deepEqual(f.calls.finished.map((x) => Object.keys(x).filter((k) => k !== "id")), [["summary"]]);
+  assert.match(f.calls.finished[0].summary, /^refused by the runner: a pretend run on a real request/);
+});
+
+test("pretend mismatch backstop: the database's 55000 is reported (422, retry false, the fix named), never thrown", async () => {
+  // The runner's mode check passes (run and request agree); 251 still refuses, and its fix is named.
+  for (const f of [pretendFakes(), srFakes()]) {
     f.deps.recordRunEvidence = async () => { throw coded("55000", "switchboard_record_run_evidence: a pretend run records evidence only on a pretend request, and a pretend request only from a pretend run; no evidence is recorded."); };
     const res = await handle(srResult({ sample: SAMPLE }), f.deps);
     assert.equal(res.status, 422);
@@ -2157,9 +2194,9 @@ test("pretend mismatch: the database's 55000 is reported (422, retry false, the 
   }
 });
 
-test("pretend mismatch on a write: 254's 55000 is noted on the run and the reply, not thrown", async () => {
+test("pretend mismatch backstop on a write: 254's 55000 is noted on the run and the reply, not thrown", async () => {
   const write = { ...LINK_ROW };
-  const f = pretendFakes({ link: write, request: { ...REQ_ROW, page: "dataop", base_page: "dataop" },
+  const f = pretendFakes({ link: write, request: { ...PRETEND_REQ, page: "dataop", base_page: "dataop" },
     outcome: async () => { throw coded("55000", "switchboard_record_run_outcome: a pretend run's outcome is kept only on a pretend request, and a pretend request's only from a pretend run. Nothing was recorded."); } });
   const res = await handle(srResult({ checks: undefined, write: { updated: 3 } }), f.deps);
   assert.equal(res.status, 200);

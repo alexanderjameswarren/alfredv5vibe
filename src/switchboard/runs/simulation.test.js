@@ -87,6 +87,24 @@ describe('simulation', () => {
     expect(typeof SCENARIOS[name].title).toBe('string');
   });
 
+  test('s30 (16.2): every filter scenario carries its labelled queries with a fixed cutoff, never a relative date', async () => {
+    const now = Date.parse('2026-11-23T12:00:00Z');
+    const filters = [];
+    for (const name of scenarioNames()) {
+      const { request } = await simSource(name, { now }).load();
+      if (request.selected_by?.kind === 'filter') filters.push([name, request]);
+    }
+    expect(filters.map(([n]) => n)).toEqual(expect.arrayContaining(['precheck-filter', 'precheck-filter-differs', 'correction-records-filter', 'correction-sandbox-filter']));
+    for (const [name, r] of filters) {
+      const labels = r.details.queries.map((q) => q.label);
+      expect([name, labels]).toEqual([name, r.selected_by.sandbox_text ? ['records', 'sandbox records'] : ['records']]);
+      for (const q of r.details.queries) expect(q.soql).not.toMatch(/LAST_N_DAYS|TODAY/);
+    }
+    const plain = filters.find(([n]) => n === 'precheck-filter')[1];
+    expect(plain.details.queries[0].soql).toMatch(/CreatedDate < 2026-11-20T00:00:00Z/);
+    expect(plain.selected_by.text).toMatch(/created before 20 November 2026/);
+  });
+
   test('an unknown scenario has no source', () => expect(simSource('nope')).toBeNull());
 
   test('desktop answers come in order, one per ask, the last repeating', async () => {

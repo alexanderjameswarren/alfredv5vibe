@@ -3,7 +3,7 @@
 // RunShell draws the strip unless the source's kind is exactly 'real'.
 
 import { ANSWERS, simulatedState } from './desktopCheck';
-import { EDIT_RERUNS, RECORDS_QUERY, rerunSteps } from './runContract';
+import { EDIT_RERUNS, RECORDS_QUERY, SANDBOX_RECORDS_QUERY, rerunSteps } from './runContract';
 
 const HOUR = 60 * 60 * 1000;
 const iso = (t) => new Date(t).toISOString();
@@ -13,7 +13,12 @@ const PROD = { alias: 'example-prod', org_type: 'production', role: 'target' };
 const SANDBOX = { alias: 'example-dev1', org_type: 'sandbox', role: 'rehearsal' };
 const CODE = 'demo_gift_campaign-x1y';
 const IDS_SOQL = "SELECT Id, Campaign__c FROM Gift__c\nWHERE Id IN ('a0B5g00000AbCdEAAV', 'a0B5g00000AbCdFAAV', ...)";
-const FILTER_SOQL = "SELECT Id, Campaign__c FROM Gift__c\nWHERE Source__c = 'Spring import'\n  AND CreatedDate = LAST_N_DAYS:30\n  AND Campaign__c = null";
+// s30 (16.2): a fixed cutoff, never a relative date, so the count can't move between the pre-check and the write.
+const FILTER_SOQL = "SELECT Id, Campaign__c FROM Gift__c\nWHERE Source__c = 'Spring import'\n  AND CreatedDate < 2026-11-20T00:00:00Z\n  AND Campaign__c = null";
+const SANDBOX_FILTER_SOQL = "SELECT Id, Campaign__c FROM Gift__c\nWHERE Source__c = 'Spring import'\n  AND Campaign__c = null";
+const FILTER_TEXT = "Source__c = 'Spring import', created before 20 November 2026, with no campaign.";
+const filterQueries = (sandboxSoql) => [{ label: RECORDS_QUERY, soql: FILTER_SOQL },
+  ...(sandboxSoql ? [{ label: SANDBOX_RECORDS_QUERY, soql: sandboxSoql }] : [])];
 
 const base = (over) => ({
   simulation: true,
@@ -122,10 +127,10 @@ export const SCENARIOS = {
       request: base({
         page: 'precheck', version: 1, orgs: [PROD, SANDBOX],
         headline: `PRE-CHECK AND REHEARSAL ${CODE}: READS WHAT THE FILTER MATCHES IN example-prod, REHEARSES ON example-dev1`,
-        selected_by: { kind: 'filter', text: "Source__c = 'Spring import', created in the last 30 days, with no campaign." },
+        selected_by: { kind: 'filter', text: FILTER_TEXT },
         steps: codes(PRECHECK_FILTER_STEPS), evidence: [],
         phases: [{ name: 'Pre-check and rehearsal', state: 'waiting' }, { name: 'Data operation', state: 'not_started' }],
-        details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(2) }, { name: 'selection.soql', sha256: hash(3) }], queries: [{ label: 'The filter', soql: FILTER_SOQL }] },
+        details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(2) }, { name: 'selection.soql', sha256: hash(3) }], queries: filterQueries() },
       }),
     }),
   },
@@ -137,13 +142,14 @@ export const SCENARIOS = {
         headline: `PRE-CHECK AND REHEARSAL ${CODE}: READS WHAT THE FILTER MATCHES IN example-prod, REHEARSES ON example-dev1`,
         selected_by: {
           kind: 'filter',
-          text: "Source__c = 'Spring import', created in the last 30 days, with no campaign.",
-          sandbox_text: "Source__c = 'Spring import', with no campaign (the sandbox copy is older than 30 days).",
+          text: FILTER_TEXT,
+          sandbox_text: "Source__c = 'Spring import', with no campaign (the sandbox copy is older than the cutoff).",
+          // s30: still the old words; RunPage.test.jsx pins them, so "The CreatedDate cutoff." waits for s32 (16.2).
           not_rehearsed: 'The 30-day limit on CreatedDate.',
         },
         steps: codes(PRECHECK_FILTER_STEPS), evidence: [],
         phases: [{ name: 'Pre-check and rehearsal', state: 'waiting' }, { name: 'Data operation', state: 'not_started' }],
-        details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(4) }], queries: [{ label: 'The filter', soql: FILTER_SOQL }] },
+        details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(4) }], queries: filterQueries(SANDBOX_FILTER_SOQL) },
       }),
     }),
   },
@@ -282,18 +288,19 @@ export const SCENARIOS = {
   'correction-records-filter': {
     title: 'Corrected request: which records (filter), so the count, the backup, the sample and the rehearsal run again',
     build: (now) => correction(now, 'records_filter', {
-      selected_by: { kind: 'filter', text: "Source__c = 'Spring import', created in the last 45 days, with no campaign." },
-      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(8) }], queries: [{ label: 'The filter', soql: FILTER_SOQL.replace('LAST_N_DAYS:30', 'LAST_N_DAYS:45') }] },
-    }, 'The import ran over two weeks, so 30 days missed the first batch.', [{ what: 'Filter', old: 'created in the last 30 days', new: 'created in the last 45 days' }]),
+      selected_by: { kind: 'filter', text: "Source__c = 'Spring import', created before 22 November 2026, with no campaign." },
+      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(8) }], queries: [{ label: RECORDS_QUERY, soql: FILTER_SOQL.replace('2026-11-20T', '2026-11-22T') }] },
+    }, 'The import ran until 21 November, so the 20 November cutoff missed the last batch.', [{ what: 'Filter', old: 'created before 20 November 2026', new: 'created before 22 November 2026' }]),
   },
   'correction-sandbox-filter': {
     title: 'Corrected request: the sandbox filter, so only the rehearsal runs again',
     build: (now) => correction(now, 'sandbox_filter', {
       selected_by: {
-        kind: 'filter', text: "Source__c = 'Spring import', created in the last 30 days, with no campaign.",
-        sandbox_text: "Source__c = 'Spring import', with no campaign, in the 2026-11-01 sandbox refresh.", not_rehearsed: 'The 30-day limit on CreatedDate.',
+        kind: 'filter', text: FILTER_TEXT,
+        sandbox_text: "Source__c = 'Spring import', with no campaign, in the 2026-11-01 sandbox refresh.", not_rehearsed: 'The CreatedDate cutoff.',
       },
-      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(9) }], queries: [{ label: 'The filter', soql: FILTER_SOQL }] },
+      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(9) }],
+        queries: filterQueries(`${SANDBOX_FILTER_SOQL}\n  AND CreatedDate < 2026-11-01T00:00:00Z`) },
     }, 'The sandbox was refreshed on 1 November, so its copy needs its own date.', [{ what: 'Sandbox filter', old: 'with no campaign', new: 'with no campaign, in the 2026-11-01 sandbox refresh' }]),
   },
   'correction-code': {
