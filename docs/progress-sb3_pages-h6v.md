@@ -48,21 +48,19 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-s32 and s32b: the runner's items b and e, the page's check result and item d, the not_rehearsed rewording, deno.json's diff mapping, and the run pages' wake lines (nothing posts at Approve); switchboard-runner deployed and booting (spec 16.10).
+s33: plan for O18 and O24, spec 17. s34: the page and contract side built (spec 17.7 answers, 17.8 as built); no database change, no deploy.
 
-Next: Alex runs gitpush Checkpoint for this worktree with s32's and s32b's files (listed in the s32b report). The helper must send check, not pass, on a check page's run before one is approved. Then C2 below, once its gates are met.
+Next: Alex runs gitpush Checkpoint for s34's files if he wants them on main before the database steps (front end only, harmless before the migration). Then s35, the migration and test 10 drafted (17.4, 17.5), not queued. Later C2 (s24), once its gates are met (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall. C2's scope: update switchboard.ts, switchboard.test.mjs, mcp/index.ts, mcp/index.test.mjs and the spec; deploy mcp; one read-only check on switchboard_actions; 20m.
 
-Then C2, once its gates are met (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall.
-
-Run tag: sb3_pages-h6v-s24-<4>, C2: retire sf_dataop and sf_datawrite (they refuse with a pointer to the run request tools)
+Run tag: sb3_pages-h6v-s35-<4>, slice 2b migration drafted: kept_test_records and test_run_ids columns, delete_test_data in both constraints, queue, consume, retry, correct, outcome and preview replaced, switchboard_record_kept_test_records, with the smoke check; test 10 drafted; cold review; nothing queued
 
 Scope of this step:
-- create: nothing
-- update: supabase/functions/_shared/tools/switchboard.ts, supabase/functions/_shared/tools/switchboard.test.mjs, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, docs/technical-spec-sb3_pages-h6v.md
+- create: supabase/migrations/_pending_sb3_pages-h6v_slice2b.sql, supabase/tests/sb3_pages-h6v/10_slice2b_test.sql
+- update: docs/technical-spec-sb3_pages-h6v.md
 - delete: nothing
-- deploy: mcp (db:deploy, with main's commits present)
-- SQL: switchboard_actions (one read-only check that no old data run action is open)
-Estimated run: 20m
+- deploy: nothing
+- SQL: none (read-only reads of the live definitions with get_sql_read only)
+Estimated run: 45m
 
 ## Timing log
 
@@ -196,3 +194,5 @@ Estimated run: 20m
 | s31d | md5s of 258 against live, queue test 9, spec | 07:35:10 | 07:35:46 | 0m36s |
 | s32 | Runner b and e, page check result and d, rewording, tests, suites, build, cold review and fix, spec; deploy held | 07:39:06 | 07:48:30 | 9m24s |
 | s32b | deno.json, wake lines, tests, suites, build, deploy and boot check, cold review and fixes, spec | 07:50:17 | 07:55:29 | 5m12s |
+| s33 | read live definitions, plan spec 17 (O18, O24), cold review and fixes, progress, report | 11:19:01 | 11:27:18 | 8m17s |
+| s34 | contract, page, liveSource, simulations, tests, suites, build, cold review and fixes, spec 17.7 and 17.8 | 11:32:38 | 11:43:48 | 11m10s |

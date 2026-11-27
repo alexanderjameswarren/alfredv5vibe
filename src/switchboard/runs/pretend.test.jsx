@@ -71,6 +71,19 @@ describe('a pretend page', () => {
     expect(within(box).queryByTitle('Copy this line for the chat')).toBeNull();
   });
 
+  test('s34: a pretend delete page: marked pretend, its kind run, and the SIMULATION wake line at Approve', async () => {
+    await openRun(pretend(simSource('delete-test-data-pretend'), { approve: async () => ({ sent: true, link_id: LINK, action_id: ACTION }) }));
+    expect(top()).toHaveAttribute('data-switchboard-kind', 'run');
+    expect(top()).toHaveAttribute('data-switchboard-pretend', '');
+    expect(screen.getByTestId('run-approve')).toHaveTextContent('Delete the TEST records in SANDBOX');
+    fireEvent.click(screen.getByTestId('run-approve'));
+    const box = await screen.findByTestId('run-result-line');
+    expect(top()).toHaveAttribute('data-switchboard-action-id', ACTION);
+    expect(box).toHaveAttribute('data-switchboard-line', `SIMULATION run ${LINK}`);
+    expect(box).toHaveTextContent(PRETEND_WAKE_LINE_NOTE);
+    expect(within(box).queryByTitle('Copy this line for the chat')).toBeNull();
+  });
+
   test('the sent text says a pretend run went to the helper, its data made up', async () => {
     await openRun(pretend(simSource('pretend-precheck'), { approve: async () => ({ sent: true, link_id: LINK }) }));
     fireEvent.click(screen.getByTestId('run-approve'));

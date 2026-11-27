@@ -5,7 +5,10 @@
 // The extension lets the mcp Edge Function (Deno) and node load this file too: one copy of the rules (sb3 B3).
 import { noteOnChange } from './codeDiff.js';
 
-export const PAGES = ['precheck', 'dataop', 'undo', 'correction', 'check'];
+export const PAGES = ['precheck', 'dataop', 'undo', 'correction', 'check', 'delete_test_data'];
+/** s34 (O24, spec 17.2): the page that deletes the TEST records a pre-check kept, on one sandbox only. */
+export const DELETE_TEST_PAGE = 'delete_test_data';
+export const DELETE_TEST_STEPS = ['find_kept_test', 'type_count', 'delete_kept_test', 'confirm_gone'];
 export const OPERATIONS = ['update', 'insert', 'upsert', 'delete', 'undelete', 'multi'];
 export const ORG_TYPES = ['production', 'sandbox'];
 export const PHASE_STATES = ['passed', 'waiting', 'not_started', 'interrupted'];
@@ -23,6 +26,7 @@ export const GROUPS = {
   dataop: ['Before the write', 'Write', 'After the write'],
   undo: ['Before the write', 'Write', 'After the write'],
   check: ['What happened'],
+  delete_test_data: ['Sandbox clean-up'],
 };
 export const STOPS_AT_FIRST_FAILURE = 'The run stops at the first step that fails.';
 
@@ -123,6 +127,8 @@ export const STEPS = {
   rehearse_operation: { group: 'Sandbox rehearsal', org: 'sandbox', text: (s, r) => (isFilter(r) ? "Run the same operation and confirm each of the 3 changed and the 1 didn't." : 'Run the same operation and confirm each one changed.') },
   rehearse_undo: { group: 'Sandbox rehearsal', org: 'sandbox', text: () => 'Run the standard undo and confirm each one is back.' },
   delete_test: { group: 'Sandbox rehearsal', org: 'sandbox', text: () => 'Delete the TEST records.' },
+  // s34 (O18): in place of delete_test when the request keeps them (the data runs thread's wording).
+  keep_test: { group: 'Sandbox rehearsal', org: 'sandbox', text: () => 'Keep the TEST records in the sandbox for later.' },
   // Data operation and undo pages.
   still_match_backup: { group: 'Before the write', org: 'production', text: (s, r) => firstBeforeWrite(r) },
   login_can_write: { group: 'Before the write', org: 'production', text: (s, r) => (r?.page === 'undo'
@@ -149,7 +155,20 @@ export const STEPS = {
   job_state: { group: 'What happened', org: 'production', text: () => "Read Salesforce's job state." },
   compare_records: { group: 'What happened', org: 'production', text: () => 'Compare each record with the backup and with the goal.' },
   find_temp_code: { group: 'What happened', org: 'production', text: () => 'Look for temporary code left in production.' },
+  // s34 (O24): the delete page, sandbox only. Its type_count is in PAGE_STEPS.
+  find_kept_test: { group: 'Sandbox clean-up', org: 'sandbox', text: (s, r) => `Confirm ${targetOrg(r)?.alias ?? '?'} is a sandbox, then find the TEST records the pre-check kept, by the Ids saved on your PC. Any already gone are counted and listed.` },
+  delete_kept_test: { group: 'Sandbox clean-up', org: 'sandbox', text: () => "Delete those TEST records, and only those. A record that isn't a TEST record stops the run with nothing deleted." },
+  confirm_gone: { group: 'Sandbox clean-up', org: 'sandbox', text: () => 'Confirm none of them is left.' },
 };
+
+/** s34: a step code whose group, org and text differ on one page (the delete page's type_count is the sandbox's). */
+const PAGE_STEPS = {
+  delete_test_data: {
+    type_count: { group: 'Sandbox clean-up', org: 'sandbox', text: () => 'You type the number of TEST records the terminal finds; anything else stops with nothing deleted.' },
+  },
+};
+/** A step code's definition on a page: the page's own where it has one, else the shared one. */
+export const stepDef = (code, page) => PAGE_STEPS[page]?.[code] ?? STEPS[code];
 
 const isFilter = (r) => r?.selected_by?.kind === 'filter';
 
@@ -184,6 +203,9 @@ export function whatChanges(r) {
       : `Puts back up to ${recs(c.undo_up_to ?? c.expected)} of ${obj} from the backup of run ${r.undo_of?.run_tag ?? '?'}.`;
   }
   if (r?.page === 'check') return 'Nothing: this page only reads.';
+  if (r?.page === DELETE_TEST_PAGE) {
+    return `Deletes up to ${n(c.expected)} TEST ${plural(c.expected, 'record')} of ${obj} that pre-check run ${r.test_data_of?.run_tag ?? '?'} kept in ${targetOrg(r)?.alias ?? '?'}.`;
+  }
   switch (o.kind) {
     case 'update': return `Sets ${o.field ?? '?'} to ${JSON.stringify(o.value ?? null)} on ${recs(c.expected)} of ${obj}.`;
     case 'insert': return `Creates ${recs(c.expected)} of ${obj} from ${o.file ?? '?'}.`;
@@ -203,7 +225,7 @@ export const targetOrg = (r) => (r?.orgs ?? []).find((o) => o.role === 'target')
 export const rehearsalOrg = (r) => (r?.orgs ?? []).find((o) => o.role === 'rehearsal') ?? null;
 // A correction touches only the orgs its rerun steps run on (a sandbox filter edit never reads production).
 const touches = (r, type) => (r?.page === 'correction'
-  ? (r.steps ?? []).some((s) => STEPS[s?.code]?.org === type)
+  ? (r.steps ?? []).some((s) => stepDef(s?.code, r.page)?.org === type)
   : (r?.orgs ?? []).some((o) => o.org_type === type));
 
 /** The total a write page shows (the count sentence and detail): undo_up_to or expected on an undo, else total or expected. */
@@ -214,6 +236,11 @@ export function shownTotal(r) {
 
 /** The large count sentence: only on pages that write (data operation, undo). Null elsewhere. */
 export function countSentence(r) {
+  // s34 (O24): the terminal asks for the number it finds, so the delete page promises only "up to".
+  if (r?.page === DELETE_TEST_PAGE) {
+    const e = r.counts?.expected;
+    return `This deletes up to ${n(e)} TEST ${plural(e, 'record')} of ${r.operation?.object_label ?? r.operation?.object ?? '?'} in ${targetOrg(r)?.alias ?? '?'}.`;
+  }
   if (!r || !['dataop', 'undo'].includes(r.page)) return null;
   const t = targetOrg(r);
   const live = t?.org_type === 'sandbox' ? 'sandbox' : 'live';
@@ -232,12 +259,18 @@ export function bannerLines(r) {
   const writes = ['dataop', 'undo'].includes(r?.page);
   const c = r?.counts ?? {};
   const total = r?.page === 'undo' ? c.undo_up_to ?? c.expected : c.total ?? c.expected;
+  // s34 (O24): the delete page has the sandbox banner only.
+  if (r?.page === DELETE_TEST_PAGE) {
+    return { production: null, sandbox: `This deletes up to ${n(c.expected)} TEST ${plural(c.expected, 'record')}. Nothing else changes.` };
+  }
   return {
     production: touches(r, 'production')
       ? (writes && t?.org_type === 'production' ? `This changes ${r.page === 'undo' ? 'up to ' : ''}${recs(total).replace('record', 'live record')}.` : 'Read only, nothing changes.')
       : null,
     sandbox: touches(r, 'sandbox')
-      ? (writes && t?.org_type === 'sandbox' ? `This changes ${r.page === 'undo' ? 'up to ' : ''}${recs(total)}.` : 'TEST records are created, changed and deleted. Nothing else changes.')
+      ? (writes && t?.org_type === 'sandbox' ? `This changes ${r.page === 'undo' ? 'up to ' : ''}${recs(total)}.`
+        : keepsTestRecords(r) ? 'TEST records are created and changed, and kept for later. Nothing else changes.'
+          : 'TEST records are created, changed and deleted. Nothing else changes.')
       : null,
   };
 }
@@ -246,6 +279,7 @@ export function bannerLines(r) {
 export function approveLabel(r) {
   if (r?.page === 'undo') return 'Approve this UNDO on PRODUCTION';
   if (r?.page === 'check') return 'Check what happened on PRODUCTION';
+  if (r?.page === DELETE_TEST_PAGE) return 'Delete the TEST records in SANDBOX';
   const p = touches(r, 'production');
   const s = touches(r, 'sandbox');
   if (p && s) return 'Approve this run on PRODUCTION and SANDBOX';
@@ -261,6 +295,7 @@ const UNDO_WORDS ={ standard: 'standard', backup_only: 'backup only', none: 'non
 export function undoLine(r) {
   if (r?.page === 'undo') return 'Undo: none. An undo has no undo. A further change is a new request through diagnosis.';
   if (r?.page === 'check') return null;
+  if (r?.page === DELETE_TEST_PAGE) return 'Undo: none. Deleted TEST records are not restored; the rehearsal made them.';
   // Across several objects the undo is always backup only, whatever the request says.
   if (r?.operation?.kind === 'multi') return MULTI_UNDO;
   const u = r?.undo;
@@ -286,8 +321,8 @@ export function afterApproveLines(r) {
   if (r?.page === 'precheck' || r?.page === 'correction') {
     // A correction reruns only some checks: say only what its steps do.
     const codes = new Set((r.steps ?? []).map((s) => s?.code));
-    const prod = [...codes].some((c) => STEPS[c]?.org === 'production');
-    const sandbox = [...codes].some((c) => STEPS[c]?.org === 'sandbox');
+    const prod = [...codes].some((c) => stepDef(c, r.page)?.org === 'production');
+    const sandbox = [...codes].some((c) => stepDef(c, r.page)?.org === 'sandbox');
     lines.push(prod && sandbox
       ? 'A terminal window on your desktop runs the production pre-check first, read only, then the sandbox rehearsal.'
       : prod ? 'A terminal window on your desktop runs the production checks, read only.' : 'A terminal window on your desktop runs the sandbox rehearsal.');
@@ -303,6 +338,9 @@ export function afterApproveLines(r) {
   } else if (r?.page === 'check') {
     lines.push('A terminal window on your desktop reads, and changes nothing.');
     lines.push('Back to Alfred: the job state and three counts: records at the goal, at the backup, and neither.');
+  } else if (r?.page === DELETE_TEST_PAGE) {
+    lines.push(`A terminal window on your desktop confirms ${targetOrg(r)?.alias ?? '?'} is a sandbox, finds the kept TEST records by the Ids saved on your PC, lists any already gone, then asks you to type the number it finds. Anything else stops it with nothing deleted.`);
+    lines.push('Back to Alfred: the counts and pass or fail for each step. Nothing in production is touched.');
   }
   return lines;
 }
@@ -312,6 +350,7 @@ export function countDetail(r) {
   const c = r?.counts ?? {};
   const total = r?.page === 'undo' ? c.undo_up_to ?? c.expected : c.total ?? c.expected;
   if (r?.page === 'undo') return `Up to ${n(total)}`;
+  if (r?.page === DELETE_TEST_PAGE) return `Up to ${n(c.expected)}`;
   if (r?.operation?.kind === 'upsert') return `${n(total)}: ${n(c.update)} to update, ${n(c.create)} to create`;
   if (r?.operation?.kind === 'multi') {
     return `${n(total)} in all: ${(r.operation.steps ?? []).map((s) => `${n(s.count)} ${pluralLabel(s)}`).join(', ')}`;
@@ -340,6 +379,7 @@ export function daysLeftLine(r) {
 /** "Selected by": diagnosis's words, except a stopped run's undo, which selects only what that run changed (built). */
 export function selectedByText(r) {
   if (r?.page === 'undo' && r.undo_of?.stopped) return `The ${recs(r.undo_of.changed ?? r.counts?.undo_up_to)} the stopped run changed.`;
+  if (r?.page === DELETE_TEST_PAGE) return `The TEST records pre-check run ${r.test_data_of?.run_tag ?? '?'} kept, by the Ids saved on your PC.`;
   return r?.selected_by?.text ?? '';
 }
 
@@ -411,7 +451,8 @@ export function runEnd(run) {
 /** The pre-check and rehearsal that "Run the pre-check and rehearsal again" runs, listed in full beneath it. */
 export function rerunRequest(r) {
   const count = r?.selected_by?.kind === 'filter' ? 'count_filter' : 'count_listed';
-  const codes = [count, 'login_can_change', 'list_automation', 'save_backup', 'create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test'];
+  const codes = [count, 'login_can_change', 'list_automation', 'save_backup', 'create_test', 'rehearse_operation', 'rehearse_undo',
+    keepsTestRecords(r) ? 'keep_test' : 'delete_test'];
   return { ...r, page: 'precheck', steps: codes.map((code) => ({ code })) };
 }
 export const RERUN_LABEL = 'Run the pre-check and rehearsal again';
@@ -465,7 +506,37 @@ export const PHASE_HEADERS = {
   undo: 'Undo of a data operation',
   correction: 'Corrected request: checks to run again',
   check: 'Check what happened after an interrupted run',
+  delete_test_data: 'Delete sandbox test data',
 };
+
+/** s34 (O18): the request keeps its TEST records (only the value true; a pre-check or its correction). */
+export const keepsTestRecords = (r) => r?.keep_test_records === true;
+/** A kept set as the runner reports it, {count, sandbox}: count 1 to 999,999,999, sandbox a name. */
+const keptSet = (k) => isPlain(k) && Number.isInteger(k.count) && k.count >= 1 && k.count <= 999_999_999
+  && typeof k.sandbox === 'string' && k.sandbox.trim() !== '';
+/**
+ * s34 (O18, spec 17.1): "N TEST records kept in <sandbox>." on a pre-check page, summing every kept set not yet
+ * deleted (request.kept_test_records, which the database keeps, one per run), by sandbox; the run's own
+ * kept_test_records when the request has none recorded. Null when nothing is kept.
+ */
+export function keptTestLine(r, run) {
+  if (!['precheck', 'correction'].includes(r?.page)) return null;
+  // The run's own set only when the database has recorded none: a recorded set that was deleted stays deleted.
+  const recorded = Array.isArray(r.kept_test_records) && r.kept_test_records.length > 0;
+  const sets = recorded ? r.kept_test_records.filter((k) => keptSet(k) && !k.deleted_by)
+    : keptSet(run?.kept_test_records) ? [run.kept_test_records] : [];
+  if (!sets.length) return null;
+  const by = new Map();
+  sets.forEach((k) => by.set(k.sandbox, (by.get(k.sandbox) ?? 0) + k.count));
+  return [...by].map(([sb, c]) => `${n(c)} TEST ${plural(c, 'record')} kept in ${sb}.`).join(' ');
+}
+/** s34 (O24): why a delete page can't be drawn: any org other than its one sandbox. Null when it can. */
+export function deletePageOrgProblem(r) {
+  if (r?.page !== DELETE_TEST_PAGE) return null;
+  const orgs = Array.isArray(r.orgs) ? r.orgs : [];
+  return orgs.length === 1 && orgs[0]?.org_type === 'sandbox' && orgs[0]?.role === 'target' ? null
+    : 'This delete page names an org that is not its one sandbox, so it is not shown. Nothing was approved.';
+}
 
 /**
  * 24 hours from the oldest evidence still in use (not voided), as an ISO string; null when there is none (a pre-check
@@ -487,7 +558,7 @@ export const checksExpired = (evidence, now = Date.now()) => {
 export function groupedSteps(r) {
   const groups = GROUPS[r?.page] ?? [];
   const steps = (Array.isArray(r?.steps) ? r.steps : []).map((s) => {
-    const def = STEPS[s?.code];
+    const def = stepDef(s?.code, r.page);
     // The org comes from the step code alone, so a rehearsal step can never show a Production pill.
     return def ? { code: s.code, group: def.group, org: def.org, text: def.text(s, r) } : null;
   }).filter(Boolean);
@@ -637,7 +708,36 @@ export function requestProblems(r, opts = {}) {
   if (r.operation?.kind === 'insert' && !text(r.operation?.file)) out.push('Add operation.file: the file of rows on the PC.');
   if (r.operation?.kind === 'upsert' && !text(r.operation?.external_id)) out.push('Add operation.external_id.');
   if (r.operation?.kind === 'multi' && !(Array.isArray(r.operation?.steps) && r.operation.steps.length)) out.push('Add operation.steps: each object, its operation and count.');
-  if (r.page !== 'check' && !['ids', 'filter'].includes(r.selected_by?.kind)) out.push('Add selected_by: kind ids or filter, and its text.');
+  const del = r.page === DELETE_TEST_PAGE;
+  if (r.page !== 'check' && !del && !['ids', 'filter'].includes(r.selected_by?.kind)) out.push('Add selected_by: kind ids or filter, and its text.');
+  // s34 (O18, spec 17.1): keep_test_records, true only, on a pre-check (or its correction); keep_test goes with it.
+  if (r.keep_test_records !== undefined) {
+    if (!['precheck', 'correction'].includes(r.page)) out.push('Leave keep_test_records out: only a pre-check keeps its TEST records.');
+    else if (r.keep_test_records !== true) out.push('Fix keep_test_records: true, or leave it out.');
+    else if (!(Array.isArray(r.orgs) && r.orgs.some((o) => o?.role === 'rehearsal' && o?.org_type === 'sandbox'))) {
+      out.push('Add the rehearsal sandbox (role rehearsal, org_type sandbox): keep_test_records keeps the TEST records there.');
+    }
+  }
+  // s34 (O24, spec 17.2): the delete page, one sandbox, the pre-check it cleans up after, the count, its four steps.
+  if (r.test_data_of !== undefined && !del) out.push('Leave test_data_of out: only a delete page names the pre-check whose TEST records it deletes.');
+  if (del) {
+    const o = Array.isArray(r.orgs) ? r.orgs : [];
+    if (!(o.length === 1 && o[0]?.org_type === 'sandbox' && o[0]?.role === 'target')) {
+      out.push(`Fix orgs: a delete page runs on one sandbox only: one org, org_type sandbox, role target. ${NO_LINK}`);
+    }
+    if (r.operation?.kind !== 'delete') out.push('Fix operation.kind: a delete page deletes.');
+    const t = r.test_data_of;
+    if (!isPlain(t) || typeof t.request_id !== 'string' || !LOWER_UUID.test(t.request_id) || !text(t.run_tag)) {
+      out.push("Add test_data_of: {request_id, run_tag}, the pre-check whose kept TEST records this deletes (its id a lower-case uuid).");
+    }
+    const ce = r.counts?.expected;
+    if (!(Number.isInteger(ce) && ce >= 1)) out.push('Add counts.expected: the TEST records the pre-check kept, a whole number of 1 or more.');
+    if (r.counts?.total !== undefined) out.push('Leave counts.total out: a delete page counts only what the pre-check kept.');
+    const extra = ['selected_by', 'undo_of', 'interrupted', 'pre_check_request_id', 'sample', 'undo'].filter((k) => r[k] !== undefined);
+    if (extra.length) out.push(`Leave ${extra.join(', ')} out of a delete page.`);
+    const sc = (Array.isArray(r.steps) ? r.steps : []).map((s) => s?.code);
+    if (sc.join() !== DELETE_TEST_STEPS.join()) out.push(`Fix steps: a delete page's steps are ${DELETE_TEST_STEPS.join(', ')}, in that order.`);
+  }
   if (r.diagnosis_allows !== undefined && !(Array.isArray(r.diagnosis_allows) && r.diagnosis_allows.every(text))) {
     out.push("Fix diagnosis_allows: a list of sentences in diagnosis's words, or leave it out.");
   }
@@ -719,8 +819,13 @@ export function requestProblems(r, opts = {}) {
   const steps = Array.isArray(r.steps) ? r.steps : [];
   if (!steps.length) out.push('Add steps: the step codes this run will take.');
   const groups = GROUPS[r.page] ?? [];
+  // s34 (O18): keep_test replaces delete_test exactly when the request keeps its TEST records.
+  const codesHere = steps.map((s) => s?.code);
+  if (keepsTestRecords(r) && codesHere.includes('delete_test')) out.push('Fix steps: a request that keeps its TEST records lists keep_test, not delete_test.');
+  if (!keepsTestRecords(r) && codesHere.includes('keep_test')) out.push('Fix steps: keep_test needs keep_test_records true; otherwise the rehearsal lists delete_test.');
+  if (keepsTestRecords(r) && r.page === 'precheck' && !codesHere.includes('keep_test')) out.push('Add the keep_test step: a request that keeps its TEST records says so in its rehearsal.');
   steps.forEach((s, i) => {
-    const def = STEPS[s?.code];
+    const def = stepDef(s?.code, r.page);
     if (!def) out.push(`Fix steps[${i}]: ${JSON.stringify(s?.code ?? null)} is not a known step code.`);
     else if (groups.length && !groups.includes(def.group)) out.push(`Fix steps[${i}]: ${s.code} doesn't belong on a ${r.page} page.`);
     else if (s.code === 'skip_edited' && r.page !== 'undo') out.push(`Fix steps[${i}]: skip_edited is for the undo page only.`);
@@ -739,6 +844,8 @@ export function requestProblems(r, opts = {}) {
     const reruns = EDIT_RERUNS[r.changed.edit_kind];
     if (!reruns.length) out.push(`A ${r.changed.edit_kind} edit runs nothing, so it has no page: the next page carries the change. ${NO_LINK}`);
     const allowed = new Set(reruns.flatMap((c) => CHECK_STEPS[c] ?? []));
+    // s34: a rehearsal that keeps its TEST records ends with keep_test where it would delete them.
+    if (allowed.has('delete_test')) allowed.add('keep_test');
     steps.forEach((s, i) => {
       if (STEPS[s?.code] && reruns.length && !allowed.has(s.code)) out.push(`Fix steps[${i}]: a ${r.changed.edit_kind} edit doesn't run ${s.code} again.`);
     });

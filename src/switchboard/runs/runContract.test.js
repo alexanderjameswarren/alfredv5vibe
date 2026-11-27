@@ -6,6 +6,7 @@ import {
   LINE_TEXT_MAX, lineText, requestProblems, reviewChangesLine, reviewQuestionLine, reviewReviewedLine, runCancelledLine, runLine,
   rerunSteps, runRerunsLine, runResentLine, selectedByText, STEPS, statusFromEvidence, undoClosedReason, undoLine, validUntil, whatChanges,
   WRITE_CHECKS, outcomeView, filterQueryProblem, CHECK_JOBS, checkOutcomeView, checkResultProblem,
+  DELETE_TEST_STEPS, PHASE_HEADERS, deletePageOrgProblem, keptTestLine, stepDef,
 } from './runContract';
 import { BUTTON, RunShell, SECOND_BUTTON, localTime } from './look';
 
@@ -539,5 +540,107 @@ describe('B4: the status from the evidence, never the chat', () => {
     const undo = { page: 'undo', phases: [{ name: 'Undo', state: 'waiting' }] };
     expect(statusFromEvidence(undo)).toBe(undo);
     expect(statusFromEvidence(null)).toBeNull();
+  });
+});
+
+describe('s34 (O18): keep_test_records, keep_test and the kept line', () => {
+  const KEEP = ['count_listed', 'login_can_change', 'list_automation', 'save_backup', 'create_test', 'rehearse_operation', 'rehearse_undo', 'keep_test'];
+  const keeping = (over = {}) => precheck({ keep_test_records: true, steps: KEEP.map((code) => ({ code })), ...over });
+  test('a keeping pre-check is whole; keep_test goes only with it, delete_test never with it', () => {
+    expect(requestProblems(keeping())).toEqual([]);
+    expect(requestProblems(keeping({ steps: precheck().steps }))).toContain('Fix steps: a request that keeps its TEST records lists keep_test, not delete_test.');
+    expect(requestProblems(precheck({ steps: KEEP.map((code) => ({ code })) }))).toContain('Fix steps: keep_test needs keep_test_records true; otherwise the rehearsal lists delete_test.');
+  });
+  test('keep_test_records is true only, on a pre-check or its correction only', () => {
+    expect(requestProblems(keeping({ keep_test_records: false }))).toContain('Fix keep_test_records: true, or leave it out.');
+    expect(requestProblems(dataop({ keep_test_records: true }))).toContain('Leave keep_test_records out: only a pre-check keeps its TEST records.');
+    // Cold review: it needs the rehearsal sandbox, and the keep_test step on the pre-check.
+    expect(requestProblems(keeping({ orgs: [{ alias: 'example-prod', org_type: 'production', role: 'target' }] })))
+      .toContain('Add the rehearsal sandbox (role rehearsal, org_type sandbox): keep_test_records keeps the TEST records there.');
+    expect(requestProblems(keeping({ steps: KEEP.slice(0, -1).map((code) => ({ code })) })))
+      .toContain('Add the keep_test step: a request that keeps its TEST records says so in its rehearsal.');
+  });
+  test('keep_test is a sandbox rehearsal step in the agreed words; the rerun and a rehearsal correction keep with it', () => {
+    expect(STEPS.keep_test).toMatchObject({ group: 'Sandbox rehearsal', org: 'sandbox' });
+    expect(STEPS.keep_test.text()).toBe('Keep the TEST records in the sandbox for later.');
+    const corr = keeping({ page: 'correction', version: 2, steps: ['create_test', 'rehearse_operation', 'rehearse_undo', 'keep_test'].map((code) => ({ code })),
+      changed: { edit_kind: 'value', from_version: 1, reason: 'The value was wrong.', items: [{ what: 'Value', old: 'a', new: 'b' }] } });
+    expect(requestProblems(corr)).toEqual([]);
+    // rerunSteps itself is unchanged: the correction page maps delete_test to keep_test.
+    expect(rerunSteps('value')).toEqual(['create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test']);
+  });
+  test('the sandbox banner says the records are kept; without it, unchanged', () => {
+    expect(bannerLines(keeping()).sandbox).toBe('TEST records are created and changed, and kept for later. Nothing else changes.');
+    expect(bannerLines(precheck()).sandbox).toBe('TEST records are created, changed and deleted. Nothing else changes.');
+  });
+  test('keptTestLine sums every set not yet deleted, by sandbox; else the run\'s; malformed sets left out', () => {
+    const set = (count, over = {}) => ({ run_id: 'r', run_tag: 't', count, sandbox: 'example-dev1', recorded_at: '2026-11-27T10:00:00Z', deleted_by: null, ...over });
+    expect(keptTestLine(keeping({ kept_test_records: [set(4)] }))).toBe('4 TEST records kept in example-dev1.');
+    expect(keptTestLine(keeping({ kept_test_records: [set(4), set(3)] }))).toBe('7 TEST records kept in example-dev1.');
+    expect(keptTestLine(keeping({ kept_test_records: [set(1)] }))).toBe('1 TEST record kept in example-dev1.');
+    expect(keptTestLine(keeping({ kept_test_records: [set(1200), set(3, { deleted_by: 'x' }), set(0), set(2.5), { count: 2 }] }))).toBe('1,200 TEST records kept in example-dev1.');
+    expect(keptTestLine(keeping({ kept_test_records: [set(2), set(3, { sandbox: 'other-dev' })] }))).toBe('2 TEST records kept in example-dev1. 3 TEST records kept in other-dev.');
+    expect(keptTestLine(keeping(), { kept_test_records: { count: 5, sandbox: 'example-dev1' } })).toBe('5 TEST records kept in example-dev1.');
+    expect(keptTestLine(keeping(), { kept_test_records: { count: 5 } })).toBeNull();
+    expect(keptTestLine(keeping())).toBeNull();
+    expect(keptTestLine(dataop({ kept_test_records: [set(4)] }))).toBeNull();
+    // Cold review: once every recorded set is deleted, the run's own set never brings the line back.
+    expect(keptTestLine(keeping({ kept_test_records: [set(4, { deleted_by: 'd' })] }), { kept_test_records: { count: 4, sandbox: 'example-dev1' } })).toBeNull();
+  });
+});
+
+describe('s34 (O24): the delete sandbox test data page', () => {
+  const SB = { alias: 'example-dev1', org_type: 'sandbox', role: 'target' };
+  const del = (over = {}) => ({
+    page: 'delete_test_data', project_code: 'demo-x1y', run_tag: 'demo-x1y-s9-ab12', headline: 'DELETE SANDBOX TEST DATA',
+    problem: { label: 'P1a', sentence: 'The rehearsal kept its TEST records.' }, side_effects: 'None.',
+    orgs: [SB], operation: { kind: 'delete', object: 'Gift__c', object_label: 'Gift' }, counts: { expected: 7 },
+    test_data_of: { request_id: '3f2b8c1a-4d5e-4f60-8a7b-9c0d1e2f3a4b', run_tag: 'demo-x1y-s3-ef56' },
+    steps: DELETE_TEST_STEPS.map((code) => ({ code })), ...over,
+  });
+  test('a whole delete page has no problems', () => expect(requestProblems(del())).toEqual([]));
+  test('one sandbox org only, never production', () => {
+    const msg = expect.stringMatching(/^Fix orgs: a delete page runs on one sandbox only/);
+    expect(requestProblems(del({ orgs: [{ ...SB, org_type: 'production' }] }))).toContainEqual(msg);
+    expect(requestProblems(del({ orgs: [SB, { alias: 'example-dev2', org_type: 'sandbox', role: 'rehearsal' }] }))).toContainEqual(msg);
+    expect(requestProblems(del({ orgs: [{ ...SB, role: 'rehearsal' }] }))).toContainEqual(msg);
+    expect(deletePageOrgProblem(del())).toBeNull();
+    expect(deletePageOrgProblem(del({ orgs: [{ ...SB, org_type: 'production' }] }))).toMatch(/not its one sandbox/);
+    expect(deletePageOrgProblem(precheck())).toBeNull();
+  });
+  test('test_data_of, the count, the kind, the four steps and nothing else', () => {
+    expect(requestProblems(del({ test_data_of: { request_id: '3F2B8C1A-4D5E-4F60-8A7B-9C0D1E2F3A4B', run_tag: 'x' } }))[0]).toMatch(/^Add test_data_of/);
+    expect(requestProblems(del({ test_data_of: { request_id: '3f2b8c1a-4d5e-4f60-8a7b-9c0d1e2f3a4b' } }))[0]).toMatch(/^Add test_data_of/);
+    expect(requestProblems(del({ counts: { expected: 0 } }))).toContain('Add counts.expected: the TEST records the pre-check kept, a whole number of 1 or more.');
+    expect(requestProblems(del({ counts: { expected: 7, total: 7 } }))).toContain('Leave counts.total out: a delete page counts only what the pre-check kept.');
+    expect(requestProblems(del({ operation: { kind: 'update', object: 'Gift__c', field: 'X' } }))).toContain('Fix operation.kind: a delete page deletes.');
+    expect(requestProblems(del({ steps: DELETE_TEST_STEPS.slice(1).map((code) => ({ code })) }))).toContain(
+      "Fix steps: a delete page's steps are find_kept_test, type_count, delete_kept_test, confirm_gone, in that order.");
+    expect(requestProblems(del({ selected_by: { kind: 'ids', text: 'x' }, undo: { level: 'none' } }))).toContain('Leave selected_by, undo out of a delete page.');
+    expect(requestProblems(del({ keep_test_records: true }))).toContain('Leave keep_test_records out: only a pre-check keeps its TEST records.');
+    expect(requestProblems(precheck({ test_data_of: { request_id: 'x', run_tag: 'y' } }))).toContain('Leave test_data_of out: only a delete page names the pre-check whose TEST records it deletes.');
+  });
+  test('its words: sandbox banner only, "up to", the label, the undo line, the phase header, after you approve', () => {
+    expect(bannerLines(del())).toEqual({ production: null, sandbox: 'This deletes up to 7 TEST records. Nothing else changes.' });
+    expect(countSentence(del())).toBe('This deletes up to 7 TEST records of Gift in example-dev1.');
+    expect(approveLabel(del())).toBe('Delete the TEST records in SANDBOX');
+    expect(undoLine(del())).toBe('Undo: none. Deleted TEST records are not restored; the rehearsal made them.');
+    expect(whatChanges(del())).toBe('Deletes up to 7 TEST records of Gift__c that pre-check run demo-x1y-s3-ef56 kept in example-dev1.');
+    expect(selectedByText(del())).toBe('The TEST records pre-check run demo-x1y-s3-ef56 kept, by the Ids saved on your PC.');
+    expect(PHASE_HEADERS.delete_test_data).toBe('Delete sandbox test data');
+    expect(afterApproveLines(del())[1]).toMatch(/asks you to type the number it finds\. Anything else stops it with nothing deleted\.$/);
+    expect(GROUPS.delete_test_data).toEqual(['Sandbox clean-up']);
+  });
+  test('its type_count is the sandbox\'s; every other page keeps the production type_count unchanged', () => {
+    const g = groupedSteps(del());
+    expect(g).toHaveLength(1);
+    expect(g[0].steps.map((s) => [s.code, s.org])).toEqual(DELETE_TEST_STEPS.map((c) => [c, 'sandbox']));
+    expect(g[0].steps[1].text).toBe('You type the number of TEST records the terminal finds; anything else stops with nothing deleted.');
+    expect(stepDef('type_count', 'dataop')).toBe(STEPS.type_count);
+    expect(STEPS.type_count).toMatchObject({ group: 'Write', org: 'production' });
+    const dataopType = groupedSteps(dataop()).find((x) => x.group === 'Write').steps.find((s) => s.code === 'type_count');
+    expect(dataopType).toMatchObject({ org: 'production', text: 'You type the count, 45, in the terminal; anything else stops with nothing changed.' });
+    // The delete steps don't belong on any other page.
+    expect(requestProblems(dataop({ steps: [{ code: 'find_kept_test' }] }))).toContain("Fix steps[0]: find_kept_test doesn't belong on a dataop page.");
   });
 });

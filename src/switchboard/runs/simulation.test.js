@@ -105,6 +105,23 @@ describe('simulation', () => {
     expect(plain.selected_by.text).toMatch(/created before 20 November 2026/);
   });
 
+  test('s34: the kept-records and delete page scenarios', async () => {
+    const now = Date.parse('2026-11-23T12:00:00Z');
+    const one = (await simSource('precheck-keep-test', { now }).load()).request;
+    expect(one.keep_test_records).toBe(true);
+    expect(one.steps.map((s) => s.code).at(-1)).toBe('keep_test');
+    expect(one.kept_test_records).toHaveLength(1);
+    const two = (await simSource('precheck-keep-test-two-sets', { now }).load()).request;
+    expect(two.kept_test_records.map((k) => k.count)).toEqual([4, 3]);
+    const del = (await simSource('delete-test-data', { now }).load()).request;
+    // The delete page's count is every kept set of its pre-check, summed.
+    expect(del.counts.expected).toBe(two.kept_test_records.reduce((a, k) => a + k.count, 0));
+    expect(del.orgs).toEqual([{ alias: 'example-dev1', org_type: 'sandbox', role: 'target' }]);
+    expect(del.selected_by).toBeUndefined();
+    expect(simSource('delete-test-data-pretend').kind).toBe('pretend');
+    expect((await simSource('delete-test-data-pretend', { now }).load()).request.pretend).toEqual({ scenario: 'delete_ok' });
+  });
+
   test('an unknown scenario has no source', () => expect(simSource('nope')).toBeNull());
 
   test('desktop answers come in order, one per ask, the last repeating', async () => {

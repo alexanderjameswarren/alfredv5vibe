@@ -72,6 +72,23 @@ describe('the run page marks', () => {
     expect(box.querySelector('[data-switchboard-status]')).toHaveAttribute('hidden');
   });
 
+  test('s34: the delete page: kind run, running while out, the action id, and the plain run line with the wake note', async () => {
+    const out = held();
+    await openRun(real(simSource('delete-test-data'), { approve: () => out.promise }));
+    expect(top()).toHaveAttribute('data-switchboard-kind', 'run');
+    expect(top()).not.toHaveAttribute('data-switchboard-pretend');
+    fireEvent.click(screen.getByTestId('run-approve'));
+    await waitFor(() => expect(top()).toHaveAttribute('data-switchboard-running', ''));
+    out.resolve({ sent: true, link_id: LINK, action_id: ACTION });
+    const box = await screen.findByTestId('run-result-line');
+    expect(top()).toHaveAttribute('data-switchboard-action-id', ACTION);
+    expect(box).toHaveAttribute('data-switchboard-line', `run ${LINK}`);
+    expect(box).toHaveAttribute('data-switchboard-link-id', LINK);
+    expect(box).toHaveTextContent('Nothing goes to the Claude chat from here: the desktop helper has been told.');
+    expect(within(box).queryByTitle('Copy this line for the chat')).toBeNull();
+    expect(box.querySelector('[data-switchboard-status]')).toHaveAttribute('hidden');
+  });
+
   test('a failed Approve drops running and sets no action id', async () => {
     const out = held();
     await openRun(real(simSource('dataop-update'), { approve: () => out.promise }));
