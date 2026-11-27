@@ -5,7 +5,7 @@ import {
   afterApproveLines, approveLabel, bannerLines, clientOrgLine, checkLine, checksExpired, codeReviewProblems, countSentence, EDIT_RERUNS, GROUPS, groupedSteps,
   LINE_TEXT_MAX, lineText, requestProblems, reviewChangesLine, reviewQuestionLine, reviewReviewedLine, runCancelledLine, runLine,
   rerunSteps, runRerunsLine, runResentLine, selectedByText, STEPS, statusFromEvidence, undoClosedReason, undoLine, validUntil, whatChanges,
-  WRITE_CHECKS, outcomeView, filterQueryProblem,
+  WRITE_CHECKS, outcomeView, filterQueryProblem, CHECK_JOBS, checkOutcomeView, checkResultProblem,
 } from './runContract';
 import { BUTTON, RunShell, SECOND_BUTTON, localTime } from './look';
 
@@ -26,12 +26,46 @@ describe('outcomeView (s17): only the named parts, a missing or malformed part l
       changed: 3,
       rows: [{ label: 'A', before: 3, goal: 0, after: 0, knock_on: false }, { label: 'B', before: null, goal: 'none', after: null, knock_on: false },
         { label: 'K', before: 0, goal: 1, after: 1, knock_on: true }],
-      stopped: { already_changed: 2, saved_on_pc: ['backup.csv'] },
+      stopped: { already_changed: 2, saved_on_pc: ['backup.csv'], next: null, by_step: null },
+      skipped: [],
     });
   });
   test('a stop with only saved files, or only a count', () => {
-    expect(outcomeView({ stopped: { saved_on_pc: ['a.csv', 7, ''] } }).stopped).toEqual({ already_changed: null, saved_on_pc: ['a.csv'] });
-    expect(outcomeView({ stopped: { already_changed: 0 } }).stopped).toEqual({ already_changed: 0, saved_on_pc: [] });
+    expect(outcomeView({ stopped: { saved_on_pc: ['a.csv', 7, ''] } }).stopped).toEqual({ already_changed: null, saved_on_pc: ['a.csv'], next: null, by_step: null });
+    expect(outcomeView({ stopped: { already_changed: 0 } }).stopped).toEqual({ already_changed: 0, saved_on_pc: [], next: null, by_step: null });
+  });
+  test('s32 (item d): stopped.next, stopped.by_step and skipped; a malformed part is left out, never guessed', () => {
+    const v = outcomeView({ stopped: { next: ' Open the check page. ', by_step: { step: 'Write', object: 'Gift__c', extra: 'x' } },
+      skipped: [{ kind: 'locked', count: 2 }, { kind: 'edited', count: -1 }, { kind: '', count: 1 }, { kind: 'x'.repeat(81), count: 1 }, 'locked', { count: 3 }] });
+    expect(v.stopped).toEqual({ already_changed: null, saved_on_pc: [], next: 'Open the check page.', by_step: { step: 'Write', object: 'Gift__c' } });
+    expect(v.skipped).toEqual([{ kind: 'locked', count: 2 }]);
+    // A stop with only next (it used to need already_changed or saved_on_pc), and skipped alone.
+    expect(outcomeView({ stopped: { next: 'Run the undo.' } }).stopped.next).toBe('Run the undo.');
+    expect(outcomeView({ skipped: [{ kind: 'locked', count: 0 }] })).toEqual({ changed: null, rows: [], stopped: null, skipped: [{ kind: 'locked', count: 0 }] });
+    // Refused: a next over 200 characters or on two lines, a by_step missing a part or too long.
+    for (const s of [{ next: 'x'.repeat(201) }, { next: 'a\nb' }, { next: 5 }, { by_step: { step: 'Write' } }, { by_step: { step: 'Write', object: 'y'.repeat(81) } }, { by_step: 'Write' }]) {
+      expect(outcomeView({ stopped: s })).toBeNull();
+    }
+  });
+});
+
+describe('s32 (item e): a check result', () => {
+  const ok = { job: 'Completed', at_goal: 45, at_backup: 0, neither: 0 };
+  test('checkResultProblem takes each job state and none, counts 0 to 999999999', () => {
+    for (const job of CHECK_JOBS) expect(checkResultProblem({ ...ok, job })).toBeNull();
+    expect(CHECK_JOBS).toEqual(['Queued', 'Preparing', 'Processing', 'Holding', 'InProgress', 'Completed', 'Failed', 'Aborted', 'none']);
+    expect(checkResultProblem({ ...ok, at_goal: 999999999 })).toBeNull();
+  });
+  test('checkResultProblem refuses every other shape', () => {
+    for (const c of [null, [], 'x', {}, { ...ok, extra: 1 }, { job: 'Completed', at_goal: 1, at_backup: 0 }]) {
+      expect(checkResultProblem(c)).toBe('check must be {job, at_goal, at_backup, neither}, nothing else.');
+    }
+    for (const job of ['completed', 'Running', '', 5, null, 'None']) expect(checkResultProblem({ ...ok, job })).toMatch(/^check\.job must be one of Queued/);
+    for (const n of [-1, 1.5, '5', null, 1000000000, NaN]) expect(checkResultProblem({ ...ok, neither: n })).toMatch(/^check\.at_goal, at_backup and neither must each be a whole number from 0 to 999,999,999\.$/);
+  });
+  test('checkOutcomeView draws only an exact {check}', () => {
+    expect(checkOutcomeView({ check: ok })).toEqual(ok);
+    for (const o of [null, {}, { check: { ...ok, job: 'Running' } }, { check: ok, changed: 1 }, { changed: 45 }]) expect(checkOutcomeView(o)).toBeNull();
   });
 });
 

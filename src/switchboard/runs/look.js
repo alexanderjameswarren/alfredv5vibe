@@ -55,16 +55,28 @@ export const REAL_LINE_NOTE = 'This line goes to the Claude chat by itself; you 
 export const SIM_LINE_NOTE = 'A simulation posts nothing. This is the line a real page would send to the chat.';
 /** s28: a pretend page posts its line, which says SIMULATION, so its note says both. */
 export const PRETEND_LINE_NOTE = 'This SIMULATION line goes to the Claude chat by itself: a pretend run, whose data is made up. You can close this tab.';
-export function ResultLine({ line, sim, pretend = false, linkId }) {
+/**
+ * s32b (Alex, for the data runs thread): a run page's Approve, rerun and resent lines behave like git links. Nothing
+ * posts into the chat; the extension wakes the helper from the page's marks and closes the tab; the only chat line is
+ * the result, from the tile. Cancel, the review page and the approve pages keep the notes above.
+ */
+export const WAKE_LINE_NOTE = 'Nothing goes to the Claude chat from here: the desktop helper has been told. The result line comes from the tile when the run ends, and this tab closes by itself.';
+export const SIM_WAKE_LINE_NOTE = 'A simulation sends nothing. On a real page nothing goes to the Claude chat from here either: the desktop helper is told, and the result line comes from the tile.';
+export const PRETEND_WAKE_LINE_NOTE = 'Nothing goes to the Claude chat from here: the desktop helper has been told to make this pretend run, whose data is made up. Its SIMULATION result line comes from the tile when the run ends, and this tab closes by itself.';
+export function ResultLine({ line, sim, pretend = false, linkId, wake = false }) {
   // s28: a pretend page is marked as a real one is (spec 15.2 point 4); a plain simulation stays unmarked.
   const marked = !sim || pretend;
   // No link id, no link-id mark: the extension sees it missing, never empty.
   const marks = marked ? { 'data-switchboard-line': line, ...(linkId ? { 'data-switchboard-link-id': linkId } : {}) } : {};
+  // s32b: a wake line has its own note and no copy button; the marks and the status block are unchanged.
+  const note = wake
+    ? (pretend ? PRETEND_WAKE_LINE_NOTE : sim ? SIM_WAKE_LINE_NOTE : WAKE_LINE_NOTE)
+    : (pretend ? PRETEND_LINE_NOTE : sim ? SIM_LINE_NOTE : REAL_LINE_NOTE);
   return h('div', { 'data-testid': 'run-result-line', ...marks },
-    h('p', { className: 'text-dark mb-2' }, pretend ? PRETEND_LINE_NOTE : sim ? SIM_LINE_NOTE : REAL_LINE_NOTE),
+    h('p', { className: 'text-dark mb-2' }, note),
     h('div', { className: 'flex items-center gap-2' },
       h('code', { className: 'font-mono text-dark break-all' }, line),
-      h(CopyButton, { getText: () => line, title: 'Copy this line for the chat' })),
+      !wake && h(CopyButton, { getText: () => line, title: 'Copy this line for the chat' })),
     marked && h('div', { 'data-switchboard-status': '', hidden: true, className: 'mt-4' },
       h('p', { 'data-switchboard-status-text': '', className: 'text-dark mb-3 break-words' }),
       h('button', { type: 'button', 'data-switchboard-retry': '', className: SECOND_BUTTON }, 'Try again')));

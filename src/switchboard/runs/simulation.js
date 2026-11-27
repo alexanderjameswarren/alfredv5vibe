@@ -144,8 +144,7 @@ export const SCENARIOS = {
           kind: 'filter',
           text: FILTER_TEXT,
           sandbox_text: "Source__c = 'Spring import', with no campaign (the sandbox copy is older than the cutoff).",
-          // s30: still the old words; RunPage.test.jsx pins them, so "The CreatedDate cutoff." waits for s32 (16.2).
-          not_rehearsed: 'The 30-day limit on CreatedDate.',
+          not_rehearsed: 'The CreatedDate cutoff.',
         },
         steps: codes(PRECHECK_FILTER_STEPS), evidence: [],
         phases: [{ name: 'Pre-check and rehearsal', state: 'waiting' }, { name: 'Data operation', state: 'not_started' }],
@@ -371,6 +370,25 @@ export const SCENARIOS = {
         rows: [{ label: 'Gifts in the list with no campaign', before: 45, goal: 0, after: 25 }],
         stopped: { already_changed: 20, saved_on_pc: [`data-ops/${CODE}/2026-11-23/backup.csv`, `data-ops/${CODE}/2026-11-23/results.csv`] },
       },
+    }),
+  },
+  // s32 (item d): a stop that also says where it stopped, what to do next, and what it skipped.
+  'run-stopped-detail': {
+    title: 'Stopped part way, with where it stopped, the next step and what it skipped',
+    build: (now) => {
+      const s = SCENARIOS['run-stopped-outcome'].build(now);
+      return { ...s, outcome: { ...s.outcome,
+        stopped: { ...s.outcome.stopped, next: 'Open the check page for this run before anything else.', by_step: { step: 'Write', object: 'Gift__c' } },
+        skipped: [{ kind: 'edited since the backup', count: 3 }, { kind: 'locked', count: 1 }] } };
+    },
+  },
+  // s32 (item e): the check page after its run, with the result 258 keeps as {check}.
+  'check-finished-outcome': {
+    title: 'Check what happened, finished, with what it found',
+    build: (now) => ({
+      ...SCENARIOS.check.build(now),
+      run: { consumed_at: iso(now - 20 * MIN), picked_up_at: iso(now - 19 * MIN), finished_at: iso(now - 15 * MIN) },
+      outcome: { check: { job: 'Aborted', at_goal: 20, at_backup: 25, neither: 0 } },
     }),
   },
   // A5: checks expired, and the same page after the pre-check ran again.

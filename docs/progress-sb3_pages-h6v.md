@@ -48,18 +48,9 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-s31d: 258 applied (run 04cb994c-b322-48de-9231-7c6ca496d162, both smoke blocks, CONFORMANT); the live md5s equal 258's. Test 9 queued with --test as action adf5d443-59ce-4c17-874e-3ddded6e0882. db:fn ×4, db:table:switchboard_run_requests and db:migration:258 are held for the Checkpoint.
+s32 and s32b: the runner's items b and e, the page's check result and item d, the not_rehearsed rewording, deno.json's diff mapping, and the run pages' wake lines (nothing posts at Approve); switchboard-runner deployed and booting (spec 16.10).
 
-Run tag: sb3_pages-h6v-s31e-<4>: read test 9's result (run id from the chat), fix test 9 only if a failing check is its own fault, record it (spec 16.9)
-
-Scope of this step:
-- create: nothing
-- update: docs/technical-spec-sb3_pages-h6v.md, supabase/tests/sb3_pages-h6v/9_slice2_test.sql
-- delete: nothing
-- deploy: nothing
-- SQL: test 9 again with --test only if it was changed
-Estimated run: 3m
-(Then Alex runs gitpush Checkpoint for this worktree with supabase/migrations/258_slice2.sql, supabase/tests/sb3_pages-h6v/9_slice2_test.sql, docs/technical-spec-sb3_pages-h6v.md and docs/progress-sb3_pages-h6v.md, which releases the db: claims; s32: the runner's b and e, the check page's outcome, item d, and not_rehearsed's rewording with RunPage.test.jsx.)
+Next: Alex runs gitpush Checkpoint for this worktree with s32's and s32b's files (listed in the s32b report). The helper must send check, not pass, on a check page's run before one is approved. Then C2 below, once its gates are met.
 
 Then C2, once its gates are met (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall.
 
@@ -203,3 +194,5 @@ Estimated run: 20m
 | s31b | Correction's check-page refusal, smoke calls, test 9, number 258, cold review, spec | 06:52:36 | 06:57:40 | 5m04s |
 | s31c | Claims, drift check, write 258, diff, delete pending, spec, queue | 07:26:42 | 07:32:26 | 5m44s |
 | s31d | md5s of 258 against live, queue test 9, spec | 07:35:10 | 07:35:46 | 0m36s |
+| s32 | Runner b and e, page check result and d, rewording, tests, suites, build, cold review and fix, spec; deploy held | 07:39:06 | 07:48:30 | 9m24s |
+| s32b | deno.json, wake lines, tests, suites, build, deploy and boot check, cold review and fixes, spec | 07:50:17 | 07:55:29 | 5m12s |

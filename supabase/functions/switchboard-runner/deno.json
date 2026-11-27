@@ -1,3 +1,5 @@
 {
-  "imports": {}
+  "imports": {
+    "diff": "npm:diff@5.2.0"
+  }
 }

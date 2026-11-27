@@ -69,7 +69,7 @@ describe('the run page, on sample data', () => {
   test('a sandbox filter that must differ shows both and a Not rehearsed line', async () => {
     await open('precheck-filter-differs');
     expect(screen.getByTestId('run-selected-by')).toHaveTextContent(/Production: .*Sandbox: /);
-    expect(screen.getByTestId('run-not-rehearsed')).toHaveTextContent('Not rehearsed: The 30-day limit on CreatedDate.');
+    expect(screen.getByTestId('run-not-rehearsed')).toHaveTextContent('Not rehearsed: The CreatedDate cutoff.');
     expect(screen.getAllByTestId('run-step')[0]).toHaveTextContent("Count what the filter matches now, against diagnosis's expected 45.");
   });
 
@@ -89,13 +89,15 @@ describe('the run page, on sample data', () => {
     expect(container.querySelector('[data-switchboard-run-id]')).toBeNull();
     expect(container.querySelector('[data-switchboard-status]')).toBeNull();
     // A write approval: the bare line, no outcome word (s12b).
-    expect(screen.getByTestId('run-result-line')).toHaveTextContent(/chat\.SIMULATION run sim-dataop-update$/);
+    // s32b: the sent line's note now ends "…from the tile." (SIM_WAKE_LINE_NOTE).
+    expect(screen.getByTestId('run-result-line')).toHaveTextContent(/tile\.SIMULATION run sim-dataop-update$/);
   });
 });
 
 describe('the red bar and the Approve button always appear together', () => {
   // These offer no buttons at all (closed, used, or a rerun already asked for); their own tests are below.
-  const approvable = scenarioNames().filter((n) => !['undo-closed', 'run-picked-up', 'run-finished', 'run-finished-outcome', 'run-stopped-outcome', 'dataop-update-rerun-waiting'].includes(n));
+  const approvable = scenarioNames().filter((n) => !['undo-closed', 'run-picked-up', 'run-finished', 'run-finished-outcome', 'run-stopped-outcome',
+    'run-stopped-detail', 'check-finished-outcome', 'dataop-update-rerun-waiting'].includes(n));
   test.each(approvable)('%s, desktop ready, then approved', async (name) => {
     await open(name, { desktop: ['running'] });
     together();
@@ -528,7 +530,7 @@ describe('A5: screen d, the correction page', () => {
     await open('correction-field');
     fireEvent.click(screen.getByTestId('run-approve'));
     await screen.findByTestId('run-sent');
-    expect(screen.getByTestId('run-result-line')).toHaveTextContent(/chat\.SIMULATION run sim-correction-field reruns$/);
+    expect(screen.getByTestId('run-result-line')).toHaveTextContent(/tile\.SIMULATION run sim-correction-field reruns$/);
   });
 
   test('a wording-only edit has no page of its own: the next page carries the block', async () => {
@@ -623,6 +625,40 @@ describe('A5: not started, checks expired, check what happened', () => {
     expect(stopped).toHaveTextContent('Stopped. Already changed: 20 records');
     expect([...stopped.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
       'data-ops/demo_gift_campaign-x1y/2026-11-23/backup.csv', 'data-ops/demo_gift_campaign-x1y/2026-11-23/results.csv']);
+  });
+
+  test('s32 (item d): a stop says where it stopped and what to do next, and what was skipped, one row each', async () => {
+    render(<RunPage source={simSource('run-stopped-detail')} />);
+    const stopped = await screen.findByTestId('run-outcome-stopped');
+    expect(stopped).toHaveTextContent('Stopped. Already changed: 20 records');
+    expect(screen.getByTestId('run-outcome-by-step')).toHaveTextContent('Stopped at Write on Gift__c');
+    expect(screen.getByTestId('run-outcome-next')).toHaveTextContent('Next: Open the check page for this run before anything else.');
+    expect([...screen.getByTestId('run-outcome-skipped').querySelectorAll('li')].map((li) => li.textContent))
+      .toEqual(['Skipped, edited since the backup: 3 records', 'Skipped, locked: 1 record']);
+  });
+
+  test('s32 (item e): a check page shows its stored result: the job state and the three counts', async () => {
+    render(<RunPage source={simSource('check-finished-outcome')} />);
+    const box = await screen.findByTestId('run-outcome');
+    expect(box).toHaveTextContent('What the check found');
+    expect(screen.getByTestId('run-outcome-job')).toHaveTextContent('Job: Aborted');
+    expect([...screen.getByTestId('run-outcome-check').querySelectorAll('li')].map((li) => li.textContent))
+      .toEqual(['At the goal: 20 records', 'Back as the backup had them: 25 records', 'Neither: 0 records']);
+    expect(screen.queryByTestId('run-outcome-changed')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  test('s32 (item e): a check page with no result, or a malformed one, shows none', async () => {
+    const { unmount } = render(<RunPage source={simSource('check')} />);
+    await screen.findByTestId('run-headline');
+    expect(screen.queryByTestId('run-outcome')).toBeNull();
+    unmount();
+    const bad = simSource('check-finished-outcome');
+    const page = await bad.load();
+    const source = { ...bad, load: async () => ({ ...page, outcome: { check: { job: 'Running', at_goal: 1, at_backup: 0, neither: 0 } } }) };
+    render(<RunPage source={source} />);
+    await screen.findByTestId('run-used');
+    expect(screen.queryByTestId('run-outcome')).toBeNull();
   });
 
   test('s17: no outcome, or none on a page that writes nothing: nothing shown', async () => {

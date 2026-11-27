@@ -1923,6 +1923,7 @@ test("sf_run result: a link read that throws is retried and writes nothing", asy
 });
 
 const WRITE_REQ = { ...REQ_ROW, page: "dataop", base_page: "dataop", total_count: 45 };
+const CHECK_REQ = { ...REQ_ROW, page: "check", base_page: "check" };
 const coded = (code, message = "refused") => Object.assign(new Error(message), { code });
 
 test("sf_run kind: 251's rule, from the link's action_id and rerun_action_id and the request's base_page", async () => {
@@ -1938,7 +1939,9 @@ test("sf_run kind: 251's rule, from the link's action_id and rerun_action_id and
   assert.equal(sfRunKind("a2", link, { page: "correction", base_page: "undo" }), "pre-check");
   // A write approved before its request was corrected is still the write.
   assert.equal(sfRunKind("a1", link, { page: "correction", base_page: "dataop" }), "write");
-  assert.equal(sfRunKind("a1", link, { page: "check", base_page: "check" }), "other");
+  // s32 (item e): a check page's Approve is its check; a rerun of it, or an action the link no longer names, is other.
+  assert.equal(sfRunKind("a1", link, { page: "check", base_page: "check" }), "check");
+  assert.equal(sfRunKind("a9", link, { page: "check", base_page: "check" }), "other");
   assert.equal(sfRunKind("a9", link, { page: "precheck", base_page: "precheck" }), "other");
 });
 
@@ -1976,8 +1979,8 @@ test("sf_run write: a failed drop doesn't fail the write; the run summary says s
   assert.deepEqual(calls.status, [{ id: "sr-1", status: "succeeded" }]);
 });
 
-test("sf_run other: a check page's run, or one the link no longer names, records nothing but its run", async () => {
-  for (const over of [{ request: { ...REQ_ROW, page: "check", base_page: "check" } }, { link: { ...LINK_ROW, action_id: "sr-0" } }]) {
+test("sf_run other: a run the link no longer names records nothing but its run", async () => {
+  for (const over of [{ link: { ...LINK_ROW, action_id: "sr-0" } }, { link: { ...LINK_ROW, action_id: "sr-0" }, request: CHECK_REQ }]) {
     const { deps, order } = srFakes(over);
     deps.dropRunSample = async () => { throw new Error("not called"); };
     const body = await (await handle(srResult({ sample: SAMPLE }), deps)).json();
@@ -2504,6 +2507,186 @@ test("index.ts: expiries come from 247's run rows, for helper kinds only", () =>
   assert.match(q, /\.eq\("failure_reason", "expired_not_picked_up"\)\.gte\("finished_at", since\)\s*\.order\("finished_at", \{ ascending: false \}\)/);
   assert.match(q, /from\("switchboard_actions"\)\.select\("id, kind, project_code"\)\.eq\("user_id", userId\)/);
   assert.match(q, /\.in\("kind", \[\.\.\.HELPER_KINDS\]\)/);
+});
+
+// ---------------------------------------------------------------------------
+// sb3_pages-h6v s32: item b (a pre-check that stopped at the rehearsal keeps its passed checks, 258) and item e (a
+// check page's run reports what it found, kept as {check} through switchboard_record_run_outcome, 258).
+// ---------------------------------------------------------------------------
+
+const PROD_CHECKS = [{ check: "count", org: "production" }, { check: "login", org: "production" }];
+const FAILED_AT_REHEARSAL = { pass: false, failed_check: "rehearsal", checks: PROD_CHECKS };
+const CHECK = { job: "Completed", at_goal: 45, at_backup: 0, neither: 0 };
+const checkResult = (over = {}) => srResult({ pass: undefined, checks: undefined, summary: "check done", check: CHECK, ...over });
+
+test("s32 item b: a stop at the rehearsal is kept with failed_check, sent to the evidence function, and its line is done: FAIL", async () => {
+  const { deps, calls, order } = srFakes();
+  const res = await handle(srResult(FAILED_AT_REHEARSAL), deps);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.run_kind, "pre-check");
+  assert.equal(body.status, "succeeded");
+  assert.equal(body.line, `run ${LINK_ID} done: FAIL`);
+  assert.deepEqual(body.evidence, { recorded: 2, already: false, request_id: REQ_ID, page: "precheck" });
+  assert.equal(body.sample_stored, false);
+  assert.deepEqual(calls.finished[0].result, { ok: true, pass: false, checks: PROD_CHECKS, failed_check: "rehearsal" });
+  assert.deepEqual(order, [...READS, "finish", "evidence run-s", "status succeeded"]);
+  assert.equal(calls.sample, undefined);
+  // A pretend run's line starts SIMULATION.
+  const p = pretendFakes();
+  assert.equal((await (await handle(srResult(FAILED_AT_REHEARSAL), p.deps)).json()).line, `SIMULATION run ${LINK_ID} done: FAIL`);
+});
+
+test("s32 item b: a plain FAIL still records nothing, and ok false stays failed", async () => {
+  for (const [over, line, status] of [[{ pass: false }, "done: FAIL", "succeeded"], [{ ok: false, pass: undefined, checks: undefined }, "failed", "failed"]]) {
+    const { deps, order } = srFakes();
+    const body = await (await handle(srResult(over), deps)).json();
+    assert.equal(body.line, `run ${LINK_ID} ${line}`);
+    assert.equal(body.status, status);
+    assert.equal(body.evidence, null);
+    assert.ok(!order.some((o) => o.startsWith("evidence")));
+  }
+});
+
+test("s32 item b: a malformed failed_check is refused before the evidence function, naming the fix", async () => {
+  for (const [over, why] of [
+    [{ ...FAILED_AT_REHEARSAL, failed_check: "count" }, /failed_check must be "rehearsal"/],
+    [{ ...FAILED_AT_REHEARSAL, pass: true }, /failed_check comes only with ok true and pass false/],
+    [{ ...FAILED_AT_REHEARSAL, ok: false }, /failed_check comes only with ok true and pass false/],
+    [{ ...FAILED_AT_REHEARSAL, checks: [] }, /failed_check needs checks/],
+    [{ ...FAILED_AT_REHEARSAL, checks: undefined }, /failed_check needs checks/],
+    [{ ...FAILED_AT_REHEARSAL, checks: [...PROD_CHECKS, { check: "rehearsal", org: "sandbox" }] }, /never lists a rehearsal/],
+    [{ ...FAILED_AT_REHEARSAL, sample: SAMPLE }, /keeps no sample/],
+  ]) {
+    const { deps, calls, order } = srFakes();
+    const res = await handle(srResult(over), deps);
+    assert.equal(res.status, 400, String(why));
+    const body = await res.json();
+    assert.match(body.error, why);
+    assert.equal(body.line, `run ${LINK_ID} failed`);
+    assert.ok(!order.some((o) => o.startsWith("evidence") || o.startsWith("sample")), String(why));
+    assert.deepEqual(calls.status, [{ id: "sr-1", status: "failed" }]);
+  }
+  // On a write, failed_check is refused too.
+  const w = srFakes({ request: WRITE_REQ });
+  const res = await handle(srResult({ ...FAILED_AT_REHEARSAL, checks: PROD_CHECKS }), w.deps);
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /failed_check is reported only by a pre-check/);
+});
+
+test("s32 item b: a refused kept-checks record is noted on the run, never final; a network error is retried", async () => {
+  for (const code of ["P0002", "23514", "55000"]) {
+    const { deps, calls } = srFakes({ evidence: async () => { throw coded(code, "the run did not pass"); } });
+    const res = await handle(srResult(FAILED_AT_REHEARSAL), deps);
+    assert.equal(res.status, 200, code);
+    const body = await res.json();
+    assert.equal(body.line, `run ${LINK_ID} done: FAIL`);
+    assert.equal(body.status, "succeeded");
+    assert.match(calls.finished.at(-1).summary, new RegExp(`\\(kept checks refused \\(${code}\\): the run did not pass\\)$`));
+  }
+  const { deps, calls } = srFakes({ evidence: async () => { throw new Error("fetch failed"); } });
+  const res = await handle(srResult(FAILED_AT_REHEARSAL), deps);
+  assert.equal(res.status, 503);
+  assert.equal((await res.json()).retry, true);
+  assert.deepEqual(calls.status, []);
+});
+
+test("s32 item e: a check's result is kept as {check} through the outcome function, and its line is checkLine's", async () => {
+  const { deps, calls, order } = srFakes({ request: CHECK_REQ });
+  const res = await handle(checkResult(), deps);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.run_kind, "check");
+  assert.equal(body.status, "succeeded");
+  assert.equal(body.line, `check ${LINK_ID} done: job Completed; 45 at goal, 0 at backup, 0 neither`);
+  assert.deepEqual(body.outcome, { recorded: true, already: false, request_id: REQ_ID });
+  assert.ok(!("sample_dropped" in body));
+  assert.deepEqual(calls.outcomes, [["run-s", { check: CHECK }]]);
+  assert.deepEqual(calls.finished[0].result, { ok: true, check: CHECK });
+  assert.deepEqual(order, [...READS, "finish", "outcome run-s", "status succeeded"]);
+  // Each job state and none.
+  for (const job of ["Queued", "Preparing", "Processing", "Holding", "InProgress", "Completed", "Failed", "Aborted", "none"]) {
+    const f = srFakes({ request: CHECK_REQ });
+    const b = await (await handle(checkResult({ check: { ...CHECK, job, at_goal: 999999999 } }), f.deps)).json();
+    // checkLine writes counts with thousands separators, as the page does.
+    assert.equal(b.line, `check ${LINK_ID} done: job ${job}; 999,999,999 at goal, 0 at backup, 0 neither`, job);
+  }
+  // A pretend check's line starts SIMULATION.
+  const p = pretendFakes({ request: { ...PRETEND_REQ, page: "check", base_page: "check" } });
+  assert.equal((await (await handle(checkResult(), p.deps)).json()).line,
+    `SIMULATION check ${LINK_ID} done: job Completed; 45 at goal, 0 at backup, 0 neither`);
+});
+
+test("s32 item e: a failed check run keeps run <link id> failed, and records no outcome", async () => {
+  const { deps, calls } = srFakes({ request: CHECK_REQ });
+  const body = await (await handle(checkResult({ ok: false, check: undefined }), deps)).json();
+  assert.equal(body.line, `run ${LINK_ID} failed`);
+  assert.equal(body.status, "failed");
+  assert.equal(calls.outcomes, undefined);
+});
+
+test("s32 item e: a check in the wrong shape is refused before anything is stored", async () => {
+  for (const [over, why] of [
+    [{ check: { ...CHECK, job: "Running" } }, /check\.job must be one of Queued/],
+    [{ check: { ...CHECK, job: "completed" } }, /check\.job must be one of/],
+    [{ check: { ...CHECK, neither: -1 } }, /each be a whole number from 0 to 999,999,999/],
+    [{ check: { ...CHECK, at_goal: 1000000000 } }, /each be a whole number/],
+    [{ check: { ...CHECK, at_backup: "5" } }, /each be a whole number/],
+    [{ check: { ...CHECK, at_goal: 1.5 } }, /each be a whole number/],
+    [{ check: { job: "Completed", at_goal: 1, at_backup: 0 } }, /check must be \{job, at_goal, at_backup, neither\}/],
+    [{ check: { ...CHECK, extra: 1 } }, /check must be \{job, at_goal, at_backup, neither\}/],
+    [{ check: "Completed" }, /check must be/],
+    [{ check: undefined }, /a check that succeeded must report check/],
+    [{ ok: false }, /check comes only with ok true/],
+    [{ pass: true }, /a check page's run reports check, not pass; leave it out\./],
+    [{ checks: CHECKS, sample: SAMPLE }, /reports check, not checks, sample; leave them out\./],
+    [{ failed_check: "rehearsal" }, /reports check, not failed_check/],
+  ]) {
+    const { deps, calls, order } = srFakes({ request: CHECK_REQ });
+    const res = await handle(checkResult(over), deps);
+    assert.equal(res.status, 400, String(why));
+    const body = await res.json();
+    assert.match(body.error, why);
+    assert.equal(body.line, `run ${LINK_ID} failed`);
+    assert.equal(calls.outcomes, undefined, String(why));
+    assert.ok(!order.some((o) => o.startsWith("outcome") || o.startsWith("evidence") || o.startsWith("sample") || o.startsWith("drop")), String(why));
+    assert.deepEqual(calls.finished.map((f) => f.result), [{ ok: false }]);
+    assert.deepEqual(calls.status, [{ id: "sr-1", status: "failed" }]);
+  }
+  // check from a pre-check or a write is refused too.
+  for (const request of [REQ_ROW, WRITE_REQ]) {
+    const { deps, calls } = srFakes({ request });
+    const res = await handle(srResult({ check: CHECK }), deps);
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /check is reported only by a check page's run/);
+    assert.equal(calls.outcomes, undefined);
+  }
+});
+
+test("s32 item e: 258's refusal of a check outcome is noted, not thrown; a repeat answers the check line", async () => {
+  const { deps, calls } = srFakes({ request: CHECK_REQ, outcome: async () => { throw coded("22023", "a check's outcome is exactly"); } });
+  const body = await (await handle(checkResult(), deps)).json();
+  assert.equal(body.status, "succeeded");
+  assert.equal(body.outcome_refused, "22023");
+  assert.match(calls.finished.at(-1).summary, /outcome refused \(22023\)/);
+  const again = srFakes({ request: CHECK_REQ, action: { status: "succeeded" },
+    run: { finished_at: "2026-11-24T10:05:00Z", result: { ok: true, check: CHECK } } });
+  const b = await (await handle(checkResult(), again.deps)).json();
+  assert.equal(b.already, true);
+  assert.equal(b.line, `check ${LINK_ID} done: job Completed; 45 at goal, 0 at backup, 0 neither`);
+});
+
+test("s32: a real run's lines are byte-identical to before", async () => {
+  const cases = [
+    [srFakes(), srResult(), `run ${LINK_ID} done: PASS`],
+    [srFakes(), srResult({ pass: false }), `run ${LINK_ID} done: FAIL`],
+    [srFakes(), srResult({ ok: false, pass: undefined, checks: undefined }), `run ${LINK_ID} failed`],
+    [srFakes({ request: WRITE_REQ }), srResult(), `run ${LINK_ID} done: PASS`],
+    [srFakes({ request: WRITE_REQ }), srResult({ ok: false, pass: undefined }), `run ${LINK_ID} failed`],
+    [srFakes({ action: { status: "succeeded" }, run: { finished_at: "2026-11-24T10:05:00Z", result: { ok: true, pass: true, checks: CHECKS } } }),
+      srResult(), `run ${LINK_ID} done: PASS`],
+  ];
+  for (const [f, req, line] of cases) assert.equal((await (await handle(req, f.deps)).json()).line, line);
 });
 
 test("index.ts: the outcome goes by rpc with the run id and the helper's write", () => {
