@@ -3,6 +3,9 @@
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
+// s32 (item e): the check line and the check result's shape, from the pages' one copy of the contract (as mcp's
+// tools import it). Pure functions: no client, no network.
+import { checkLine, checkResultProblem } from "../../../src/switchboard/runs/runContract.js";
 
 export const MAX_SQL_CHARS = 512 * 1024;
 const MAX_DESCRIPTION = 300;
@@ -791,11 +794,33 @@ const COMMIT = /^[0-9a-f]{7,40}$/;
  * Why an sf_run report can't be kept, or null. The one place its shape is checked, while the evidence shape is still
  * the data runs thread's proposal: {ok, pass, checks: [{check, org, commit?}], sample?}. pass is required when ok;
  * checks may be left out or empty (a run with nothing to record); sample is an object (250 checks its records).
+ * s32: a pre-check that stopped at the rehearsal adds failed_check: 'rehearsal' (item b); a check page's run reports
+ * check: {job, at_goal, at_backup, neither} instead of pass (item e), its shape as runContract's checkResultProblem.
  */
-export function sfRunReportProblem(body: Record<string, unknown>): string | null {
+export function sfRunReportProblem(body: Record<string, unknown>, kind: SfRunKind = "pre-check"): string | null {
   if (body.pass !== undefined && typeof body.pass !== "boolean") return "pass must be true or false.";
+  // s32 (item e): a check reports what it found, not pass; its result is `check`, required when it succeeded.
+  if (kind === "check") {
+    // s32 cold review: a check reports check instead of pass, and keeps no checks or sample.
+    const extra = ["pass", "checks", "failed_check", "sample"].filter((k) => body[k] !== undefined);
+    if (extra.length) return `a check page's run reports check, not ${extra.join(", ")}; leave ${extra.length === 1 ? "it" : "them"} out.`;
+    if (body.check === undefined) return body.ok === true ? "a check that succeeded must report check: {job, at_goal, at_backup, neither}." : null;
+    if (body.ok !== true) return "check comes only with ok true; a failed check run reports no check.";
+    return checkResultProblem(body.check);
+  }
+  if (body.check !== undefined) return "check is reported only by a check page's run.";
   if (body.ok === true && typeof body.pass !== "boolean") return "an sf_run that succeeded must report pass, true or false.";
   if (body.pass === true && body.ok !== true) return "pass can be true only when ok is true.";
+  // s32 (item b, 15.3): a pre-check that stopped at the sandbox rehearsal: {ok: true, pass: false, failed_check:
+  // 'rehearsal', checks: [the production checks that passed]}, never a rehearsal among them.
+  if (body.failed_check !== undefined) {
+    if (kind === "write") return "failed_check is reported only by a pre-check.";
+    if (body.failed_check !== "rehearsal") return "failed_check must be \"rehearsal\": only a stop at the sandbox rehearsal keeps checks.";
+    if (body.ok !== true || body.pass !== false) return "failed_check comes only with ok true and pass false.";
+    if (!Array.isArray(body.checks) || body.checks.length === 0) return "failed_check needs checks: the production checks that passed.";
+    if (body.checks.some((c) => isPlain(c) && c.check === "rehearsal")) return "a run that failed at the rehearsal never lists a rehearsal in checks.";
+    if (body.sample !== undefined) return "a run that failed at the rehearsal keeps no sample; leave it out.";
+  }
   if (body.checks !== undefined) {
     if (!Array.isArray(body.checks)) return "checks must be a list of {check, org, commit?}.";
     const bad = body.checks.find((c) => !isPlain(c) || !SF_RUN_CHECKS.includes(c.check as string) || !SF_RUN_ORGS.includes(c.org as string) ||
@@ -819,14 +844,17 @@ export function sfRunReportProblem(body: Record<string, unknown>): string | null
  * What an sf_run is, by 251's own rule (switchboard_record_run_evidence): the link's pre-check when it is the link's
  * rerun (rerun_action_id: "Run the pre-check and rehearsal again", or a write's correction Approve) or the link's
  * approval (action_id) on a request whose base_page is precheck; the data operation's write when it is the link's
- * approval on a request whose base_page is dataop or undo; anything else (a check page, or an action the link no longer
- * names) is neither, and records nothing.
+ * approval on a request whose base_page is dataop or undo; s32 (item e): the check page's check when it is the link's
+ * approval on a request whose base_page is check (consume sets action_id on a check page's Approve); anything else (an
+ * action the link no longer names) is none of them, and records nothing.
  */
-export function sfRunKind(actionId: string, link: Record<string, unknown>, request: Record<string, unknown>): "pre-check" | "write" | "other" {
+export type SfRunKind = "pre-check" | "write" | "check" | "other";
+export function sfRunKind(actionId: string, link: Record<string, unknown>, request: Record<string, unknown>): SfRunKind {
   if (actionId === link.rerun_action_id) return "pre-check";
   if (actionId !== link.action_id) return "other";
   if (request.base_page === "precheck") return "pre-check";
   if (request.base_page === "dataop" || request.base_page === "undo") return "write";
+  if (request.base_page === "check") return "check";
   return "other";
 }
 
@@ -848,8 +876,9 @@ const PRETEND_MISMATCH = /a pretend (run|request)/;
 const PRETEND_MISMATCH_FIX = "the run and its request disagree on pretend; queue the request again and approve its new link.";
 const finalFix = (code: string, message: string) =>
   (code === "55000" && PRETEND_MISMATCH.test(message) ? PRETEND_MISMATCH_FIX : FINAL_FIX[code]);
-/** 254's switchboard_record_run_outcome refusals: 22023 (not an object, over 64 KB), P0002 (no such run), 55000 (not a
- *  finished real run its link approved on a data operation or undo, a simulation, never started, another link's). */
+/** 254's switchboard_record_run_outcome refusals: 22023 (not an object, over 64 KB; 258: a check's not {check}), P0002
+ *  (no such run), 55000 (not a finished run its link approved on a data operation, undo or (258) check, a simulation,
+ *  never started, another link's, a pretend mismatch). */
 export const OUTCOME_FINAL_SQLSTATES = ["22023", "P0002", "55000"];
 /** The function itself unreachable: PostgREST's no such function, undefined function, no permission. Noted, not retried. */
 export const OUTCOME_MISSING_CODES = ["PGRST202", "42883", "42501"];
@@ -888,8 +917,12 @@ async function sfRunResult(
     const stored = r.result ?? {};
     if (r.finished_at && stored.timed_out !== true && (a.status === "succeeded" || a.status === "failed")) {
       // From the status too: an action failed by the stale check after a failed write says failed, never PASS.
+      // s32: a check's run row keeps its check, so a repeat answers the check line, not a PASS or FAIL.
+      const done = a.status === "succeeded" && stored.ok === true;
       return json({ ok: true, already: true, action_id: a.id, run_id: r.id, status: a.status, link_id: linkId,
-                    line: sfRunLine(linkId, a.status === "succeeded" && stored.ok === true, stored.pass, r.mode === "pretend") });
+                    line: done && isPlain(stored.check) && checkResultProblem(stored.check) === null
+                      ? checkLine(linkId, stored.check, r.mode === "pretend")
+                      : sfRunLine(linkId, done, stored.pass, r.mode === "pretend") });
     }
     return json({ ok: false, error: `this action is ${a.status} and no longer waiting for a result.` }, 409);
   }
@@ -938,11 +971,14 @@ async function sfRunRecord(
   // s5: a write's outcome (254), from the helper's write object, goes on its request once the run row is finished;
   // never on the run row. 254's refusals are noted and don't undo the run; anything else is retried while `retrying`.
   const outcome: { reply: Record<string, unknown> | null; refused: string | null; error: string | null } = { reply: null, refused: null, error: null };
+  // s32 (item e): a check's result goes the same way, as {check} (258), once sfRunReportProblem has passed its shape.
+  const outcomeOf = (): unknown => (kind === "write" ? body.write : kind === "check" && body.check !== undefined ? { check: body.check } : undefined);
   const recordOutcome = async (retrying: boolean): Promise<{ note: string; again?: Response }> => {
-    if (kind !== "write" || body.write === undefined) return { note: "" };
-    if (!isPlain(body.write)) return { note: " (outcome not recorded: the helper's write isn't an object)" };
+    const given = outcomeOf();
+    if (given === undefined) return { note: "" };
+    if (!isPlain(given)) return { note: " (outcome not recorded: the helper's write isn't an object)" };
     try {
-      outcome.reply = await deps.recordRunOutcome(r.id, body.write);
+      outcome.reply = await deps.recordRunOutcome(r.id, given);
       return { note: "" };
     } catch (e) {
       const code = sqlstateOf(e);
@@ -961,10 +997,9 @@ async function sfRunRecord(
       return { note: ` (outcome not recorded (${outcome.error}): ${msg})` };
     }
   };
-  const writeReply = () => (kind === "write"
-    ? { sample_dropped: sampleDropped, outcome: outcome.reply,
-        ...(outcome.refused ? { outcome_refused: outcome.refused } : {}), ...(outcome.error ? { outcome_error: outcome.error } : {}) }
-    : {});
+  const outcomeReply = () => ({ outcome: outcome.reply,
+    ...(outcome.refused ? { outcome_refused: outcome.refused } : {}), ...(outcome.error ? { outcome_error: outcome.error } : {}) });
+  const writeReply = () => (kind === "write" ? { sample_dropped: sampleDropped, ...outcomeReply() } : kind === "check" ? outcomeReply() : {});
   // Fail the run for good: the run row says why and the fix; the helper is told not to retry. `touch` false (s30, the
   // mode check) leaves the sample and the outcome alone: the run isn't this request's, so it may change neither.
   const final = async (why: string, kept: Record<string, unknown>, status = 422, touch = true) => {
@@ -987,16 +1022,21 @@ async function sfRunRecord(
       { ...exit, refused: "mode" }, 422, false);
   }
 
-  const problem = sfRunReportProblem(body);
+  const problem = sfRunReportProblem(body, kind);
   if (problem) {
     // A retry after a failed write keeps the result already on the run; only a first report is closed by its shape.
     if (r.finished_at) return json({ ok: false, error: problem, ...ids }, 400);
-    return final(`refused by the runner: ${problem}`, exit, 400);
+    // s32: a check in the wrong shape is refused before anything is stored: no outcome call for it.
+    return final(`refused by the runner: ${problem}`, exit, 400, kind !== "check");
   }
+  // s32: failed_check (item b) goes on the run row, which is all switchboard_record_run_evidence reads; a check's
+  // result (item e) too, so a repeat answers the check line.
   const result: Record<string, unknown> = r.finished_at ? (r.result ?? {}) : {
     ok: body.ok, ...exit,
     ...(typeof body.pass === "boolean" ? { pass: body.pass } : {}),
     ...(Array.isArray(body.checks) ? { checks: body.checks } : {}),
+    ...(body.failed_check === "rehearsal" ? { failed_check: "rehearsal" } : {}),
+    ...(kind === "check" && isPlain(body.check) ? { check: body.check } : {}),
   };
   if (!link || !request) {
     return final(`sf_run ${a.id}: ${!link ? `no run link ${linkId}` : `run link ${linkId} has no request`} — queue the request again and approve its new link.`, result);
@@ -1006,17 +1046,25 @@ async function sfRunRecord(
   const ok = result.ok === true;
   let evidence: Record<string, unknown> | null = null;
   let sampleStored = false;
-  if (kind === "pre-check" && ok && result.pass === true && Array.isArray(result.checks) && result.checks.length > 0) {
+  // s32 (item b): a stop at the rehearsal keeps its passed production checks; 258 records them and voids the rehearsal.
+  const keptChecks = kind === "pre-check" && ok && result.pass === false && result.failed_check === "rehearsal";
+  if (kind === "pre-check" && ok && (result.pass === true || keptChecks) && Array.isArray(result.checks) && result.checks.length > 0) {
     try {
       evidence = await deps.recordRunEvidence(r.id);
     } catch (e) {
       const code = sqlstateOf(e);
       if (!FINAL_SQLSTATES.includes(code)) return retry("evidence", e);
-      return final(`evidence refused (${code}): ${blankIds(messageOf(e))} — ${finalFix(code, messageOf(e))}`, { ...result, refused: "evidence", sqlstate: code });
+      // 15.3: a refused kept-checks record is noted on the run, never final(): the run stays "done: FAIL".
+      if (keptChecks) {
+        runSummary = noted(runSummary, ` (kept checks refused (${code}): ${blankIds(messageOf(e)).slice(0, 100)})`);
+        await deps.finishRun(r.id, { summary: runSummary });
+      } else {
+        return final(`evidence refused (${code}): ${blankIds(messageOf(e))} — ${finalFix(code, messageOf(e))}`, { ...result, refused: "evidence", sqlstate: code });
+      }
     }
     // Only a passing pre-check's sample is kept; any other is dropped, never stored. Once the evidence is in, a
     // refused sample doesn't undo the run: it is noted, and the page shows no sample.
-    if (isPlain(body.sample)) {
+    if (result.pass === true && isPlain(body.sample)) {
       try {
         await deps.storeRunSample(link.request_id as string, body.sample);
         sampleStored = true;
@@ -1039,8 +1087,10 @@ async function sfRunRecord(
   if (dropNote) await deps.finishRun(r.id, { summary: noted(runSummary, dropNote) });
   const status = ok ? "succeeded" : "failed";
   await deps.setStatus(a.id, status);
-  return json({ ok: true, ...ids, run_kind: kind, status, line: sfRunLine(linkId, ok, result.pass, simulated), evidence,
-                sample_stored: sampleStored, ...writeReply() });
+  // s32 (item e): a check that succeeded answers checkLine; a failed one keeps "run <link id> failed".
+  const line = kind === "check" && ok && isPlain(result.check)
+    ? checkLine(linkId, result.check, simulated) : sfRunLine(linkId, ok, result.pass, simulated);
+  return json({ ok: true, ...ids, run_kind: kind, status, line, evidence, sample_stored: sampleStored, ...writeReply() });
 }
 
 /** The helper's report: closes the run and marks the action succeeded or failed. Only for a pick still waiting. */

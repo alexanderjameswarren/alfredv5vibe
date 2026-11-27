@@ -840,28 +840,67 @@ export function reviewQuestionLine(id, question) {
  * shape belongs to the data runs thread; a part that is missing or malformed is left out, never guessed:
  *   changed  a count (an integer, 0 or more): "Changed: N records"
  *   rows     [{label, before, goal, after, knock_on?}]: a table, knock-on rows last, each cell a number or short text
- *   stopped  {already_changed (a count), saved_on_pc (text, or a list of text)}: on a stop, what already changed and
- *            what is saved on the PC
- * Null when there is nothing to show.
+ *   stopped  {already_changed (a count), saved_on_pc (text, or a list of text), next (one sentence), by_step
+ *            ({step, object}, short text)}: on a stop, what already changed, what is saved on the PC, what to do next and
+ *            where it stopped (s32, item d)
+ *   skipped  [{kind, count}]: kind short text, count a count; one row each (s32, item d)
+ * Counts and names only, never field values. Null when there is nothing to show.
  */
 export function outcomeView(outcome) {
-  if (!outcome || typeof outcome !== 'object' || Array.isArray(outcome)) return null;
+  if (!isPlain(outcome)) return null;
   const count = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
   const cell = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.length <= 200 ? v : null);
   const text = (v) => (typeof v === 'string' && v.trim() && v.length <= 500 ? v : null);
+  const short = (v) => (typeof v === 'string' && v.trim() && v.length <= SHORT_TEXT_MAX ? v : null);
   const changed = count(outcome.changed);
   const rows = (Array.isArray(outcome.rows) ? outcome.rows : [])
     .filter((row) => row && typeof row === 'object' && text(row.label))
     .map((row) => ({ label: row.label, before: cell(row.before), goal: cell(row.goal), after: cell(row.after), knock_on: row.knock_on === true }));
   // Knock-on rows last, each group in its own order.
   const ordered = [...rows.filter((row) => !row.knock_on), ...rows.filter((row) => row.knock_on)];
-  const s = outcome.stopped && typeof outcome.stopped === 'object' && !Array.isArray(outcome.stopped) ? outcome.stopped : null;
+  const s = isPlain(outcome.stopped) ? outcome.stopped : null;
   const saved = s ? (Array.isArray(s.saved_on_pc) ? s.saved_on_pc : [s.saved_on_pc]).map(text).filter(Boolean) : [];
-  const stopped = s && (count(s.already_changed) !== null || saved.length)
-    ? { already_changed: count(s.already_changed), saved_on_pc: saved } : null;
-  if (changed === null && !ordered.length && !stopped) return null;
-  return { changed, rows: ordered, stopped };
+  // s32 (item d): one sentence of at most 200 characters, and where it stopped; anything else is left out.
+  const next = s && typeof s.next === 'string' && s.next.trim() && s.next.length <= 200 && !/\n/.test(s.next) ? s.next.trim() : null;
+  const byStep = s && isPlain(s.by_step) && short(s.by_step.step) && short(s.by_step.object)
+    ? { step: s.by_step.step, object: s.by_step.object } : null;
+  const stopped = s && (count(s.already_changed) !== null || saved.length || next || byStep)
+    ? { already_changed: count(s.already_changed), saved_on_pc: saved, next, by_step: byStep } : null;
+  const skipped = (Array.isArray(outcome.skipped) ? outcome.skipped : [])
+    .filter((k) => isPlain(k) && short(k.kind) && count(k.count) !== null)
+    .map((k) => ({ kind: k.kind, count: k.count }));
+  if (changed === null && !ordered.length && !stopped && !skipped.length) return null;
+  return { changed, rows: ordered, stopped, skipped };
 }
+
+/** s32 (item d): the longest short text an outcome name may be (a step, an object, a kind of skip). */
+export const SHORT_TEXT_MAX = 80;
+/** s32 (item e): Salesforce's job states, and none for a small run with no job (258 takes the same list). */
+export const CHECK_JOBS = ['Queued', 'Preparing', 'Processing', 'Holding', 'InProgress', 'Completed', 'Failed', 'Aborted', 'none'];
+/** s32 (item e): the largest count a check reports, as 258's nine-digit rule. */
+export const CHECK_COUNT_MAX = 999_999_999;
+const checkCount = (v) => Number.isInteger(v) && v >= 0 && v <= CHECK_COUNT_MAX;
+
+/**
+ * s32 (item e): why a check's result {job, at_goal, at_backup, neither} can't be kept, or null. job one of CHECK_JOBS;
+ * each count a whole number, 0 to CHECK_COUNT_MAX; nothing else. The runner refuses it before anything is stored, and
+ * 258's switchboard_record_run_outcome refuses the same shapes.
+ */
+export function checkResultProblem(c) {
+  const keys = ['job', 'at_goal', 'at_backup', 'neither'];
+  if (!isPlain(c) || Object.keys(c).length !== keys.length || !keys.every((k) => Object.hasOwn(c, k))) {
+    return 'check must be {job, at_goal, at_backup, neither}, nothing else.';
+  }
+  if (!CHECK_JOBS.includes(c.job)) return `check.job must be one of ${CHECK_JOBS.join(', ')}.`;
+  if (!['at_goal', 'at_backup', 'neither'].every((k) => checkCount(c[k]))) {
+    return `check.at_goal, at_backup and neither must each be a whole number from 0 to ${CHECK_COUNT_MAX.toLocaleString('en-US')}.`;
+  }
+  return null;
+}
+
+/** s32 (item e): a check page's stored outcome {check: {...}} to draw, or null when it is absent or malformed. */
+export const checkOutcomeView = (outcome) =>
+  (isPlain(outcome) && Object.keys(outcome).length === 1 && checkResultProblem(outcome.check) === null ? { ...outcome.check } : null);
 
 export function reviewChangesLine(id, change) {
   if (!lineText(change)) throw new Error('changes required needs the change');

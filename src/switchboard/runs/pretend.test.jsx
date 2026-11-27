@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import RunPage from './RunPage';
 import { simSource } from './simulation';
 import { kindOf, liveReviewSource, liveRunSource } from './liveSource';
-import { REAL_LINE_NOTE, isPretend, isSimulation } from './look';
+import { PRETEND_WAKE_LINE_NOTE, REAL_LINE_NOTE, WAKE_LINE_NOTE, isPretend, isSimulation } from './look';
 
 // s28 (spec 15.2 point 4): a pretend page keeps the SIMULATION strip and carries the s20 marks, as a real page does,
 // with its lines starting SIMULATION and a data-switchboard-pretend mark. A plain simulation carries no marks.
@@ -65,7 +65,10 @@ describe('a pretend page', () => {
     expect(box).toHaveAttribute('data-switchboard-link-id', LINK);
     expect(box.querySelector('code').textContent).toBe(`SIMULATION run ${LINK}`);
     expect(box.querySelector('[data-switchboard-status]')).not.toBeNull();
-    expect(box).toHaveTextContent('This SIMULATION line goes to the Claude chat by itself: a pretend run, whose data is made up.');
+    // s32b: nothing posts at Approve; the pretend wake note, and no copy button.
+    expect(box).toHaveTextContent(PRETEND_WAKE_LINE_NOTE);
+    expect(box).toHaveTextContent('Its SIMULATION result line comes from the tile when the run ends, and this tab closes by itself.');
+    expect(within(box).queryByTitle('Copy this line for the chat')).toBeNull();
   });
 
   test('the sent text says a pretend run went to the helper, its data made up', async () => {
@@ -119,12 +122,17 @@ describe('a real page is unchanged', () => {
     expect(top()).not.toHaveAttribute('data-switchboard-pretend');
     expect(screen.queryByTestId('run-simulation')).toBeNull();
   });
-  test('Approve: the bare line, REAL_LINE_NOTE, and the plain sent text', async () => {
+  test('Approve: the bare line, the wake note with no copy button, and the plain sent text', async () => {
     await openRun({ ...real(simSource('dataop-update')), approve: async () => ({ sent: true, link_id: LINK }) });
     fireEvent.click(screen.getByTestId('run-approve'));
     const box = await screen.findByTestId('run-result-line');
     expect(box).toHaveAttribute('data-switchboard-line', `run ${LINK}`);
-    expect(box).toHaveTextContent(REAL_LINE_NOTE);
+    // s32b: nothing goes to the chat at Approve; the result line comes from the tile.
+    expect(box).toHaveTextContent(WAKE_LINE_NOTE);
+    expect(box).not.toHaveTextContent(REAL_LINE_NOTE);
+    expect(within(box).queryByTitle('Copy this line for the chat')).toBeNull();
+    // The status block the extension fills is still there, hidden.
+    expect(box.querySelector('[data-switchboard-status]')).toHaveAttribute('hidden');
     expect(screen.getByTestId('run-sent-text')).toHaveTextContent('It must pick the run up within 15 minutes.');
     expect(screen.getByTestId('run-sent')).not.toHaveTextContent(/Pretend|Simulated/);
   });

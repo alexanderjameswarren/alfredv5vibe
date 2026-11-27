@@ -7,7 +7,7 @@ import {
   PHASE_HEADERS, RERUN_LABEL, STOPS_AT_FIRST_FAILURE, afterApproveLines, allowsView, approveLabel, bannerLines, checkWord, clientOrgLine,
   countDetail, countSentence, daysLeftLine, groupedSteps, knockOnLines, notStarted, pageExpired, phaseWord, rehearsalOrg,
   rerunRequest, selectedByText, runCancelledLine, runEnd, runLine, runRerunsLine, runResentLine, sampleRoleLabel, stillValid, targetOrg, UNDO_NO_SAMPLE, undoClosedReason,
-  outcomeView, undoHasDeadline, undoLine, undoScopeLine, validUntil, whatChanges,
+  checkOutcomeView, outcomeView, undoHasDeadline, undoLine, undoScopeLine, validUntil, whatChanges,
 } from './runContract';
 import { desktopLine, notReadyReason } from './desktopCheck';
 
@@ -180,6 +180,21 @@ const records = (v) => `${v.toLocaleString('en-US')} ${v === 1 ? 'record' : 'rec
  * link is used (the database returns it only on the link whose run recorded it).
  */
 function Outcome({ r, outcome, used }) {
+  // s32 (item e): a check page's result, {check: {job, at_goal, at_backup, neither}}: the job state and three counts.
+  const check = used && r.page === 'check' ? checkOutcomeView(outcome) : null;
+  if (check) {
+    return (
+      <section data-testid="run-outcome" className={PANEL}>
+        <h2 className="text-lg font-bold mb-2">What the check found</h2>
+        <p data-testid="run-outcome-job" className="m-0 mb-2 font-medium">Job: {check.job === 'none' ? 'no job (a small run)' : check.job}</p>
+        <ul data-testid="run-outcome-check" className="list-disc pl-6 m-0">
+          <li>At the goal: {records(check.at_goal)}</li>
+          <li>Back as the backup had them: {records(check.at_backup)}</li>
+          <li>Neither: {records(check.neither)}</li>
+        </ul>
+      </section>
+    );
+  }
   const view = used && ['dataop', 'undo'].includes(r.page) ? outcomeView(outcome) : null;
   if (!view) return null;
   const shown = (v) => (v === null ? '' : typeof v === 'number' ? v.toLocaleString('en-US') : v);
@@ -203,9 +218,19 @@ function Outcome({ r, outcome, used }) {
           </table>
         </div>
       )}
+      {view.skipped.length > 0 && (
+        <ul data-testid="run-outcome-skipped" className="list-disc pl-6 m-0 mb-2">
+          {view.skipped.map((k, i) => (
+            // eslint-disable-next-line react/no-array-index-key -- kinds can repeat; the order is fixed
+            <li key={i}>Skipped, {k.kind}: {records(k.count)}</li>
+          ))}
+        </ul>
+      )}
       {view.stopped && (
         <div data-testid="run-outcome-stopped">
           {view.stopped.already_changed !== null && <p className="m-0 mb-1 font-medium">Stopped. Already changed: {records(view.stopped.already_changed)}</p>}
+          {view.stopped.by_step && <p data-testid="run-outcome-by-step" className="m-0 mb-1">Stopped at {view.stopped.by_step.step} on {view.stopped.by_step.object}</p>}
+          {view.stopped.next && <p data-testid="run-outcome-next" className="m-0 mb-1">Next: {view.stopped.next}</p>}
           {view.stopped.saved_on_pc.length > 0 && (
             <>
               <p className="m-0">Saved on the PC:</p>
@@ -591,7 +616,7 @@ export default function RunPage({ source }) {
               The expired-checks rerun (mode rerun) also replies as_rerun, and keeps the bare line. */}
           <ResultLine
             line={lineOf(sent, sent.resent ? runResentLine(linkId, pretend) : mode === 'approve' && sent.as_rerun && !sent.rerun ? runRerunsLine(linkId, pretend) : runLine(linkId, pretend))}
-            sim={sim} pretend={pretend} linkId={linkId}
+            sim={sim} pretend={pretend} linkId={linkId} wake
           />
         </div>
       ) : (

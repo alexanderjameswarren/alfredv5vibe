@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import RunPage from './RunPage';
 import CodeReviewPage from './CodeReviewPage';
@@ -50,9 +50,26 @@ describe('the run page marks', () => {
     expect(box).toHaveAttribute('data-switchboard-line', `run ${LINK}`);
     expect(box).toHaveAttribute('data-switchboard-link-id', LINK);
     expect(box.querySelector('code').textContent).toBe(box.getAttribute('data-switchboard-line'));
-    // s23b: the extension posts the line, so the page says so (the exact words, pinned).
+    // s32b: like a git link, nothing posts at Approve: the extension wakes the helper from the marks and closes the
+    // tab, and the result line comes from the tile (the exact words, pinned). No copy button; the status block stays.
+    expect(box).toHaveTextContent('Nothing goes to the Claude chat from here: the desktop helper has been told. The result line comes from the tile when the run ends, and this tab closes by itself.');
+    expect(box).not.toHaveTextContent(/goes to the Claude chat by itself|Paste this into the Claude chat/);
+    expect(within(box).queryByTitle('Copy this line for the chat')).toBeNull();
+    const status = box.querySelector('[data-switchboard-status]');
+    expect(status).toHaveAttribute('hidden');
+    expect(status.querySelector('[data-switchboard-status-text]')).toBeInTheDocument();
+    expect(status.querySelector('[data-switchboard-retry]')).toHaveTextContent('Try again');
+  });
+
+  test("s32b: Don't run (Cancel) keeps its note and its copy button", async () => {
+    await openRun(real(simSource('dataop-update'), { cancel: async (reason) => ({ cancelled: true, link_id: LINK, reason }) }));
+    fireEvent.change(screen.getByLabelText('Reason for not running (optional)'), { target: { value: 'wait' } });
+    fireEvent.click(screen.getByTestId('run-dont'));
+    const box = await within(await screen.findByTestId('run-cancelled')).findByTestId('run-result-line');
     expect(box).toHaveTextContent('This line goes to the Claude chat by itself; you can close this tab.');
-    expect(box).not.toHaveTextContent(/Paste this into the Claude chat/);
+    expect(within(box).getByTitle('Copy this line for the chat')).toBeInTheDocument();
+    expect(box).toHaveAttribute('data-switchboard-line', `run ${LINK} cancelled: wait`);
+    expect(box.querySelector('[data-switchboard-status]')).toHaveAttribute('hidden');
   });
 
   test('a failed Approve drops running and sets no action id', async () => {
@@ -122,6 +139,9 @@ describe('the run page marks', () => {
     expect(top()).not.toHaveAttribute('data-switchboard-running');
     expect(top()).not.toHaveAttribute('data-switchboard-action-id');
     expect(screen.getByTestId('run-result-line')).toHaveAttribute('data-switchboard-line', `run ${LINK} reruns`);
+    // s32b: the reruns line is a wake line too: its note, no copy button.
+    expect(screen.getByTestId('run-result-line')).toHaveTextContent('Nothing goes to the Claude chat from here: the desktop helper has been told.');
+    expect(within(screen.getByTestId('run-result-line')).queryByTitle('Copy this line for the chat')).toBeNull();
   });
 
   test('a reply with no action id sets no action-id mark', async () => {
@@ -147,9 +167,10 @@ describe('the run page marks', () => {
     expect(box).not.toHaveAttribute('data-switchboard-line');
     expect(box).not.toHaveAttribute('data-switchboard-link-id');
     expect(document.querySelector('[data-switchboard-line], [data-switchboard-link-id], [data-switchboard-running], [data-switchboard-action-id]')).toBeNull();
-    // s23b: the simulation's sentence is unchanged.
-    expect(box).toHaveTextContent('A simulation posts nothing. This is the line a real page would send to the chat.');
-    expect(box).not.toHaveTextContent(/goes to the Claude chat by itself/);
+    // s32b: a simulation's sent line says what a real page now does: nothing to the chat; no copy button.
+    expect(box).toHaveTextContent('A simulation sends nothing. On a real page nothing goes to the Claude chat from here either: the desktop helper is told, and the result line comes from the tile.');
+    expect(box).not.toHaveTextContent(/goes to the Claude chat by itself|a real page would send/);
+    expect(within(box).queryByTitle('Copy this line for the chat')).toBeNull();
   });
 });
 

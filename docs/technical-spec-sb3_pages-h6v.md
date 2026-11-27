@@ -2160,6 +2160,89 @@ Files: `supabase/migrations/258_slice2.sql` (the pending draft until s31c) and
   all 123 non-exempt public tables satisfy platform contract v1, and anon reaches nothing undecided."
   - Live md5s after the run, each equal to its body in 258: queue 934acd07, evidence 5548ba77, outcome 3b5e3903,
     correction 47ae4fc0.
-  - Test 9 queued with --test as action adf5d443-59ce-4c17-874e-3ddded6e0882 (one run, undone); its result is still
-    to come.
+  - Test 9 queued with --test as action adf5d443-59ce-4c17-874e-3ddded6e0882 (one run, undone): run
+    2eec7697-6214-4e16-9b07-44f123f84bb2 passed 47 of 47. The Checkpoint after it carried 258, test 9, the spec and
+    the progress file into main and released the db: claims.
+
+### 16.10 s32 as built (2026-11-27); the runner's deploy waits for its deno.json
+
+- **Item b, runner (core.ts):**
+  - sfRunReportProblem(body, kind) takes `failed_check: "rehearsal"` only on a pre-check, with ok true, pass false,
+    non-empty checks, no rehearsal among them and no sample. Each other form is a 400 refusal naming the fix, before
+    any evidence call.
+  - The run row keeps failed_check, and switchboard_record_run_evidence is called for such a result.
+  - The line is "run <link id> done: FAIL" (contract 4.4), with SIMULATION on a pretend run. ok false stays "run
+    <link id> failed".
+  - A refused kept-checks record is noted on the run ("kept checks refused (code): …"), never final(). A network
+    error is retried (503). The sample is stored only on a full pass, as before.
+- **Item e, runner:**
+  - sfRunKind gains `check`: the link's action_id on base_page check.
+  - A check run reports `check: {job, at_goal, at_backup, neither}` instead of pass. Its shape is runContract's
+    checkResultProblem: the nine job states, counts 0 to 999,999,999, nothing else, as 258's outcome rule.
+  - It is required when ok is true and refused otherwise. pass, checks, failed_check and sample are refused on a
+    check (from the cold review), and check is refused on any other kind.
+  - A wrong shape is refused before anything is stored: final() with touch false, so no outcome, evidence, sample or
+    drop call; the run row gets `{exit_code?, ok: false}`.
+  - A good check goes on the run row and, as `{check}`, through switchboard_record_run_outcome. 258's refusals are
+    noted, as a write's are.
+  - The line is checkLine's: "check <link id> done: job <job>; <a> at goal, <b> at backup, <c> neither" (counts
+    with thousands separators), with SIMULATION for a pretend run. A repeat answers it from the run row. A failed
+    check keeps "run <link id> failed".
+  - The runner imports checkLine and checkResultProblem from src/switchboard/runs/runContract.js, as mcp's tools do.
+- **Page (runContract.js, RunPage.jsx):**
+  - checkOutcomeView draws only an exact `{check}`: "What the check found", the job ("no job (a small run)" for
+    none) and the three counts.
+  - outcomeView adds stopped.next (one line, at most 200 characters), stopped.by_step ({step, object}, each at most
+    80) and skipped ([{kind, count}]). A stop with only next now shows. Counts and names only; anything malformed is
+    left out.
+  - Two simulation scenarios: run-stopped-detail and check-finished-outcome.
+- **The deferred rewording:** precheck-filter-differs's not_rehearsed is "The CreatedDate cutoff.", and
+  RunPage.test.jsx matches.
+- **No real run's line changed.** A test pins the pre-check PASS, FAIL and failed lines, the write's, and the
+  repeat's.
+- **Tests:**
+  - runner 184 of 184 (19 new or changed for s32);
+  - switchboard folder 618, full app suite 3905 (7 skipped);
+  - scripts 77; tools and mcp index 70;
+  - the build compiles.
+- **Cold review** (one round): one must-fix.
+  - runContract.js imports codeDiff.js, which imports the bare package `diff`. switchboard-runner/deno.json maps
+    nothing (mcp's maps `"diff": "npm:diff@5.2.0"`), so the runner would fail to load under Deno.
+  - Node finds `diff` in node_modules, so the tests can't catch it.
+  - The fix is that one line in switchboard-runner/deno.json. The claims guard refused the edit: the file wasn't in
+    the plan, and it is unclaimed.
+  - **So the runner is not deployed;** the live runner is still s30's.
+  - Other confirmations: no real run's line changed; a wrong-shape check is refused before anything is stored; the
+    rules agree with 258; retries behave.
+  - Its should-fix (refusing pass, checks, failed_check and sample on a check) is taken.
+- **For the helper:** a check page's run must now send check, not pass. Until the helper does, a check page's run
+  fails with a 400 naming the fix.
+
+**s32b (2026-11-27):**
+- **deno.json:** switchboard-runner/deno.json now maps `"diff": "npm:diff@5.2.0"`, as mcp's does, claimed at s32b.
+- **Deployed** holding db:deploy, with main's commits present: switchboard-runner at 07:53:01 (924 kB). An
+  unauthenticated POST to /result answers 401 `{"ok":false,"error":"unauthorized"}`, the runner's own body, so it
+  boots under Deno with the runContract import.
+- **Run pages behave like git links** (Alex's decision, for the data runs thread's extension 1.2.45):
+  - Nothing posts into the chat at Approve. The extension wakes the helper from the page's marks without posting
+    and closes the tab; the only chat line is the result, from the tile.
+  - ResultLine gains `wake`, set on the run page's Approve, rerun, reruns and resent lines. They carry new notes:
+    - WAKE_LINE_NOTE: "Nothing goes to the Claude chat from here: the desktop helper has been told. The result line
+      comes from the tile when the run ends, and this tab closes by itself."
+    - PRETEND_WAKE_LINE_NOTE: the same, for a pretend run, with "Its SIMULATION result line…".
+    - SIM_WAKE_LINE_NOTE, on a plain simulation (from the cold review): "A simulation sends nothing. On a real page
+      nothing goes to the Claude chat from here either…".
+  - Wake lines have no "Copy this line for the chat" button.
+  - Unchanged: every mark (data-switchboard-line and -link-id; the page's -running, -action-id, -pretend, -project
+    and -kind) and the hidden status block with its Try again. Cancel ("Don't run") keeps REAL, PRETEND and
+    SIM_LINE_NOTE and its copy button.
+  - The review and approve pages are unchanged: CodeReviewPage passes no `wake`, and ApprovePage has its own line.
+- **Tests:**
+  - pageMarks and pretend pin the new notes and the missing button, on Approve and on the reruns line;
+  - a new test pins Cancel's note, button, line and status block;
+  - two RunPage tests matched the old note's last word.
+  - Results: runner 184, switchboard folder 619, full app suite 3906 (7 skipped); the build compiles.
+- **Cold review** (one round): no must-fix. It confirmed that the marks, the status block, Cancel, and the review and
+  approve pages are unchanged. Its should-fixes are taken: the plain simulation's note, and pinning the reruns
+  line.
 
