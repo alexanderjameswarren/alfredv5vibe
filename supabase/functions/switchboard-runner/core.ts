@@ -743,9 +743,19 @@ async function expiredOf(deps: Deps, now: number): Promise<{ expired?: { action_
 // {ok, pass, checks, sample?}; the runner records the run, then the evidence (251), then the sample (250).
 // ---------------------------------------------------------------------------
 
-/** The result line for a run page's run (part 4.4), by its link id: done: PASS, done: FAIL, or failed. */
-export const sfRunLine = (linkId: string, ok: boolean, pass?: unknown) =>
-  `run ${linkId} ${ok ? (pass === true ? "done: PASS" : "done: FAIL") : "failed"}`;
+/**
+ * The result line for a run page's run (part 4.4), by its link id: done: PASS, done: FAIL, or failed. A pretend run's
+ * (sb3_pages-h6v s29) starts "SIMULATION ": its data was made up. A real run's is unchanged.
+ */
+export const sfRunLine = (linkId: string, ok: boolean, pass?: unknown, simulated = false) =>
+  `${simulated ? "SIMULATION " : ""}run ${linkId} ${ok ? (pass === true ? "done: PASS" : "done: FAIL") : "failed"}`;
+
+/**
+ * The run modes an sf_run's result is taken for (s29): real, and pretend (256: pickup_helper opens a pretend request's
+ * sf_run run as pretend, from the payload's pretend that consume sets). The runner only records a pretend result; whether the run and its
+ * request agree is the 256 functions' check (evidence and outcome refuse a mismatch, 55000). Other kinds stay real.
+ */
+export const SF_RUN_MODES = ["real", "pretend"];
 
 const linkIdOf = (payload: Record<string, unknown> | null | undefined) =>
   typeof payload?.link_id === "string" ? payload.link_id : "";
@@ -766,7 +776,7 @@ async function sfRunPickup(action: PickedAction, deps: Deps, now: number, extra:
     await deps.finishRun(action.run_id, { summary: error.slice(0, MAX_SUMMARY), result: { ok: false }, finished_at: new Date(now).toISOString() });
     await deps.setStatus(action.action_id, "failed");
     return json({ ok: false, error, action_id: action.action_id, run_id: action.run_id, project_code: action.project_code,
-                  ...(linkId ? { line: sfRunLine(linkId, false) } : {}), ...extra }, 409);
+                  ...(linkId ? { line: sfRunLine(linkId, false, undefined, action.payload?.pretend === true) } : {}), ...extra }, 409);
   }
   const { token_hash: _hash, ...shown } = link;
   return json({ ok: true, action: { ...action, link: shown, request }, ...extra });
@@ -833,6 +843,11 @@ const FINAL_FIX: Record<string, string> = {
   "23514": "the helper's result doesn't fit what the database records; fix the helper's report and run the pre-check again.",
   "55000": "the run page changed since this run was approved; reload the run page and run the pre-check again.",
 };
+/** s29: 256's pretend mismatch (55000) names "a pretend run" or "a pretend request"; reloading can't fix it. */
+const PRETEND_MISMATCH = /a pretend (run|request)/;
+const PRETEND_MISMATCH_FIX = "the run and its request disagree on pretend; queue the request again and approve its new link.";
+const finalFix = (code: string, message: string) =>
+  (code === "55000" && PRETEND_MISMATCH.test(message) ? PRETEND_MISMATCH_FIX : FINAL_FIX[code]);
 /** 254's switchboard_record_run_outcome refusals: 22023 (not an object, over 64 KB), P0002 (no such run), 55000 (not a
  *  finished real run its link approved on a data operation or undo, a simulation, never started, another link's). */
 export const OUTCOME_FINAL_SQLSTATES = ["22023", "P0002", "55000"];
@@ -866,7 +881,7 @@ async function sfRunResult(
   const retry = (which: string, e: unknown) => json({
     ok: false, retry: true, ...ids, error: `${which}: ${messageOf(e)} — the run is kept; send the same result again.`,
   }, 503);
-  if (!a.picked_up_at || r.mode !== "real") {
+  if (!a.picked_up_at || !SF_RUN_MODES.includes(r.mode)) {
     return json({ ok: false, error: `this action is ${a.status} and no longer waiting for a result.` }, 409);
   }
   if (a.status !== "consumed") {
@@ -874,7 +889,7 @@ async function sfRunResult(
     if (r.finished_at && stored.timed_out !== true && (a.status === "succeeded" || a.status === "failed")) {
       // From the status too: an action failed by the stale check after a failed write says failed, never PASS.
       return json({ ok: true, already: true, action_id: a.id, run_id: r.id, status: a.status, link_id: linkId,
-                    line: sfRunLine(linkId, a.status === "succeeded" && stored.ok === true, stored.pass) });
+                    line: sfRunLine(linkId, a.status === "succeeded" && stored.ok === true, stored.pass, r.mode === "pretend") });
     }
     return json({ ok: false, error: `this action is ${a.status} and no longer waiting for a result.` }, 409);
   }
@@ -895,6 +910,7 @@ async function sfRunRecord(
 ): Promise<Response> {
   const finished_at = new Date(now).toISOString();
   const exit = exitCode === undefined ? {} : { exit_code: exitCode };
+  const simulated = r.mode === "pretend";
 
   // The link and its request first, so the kind is known on every path, a refused report's included.
   let link: Record<string, unknown> | null;
@@ -957,7 +973,7 @@ async function sfRunRecord(
     const { note } = await recordOutcome(false);
     if (note) await deps.finishRun(r.id, { summary: noted(reason, note) });
     await deps.setStatus(a.id, "failed");
-    return json({ ok: false, retry: false, error: why, ...ids, status: "failed", line: sfRunLine(linkId, false),
+    return json({ ok: false, retry: false, error: why, ...ids, status: "failed", line: sfRunLine(linkId, false, undefined, simulated),
                   ...writeReply() }, status);
   };
 
@@ -986,7 +1002,7 @@ async function sfRunRecord(
     } catch (e) {
       const code = sqlstateOf(e);
       if (!FINAL_SQLSTATES.includes(code)) return retry("evidence", e);
-      return final(`evidence refused (${code}): ${blankIds(messageOf(e))} — ${FINAL_FIX[code]}`, { ...result, refused: "evidence", sqlstate: code });
+      return final(`evidence refused (${code}): ${blankIds(messageOf(e))} — ${finalFix(code, messageOf(e))}`, { ...result, refused: "evidence", sqlstate: code });
     }
     // Only a passing pre-check's sample is kept; any other is dropped, never stored. Once the evidence is in, a
     // refused sample doesn't undo the run: it is noted, and the page shows no sample.
@@ -1013,7 +1029,7 @@ async function sfRunRecord(
   if (dropNote) await deps.finishRun(r.id, { summary: noted(runSummary, dropNote) });
   const status = ok ? "succeeded" : "failed";
   await deps.setStatus(a.id, status);
-  return json({ ok: true, ...ids, run_kind: kind, status, line: sfRunLine(linkId, ok, result.pass), evidence,
+  return json({ ok: true, ...ids, run_kind: kind, status, line: sfRunLine(linkId, ok, result.pass, simulated), evidence,
                 sample_stored: sampleStored, ...writeReply() });
 }
 

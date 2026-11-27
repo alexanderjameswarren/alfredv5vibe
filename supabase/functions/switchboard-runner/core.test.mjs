@@ -2082,6 +2082,120 @@ test("sf_run result: a late result after the 4-hour timeout, or before any picku
   assert.deepEqual(unpicked.order, []);
 });
 
+// sb3_pages-h6v s29: a pretend sf_run (256). Its run is opened as mode pretend; the runner records its result like a
+// real one's, through the same functions, and its lines start SIMULATION. A real run's lines are unchanged.
+const PRETEND_REQ = { ...REQ_ROW, simulation: true, pretend: true,
+  request: { ...REQ_ROW.request, simulation: true, pretend: { scenario: "count_ok" } } };
+const pretendFakes = (over = {}) => srFakes({ request: PRETEND_REQ, ...over,
+  action: { payload: { link_id: LINK_ID, pretend: true }, ...over.action }, run: { mode: "pretend", ...over.run } });
+
+test("pretend sf_run: a passing pre-check is recorded like a real one's: run row, evidence, sample, status", async () => {
+  const { deps, calls, order } = pretendFakes();
+  const res = await handle(srResult({ exit_code: 0, sample: SAMPLE }), deps);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {
+    ok: true, action_id: "sr-1", run_id: "run-s", run_kind: "pre-check", status: "succeeded", link_id: LINK_ID,
+    line: `SIMULATION run ${LINK_ID} done: PASS`, evidence: { recorded: 2, already: false, request_id: REQ_ID, page: "precheck" },
+    sample_stored: true,
+  });
+  assert.deepEqual(order, [...READS, "finish", "evidence run-s", `sample ${REQ_ID}`, "status succeeded"]);
+  assert.deepEqual(calls.finished[0].result, { ok: true, exit_code: 0, pass: true, checks: CHECKS });
+  assert.deepEqual(calls.sample, SAMPLE);
+});
+
+test("pretend sf_run: every line starts SIMULATION: done: FAIL, failed, a refused report, a repeat, a pickup refusal", async () => {
+  const fail = await (await handle(srResult({ pass: false }), pretendFakes().deps)).json();
+  assert.equal(fail.line, `SIMULATION run ${LINK_ID} done: FAIL`);
+  const failed = await (await handle(srResult({ ok: false, pass: undefined, checks: undefined }), pretendFakes().deps)).json();
+  assert.equal(failed.line, `SIMULATION run ${LINK_ID} failed`);
+  const refused = await handle(srResult({ pass: "yes" }), pretendFakes().deps);
+  assert.equal(refused.status, 400);
+  assert.equal((await refused.json()).line, `SIMULATION run ${LINK_ID} failed`);
+  const again = await (await handle(srResult(), pretendFakes({
+    action: { status: "succeeded" }, run: { finished_at: "2026-11-24T10:05:00Z", result: { ok: true, pass: true, checks: CHECKS } },
+  }).deps)).json();
+  assert.equal(again.already, true);
+  assert.equal(again.line, `SIMULATION run ${LINK_ID} done: PASS`);
+  const pick = pretendFakes({ link: null });
+  pick.deps.pickupHelper = async () => ({ ...SR_PICKED, payload: { link_id: LINK_ID, pretend: true } });
+  const res = await handle(helper("pickup", { kinds: EIGHT }), pick.deps);
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).line, `SIMULATION run ${LINK_ID} failed`);
+});
+
+test("real sf_run lines are unchanged: no SIMULATION, whatever the request says", async () => {
+  const { sfRunLine } = await import("./core.ts");
+  assert.equal(sfRunLine(LINK_ID, true, true), `run ${LINK_ID} done: PASS`);
+  assert.equal(sfRunLine(LINK_ID, true, false), `run ${LINK_ID} done: FAIL`);
+  assert.equal(sfRunLine(LINK_ID, false), `run ${LINK_ID} failed`);
+  assert.equal(sfRunLine(LINK_ID, true, true, true), `SIMULATION run ${LINK_ID} done: PASS`);
+  for (const [over, line] of [[{}, "done: PASS"], [{ pass: false }, "done: FAIL"], [{ ok: false, pass: undefined, checks: undefined }, "failed"]]) {
+    const body = await (await handle(srResult(over), srFakes().deps)).json();
+    assert.equal(body.line, `run ${LINK_ID} ${line}`);
+  }
+  // A real run on a pretend request still takes the real line: the line follows the run's mode.
+  const body = await (await handle(srResult(), srFakes({ request: PRETEND_REQ, evidence: async () => { throw coded("55000", "pretend mismatch"); } }).deps)).json();
+  assert.equal(body.line, `run ${LINK_ID} failed`);
+  // A real pickup refusal too.
+  const pick = srFakes({ link: null });
+  assert.equal((await (await handle(helper("pickup", { kinds: EIGHT }), pick.deps)).json()).line, `run ${LINK_ID} failed`);
+});
+
+test("pretend mismatch: the database's 55000 is reported (422, retry false, the fix named), never thrown", async () => {
+  // A pretend run on a real request, and a real run on a pretend request: 251 refuses both.
+  for (const f of [pretendFakes({ request: REQ_ROW }), srFakes({ request: PRETEND_REQ })]) {
+    f.deps.recordRunEvidence = async () => { throw coded("55000", "switchboard_record_run_evidence: a pretend run records evidence only on a pretend request, and a pretend request only from a pretend run; no evidence is recorded."); };
+    const res = await handle(srResult({ sample: SAMPLE }), f.deps);
+    assert.equal(res.status, 422);
+    const body = await res.json();
+    assert.equal(body.ok, false);
+    assert.equal(body.retry, false);
+    assert.match(body.error, /^evidence refused \(55000\): .*a pretend run records evidence only on a pretend request.* — the run and its request disagree on pretend; queue the request again and approve its new link\.$/);
+    assert.ok(!body.error.includes("reload the run page"));
+    assert.equal(f.calls.sample, undefined);
+    assert.deepEqual(f.calls.status, [{ id: "sr-1", status: "failed" }]);
+  }
+});
+
+test("pretend mismatch on a write: 254's 55000 is noted on the run and the reply, not thrown", async () => {
+  const write = { ...LINK_ROW };
+  const f = pretendFakes({ link: write, request: { ...REQ_ROW, page: "dataop", base_page: "dataop" },
+    outcome: async () => { throw coded("55000", "switchboard_record_run_outcome: a pretend run's outcome is kept only on a pretend request, and a pretend request's only from a pretend run. Nothing was recorded."); } });
+  const res = await handle(srResult({ checks: undefined, write: { updated: 3 } }), f.deps);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.run_kind, "write");
+  assert.equal(body.outcome_refused, "55000");
+  // As for any 254 refusal, the run's own status stands (s29 cold review: pinned, raised in the report).
+  assert.equal(body.status, "succeeded");
+  assert.equal(body.line, `SIMULATION run ${LINK_ID} done: PASS`);
+  assert.match(f.calls.finished.at(-1).summary, /outcome refused \(55000\)/);
+});
+
+test("pretend mode is taken for an sf_run only: any other helper kind's pretend run is refused, and a plain simulation run too", async () => {
+  const { SF_RUN_MODES } = await import("./core.ts");
+  assert.deepEqual(SF_RUN_MODES, ["real", "pretend"]);
+  const { deps, calls } = fakes({
+    findPicked: async () => ({
+      action: { id: "git-1", user_id: USER, kind: "git", status: "consumed", picked_up_at: "2026-11-24T10:01:00Z", payload: {} },
+      run: { id: "run-g", action_id: "git-1", mode: "pretend", finished_at: null },
+    }),
+  });
+  assert.equal((await handle(helper("result", result()), deps)).status, 409);
+  assert.deepEqual(calls.status, []);
+  for (const mode of ["dry_run", "simulation"]) {
+    const f = srFakes({ run: { mode } });
+    assert.equal((await handle(srResult(), f.deps)).status, 409, mode);
+    assert.deepEqual(f.order, []);
+  }
+});
+
+test("index.ts: pendingActions and stalePicks find a real or pretend open run", () => {
+  const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  assert.equal(src.match(/\.in\("mode", SF_RUN_MODES\)\.is\("finished_at", null\)/g)?.length, 2);
+  assert.ok(!/\.eq\("mode", "real"\)/.test(src));
+});
+
 test("sf_run link: the runner's approve routes never serve one", async () => {
   const { deps, calls, action } = gitFakes();
   Object.assign(action, { kind: "sf_run", payload: { link_id: LINK_ID } });

@@ -48,20 +48,25 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-s28b: mcp and switchboard-run-pages are deployed with the s28 code (2026-11-26, 20:42 local; spec 15.2 "s28b deployed"). s28: the pages, runContract (pretend, O17, O2, O5), the tool, run-pages core and item c (spec 15.2 "s28 as built"). s26 to s27g: migrations 256 and 257 are live and on main; test 8 passed 59 of 59. Steps (15.2): s29 runner; item b is s30, d s31, e s32.
+s29: the runner takes a pretend sf_run's result and prefixes its lines SIMULATION; deployed 2026-11-26 20:51 local (spec 15.2 "s29 as built"). The data runs thread's pretend walk can start. Open for Alex: a runner-side mode check (15.2 "Open, for Alex"). s28 and s28b are on main. Steps (15.2): s29b data runs items 2 to 4; item b is s30, d s31, e s32.
 
-Before s29: Alex runs gitpush Checkpoint of the s28 and s28b files, then gitsync in this worktree if it is behind main.
+Before s29b: Alex runs gitpush Checkpoint of the s29 files, then gitsync in this worktree if it is behind main.
 
-Run tag: sb3_pages-h6v-s29-<4>, the runner's pretend handling (spec 15.2)
+Run tag: sb3_pages-h6v-s29b-<4>, data runs items 2 to 4: filter fields, their correction shape, a fixed simulation cutoff (spec 15.2)
 
 Scope of this step:
 - create: nothing
-- update: supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs, supabase/functions/switchboard-runner/index.ts, docs/technical-spec-sb3_pages-h6v.md
+- update: src/switchboard/runs/runContract.js, src/switchboard/runs/runContract.test.js, src/switchboard/runs/simulation.js, src/switchboard/runs/simulation.test.js, supabase/functions/mcp/index.ts, supabase/functions/mcp/index.test.mjs, docs/technical-spec-sb3_pages-h6v.md
 - delete: nothing
-- deploy: switchboard-runner (db:deploy, claimed at this step, Alex's permission prompt), with main's commits present
-- SQL: none
-Estimated run: 20m
-(core.ts:869 accepts a pretend run's result; index.ts:200 stalePicks and 173 pendingActions take mode 'pretend' as well as 'real'. Then the first pretend walk: queue a pretend pre-check with the tool, issue its link, open /run/ and see the strip and the marks.)
+- deploy: mcp (db:deploy, claimed at this step, Alex's permission prompt), with main's commits present; it imports runContract.js
+- SQL: none (the live correction function is read with get_sql_read; any change it needs is planned as its own step)
+Estimated run: 30m
+(Item 2:
+- details.queries accepts "records" and "sandbox records";
+- selected_by {kind: "filter", text, sandbox_text?, not_rehearsed?};
+- runContract refuses a filter with anything but comparisons joined by AND.
+Item 3: check their correction shape {page: "correction", base_page, version, changed: {edit_kind, reason, still_valid: [{check, passed_at}]}} against the live switchboard_correct_run_request, whose changed is {reason, items} today, and report the gap.
+Item 4: simulation.js's filter gets a fixed cutoff, CreatedDate < 2026-11-20T00:00:00Z.)
 
 Then C2, once its gates are met (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall.
 
@@ -198,3 +203,4 @@ Estimated run: 20m
 | s27g | Check 257's run and live body, queue test 8, spec | 09:58:38 | 09:59:08 | 0m30s |
 | s28 | Pages, runContract, tool, run-pages core, item c, tests, cold review and fixes, spec | 10:03:09 | 10:16:51 | 13m42s |
 | s28b | Check, claim, deploy mcp and switchboard-run-pages, live check, spec | 20:41:52 | 20:44:08 | 2m16s |
+| s29 | Runner pretend: core, index, 7 tests, cold review and fixes, deploy, spec | 20:47:02 | 20:51:53 | 4m51s |

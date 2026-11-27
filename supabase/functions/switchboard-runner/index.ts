@@ -5,7 +5,8 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import postgres from "npm:postgres@3.4.5";
 import { createServiceClient } from "../_shared/alfred-tools/supabase-client.ts";
 import {
-  type Action, type Deps, handle, HELPER_KINDS, LONG_PICK_KINDS, type Picked, type PickedAction, type RunOutcome, type Statement, type StatementResult,
+  type Action, type Deps, handle, HELPER_KINDS, LONG_PICK_KINDS, type Picked, type PickedAction, type RunOutcome, SF_RUN_MODES, type Statement,
+  type StatementResult,
 } from "./core.ts";
 
 // switchboard-runner: the only code that executes queued SQL, and the only code using SUPABASE_DB_URL.
@@ -59,6 +60,9 @@ import {
 //                  for a pass with checks, then switchboard_store_run_sample (250) by the link's request_id, then the
 //                  status. A failed write answers 503 {retry: true} naming it and leaves the action consumed; a repeat
 //                  records nothing twice. The reply's line is "run <link id> done: PASS|done: FAIL|failed".
+//                  sb3_pages-h6v s29: a pretend sf_run's run (mode pretend, 256) is taken like a real one's, and its
+//                  lines start "SIMULATION ". The runner only records it, through the same functions, which refuse a
+//                  run and request that disagree on pretend (55000).
 //                  s4b: the link and request are read first; a data operation's write (sfRunKind) records no evidence
 //                  or sample, and drops the request's sample (switchboard_drop_run_sample) at its final status. A
 //                  refusal with SQLSTATE P0002, 23514 or 55000 fails the run at once (422, retry: false, the fix named).
@@ -168,9 +172,10 @@ function deps(): Deps {
       const pickedRows = must(await db.from("switchboard_actions").select("id, kind, project_code, picked_up_at")
         .eq("user_id", userId).in("kind", [...HELPER_KINDS]).eq("status", "consumed").not("picked_up_at", "is", null)
         .order("picked_up_at")) as { id: string; kind: string; project_code: string; picked_up_at: string }[];
+      // s29: a pretend sf_run's open run (mode pretend, 256) counts as one owed too; other kinds' runs are only real.
       const runs = pickedRows.length
         ? must(await db.from("switchboard_runs").select("id, action_id").in("action_id", pickedRows.map((a) => a.id))
-          .eq("mode", "real").is("finished_at", null)) as { id: string; action_id: string }[]
+          .in("mode", SF_RUN_MODES).is("finished_at", null)) as { id: string; action_id: string }[]
         : [];
       const picked = pickedRows.map((a) => ({ ...a, run_id: runs.find((r) => r.action_id === a.id)?.id ?? null }));
       return { unpicked, picked };
@@ -196,8 +201,9 @@ function deps(): Deps {
           .eq("status", "consumed").lt("picked_up_at", dataopBefore)) as { id: string }[],
       ];
       if (!actions.length) return [];
+      // s29: real or pretend, so a timed-out pretend sf_run's run is finished too.
       const runs = must(await db.from("switchboard_runs").select("id, action_id")
-        .in("action_id", actions.map((a) => a.id)).eq("mode", "real").is("finished_at", null)) as { id: string; action_id: string }[];
+        .in("action_id", actions.map((a) => a.id)).in("mode", SF_RUN_MODES).is("finished_at", null)) as { id: string; action_id: string }[];
       return actions.map((a) => ({ action_id: a.id, run_id: runs.find((r) => r.action_id === a.id)?.id ?? null }));
     },
     findPicked: async (actionId, runId) => {
