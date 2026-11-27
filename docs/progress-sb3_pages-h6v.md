@@ -48,18 +48,18 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-s30: the runner's mode check, the filter fields and AND rule, the simulation cutoff, O23's runContract part and checkLine's flag (spec 16.8); mcp and switchboard-runner deployed. Its files go into main with s30's Checkpoint.
+s31d: 258 applied (run 04cb994c-b322-48de-9231-7c6ca496d162, both smoke blocks, CONFORMANT); the live md5s equal 258's. Test 9 queued with --test as action adf5d443-59ce-4c17-874e-3ddded6e0882. db:fn ×4, db:table:switchboard_run_requests and db:migration:258 are held for the Checkpoint.
 
-Run tag: sb3_pages-h6v-s31-<4>, no deploy, no SQL queued: draft the one slice 2 migration (item b, O23, item e) and test 9, with the smoke check calling every replaced function past its changed lines (spec 16.6, 16.7)
+Run tag: sb3_pages-h6v-s31e-<4>: read test 9's result (run id from the chat), fix test 9 only if a failing check is its own fault, record it (spec 16.9)
 
 Scope of this step:
-- create: supabase/migrations/_pending_sb3_pages-h6v_slice2.sql, supabase/tests/sb3_pages-h6v/9_slice2_test.sql
-- update: docs/technical-spec-sb3_pages-h6v.md
+- create: nothing
+- update: docs/technical-spec-sb3_pages-h6v.md, supabase/tests/sb3_pages-h6v/9_slice2_test.sql
 - delete: nothing
-- deploy: none
-- SQL: none (drafted only; s31b numbers and queues it)
-Estimated run: 40m
-(Then s31b: gitsync if behind, drift check, claim the db: items, number, write and queue it; s31c: after a clean dry run and Alex's approval, test 9 with --test; s32: the runner's b and e, the check page's outcome, item d, and not_rehearsed's rewording with RunPage.test.jsx.)
+- deploy: nothing
+- SQL: test 9 again with --test only if it was changed
+Estimated run: 3m
+(Then Alex runs gitpush Checkpoint for this worktree with supabase/migrations/258_slice2.sql, supabase/tests/sb3_pages-h6v/9_slice2_test.sql, docs/technical-spec-sb3_pages-h6v.md and docs/progress-sb3_pages-h6v.md, which releases the db: claims; s32: the runner's b and e, the check page's outcome, item d, and not_rehearsed's rewording with RunPage.test.jsx.)
 
 Then C2, once its gates are met (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall.
 
@@ -199,3 +199,7 @@ Estimated run: 20m
 | s29 | Runner pretend: core, index, 7 tests, cold review and fixes, deploy, spec | 20:47:02 | 20:51:53 | 4m51s |
 | s29b | Plan: live reads, spec section 16, cold review and fixes | 21:18:23 | 21:27:18 | 8m55s |
 | s30 | Mode check, filter rule, cutoff, O23 contract, checkLine flag, tests, cold review and fixes, deploy mcp and runner, spec | 06:04:58 | 06:19:04 | 14m06s |
+| s31 | Live reads, draft slice 2 migration and smoke check, test 9, expression checks, cold review and fixes, spec | 06:24:11 | 06:44:10 | 19m59s |
+| s31b | Correction's check-page refusal, smoke calls, test 9, number 258, cold review, spec | 06:52:36 | 06:57:40 | 5m04s |
+| s31c | Claims, drift check, write 258, diff, delete pending, spec, queue | 07:26:42 | 07:32:26 | 5m44s |
+| s31d | md5s of 258 against live, queue test 9, spec | 07:35:10 | 07:35:46 | 0m36s |
