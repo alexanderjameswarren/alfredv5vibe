@@ -67,7 +67,8 @@ export const approveCount = (preview) => preview?.total_count ?? null;
  */
 export function countMismatch(preview) {
   const r = preview?.request;
-  if (!r || !['dataop', 'undo'].includes(r.page)) return null;
+  // s34: the delete page sends its count too.
+  if (!r || !['dataop', 'undo', 'delete_test_data'].includes(r.page)) return null;
   const shown = shownTotal(r);
   const sent = approveCount(preview);
   if (shown === sent && sent !== null) return null;

@@ -3,7 +3,7 @@
 // RunShell draws the strip unless the source's kind is exactly 'real'.
 
 import { ANSWERS, simulatedState } from './desktopCheck';
-import { EDIT_RERUNS, RECORDS_QUERY, SANDBOX_RECORDS_QUERY, rerunSteps } from './runContract';
+import { DELETE_TEST_STEPS, EDIT_RERUNS, RECORDS_QUERY, SANDBOX_RECORDS_QUERY, rerunSteps } from './runContract';
 
 const HOUR = 60 * 60 * 1000;
 const iso = (t) => new Date(t).toISOString();
@@ -104,6 +104,43 @@ function correction(now, kind, over, reason, items) {
       details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(6) }], queries: [{ label: RECORDS_QUERY, soql: IDS_SOQL }] },
       ...over,
     }),
+  };
+}
+
+const KEPT_RUN_1 = '7a1c2e3f-4b5d-4e6f-8a9b-0c1d2e3f4a5b';
+const KEPT_RUN_2 = '8b2d3f4a-5c6e-4f70-9b0c-1d2e3f4a5b6c';
+const PRECHECK_ID = '3f2b8c1a-4d5e-4f60-8a7b-9c0d1e2f3a4b';
+const KEEP_STEPS = [...PRECHECK_STEPS.slice(0, -1), 'keep_test'];
+
+/** s34 (O18): the Id-list pre-check, keeping its TEST records, its run finished with a PASS and `kept` recorded. */
+function keptPrecheck(now, kept) {
+  const s = SCENARIOS['precheck-ids'].build(now);
+  const last = kept[kept.length - 1];
+  return {
+    ...s,
+    request: { ...s.request, keep_test_records: true, steps: codes(KEEP_STEPS), kept_test_records: kept },
+    run: { consumed_at: iso(now - 40 * MIN), picked_up_at: iso(now - 39 * MIN), finished_at: iso(now - 30 * MIN), status: 'succeeded', ok: true, pass: true,
+      kept_test_records: { count: last.count, sandbox: last.sandbox } },
+  };
+}
+
+/** s34 (O24): the delete page for the two kept sets: one sandbox org, no selection, the summed count, its four steps. */
+function deleteTestPage(now) {
+  const { selected_by: _s, ...frame } = base({});
+  return {
+    request: {
+      ...frame,
+      page: 'delete_test_data', version: 1,
+      orgs: [{ alias: SANDBOX.alias, org_type: 'sandbox', role: 'target' }],
+      headline: `DELETE SANDBOX TEST DATA ${CODE}: DELETES UP TO 7 TEST GIFTS IN ${SANDBOX.alias}`,
+      side_effects: 'None: the rehearsal made these TEST records, and nothing else points at them.',
+      operation: { kind: 'delete', object: 'Gift__c', object_label: 'Gift' },
+      counts: { expected: 7 },
+      test_data_of: { request_id: PRECHECK_ID, run_tag: `${CODE}-s3-ef56` },
+      steps: codes(DELETE_TEST_STEPS), evidence: [],
+      phases: [{ name: 'Pre-check and rehearsal', state: 'passed', at: iso(now - 30 * MIN) }, { name: 'Delete sandbox test data', state: 'waiting' }],
+      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'rehearsal-ids.csv', sha256: hash(7) }] },
+    },
   };
 }
 
@@ -437,6 +474,32 @@ export const SCENARIOS = {
     build: (now) => {
       const s = SCENARIOS['precheck-ids'].build(now);
       return { ...s, request: { ...s.request, pretend: { scenario: 'count_ok' } } };
+    },
+  },
+  // s34 (O18): a pre-check that keeps its TEST records, after its run: keep_test in place of delete_test, and the
+  // status line's kept count from the set the database recorded for that run.
+  'precheck-keep-test': {
+    title: 'Pre-check and rehearsal that keeps its TEST records, finished: PASS, 4 kept',
+    build: (now) => keptPrecheck(now, [{ run_id: KEPT_RUN_1, run_tag: `${CODE}-s3-ef56`, count: 4, sandbox: SANDBOX.alias, recorded_at: iso(now - 30 * MIN), deleted_by: null }]),
+  },
+  'precheck-keep-test-two-sets': {
+    title: 'Pre-check and rehearsal that keeps its TEST records, run twice: two kept sets, 7 in all',
+    build: (now) => keptPrecheck(now, [
+      { run_id: KEPT_RUN_1, run_tag: `${CODE}-s3-ef56`, count: 4, sandbox: SANDBOX.alias, recorded_at: iso(now - 3 * HOUR), deleted_by: null },
+      { run_id: KEPT_RUN_2, run_tag: `${CODE}-s3-ef56`, count: 3, sandbox: SANDBOX.alias, recorded_at: iso(now - 30 * MIN), deleted_by: null },
+    ]),
+  },
+  // s34 (O24): the delete page for those two sets, on the sandbox only; and the same page as a pretend run.
+  'delete-test-data': {
+    title: 'Delete sandbox test data: the 7 TEST records a pre-check kept',
+    build: (now) => deleteTestPage(now),
+  },
+  'delete-test-data-pretend': {
+    title: 'Pretend delete sandbox test data: marked like a real page, its lines SIMULATION',
+    kind: 'pretend',
+    build: (now) => {
+      const s = deleteTestPage(now);
+      return { ...s, request: { ...s.request, pretend: { scenario: 'delete_ok' } } };
     },
   },
   // s28 (O2): the structured allows, drawn beside diagnosis's sentences.

@@ -140,6 +140,10 @@ test('countMismatch: a write page whose shown count is not total_count; never a 
   expect(countMismatch({ request: { page: 'dataop', counts: { expected: 45 } } })).toMatch(/\(none\)/);
   expect(countMismatch({ total_count: null, request: { page: 'precheck', counts: {} } })).toBeNull();
   expect(countMismatch({ total_count: 1, request: { page: 'correction', counts: { total: 2 } } })).toBeNull();
+  // s34: the delete page sends its count too, so a mismatch refuses its Approve.
+  expect(countMismatch({ total_count: 7, request: { page: 'delete_test_data', counts: { expected: 7 } } })).toBeNull();
+  expect(countMismatch({ total_count: 4, request: { page: 'delete_test_data', counts: { expected: 7 } } })).toMatch(/\(7\).*\(4\)/);
+  expect(countMismatch({ request: { page: 'delete_test_data', counts: { expected: 7 } } })).toMatch(/\(none\)/);
 });
 
 test("the preview's outcome reaches the page; none is null", async () => {

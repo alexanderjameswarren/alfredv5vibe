@@ -8,6 +8,7 @@ import {
   countDetail, countSentence, daysLeftLine, groupedSteps, knockOnLines, notStarted, pageExpired, phaseWord, rehearsalOrg,
   rerunRequest, selectedByText, runCancelledLine, runEnd, runLine, runRerunsLine, runResentLine, sampleRoleLabel, stillValid, targetOrg, UNDO_NO_SAMPLE, undoClosedReason,
   checkOutcomeView, outcomeView, undoHasDeadline, undoLine, undoScopeLine, validUntil, whatChanges,
+  DELETE_TEST_PAGE, deletePageOrgProblem, keptTestLine,
 } from './runContract';
 import { desktopLine, notReadyReason } from './desktopCheck';
 
@@ -117,6 +118,8 @@ function AllowsRows({ allows }) {
 /** Part 8: the status line. */
 function StatusLine({ r, run, closed }) {
   const until = validUntil(r.evidence);
+  // s34 (O18): what the pre-check's runs kept in the sandbox, every set summed.
+  const kept = keptTestLine(r, run);
   // A used link (A7): the phase being run reads running or how it ended (runEnd), from the stored run, not "waiting".
   // s21b: a failed run reads failed, never finished.
   const end = runEnd(run);
@@ -139,7 +142,10 @@ function StatusLine({ r, run, closed }) {
         );
       })}
       {/* An undo has no 24-hour expiry, only its own deadline (Alex, s6); a check reads only, so nothing expires. */}
-      {r.page !== 'undo' && r.page !== 'check' && (
+      {/* s34 (O18): what the pre-check's runs kept, right after how the run ended. */}
+      {kept && <p data-testid="run-kept-test" className="m-0">{kept}</p>}
+      {/* s34: nor does a delete page, which has no checks of its own. */}
+      {r.page !== 'undo' && r.page !== 'check' && r.page !== DELETE_TEST_PAGE && (
         <p data-testid="run-valid-until" className="m-0">
           {until ? `Checks valid until ${localTime(until)}.` : 'No checks have passed yet, so nothing expires.'}
         </p>
@@ -195,7 +201,7 @@ function Outcome({ r, outcome, used }) {
       </section>
     );
   }
-  const view = used && ['dataop', 'undo'].includes(r.page) ? outcomeView(outcome) : null;
+  const view = used && ['dataop', 'undo', DELETE_TEST_PAGE].includes(r.page) ? outcomeView(outcome) : null;
   if (!view) return null;
   const shown = (v) => (v === null ? '' : typeof v === 'number' ? v.toLocaleString('en-US') : v);
   return (
@@ -251,7 +257,7 @@ function SampleRecord({ r, sample, closed }) {
   if (r.page === 'undo' && !sample?.records?.length) {
     return closed ? null : <p data-testid="run-sample-none" className="mb-4 text-sm text-dark break-words">{UNDO_NO_SAMPLE}</p>;
   }
-  if (['precheck', 'correction', 'check'].includes(r.page) || !sample?.records?.length) return null;
+  if (['precheck', 'correction', 'check', DELETE_TEST_PAGE].includes(r.page) || !sample?.records?.length) return null;
   return (
     <section data-testid="run-sample" className={PANEL}>
       <h2 className="text-lg font-bold mb-2">Sample record</h2>
@@ -495,6 +501,9 @@ export default function RunPage({ source }) {
 
   if (error) return <RunShell source={source}><p data-testid="run-error" className="text-dark break-words">{error}</p></RunShell>;
   if (!r) return <RunShell source={source}><p className="text-muted">Loading…</p></RunShell>;
+  // s34 (O24): a delete page with any org but its one sandbox is never drawn, so it can't be approved.
+  const orgProblem = deletePageOrgProblem(r);
+  if (orgProblem) return <RunShell source={source}><p data-testid="run-error" className="text-dark break-words">{orgProblem}</p></RunShell>;
 
   // A closed undo changes nothing: its banner says so, and the count sentence, "After you approve" and the desktop go.
   // In rerun mode the action is the pre-check and rehearsal: its banners, not the write's.

@@ -2246,3 +2246,405 @@ Files: `supabase/migrations/258_slice2.sql` (the pending draft until s31c) and
   approve pages are unchanged. Its should-fixes are taken: the plain simulation's note, and pinning the reruns
   line.
 
+## 17. Slice 2's last two asks: O18 kept TEST records, O24 the delete page (s33, 2026-11-27; a plan only)
+
+The data runs thread's slice 1 walk passed clean on our pages, wording and runner (switchboard 93baaa7, extension
+1.2.45). This part plans its two remaining slice 2 asks against the live definitions read at s33.
+
+| Function | live md5 (prosrc) | latest file |
+|---|---|---|
+| switchboard_queue_run_request | 934acd07 | 258 |
+| switchboard_consume_run_link | cd9e7672 | 256 |
+| switchboard_correct_run_request | 47ae4fc0 | 258 |
+| switchboard_record_run_outcome | 3b5e3903 | 258 |
+| switchboard_record_run_evidence | 5548ba77 | 258 |
+| switchboard_run_preview | b34e0d6c | 255 |
+| switchboard_retry_run | eeab7c9b | 256 |
+
+Pages are listed in five places in the database: the two check constraints on switchboard_run_requests (page,
+base_page), queue's page list and count rule, consume's count rule, outcome's base page list, and correction's
+write gate. Retry and preview are page-neutral except "no expiry for an undo". The run pages edge function's routes
+name no page, so they need no change.
+
+### 17.1 O18, keeping TEST records
+
+**The request.** `keep_test_records: true` may be sent on a pre-check page only (base page precheck). Only the
+value true; false or absent means the rehearsal deletes them as today. Elsewhere it is refused (23514, queue; and
+runContract's requestProblems). It needs a rehearsal org (role rehearsal, sandbox). A correction can't add, drop or
+change it: correction already refuses any key outside its kind's table, so this needs only a test.
+
+**The step.** With keep_test_records, the step list carries `keep_test` instead of `delete_test`. Its text (agreed
+at s34): "Keep the TEST records in the sandbox for later." (`delete_test` is refused alongside keep_test_records, and
+keep_test without it.) The rule is checked at queue and again by correction: steps are in correction's c_run, so a
+rehearsal-rerunning correction could otherwise swap keep_test back to delete_test (cold review).
+
+**The result.** A pre-check's result may carry `kept_test_records: {count, sandbox}`:
+- count a whole number, 1 to 999,999,999; sandbox a string equal to the request's rehearsal org alias; nothing else;
+- only on a pre-check run (kind pre-check) of a request with keep_test_records true; refused otherwise;
+- allowed with ok true, pass true or false (a FAIL, failed_check rehearsal included; see question 1).
+
+**The runner (core.ts).**
+- sfRunReportProblem validates it (a 400 naming the fix, before anything is stored), given the request.
+- The run row keeps it: result becomes `{ok, exit_code?, pass?, checks?, failed_check?, kept_test_records?}`.
+- Then it calls a new service-role function, `switchboard_record_kept_test_records(p_run_id)`, which reads only the
+  run row, as evidence does. A refusal is noted on the run ("kept TEST records refused (code): …"), never final();
+  a network error is retried, and a missing function (not yet deployed) is noted, not retried, as
+  OUTCOME_MISSING_CODES are.
+- It is called **before** the evidence block, which can return early through final() or a 503 retry; a call after
+  it would orphan the records (cold review).
+- The line is unchanged.
+
+**The database (new column, new function).**
+- `switchboard_run_requests.kept_test_records jsonb` (null, or a list), with a column comment. Each entry is
+  `{run_id, run_tag, count, sandbox, recorded_at, deleted_by}`, where run_tag is the request's run_tag when the run
+  was recorded (a correction may change it), and deleted_by is the delete request's id once its write ran (17.2),
+  or null.
+- A list, not one object, because a correction that reruns the rehearsal keeps a second set from the same request.
+  The delete page deletes every entry not yet deleted, and their counts sum to the count it expects (question 3).
+- The function refuses a run that is:
+  - not finished;
+  - not the pre-check run (by 251's rule: the link's pre-check or its rerun);
+  - on a request without keep_test_records true;
+  - malformed;
+  - for a sandbox that isn't the request's rehearsal org;
+  - a plain simulation;
+  - a pretend/real mismatch, as evidence refuses.
+  One entry per run; a repeat returns already true. It does **not** copy evidence's refusals for a voided link, an
+  older version or a run finished before the last correction: the records exist in the sandbox either way.
+- The run row's result is pruned after 30 days, so the request column is the durable record.
+
+**The page.**
+- preview adds `request.kept_test_records` (from the column) and `run.kept_test_records` (from the run's result,
+  when well formed).
+- The status line on a pre-check page, after runEnd's word: "N TEST records kept in <sandbox>." Commas in N, one
+  record singular. It is taken from the run, or from the request's entry for that run once the result is pruned.
+- The pre-check page's "Sandbox rehearsal" banner says "TEST records are created and changed, and kept for later.
+  Nothing else changes." when keep_test_records is true (s34).
+
+**How a delete page finds it.**
+- Claude reads the pre-check's run with get_switchboard_run (result.kept_test_records), or the request.
+- It queues the delete request naming that pre-check (test_data_of.request_id) with counts.expected equal to the sum
+  not yet deleted.
+- The queue takes the count and the sandbox from the column, never from the chat's word for them; 17.2 lists the
+  checks.
+
+### 17.2 O24, the "Delete sandbox test data" page
+
+**The request**, the data runs thread's stand-in:
+- page and base_page `delete_test_data`;
+- `test_data_of: {request_id, run_tag}`;
+- `orgs: [{alias, org_type: sandbox, role: target}]`, exactly one;
+- `operation: {kind: "delete", object, object_label}`;
+- `counts.expected`;
+- steps `find_kept_test`, `type_count`, `delete_kept_test`, `confirm_gone`, in that order;
+- the usual headline, problem, side_effects and run_tag.
+
+No selected_by: find_kept_test finds them by the run's marker (question 4).
+
+**The page (runContract.js, RunPage.jsx, look.js, simulation.js).**
+- PAGES gains delete_test_data, and GROUPS has `delete_test_data: ['Sandbox clean-up']`.
+- Our wording for the four steps, all org sandbox:
+
+  | Step | Text |
+  |---|---|
+  | find_kept_test | "Confirm <sandbox> is a sandbox, then find the TEST records the pre-check kept, by the Ids saved on your PC. Any already gone are counted and listed." |
+  | type_count | "You type the number of TEST records the terminal finds; anything else stops with nothing deleted." (the delete page's own; dataop and undo keep theirs) |
+  | delete_kept_test | "Delete those TEST records, and only those. A record that isn't a TEST record stops the run with nothing deleted." |
+  | confirm_gone | "Confirm none of them is left." |
+
+  (As built at s34, after the data runs thread's answers 4 and 5: the helper finds them by the Ids on the PC, and
+  the typed count is the number found, so nothing on the page promises it equals the kept sum.)
+- Banners: the sandbox banner only, "This deletes up to N TEST records. Nothing else changes."; the count sentence
+  "This deletes up to N TEST records of <object label> in <sandbox>." There is no production banner, and the page
+  refuses to draw if any org is not its one sandbox target.
+- Approve label: "Delete the TEST records in SANDBOX".
+- Undo line: "Undo: none. Deleted TEST records are not restored; the rehearsal made them."
+- countSentence and the count box as an undo's are, from counts.expected. The page sends it with Approve.
+- No 24-hour clock (it has no evidence of its own): the page never reads expired. pageExpired and preview's expired
+  already give false when there is no evidence, so no change is needed there.
+- The outcome is drawn by outcomeView, as a write's.
+- Two simulation scenarios: delete-test-data, and delete-test-data-pretend.
+- requestProblems for the page:
+  - the four steps exactly;
+  - one sandbox target org;
+  - kind delete;
+  - counts.expected a whole number of 1 or more;
+  - test_data_of.request_id a lower-case uuid;
+  - test_data_of.run_tag set;
+  - no selected_by, undo_of, interrupted, pre_check_request_id or keep_test_records.
+
+**The database (one migration).** Each place that lists pages:
+- **Constraints:** page and base_page gain delete_test_data (drop and re-add both, in the same migration).
+- **queue:**
+  - The page list gains it, and the count rule (`v_page in ('dataop', 'undo')`) gains it, from counts.expected.
+  - test_data_of is checked as undo_of.request_id is, and refused on any other page. The id must be a lower-case
+    uuid naming the caller's own request (else P0002), and then each of these is a 23514 refusal naming what's wrong:
+    - base page precheck;
+    - same project;
+    - simulation and pretend matching;
+    - test_data_of.run_tag equal to that request's run_tag;
+    - at least one kept entry not yet deleted (s34, answer 3: every kept set of the pre-check, whatever its run_tag);
+    - counts.expected equal to the sum of those entries' counts, and no counts.total (queue's v_total reads total
+      first);
+    - every one of those entries' sandbox equal to the one org's alias;
+    - that org's org_type sandbox and role target, and there is no other org.
+  - It also refuses another delete_test_data request for the same pre-check that is approved and not finished.
+- **consume:**
+  - The count rule gains delete_test_data (p_count must equal total_count).
+  - At Approve it checks again that the entries are still undeleted and that the sum still equals total_count. A
+    rerun deletes them or keeps more, so a stale page is refused (55000, "the kept TEST records changed; queue a new
+    delete page").
+  - It re-checks that the one org is a sandbox.
+  - It refuses when another delete request for the same pre-check has a used link whose run did not fail without
+    starting, as 256 refuses a pre-check that already backed a write (cold review: the queue's check alone goes
+    stale).
+  - Rerun mode is already refused with no evidence; nothing to add.
+- **retry:** replaced too. A resend re-checks the stale sum, the sandbox and the second-page rule, as consume does:
+  after 15 minutes a stuck delete no longer counts as live, so the pre-check could be rerun in between.
+- **outcome:**
+  - The base page list gains delete_test_data, shape-free as a write's.
+  - When a delete page's outcome is recorded from a run with result.ok true and pass true, it sets deleted_by on the
+    pre-check's entries named in the delete request's `test_run_ids` (below), in the same transaction, after the
+    delete request and its link, then the pre-check (no lock cycle).
+- **correction:** every edit but wording and allows is refused on a delete_test_data page ("queue a new delete
+  page"). After a write, those are refused too: the write gate's `base_page in ('dataop', 'undo')` gains
+  delete_test_data.
+- **preview:** `expired` stays false (no evidence); it adds the new column on a delete page. No other change.
+
+**The runner.**
+- sfRunKind maps base_page delete_test_data to `write`. Its result is a data operation's (`write`), so outcomeOf,
+  recordOutcome and writeReply apply unchanged, and the line is sfRunLine's, as a write's.
+- sfRunReportProblem refuses kept_test_records and failed_check on it, as on any write, and requires `write` when ok
+  is true on a delete page: without it no outcome is recorded, so deleted_by would never be set (cold review).
+- Nothing is recorded today, because sfRunKind calls it "other"; this fixes that.
+
+**Production.** The guarantee is layered:
+- the queue refuses any org that isn't the one sandbox target;
+- consume re-checks it;
+- the page draws no production banner and refuses to draw with a production org;
+- the helper runs only against `orgs[0].alias`.
+
+Every database layer checks org_type as the chat declared it (cold review, must-fix). So the helper must also
+confirm the org really is a sandbox (Organization.IsSandbox) before find_kept_test, and stop with nothing changed
+if not. That is a stated helper requirement (question 8). The runner never runs Salesforce, so it adds nothing
+here.
+
+**test_data_of: the right field?** Yes. It follows undo_of and interrupted (`<what it is>_of: {request_id,
+run_tag}`), and the database checks it the same way. Two changes to the stand-in:
+- the count and sandbox are never taken from it (they come from the column);
+- the run ids it deletes are kept at queue time in a new column, `switchboard_run_requests.test_run_ids uuid[]`,
+  not in the request JSON. In the JSON a wording correction would have to echo them, and the diff would refuse
+  anything else (cold review). The outcome marks exactly those.
+
+### 17.3 Contract changes (spec part 4)
+- **4.1 request:**
+  - keep_test_records (pre-check only);
+  - page delete_test_data with test_data_of {request_id, run_tag};
+  - step codes keep_test, find_kept_test, delete_kept_test and confirm_gone.
+- **4.4 result:** kept_test_records {count, sandbox} on a pre-check; a delete page reports write, as a data operation
+  does.
+- **4.5 lines:** none new.
+- **mcp:** the queue tool's description names keep_test_records and test_data_of. The tool (switchboard-runs.ts)
+  lower-cases test_data_of.request_id, as lowerIds does for undo_of.
+
+### 17.4 Files, database items, deploys, tests
+
+| Step | Files | Database / deploy |
+|---|---|---|
+| s34 | runContract.js (PAGES, GROUPS, STEPS, countSentence, bannerLines, the count readers, requestProblems), RunPage.jsx (the "nothing expires" line, the outcome list, PHASE_HEADERS), liveSource.js (countMismatch), look.js, simulation.js and their tests (runContract, RunPage, simulation, liveSource, pageMarks, pretend) | none |
+| s35 | `supabase/migrations/_pending_sb3_pages-h6v_slice2b.sql`, `supabase/tests/sb3_pages-h6v/10_slice2b_test.sql`, the spec | none (drafted, not queued) |
+| s35b | the numbered migration (number-migration), the pending file deleted | db:table:switchboard_run_requests; db:fn: queue, consume, retry, correct, outcome, preview, record_kept_test_records; queued |
+| s35c | test 10 queued with --test | md5 check of the replaced functions |
+| s36 | switchboard-runner core.ts and core.test.mjs; _shared/tools/switchboard-runs.ts and its test; mcp/index.ts and index.test.mjs | db:deploy: switchboard-runner and mcp, after the migration is live |
+
+**The migration**:
+- the two columns (kept_test_records, test_run_ids) and their comments;
+- both constraints (`switchboard_run_requests_page_check` and `_base_page_check`, names confirmed live);
+- queue, consume, retry, correct, outcome and preview replaced;
+- the new function, with `revoke all … from public, anon` and `grant execute … to service_role`.
+
+Then a smoke DO block that calls every replaced function past each changed line and is undone with a sentinel
+exception caught by name, as in 258. It covers:
+- a keep_test_records request, accepted and refused;
+- a kept record and a repeat;
+- each test_data_of refusal;
+- a delete page's consume with the right and the wrong count, and a stale sum;
+- its outcome setting deleted_by;
+- a correction refused;
+- preview reading both new keys.
+
+It ends with `select public.platform_check_conformance()`.
+
+**Test 10** (`supabase/tests/sb3_pages-h6v/10_slice2b_test.sql`): every smoke case as a numbered check, plus:
+- a real/pretend mismatch at each function;
+- a second delete page refused while one is approved;
+- the new function refused for authenticated;
+- the constraints refusing an unknown page;
+- 258's check page and test 9's interrupted rule still passing (one each, unchanged).
+
+It returns a result row from a block that undoes itself, and is drafted and cold-reviewed with the migration at s35
+before either is queued.
+
+### 17.5 Step breakdown and estimates (from s34)
+
+| Step | What | Estimate |
+|---|---|---|
+| s34 | Page and contract: keep_test_records, kept status line, the delete page, its simulations; tests | 35m |
+| s35 | Draft the migration and test 10, with the smoke check; cold review | 45m |
+| s35b | Claims, gitsync, drift check, number, write, delete pending, queue | 12m |
+| s35c | md5s after the apply, queue test 10 | 8m |
+| s36 | Runner (kept_test_records, delete kind), tool, mcp; deploy both; boot check | 35m |
+| s36b | Checkpoint (Alex), then the data runs thread's slice 2 walk | Alex |
+
+s34 can ship before the database. Until s35b is applied, a delete page can't be queued (the constraint refuses it),
+so only simulations show it. Two cautions:
+- mcp imports runContract.js, so any thread's mcp deploy after s34 ships its new request rules early. That is
+  harmless: the database still refuses the page.
+- Today's queue stores keep_test_records as sent, and today's runner drops kept_test_records. So the helper must
+  not honour keep_test_records until s36 is deployed, or the records are kept with no record of them.
+
+### 17.6 Questions for the data runs thread (answered at s34; answers and changes in 17.7)
+1. **When kept_test_records comes:**
+   - on pass and on a FAIL (failed_check rehearsal included)?
+   - on ok false, when the run broke after creating them, and with what count?
+2. **The step:** is it right that keep_test replaces delete_test in the step list, and is our wording right?
+3. **Reruns:** a correction that reruns the rehearsal with keep_test_records makes a second set. Does
+   find_kept_test find both by one run tag, and is the delete page's count their sum?
+4. **The marker:** how are kept TEST records marked (the run tag in a field, the name)? Our find_kept_test text says
+   "by its run tag".
+5. **Partly deleted:** if find_kept_test finds fewer than expected (some deleted by hand), does the run stop with
+   nothing changed, as type_count does? That is our plan. And does ok true mean all were deleted, so deleted_by is
+   set on every entry?
+6. **The result:** the delete page's result is `write` with the same keys as a data operation's. Is anything else
+   needed (for example `{deleted}`)? Its line is a write's "run <link id> done: …".
+7. **Which runs a page deletes:** the queue keeps the run ids itself (a column, not in the request), taking the
+   undeleted entries with test_data_of.run_tag. Any objection? Could the helper delete by the record ids it kept on
+   the PC, rather than by the marker alone?
+8. **Production:** will the helper confirm Organization.IsSandbox before find_kept_test, and stop with nothing
+   changed if it is false? Every database check reads org_type as the chat declared it.
+9. **Timing:** please don't honour keep_test_records until s36 (runner and mcp) is deployed.
+
+**Cold review (s33, one round):**
+- Four must-fixes, all taken:
+  - the IsSandbox requirement (question 8);
+  - run_tag kept on each entry;
+  - correction re-checking the keep_test step rule;
+  - run ids in a column, not the request.
+- Should-fixes taken:
+  - the runner's call before the evidence block;
+  - write required on a delete page, and deleted_by on pass true;
+  - consume's and retry's second-page and stale-sum re-checks (db:fn:retry added);
+  - the missed page lists in RunPage, liveSource and runContract;
+  - counts.total refused;
+  - the ordering cautions;
+  - allows named in the correction rule.
+- It confirmed:
+  - the routes name no page;
+  - with no evidence, nothing ever reads expired;
+  - consume already refuses rerun mode;
+  - the fingerprint is unaffected;
+  - the lock order has no cycle;
+  - the constraint names.
+
+### 17.7 The data runs thread's answers (s34, 2026-11-27), and what they change
+
+1. **When:** kept_test_records comes on a pass (the TEST records kept) and on done: FAIL at a rehearsal step when
+   the request keeps them (the records left in the sandbox), never on ok false. So the runner records them on the
+   item b path (failed_check rehearsal) too, as 17.1 planned; ok false with kept_test_records is refused.
+2. **The step:** keep_test replaces delete_test; "Keep the TEST records in the sandbox for later." is right (built).
+3. **Reruns:** each run that keeps records adds its own set. The delete page deletes every kept set of its
+   pre-check, and its count is their sum.
+   - **Change:** the queue sums every undeleted entry of the pre-check. It no longer filters by run_tag;
+     test_data_of.run_tag is still checked as the pre-check's own.
+4. **The marker:** the helper keeps the kept records' Ids on Alex's PC (rehearsal-ids.csv), and find_kept_test reads
+   exactly those. It stops with nothing deleted if any isn't a TEST record. Record Ids never go to the database;
+   run ids are enough on our side (built: find_kept_test's text says "by the Ids saved on your PC").
+5. **Fewer found:** this is not a stop.
+   - Records already gone are counted as already gone and reported, and the typed count is the number found.
+   - ok true with pass means every record found was deleted and confirmed gone.
+   - Only a non-TEST record or a non-sandbox org stops the run with nothing deleted.
+   - **Change:** the page promises "up to N" and says the terminal asks for the number it finds (built).
+   - Approve still sends the request's count (the kept sum), which consume checks; the typed number is the
+     terminal's.
+   - deleted_by is set on ok true and pass true, as planned.
+6. **The result:** exactly a data operation's write (as planned).
+7. **Run ids:** enough (test_run_ids, as planned).
+8. **Production:** the helper confirms Organization.IsSandbox on the real org before find_kept_test, and stops if
+   not. find_kept_test's text says so.
+9. **Timing:** they won't honour keep_test_records until s36 is deployed.
+
+### 17.8 s34 as built (2026-11-27): the page and contract side; no database change, no deploy
+
+**runContract.js:**
+- PAGES gains delete_test_data, with DELETE_TEST_PAGE, DELETE_TEST_STEPS and GROUPS ['Sandbox clean-up'].
+- PHASE_HEADERS gains "Delete sandbox test data".
+- STEPS gains keep_test, find_kept_test, delete_kept_test and confirm_gone.
+- `stepDef(code, page)` gives the delete page its own type_count (sandbox, "the number … the terminal finds"). Every
+  other page keeps STEPS.type_count unchanged. groupedSteps, requestProblems, afterApproveLines and touches read
+  through it.
+- requestProblems:
+  - keep_test_records, true only, on a pre-check or its correction;
+  - keep_test exactly when it is set, and never delete_test with it;
+  - a correction that reruns the rehearsal may list keep_test in delete_test's place;
+  - test_data_of only on the delete page.
+- requestProblems on the delete page:
+  - one sandbox target org;
+  - kind delete;
+  - test_data_of {lower-case uuid, run_tag};
+  - counts.expected of 1 or more, and no counts.total;
+  - no selected_by, undo_of, interrupted, pre_check_request_id, sample or undo;
+  - the four steps, in order.
+- The delete page's wording:
+  - whatChanges, countSentence and bannerLines (the sandbox only, "up to");
+  - approveLabel, undoLine, afterApproveLines, countDetail ("Up to N") and selectedByText.
+- rerunRequest ends with keep_test on a keeping request.
+- `keptTestLine(r, run)`: "N TEST records kept in <sandbox>." on a pre-check or correction page.
+  - It sums every well-formed set not yet deleted, per sandbox.
+  - It falls back to the run's own kept_test_records.
+- `deletePageOrgProblem(r)`.
+
+**RunPage.jsx:**
+- The kept line on the status line (run-kept-test).
+- No "Checks valid until" line on a delete page.
+- No sample record on a delete page, and its outcome is drawn as a write's.
+- A delete page with any org but its one sandbox target is not drawn (run-error), so it offers no Approve.
+
+**liveSource.js:** countMismatch covers the delete page.
+
+**simulation.js:** precheck-keep-test, precheck-keep-test-two-sets, delete-test-data and delete-test-data-pretend.
+
+**Unchanged:**
+- every existing page's marks, lines and wording;
+- the delete page's marks and lines are the run page's own: kind run, running and action id, `run <link id>` with
+  the wake note; SIMULATION and pretend on the pretend scenario.
+- look.js needed no change.
+
+**Tests:**
+- runContract, RunPage, pageMarks, pretend, liveSource and simulation each gain s34 tests.
+- Results:
+  - switchboard folder 654;
+  - full app suite 3941 (7 skipped);
+  - scripts 77;
+  - runner, tools and mcp index 254 (they import runContract.js);
+  - the build compiles.
+
+**Cold review (one round):**
+- The must-fix is taken: keptTestLine fell back to the run's set when every recorded set was deleted, so a cleaned-up
+  pre-check still read "kept". The run's set is now used only when the database has recorded none.
+- Should-fixes taken:
+  - keep_test_records needs a rehearsal sandbox org;
+  - a keeping pre-check must list keep_test;
+  - the kept line sits right after the phases (how the run ended), as 17.1 says.
+- Noted, not changed:
+  - rerunSteps and CHECK_STEPS.rehearsal still name delete_test. Whoever builds a keeping pre-check's correction
+    steps swaps in keep_test; the correction page's check allows it.
+  - A delete page's correction reads "doesn't belong on a correction page" rather than "queue a new delete page".
+    The database refuses those edits (17.2).
+  - lowerIds lower-cases test_data_of.request_id only from s36, so until then an id in capitals is refused.
+- It confirmed:
+  - no existing page's marks, lines or wording changed;
+  - STEPS.type_count is untouched;
+  - nothing promises that the typed count equals the kept sum;
+  - the RunPage guard comes after every hook;
+  - the mcp and runner imports are unchanged.
+

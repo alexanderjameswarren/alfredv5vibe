@@ -94,10 +94,81 @@ describe('the run page, on sample data', () => {
   });
 });
 
+describe('s34: kept TEST records (O18) and the delete sandbox test data page (O24)', () => {
+  // A finished run: the link is used, so the page shows no desktop line.
+  const openUsed = async (name) => { render(<RunPage source={simSource(name)} />); await screen.findByTestId('run-used'); };
+  test('a pre-check that keeps its TEST records: keep_test, the kept banner, and the kept count on the status line', async () => {
+    await openUsed('precheck-keep-test');
+    const steps = screen.getAllByTestId('run-step').map((s) => s.dataset.code);
+    expect(steps).toContain('keep_test');
+    expect(steps).not.toContain('delete_test');
+    expect(screen.getAllByTestId('run-step').find((s) => s.dataset.code === 'keep_test')).toHaveTextContent('Keep the TEST records in the sandbox for later.');
+    expect(screen.getByTestId('run-banner-sandbox')).toHaveTextContent('TEST records are created and changed, and kept for later. Nothing else changes.');
+    expect(screen.getByTestId('run-kept-test')).toHaveTextContent('4 TEST records kept in example-dev1.');
+    expect(screen.getByTestId('run-used')).toHaveAttribute('data-end', 'pass');
+  });
+
+  test('two kept sets: the status line sums them', async () => {
+    await openUsed('precheck-keep-test-two-sets');
+    expect(screen.getByTestId('run-kept-test')).toHaveTextContent(/^7 TEST records kept in example-dev1\.$/);
+  });
+
+  test('a pre-check that keeps nothing has no kept line and keeps its own banner', async () => {
+    await open('precheck-ids');
+    expect(screen.queryByTestId('run-kept-test')).toBeNull();
+    expect(screen.getByTestId('run-banner-sandbox')).toHaveTextContent('TEST records are created, changed and deleted. Nothing else changes.');
+  });
+
+  test('the delete page: the sandbox banner only, "up to", its four steps in our wording, no expiry, no sample', async () => {
+    await open('delete-test-data');
+    expect(screen.queryByTestId('run-banner-production')).toBeNull();
+    expect(screen.getByTestId('run-banner-sandbox')).toHaveTextContent('This deletes up to 7 TEST records. Nothing else changes.');
+    expect(screen.getByTestId('run-phase-header')).toHaveTextContent('Delete sandbox test data');
+    expect(screen.getByTestId('run-count-sentence')).toHaveTextContent('This deletes up to 7 TEST records of Gift in example-dev1.');
+    expect(screen.getByTestId('run-what-changes')).toHaveTextContent(`Deletes up to 7 TEST records of Gift__c that pre-check run demo_gift_campaign-x1y-s3-ef56 kept in example-dev1.`);
+    expect(screen.getByTestId('run-selected-by')).toHaveTextContent('The TEST records pre-check run demo_gift_campaign-x1y-s3-ef56 kept, by the Ids saved on your PC.');
+    expect(screen.getByTestId('run-count')).toHaveTextContent('Up to 7');
+    expect(screen.getByTestId('run-undo')).toHaveTextContent('Undo: none. Deleted TEST records are not restored; the rehearsal made them.');
+    expect(screen.getAllByTestId('run-group').map((g) => g.querySelector('h3').textContent)).toEqual(['Sandbox clean-up']);
+    const steps = screen.getAllByTestId('run-step');
+    expect(steps.map((s) => s.dataset.code)).toEqual(['find_kept_test', 'type_count', 'delete_kept_test', 'confirm_gone']);
+    expect(steps.map((s) => s.querySelector('[data-testid="run-pill"]').dataset.org)).toEqual(['sandbox', 'sandbox', 'sandbox', 'sandbox']);
+    expect(steps[0]).toHaveTextContent('Confirm example-dev1 is a sandbox, then find the TEST records the pre-check kept, by the Ids saved on your PC. Any already gone are counted and listed.');
+    expect(steps[1]).toHaveTextContent('You type the number of TEST records the terminal finds; anything else stops with nothing deleted.');
+    expect(steps[2]).toHaveTextContent("Delete those TEST records, and only those. A record that isn't a TEST record stops the run with nothing deleted.");
+    expect(steps[3]).toHaveTextContent('Confirm none of them is left.');
+    expect(screen.queryByTestId('run-valid-until')).toBeNull();
+    expect(screen.queryByTestId('run-sample')).toBeNull();
+    expect(screen.queryByTestId('run-expired')).toBeNull();
+    expect(screen.getByTestId('run-after')).toHaveTextContent('asks you to type the number it finds');
+    expect(screen.getByTestId('run-approve')).toHaveTextContent('Delete the TEST records in SANDBOX');
+  });
+
+  test('a delete page naming a production org is not drawn, and offers nothing', async () => {
+    const base = simSource('delete-test-data');
+    const page = await base.load();
+    const source = { ...base, load: async () => ({ ...page, request: { ...page.request, orgs: [...page.request.orgs, { alias: 'example-prod', org_type: 'production', role: 'rehearsal' }] } }) };
+    render(<RunPage source={source} />);
+    expect(await screen.findByTestId('run-error')).toHaveTextContent('not its one sandbox');
+    expect(document.querySelector('[data-action]')).toBeNull();
+  });
+
+  test("the delete page's outcome is drawn as a write's", async () => {
+    const base = simSource('delete-test-data');
+    const page = await base.load();
+    const now = Date.now();
+    const at = (m) => new Date(now - m * 60 * 1000).toISOString();
+    const source = { ...base, load: async () => ({ ...page, run: { consumed_at: at(20), picked_up_at: at(19), finished_at: at(15), status: 'succeeded', ok: true, pass: true },
+      outcome: { changed: 6, rows: [{ label: 'TEST records already gone', before: 1, goal: 1, after: 1 }] } }) };
+    render(<RunPage source={source} />);
+    expect(await screen.findByTestId('run-outcome-changed')).toHaveTextContent('Changed: 6 records');
+  });
+});
+
 describe('the red bar and the Approve button always appear together', () => {
   // These offer no buttons at all (closed, used, or a rerun already asked for); their own tests are below.
   const approvable = scenarioNames().filter((n) => !['undo-closed', 'run-picked-up', 'run-finished', 'run-finished-outcome', 'run-stopped-outcome',
-    'run-stopped-detail', 'check-finished-outcome', 'dataop-update-rerun-waiting'].includes(n));
+    'run-stopped-detail', 'check-finished-outcome', 'dataop-update-rerun-waiting', 'precheck-keep-test', 'precheck-keep-test-two-sets'].includes(n));
   test.each(approvable)('%s, desktop ready, then approved', async (name) => {
     await open(name, { desktop: ['running'] });
     together();
