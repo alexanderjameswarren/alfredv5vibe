@@ -2648,3 +2648,216 @@ so only simulations show it. Two cautions:
   - the RunPage guard comes after every hook;
   - the mcp and runner imports are unchanged.
 
+### 17.9 s35: the slice 2b migration (259) and test 10 (2026-11-27; 259 written and queued at s35c)
+
+**s35b:** the worktree was level with main (0 commits behind). `claims.cmd number-migration` gave **259**. The file
+will be `supabase/migrations/259_slice2b.sql`, and both db:migration:259 and that path are claimed. The numbered file
+isn't written yet: s35c writes it from the pending file, which stays until then.
+
+**s35c:**
+- **Drift check:** none. Main had not moved, there was no new migration, the six live md5s were as tabled below, and neither the columns nor the new function existed yet.
+- **Claims:** db:table:switchboard_run_requests, plus db:fn for queue, consume, retry, correct, outcome, preview and record_kept_test_records, each claimed on its own. db:migration:259 was already held.
+- **The file:** 259_slice2b.sql was written from the pending file with Write. A diff shows only the header comments changed (lines 1, 2, 4 and 26: the number, and the smoke check's section number). The pending file is deleted.
+- **Queued** with sql-queue.mjs as a schema change, no --expect: action id **5309be01-b801-4361-b404-52fc7f36617c**. The dry run on the approve page runs the smoke check, so a failure there blocks Approve. Queued is not applied.
+- **md5s the bodies should have once 259 is applied** (prosrc, from the file):
+
+  | Function | Expected md5 |
+  |---|---|
+  | queue | d9110f25 |
+  | consume | e38d6625 |
+  | retry | 81cd3939 |
+  | correct | 8d964aea |
+  | outcome | 5a4197b7 |
+  | preview | 97ee0731 |
+  | record_kept_test_records | 4caec3c3 |
+
+  s35d checks them. (s35e replaced queue's, consume's and retry's: see below.)
+
+**s35e: the dry run failed, and the fix.**
+- **What happened:** the approve page's dry run of 5309be01 failed with "failed at statement 8: syntax error at end of input". Nothing was applied, and Alex chose Don't run.
+- **Not the splitter:** run over the file, the runner's own splitStatements (switchboard-runner/core.ts) gives 37 statements:
+  - statement 7 is the base_page constraint, `alter table … add constraint switchboard_run_requests_base_page_check` through `check (base_page in (…, 'delete_test_data'))`;
+  - statement 8 is the whole queue function, 438 lines, from `create or replace function public.switchboard_queue_run_request(p_request jsonb)` to its closing `$$`;
+  - statement 9 is its `comment on function`.
+  
+  258, the control, splits into its 19 as before.
+- **The cause:** a PL/pgSQL rule.
+  - `IF <condition> THEN` reads the condition only up to the first `THEN` that isn't inside parentheses.
+  - The new delete page check began `if case when jsonb_typeof(…->'orgs') = 'array' then jsonb_array_length(…) else 0 end <> 1`. So PL/pgSQL took the condition to be `case when jsonb_typeof(…) = 'array'`.
+  - CREATE FUNCTION checks each expression, and that one ends mid-CASE: "syntax error at end of input".
+  - The same line was in consume and retry (statements 12 and 16), which would have failed next.
+  - Every earlier CASE in an IF sat inside parentheses (`coalesce(case …)`), so 256 to 258 never hit this.
+- **The fix:** parentheses around each of the three CASEs, `if (case … end) <> 1`.
+  - That is three lines in three bodies, and the logic is the same.
+  - A check of all 255 IF and ELSIF conditions in 259 (and all of test 10's and 258's) now finds none cut short.
+  - A check of all 202 RAISE statements finds every placeholder count matching its parameters.
+- **New expected md5s:**
+
+  | Function | Expected md5 |
+  |---|---|
+  | queue | e9327477 |
+  | consume | 6817a1b0 |
+  | retry | 3e73b331 |
+
+  The other four are as above: correct 8d964aea, outcome 5a4197b7, preview 97ee0731, record_kept_test_records 4caec3c3.
+- **The lesson:** before queueing a migration, run the runner's splitStatements over it and check that each statement starts and ends where it should. Then check each PL/pgSQL IF, ELSIF and RAISE the way PL/pgSQL compiles them:
+  - no CASE at the top level of a condition;
+  - placeholders equal to parameters.
+  
+  Neither the splitter nor the smoke check can catch a parse error in a body, because CREATE FUNCTION fails before the smoke check runs. The approve page's dry run is the first place it shows.
+- **Requeued:** action **6068885d-4db3-4b4b-807b-c6f42fd8b1d6**. The old action, 5309be01, stays cancelled.
+
+**s35d: 259 is applied; test 10 is queued.**
+- **The apply:** run **8ca554d1-826e-48af-b0b3-d1fb6f8a9884** (action 6068885d) was ok, all 37 statements including the smoke DO block. Conformance: "CONFORMANT — all 123 non-exempt public tables satisfy platform contract v1, and anon reaches nothing undecided." Alex's diff of the requeued file against the cancelled one showed only the three IF lines changed.
+- **Live md5s:** all seven match the expected ones:
+
+  | Function | Live md5 |
+  |---|---|
+  | queue | e9327477 |
+  | consume | 6817a1b0 |
+  | retry | 3e73b331 |
+  | correct | 8d964aea |
+  | outcome | 5a4197b7 |
+  | preview | 97ee0731 |
+  | record_kept_test_records | 4caec3c3 |
+
+- **Columns and constraints:** kept_test_records is jsonb and test_run_ids is uuid[]. Both page constraints now list delete_test_data.
+- **Test 10, checked before it was queued:**
+  - the runner's splitter gives 2 statements (the DO block, 434 lines, and the result select), as test 9's does;
+  - its one IF condition and its one RAISE check clean.
+  - Queued with --test: action **7f57eae0-85b2-49f2-83bb-0f1f42809dc4**. I didn't change test 10.
+
+**s35f: test 10's first run failed, through the test's own fault.**
+- **The failure:** run a3e0fd1e-5ed2-4eb7-be21-f307d7224b8c stopped with "operator does not exist: integer - text[]" after 53 checks passed, the last being kept_refusals_store_nothing.
+- **The cause:** the next check, kept_pass_recorded, had `(v_kept->0 - array[...])`. That parses as `v_kept -> (0 - array[...])`, the 256 trap, since `-` binds tighter than `->`. 259's smoke check had already passed through switchboard_record_kept_test_records, so the database was fine.
+- **The fix:** `((v_kept->0) - array[...])`. Nothing else in that check changed.
+- **The search:** I searched both files for an arrow (`->` or `->>`) followed by `-`, `+`, `||` or `#-` with no brackets. That line was the only hit, and 259 has none.
+- **Rechecked:** test 10 still splits into 2 statements, and its IF and RAISE check clean.
+- **Requeued** with --test: action **33f3e475-143b-48b9-b0fa-3f098d2d95f7**.
+- **The lesson, added:** before queueing, also search the file for an arrow followed by arithmetic (`->x -`, `->x +`) and bracket the lookup. `||` and `#-` share `->`'s precedence and group left to right, so they are safe, but bracketing them costs nothing.
+
+**Files:**
+- `supabase/migrations/259_slice2b.sql` (written at s35c from the pending draft, which is deleted);
+- `supabase/tests/sb3_pages-h6v/10_slice2b_test.sql`.
+
+**Sources.** Each replaced body is its live one, md5 of prosrc checked at s35:
+
+| Function | Source | Live md5 |
+|---|---|---|
+| queue | 258 | 934acd07 |
+| consume | 256 | cd9e7672 |
+| retry | 256 | eeab7c9b |
+| correct | 258 | 47ae4fc0 |
+| outcome | 258 | 3b5e3903 |
+| preview | 255 | b34e0d6c |
+
+A diff of each body against its source shows only these old lines changed:
+- queue: the page list and its words, the count rule, and the insert's columns and values;
+- consume: the count rule;
+- correct: the write gate;
+- outcome: the base-page list and its words, which keep 258's phrase;
+- preview: the request and run object ends.
+
+Everything else is added.
+
+**The migration:**
+- **Columns:** `kept_test_records jsonb` (null or a list, a column check) and `test_run_ids uuid[]`, each with a comment. register_table isn't needed, since the table is registered and its grants cover new columns.
+- **Constraints:** both page constraints are redrawn with delete_test_data.
+- **queue:**
+  - keep_test_records: true only, on a pre-check, with a rehearsal sandbox, keep_test and no delete_test. keep_test without it is refused on any page.
+  - A delete page:
+    - no counts.total;
+    - its count is required;
+    - one sandbox target org, kind delete;
+    - test_data_of: a lower-case uuid and a run_tag;
+    - the caller's own pre-check, locked, in the same project, with simulation and pretend matching and the same run tag;
+    - every undeleted kept set summed and equal to counts.expected, each kept in that sandbox;
+    - no other delete page for that pre-check approved and unfinished.
+  - The sets' run ids go into test_run_ids.
+- **consume:**
+  - the count rule covers the delete page;
+  - at Approve, the org is re-checked, the pre-check is locked (after the request and its link), and the undeleted sets must still be exactly test_run_ids, with their sum the page's count, in that sandbox;
+  - after the project lock, the second-page backstop.
+- **retry:** the same re-checks before the resend, and the second-page backstop after the project lock.
+- **correct:**
+  - The write gate covers the delete page.
+  - A delete page takes wording and allows only.
+  - The corrected steps keep the keep_test rule: no delete_test when the request keeps its records, no keep_test when it doesn't.
+  - keep_test_records and test_data_of stay outside c_words and c_run, so the diff refuses any change to them.
+- **outcome:**
+  - The base-page list gains delete_test_data.
+  - On a delete page's run with ok true and pass true, the pre-check's sets in test_run_ids get deleted_by. A failed run marks nothing.
+- **preview:**
+  - request.kept_test_records, only when the column is set;
+  - run.kept_test_records, only when the result carries an object.
+  
+  No other request's or run's preview changes.
+- **New, `switchboard_record_kept_test_records(uuid)`, service_role only:**
+  - It records on a pass, or on a FAIL with failed_check rehearsal (17.7 answer 1); never on ok false.
+  - kept_test_records must be exactly {count 1 to 999,999,999, sandbox}, and the sandbox must be the request's rehearsal org.
+  - The run must be the link's pre-check or rerun, on a base-page precheck request with keep_test_records true. Pretend and real must match; a plain simulation is refused.
+  - It records once per run. Unlike evidence, it still records on a voided link, an older version, or a run finished before a correction.
+- **switchboard_record_run_evidence is not replaced.** The kept sets have their own function, which the runner calls before evidence, so the rehearsal-failure path needs nothing there.
+
+**The smoke check** (section 8, as Alex, real requests in smoke-s2b projects, undone by a sentinel). It makes 57 calls:
+
+| Part | Function | What it reaches |
+|---|---|---|
+| 8a | queue | the page list; each keep_test_records refusal; the accepted keeping pre-check (null test_run_ids) |
+| 8b | queue | every delete page refusal, in order, down to "nothing kept" |
+| 8c | new function | unknown, unfinished, ok false, FAIL not at the rehearsal, a count of 0, pretend on real, another sandbox, a pass recorded, the repeat, a FAIL at the rehearsal as a second set, a pre-check that keeps nothing |
+| 8c | preview | both new keys |
+| 8d | queue | the wrong sum, another sandbox, an accepted page with two run ids |
+| 8e | correct | a records edit on a delete page; a wording edit made; delete_test on a keeping pre-check; keep_test on a data operation |
+| 8f | consume | the count, a stale sum, another sandbox, another org; an Approve through every new line |
+| 8g | queue | a second page while one runs |
+| 8g | new function | a delete page's run |
+| 8h | retry | a resend through every new line; a stale sum; another sandbox; another org |
+| 8i | outcome | a pass marking three sets deleted; a pre-check's run refused in the new words |
+| 8i | correct | refused after the write |
+| 8i | preview | neither key on a delete page |
+
+Five refusal bodies are not raised; only their conditions are evaluated:
+- the new function's not-sf_run, no-link and plain-simulation refusals;
+- the second-page refusal in consume and in retry, which the project lock always refuses first.
+
+**Test 10:** one self-undoing block in test 9's style. It returns {all_passed, passed, total, failed, checks}. It covers:
+- **O18:**
+  - every queue rule;
+  - every refusal of the new function and every shape it refuses;
+  - one set, two sets and three sets summed, including one recorded after a correction;
+  - a pretend pre-check's pretend run;
+  - the preview's keys, and their absence on a request or run without them;
+  - a correction that can't drop keep_test_records or swap in delete_test, and that keeps keep_test on a rehearsal rerun.
+- **O24:**
+  - every queue refusal, an accepted page with three run ids, and a second page refused while one runs;
+  - consume refusing the wrong or a missing count, a stale sum, another sandbox and another org, then approving;
+  - retry resending, then refusing a stale sum, another sandbox and another org;
+  - outcomes: ok false and pass false mark nothing, pass marks exactly its four sets, and the repeat returns already;
+  - corrections: records refused, test_data_of refused, wording made, and everything refused after the write;
+  - after deletion, a new page finds nothing, and a set kept since is the next page's whole count;
+  - a pretend page accepted, and a plain simulation on a pretend pre-check refused.
+- **The rest:**
+  - both constraints and the column check;
+  - 256's pretend shape, 257's undo_of, 258's check field edit and the outcome on a pre-check still holding;
+  - grants, columns, comments;
+  - conformance.
+
+**Cold review** (one round, against the live definitions): two must-fixes, both taken.
+- `switchboard_actions_guard` keeps created_at on every update. So the smoke check's and the test's "make the delete page's action old" did nothing, and the first retry would have failed both of them, the migration's dry run included.
+  - Both now give the action an expired_not_picked_up run, as the 15-minute expiry writes one.
+  - The smoke check first deletes its 8g run on that action. Otherwise the preview's newest-action tie (both actions are created at now()) could pick the 8g run's kept_test_records.
+- Should-fixes taken:
+  - a malformed step put a null into v_codes, which skipped the keep_test refusals. Nulls are now removed, in the queue and in correct.
+  - the rehearsal sandbox's alias may not be another org's alias on the same request (for example the production target's). A delete page later trusts that alias as a sandbox.
+  - the sandbox match treats a null sandbox as a mismatch.
+  - Test 10 gains a check for each.
+- Confirmed:
+  - each body differs from its source only where intended;
+  - precedence is safe, with every jsonb_array_length behind a type check;
+  - the run inserts match the live columns;
+  - every message, sqlstate and sum matches;
+  - there is no lock-order cycle;
+  - the grants are as intended.
+- The database still trusts org_type as declared, so the helper's IsSandbox check (17.7 answer 8) remains the real guard against production.
+
