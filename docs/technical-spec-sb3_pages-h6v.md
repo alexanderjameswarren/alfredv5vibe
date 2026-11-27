@@ -1546,6 +1546,38 @@ Live check, read only:
   the function's own body, as before (no 500). The token check comes after the JWT check, so a missing token can't
   be reached without signing in; core.test.mjs covers its 400.
 
+**s29 as built** (the runner, switchboard-runner):
+- **core.ts:**
+  - SF_RUN_MODES = ['real', 'pretend']. sfRunResult takes a run of either mode; it is reached only for kind sf_run.
+    Every other helper kind's /result and /sf-result still require `mode = 'real'`, as before.
+  - A pretend result goes through the same steps as a real one: the run row, 251's evidence, 250's sample, 254's
+    outcome, the drop and the status. The runner doesn't compare the run with its request: 251 and 254 refuse a
+    mismatch (55000). Evidence refused fails the run (422, retry false, the fix named); outcome refused is noted on
+    the run and the reply (`outcome_refused`), as any 254 refusal is.
+  - `sfRunLine(linkId, ok, pass, simulated)`: a pretend run's lines start "SIMULATION " (done: PASS, done: FAIL,
+    failed, a refused report, a repeat's already). The flag comes from the run's mode; on a pickup refusal, from the
+    payload's `pretend` (consume's). Called without it, every real line is byte-identical to before.
+- **index.ts:** pendingActions and stalePicks take `.in("mode", SF_RUN_MODES)`, so a pretend sf_run's open run is
+  owed and a timed-out one is finished. Only an sf_run ever has a pretend run, so other kinds are unaffected.
+- **No org:** the runner imports only the Supabase client and postgres, and has no fetch, no Salesforce code and no
+  subprocess. A pretend result's path calls only Supabase-backed deps. Keeping the helper off the orgs on a pretend
+  payload is the data runs thread's (above).
+- **Tests** (core.test.mjs, 7 new, 173 in all): a pretend pre-check recorded; every pretend line prefixed; real lines
+  unchanged (a real run on a pretend request included); a mismatch refused by 251 (both directions) and by 254, each
+  reported, not thrown; pretend taken for sf_run only; index.ts's two filters.
+- **Cold review** (one round): no must-fix, and no real-run path changed. Fixed: an evidence refusal carrying 256's
+  pretend-mismatch wording ("a pretend run" or "a pretend request") now names its real fix (queue the request
+  again), not "reload the run page". A comment now says that pickup_helper opens the pretend run.
+- **Open, for Alex:** the runner doesn't compare the run's mode with request.pretend itself; the database does.
+  15.2 point 3 said the runner refuses a mismatch. So a write whose outcome 254 refuses for a mismatch is
+  noted (`outcome_refused`) and still marked succeeded, as any 254 refusal is. A failed pre-check calls no checking
+  function at all. The risk is low: the mode comes only from consume's payload `pretend`, set from the request, and
+  248's guard never lets a payload change. A runner check would be one line in sfRunRecord, after the request read,
+  ending through `final`.
+- **Deployed** 2026-11-26 at 20:51:21 local time (04:51:21Z on 11-27), from the worktree at main's bdfaafe, holding
+  db:deploy. The after-deploy check: unauthenticated POSTs to /queue and /result answer 401
+  `{"ok":false,"error":"unauthorized"}`, the runner's own body.
+
 The Checkpoints follow s27d, s28b and s29. Until s29 lands the runner refuses a pretend result (core.ts:869), so no
 pretend walk starts before then.
 
