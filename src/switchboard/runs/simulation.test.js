@@ -76,7 +76,8 @@ describe('code review scenarios', () => {
 describe('simulation', () => {
   test.each(scenarioNames())('%s is a whole request, marked as a simulation, from a sim source', async (name) => {
     const s = simSource(name, { now: Date.parse('2026-11-23T12:00:00Z') });
-    expect(s.kind).toBe('sim');
+    // s28: a pretend scenario's kind is 'pretend', and only when its request carries pretend.
+    expect(s.kind).toBe(SCENARIOS[name].kind ?? 'sim');
     const page = await s.load();
     expect(requestProblems(page.request)).toEqual([]);
     expect(page.request.simulation).toBe(true);

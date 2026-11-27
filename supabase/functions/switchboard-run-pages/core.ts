@@ -8,7 +8,7 @@
 //   /preview  { token }                                      -> switchboard_run_preview
 //   /approve  { token, fingerprint, desktop, count }          -> switchboard_consume_run_link (approve)
 //   /rerun    { token, fingerprint, desktop }                 -> switchboard_consume_run_link (rerun)
-//   /resend   { token, fingerprint, desktop }                 -> switchboard_retry_run
+//   /resend   { token, fingerprint, desktop }                 -> switchboard_run_preview, then switchboard_retry_run
 //   /cancel   { token, reason? }                              -> switchboard_cancel_run_link (the note capped at 200)
 //   /review   { token, answer, text?, acks, desktop? }        -> the code review answer (reviewed, question,
 //             changes_required): the review is found through switchboard_run_preview with his JWT; the write is the
@@ -123,7 +123,7 @@ async function handleUser(route: string, req: Request, deps: Deps): Promise<Resp
     if (res.error) return refusal(res.error);
     const out = res.data as { link_id: string; reason: string | null };
     const simulated = simulationOf(preview.data);
-    return reply({ ok: true, ...out, simulated,
+    return reply({ ok: true, ...out, simulated, pretend: pretendOf(preview.data),
       line: resultLine("run", out.link_id, out.reason ? ` cancelled: ${out.reason}` : " cancelled", simulated) });
   }
 
@@ -134,10 +134,15 @@ async function handleUser(route: string, req: Request, deps: Deps): Promise<Resp
   if (typeof fingerprint !== "string" || !fingerprint) return reply({ ok: false, error: "fingerprint is missing." }, 400);
   const desktop = desktopOf(body.desktop);
   if (route === "resend") {
+    // s28: a resend is only ever of an approved action, so of a real or a pretend request (a plain simulation has
+    // none); the preview says which, so a pretend resend's line starts SIMULATION. It was hard-coded false.
+    const preview = await call("switchboard_run_preview", { p_token: token });
+    if (preview.error) return refusal(preview.error);
     const res = await call("switchboard_retry_run", { p_token: token, p_fingerprint: fingerprint, p_desktop: desktop });
     if (res.error) return refusal(res.error);
     const out = res.data as { link_id: string };
-    return reply({ ok: true, ...out, simulated: false, line: resultLine("run", out.link_id, " resent", false) });
+    const simulated = simulationOf(preview.data);
+    return reply({ ok: true, ...out, simulated, pretend: pretendOf(preview.data), line: resultLine("run", out.link_id, " resent", simulated) });
   }
   let count: number | null = null;
   if (route === "approve") {
@@ -158,6 +163,9 @@ async function handleUser(route: string, req: Request, deps: Deps): Promise<Resp
 }
 
 const simulationOf = (preview: unknown) => isObject(preview) && isObject(preview.request) && preview.request.simulation === true;
+/** s28: a pretend request (256): a simulation whose stored request carries pretend {scenario}. */
+const pretendOf = (preview: unknown) => simulationOf(preview) && isObject((preview as Record<string, unknown>).request)
+  && isObject(((preview as Record<string, unknown>).request as Record<string, unknown>).pretend);
 
 const ANSWERS = new Set(["reviewed", "question", "changes_required"]);
 const ANSWER_WORDS: Record<string, string> = { reviewed: " reviewed", question: " question", changes_required: " changes required" };

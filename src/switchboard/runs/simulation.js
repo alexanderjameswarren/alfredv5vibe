@@ -3,7 +3,7 @@
 // RunShell draws the strip unless the source's kind is exactly 'real'.
 
 import { ANSWERS, simulatedState } from './desktopCheck';
-import { EDIT_RERUNS, rerunSteps } from './runContract';
+import { EDIT_RERUNS, RECORDS_QUERY, rerunSteps } from './runContract';
 
 const HOUR = 60 * 60 * 1000;
 const iso = (t) => new Date(t).toISOString();
@@ -96,7 +96,7 @@ function correction(now, kind, over, reason, items) {
         edit_kind: kind, from_version: 1, reason, items,
         still_valid: evidence.filter((e) => !e.voided).map(({ check, passed_at }) => ({ check, passed_at })),
       },
-      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(6) }], queries: [{ label: 'The listed records', soql: IDS_SOQL }] },
+      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(6) }], queries: [{ label: RECORDS_QUERY, soql: IDS_SOQL }] },
       ...over,
     }),
   };
@@ -112,7 +112,7 @@ export const SCENARIOS = {
         headline: `PRE-CHECK AND REHEARSAL ${CODE}: READS 45 GIFTS IN example-prod, REHEARSES ON example-dev1`,
         steps: codes(PRECHECK_STEPS), evidence: [],
         phases: [{ name: 'Pre-check and rehearsal', state: 'waiting' }, { name: 'Data operation', state: 'not_started' }],
-        details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(1) }], queries: [{ label: 'The listed records', soql: IDS_SOQL }] },
+        details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(1) }], queries: [{ label: RECORDS_QUERY, soql: IDS_SOQL }] },
       }),
     }),
   },
@@ -159,7 +159,7 @@ export const SCENARIOS = {
         details: {
           run_folder: `data-ops/${CODE}/2026-11-23`,
           hashes: [{ name: 'request.json', sha256: hash(1) }, { name: 'backup.csv', sha256: hash(5) }],
-          queries: [{ label: 'The listed records', soql: IDS_SOQL }],
+          queries: [{ label: RECORDS_QUERY, soql: IDS_SOQL }],
         },
       }),
       sample: { records: [{ role: 'record', id_label: 'Gift G-000123', fields: [
@@ -276,7 +276,7 @@ export const SCENARIOS = {
     build: (now) => correction(now, 'records', {
       selected_by: { kind: 'ids', text: 'The 48 Ids diagnosis listed from the import log, including 3 found later.' },
       counts: { expected: 48, total: 48 },
-      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(7) }], queries: [{ label: 'The 48 listed records', soql: IDS_SOQL.replace("...)", "... 48 Ids)") }] },
+      details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'request.json', sha256: hash(7) }], queries: [{ label: RECORDS_QUERY, soql: IDS_SOQL.replace("...)", "... 48 Ids)") }] },
     }, 'Three more gifts from the same import were found in the log.', [{ what: 'Records', old: '45 listed Ids', new: '48 listed Ids' }]),
   },
   'correction-records-filter': {
@@ -400,9 +400,34 @@ export const SCENARIOS = {
         interrupted: { run_tag: `${CODE}-s5-cd34`, at: iso(now - 2 * HOUR), where: 'Write, after about 20 of 45 records; the terminal window closed.' },
         steps: codes(['job_state', 'compare_records', 'find_temp_code']), evidence: [],
         phases: [{ name: 'Data operation', state: 'interrupted', at: iso(now - 2 * HOUR) }, { name: 'Check what happened', state: 'waiting' }],
-        details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'backup.csv', sha256: hash(5) }], queries: [{ label: 'The listed records', soql: IDS_SOQL }] },
+        details: { run_folder: `data-ops/${CODE}/2026-11-23`, hashes: [{ name: 'backup.csv', sha256: hash(5) }], queries: [{ label: RECORDS_QUERY, soql: IDS_SOQL }] },
       }),
     }),
+  },
+  // s28: a pretend pre-check: its source's kind is 'pretend', so the page carries the extension's marks with
+  // SIMULATION lines and data-switchboard-pretend. Still made up here: nothing leaves the browser.
+  'pretend-precheck': {
+    title: 'Pretend pre-check and rehearsal: marked like a real page, its lines SIMULATION',
+    kind: 'pretend',
+    build: (now) => {
+      const s = SCENARIOS['precheck-ids'].build(now);
+      return { ...s, request: { ...s.request, pretend: { scenario: 'count_ok' } } };
+    },
+  },
+  // s28 (O2): the structured allows, drawn beside diagnosis's sentences.
+  'dataop-allows': {
+    title: 'Data operation, update, with what diagnosis allows (structured)',
+    build: (now) => {
+      const s = SCENARIOS['dataop-update'].build(now);
+      return { ...s, request: { ...s.request,
+        diagnosis_allows: ['Other gifts may change while it runs; only these 45 are written.'],
+        allows: {
+          mode: 'moving',
+          kinds: [{ kind: 'Gift edited by a person', limit: 2, reason: 'Fundraisers edit gifts during the day; an edited gift is skipped.' }],
+          integrations: { allowed: false, reason: 'The payment sync is paused for the run.' },
+          failure_tolerance: { rows: 0, reason: 'Every gift must be written, or the run stops.' },
+        } } };
+    },
   },
   // The desktop states (A3): the scenario's own answers, one per ask. ?desktop= overrides them.
   'desktop-not-running': {
@@ -440,7 +465,8 @@ export function simSource(name, { now = Date.now(), desktop } = {}) {
   const answers = [...(desktop ?? scenario.desktop ?? ['running'])];
   const linkId = `sim-${name}`.slice(0, 44);
   return {
-    kind: 'sim',
+    // s28: a pretend scenario's kind is 'pretend' (still a simulation: RunShell draws the strip).
+    kind: scenario.kind ?? 'sim',
     name,
     load: async () => ({ link_id: linkId, request: built.request, sample: built.sample ?? null, run: built.run ?? null, outcome: built.outcome ?? null }),
     checkDesktop: async () => {

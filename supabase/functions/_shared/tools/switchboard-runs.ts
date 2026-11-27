@@ -65,6 +65,10 @@ export const queueSwitchboardRunRequestTool = defineTool({
       requireUuid(tool, "pre_check_request_id", r.pre_check_request_id);
       r.pre_check_request_id = (r.pre_check_request_id as string).trim().toLowerCase();
     }
+    // s28 (O5): undo_of.request_id is lower-cased, as pre_check_request_id is; requestProblems then checks it is a
+    // lower-case uuid, and the queue (257) that it names the caller's own data operation.
+    if (isObject(r.undo_of) && typeof r.undo_of.request_id === "string") r.undo_of.request_id = r.undo_of.request_id.trim().toLowerCase();
+    // s28: pretend ({scenario}, with simulation) and the structured allows go on as sent; runContract checks their shape.
     const problems = requestProblems(r) as string[];
     if (problems.length) refuseProblems(tool, problems);
     return await call(tool, "queueing the request", ctx.db, "switchboard_queue_run_request", { p_request: r });

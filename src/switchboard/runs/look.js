@@ -49,18 +49,23 @@ export const LOCKED_INPUT = 'bg-gray-100 text-gray-500 border-dashed cursor-not-
  * s20: a real page also marks the container with the line, exactly as shown, and the page's link id, for the
  * extension (spec 14.7). A simulation gets neither.
  * s23b: the extension posts the line, so a real page says so; it shows when the tab hasn't been closed (spec 14.9).
+ * s28: a pretend page (`pretend`) is marked as a real page is, its line starting SIMULATION (spec 15.2 point 4).
  */
 export const REAL_LINE_NOTE = 'This line goes to the Claude chat by itself; you can close this tab.';
 export const SIM_LINE_NOTE = 'A simulation posts nothing. This is the line a real page would send to the chat.';
-export function ResultLine({ line, sim, linkId }) {
+/** s28: a pretend page posts its line, which says SIMULATION, so its note says both. */
+export const PRETEND_LINE_NOTE = 'This SIMULATION line goes to the Claude chat by itself: a pretend run, whose data is made up. You can close this tab.';
+export function ResultLine({ line, sim, pretend = false, linkId }) {
+  // s28: a pretend page is marked as a real one is (spec 15.2 point 4); a plain simulation stays unmarked.
+  const marked = !sim || pretend;
   // No link id, no link-id mark: the extension sees it missing, never empty.
-  const marks = sim ? {} : { 'data-switchboard-line': line, ...(linkId ? { 'data-switchboard-link-id': linkId } : {}) };
+  const marks = marked ? { 'data-switchboard-line': line, ...(linkId ? { 'data-switchboard-link-id': linkId } : {}) } : {};
   return h('div', { 'data-testid': 'run-result-line', ...marks },
-    h('p', { className: 'text-dark mb-2' }, sim ? SIM_LINE_NOTE : REAL_LINE_NOTE),
+    h('p', { className: 'text-dark mb-2' }, pretend ? PRETEND_LINE_NOTE : sim ? SIM_LINE_NOTE : REAL_LINE_NOTE),
     h('div', { className: 'flex items-center gap-2' },
       h('code', { className: 'font-mono text-dark break-all' }, line),
       h(CopyButton, { getText: () => line, title: 'Copy this line for the chat' })),
-    !sim && h('div', { 'data-switchboard-status': '', hidden: true, className: 'mt-4' },
+    marked && h('div', { 'data-switchboard-status': '', hidden: true, className: 'mt-4' },
       h('p', { 'data-switchboard-status-text': '', className: 'text-dark mb-3 break-words' }),
       h('button', { type: 'button', 'data-switchboard-retry': '', className: SECOND_BUTTON }, 'Try again')));
 }
@@ -70,6 +75,8 @@ export function ResultLine({ line, sim, linkId }) {
  * source, or an unknown kind, counts as a simulation, so the strip can't be dropped by leaving the source out.
  */
 export const isSimulation = (source) => source?.kind !== 'real';
+/** s28: a pretend source (kind 'pretend') is still a simulation, and its run really goes to the helper. */
+export const isPretend = (source) => source?.kind === 'pretend';
 
 /** B4: a refusal from switchboard-run-pages is shown word for word; any other failure gets the page's own sentence. */
 export const refusalNote = (e, tail) => (e?.name === 'RunPagesError' ? e.message : `${e instanceof Error ? e.message : String(e)} ${tail}`);
@@ -109,7 +116,8 @@ export function RunShell({ source, approvable = false, approvalNote = null, wide
   return h('div', { className: 'min-h-screen bg-primary-bg', ...(sim ? { 'data-switchboard-simulation': '' } : {}) },
     sim && h('div', { 'data-testid': 'run-simulation', role: 'alert', className: SIMULATION_STRIP },
       'Simulation', h('span', { className: 'block text-base sm:text-lg normal-case tracking-normal mt-1' },
-        'Sample data. Nothing here reaches any org.')),
+        // s28: a pretend run goes to the desktop helper, which makes its data up.
+        isPretend(source) ? 'A pretend run: the desktop helper makes the data up. Nothing here reaches any org.' : 'Sample data. Nothing here reaches any org.')),
     approvable && h('div', { 'data-testid': 'run-approval-required', role: 'alert', className: RED_BAR }, 'Approval required',
       approvalNote && h('span', { 'data-testid': 'run-approval-note', className: 'normal-case' }, ` — ${approvalNote}`)),
     h('div', { className: 'flex justify-center p-4' },

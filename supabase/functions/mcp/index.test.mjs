@@ -281,6 +281,11 @@ test("sb3 B3: the four run page tools are registered, say approval is only on th
   assert.match(q.cfg.description, /pre_check_request_id/);
   assert.match(q.cfg.description, /NEVER send evidence or a sample/);
   assert.match(q.cfg.description, /only Alex's Approve on that page approves anything/);
+  // s28: the new request fields are named for the chat.
+  assert.match(q.cfg.description, /labelled "records"/);
+  assert.match(q.cfg.description, /failure_tolerance: \{rows, reason\}/);
+  assert.match(q.cfg.description, /pretend \{scenario: "<name>"\}/);
+  assert.match(q.cfg.description, /undo_of\.request_id/);
   assert.deepEqual(Object.keys(registered.find((r) => r.name === "correct_switchboard_run_request").cfg.inputSchema).sort(),
     ["changed", "edit_kind", "request", "request_id"]);
   assert.deepEqual(Object.keys(registered.find((r) => r.name === "issue_switchboard_run_link").cfg.inputSchema).sort(), ["request_id", "review_id"]);

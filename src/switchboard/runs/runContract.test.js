@@ -47,6 +47,8 @@ const precheck = (over = {}) => ({
   side_effects: 'The gift rollups on each donor recalculate on save.',
   operation: { kind: 'update', object: 'Gift', field: 'Campaign__c', value: 'Spring 2026' },
   selected_by: { kind: 'ids', text: '45 Ids listed by diagnosis' },
+  // s28 (O17): an Id list's Ids are the query labelled "records".
+  details: { queries: [{ label: 'records', soql: "SELECT Id FROM Gift WHERE Id IN ('a0B000000000001AAA')" }] },
   counts: { expected: 45, total: 45 },
   steps: ['count_listed', 'login_can_change', 'list_automation', 'save_backup', 'create_test', 'rehearse_operation', 'rehearse_undo', 'delete_test']
     .map((code) => ({ code })),
@@ -110,6 +112,50 @@ describe('requestProblems', () => {
   test('each operation names what it needs', () => {
     expect(requestProblems(dataop({ operation: { kind: 'insert', object: 'Gift' } }))).toEqual(['Add operation.file: the file of rows on the PC.']);
     expect(requestProblems(dataop({ operation: { kind: 'upsert', object: 'Gift' }, counts: { total: 45, update: 30, create: 15 } }))).toEqual(['Add operation.external_id.']);
+  });
+});
+
+describe('requestProblems, s28: pretend, O17, O2 and O5', () => {
+  test('pretend: {scenario} with simulation is fine; every other shape, or no simulation, is refused', () => {
+    expect(requestProblems(precheck({ simulation: true, pretend: { scenario: 'count_ok' } }))).toEqual([]);
+    expect(requestProblems(precheck({ simulation: true, pretend: { scenario: 'a'.repeat(40) } }))).toEqual([]);
+    for (const p of [true, null, 'count_ok', [], {}, { scenario: 5 }, { scenario: '' }, { scenario: 'Count_OK' }, { scenario: 'a/b' },
+      { scenario: 'a'.repeat(41) }, { scenario: 'ok', extra: 1 }]) {
+      expect(requestProblems(precheck({ simulation: true, pretend: p }))).toEqual([expect.stringMatching(/^Fix pretend: \{"scenario": "<name>"\}/)]);
+    }
+    expect(requestProblems(precheck({ pretend: { scenario: 'ok' } }))).toEqual([expect.stringMatching(/^Fix pretend: it needs simulation true/)]);
+    expect(requestProblems(precheck({ simulation: false, pretend: { scenario: 'ok' } }))).toEqual([expect.stringMatching(/needs simulation true/)]);
+  });
+  test('O17: an Id list needs exactly one details.queries entry labelled records; a filter needs none', () => {
+    const msg = (n) => [`Add details.queries: exactly one entry labelled "records", the query that lists the Ids (it has ${n}).`];
+    expect(requestProblems(precheck({ details: undefined }))).toEqual(msg(0));
+    expect(requestProblems(precheck({ details: { queries: [{ label: 'The listed records', soql: 's' }] } }))).toEqual(msg(0));
+    expect(requestProblems(precheck({ details: { queries: [{ label: 'records', soql: 'a' }, { label: 'records', soql: 'b' }] } }))).toEqual(msg(2));
+    expect(requestProblems(precheck({ selected_by: { kind: 'filter', text: 'f' }, details: undefined, steps: [{ code: 'count_filter' }] }))).toEqual([]);
+  });
+  test('O2: a whole allows is fine beside the sentences; a malformed one is refused, naming its key', () => {
+    const allows = { mode: 'moving', kinds: [], integrations: { allowed: false, reason: 'r' }, failure_tolerance: { rows: 0, reason: 'r' } };
+    expect(requestProblems(dataop({ allows, diagnosis_allows: ['A sentence.'] }))).toEqual([]);
+    expect(requestProblems(dataop({ allows: { ...allows, mode: 'x' } }))).toEqual(['Fix allows.mode: frozen or moving.']);
+  });
+  test('O5: undo_of.request_id, a lower-case uuid, on an undo only; undo_of without it as before', () => {
+    const undo = (undoOf) => dataop({ page: 'undo', counts: { expected: 45, undo_up_to: 45 }, steps: [{ code: 'skip_edited' }, { code: 'write' }], undo_of: undoOf });
+    expect(requestProblems(undo({ run_tag: 'x-s1-ab12' }))).toEqual([]);
+    expect(requestProblems(undo({ run_tag: 'x-s1-ab12', request_id: ID }))).toEqual([]);
+    for (const bad of [ID.toUpperCase(), 'nope', 42, null]) {
+      expect(requestProblems(undo({ run_tag: 'x-s1-ab12', request_id: bad }))).toEqual(["Fix undo_of.request_id: the data operation request's id, a lower-case uuid."]);
+    }
+    expect(requestProblems(dataop({ undo_of: { run_tag: 'x', request_id: ID } })))
+      .toEqual(['Leave undo_of.request_id out: only an undo names the data operation it undoes.']);
+  });
+  test('the line builders prefix SIMULATION on a real link id when asked (a pretend page), and only then', () => {
+    expect(runLine(ID, true)).toBe(`SIMULATION run ${ID}`);
+    expect(runResentLine(ID, true)).toBe(`SIMULATION run ${ID} resent`);
+    expect(runRerunsLine(ID, true)).toBe(`SIMULATION run ${ID} reruns`);
+    expect(runCancelledLine(ID, 'no', true)).toBe(`SIMULATION run ${ID} cancelled: no`);
+    expect(runLine(ID)).toBe(`run ${ID}`);
+    expect(runLine(ID, false)).toBe(`run ${ID}`);
+    expect(runLine('sim-x')).toBe('SIMULATION run sim-x');
   });
 });
 
