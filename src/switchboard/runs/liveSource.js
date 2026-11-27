@@ -5,7 +5,7 @@
 
 import { supabase, supabaseUrl, supabaseAnonKey } from '../../supabaseClient';
 import { askDesktop } from './desktopCheck';
-import { shownTotal, statusFromEvidence } from './runContract';
+import { isPretendRequest, shownTotal, statusFromEvidence } from './runContract';
 
 const realSession = () => supabase.auth.getSession();
 
@@ -74,8 +74,11 @@ export function countMismatch(preview) {
   return `The count on this page (${shown ?? 'none'}) is not the request's count in the database (${sent ?? 'none'}), so this page can't be approved. Ask Claude to correct the request. Nothing was approved.`;
 }
 
-/** 'real' only when the database says the request is not a simulation; anything else shows the SIMULATION strip. */
-const kindOf = (preview) => (preview?.request?.simulation === false ? 'real' : 'sim');
+/**
+ * 'real' only when the database says the request is not a simulation; anything else shows the SIMULATION strip.
+ * s28: 'pretend' when it is a simulation carrying request.pretend (256), so the page carries the extension's marks.
+ */
+export const kindOf = (preview) => (preview?.request?.simulation === false ? 'real' : isPretendRequest(preview?.request) ? 'pretend' : 'sim');
 
 /**
  * The real run page source for one token, from its preview. Its kind is fixed here, from the database's simulation
@@ -118,7 +121,8 @@ export function liveReviewSource(token, preview, deps = {}) {
   const review = { ...preview.review, headline: preview.request?.headline, project_code: preview.request?.project_code };
   const answer = (kind, text, acks) => call('review', { token, answer: kind, text, acks: acks ?? {}, desktop });
   return {
-    kind: kindOf(preview),
+    // s28: a pretend request's code review page is a plain simulation page: unmarked, with the plain strip.
+    kind: kindOf(preview) === 'pretend' ? 'sim' : kindOf(preview),
     load: async () => ({ link_id: preview.link_id, review }),
     checkDesktop: async () => { desktop = await ask(); return desktop; },
     reviewed: (acks) => answer('reviewed', '', acks),

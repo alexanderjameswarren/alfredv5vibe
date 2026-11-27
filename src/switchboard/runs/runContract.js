@@ -500,6 +500,58 @@ export function groupedSteps(r) {
 
 const text = (v) => typeof v === 'string' && v.trim().length > 0;
 const NO_LINK = 'No link was issued.';
+const isPlain = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+const count0 = (v) => Number.isInteger(v) && v >= 0;
+const LOWER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** s28: request.pretend's scenario name, as the queue checks it (256): a name, never a path. */
+export const PRETEND_SCENARIO = /^[a-z0-9_-]{1,40}$/;
+/** s28: a pretend request (256): request.pretend = {scenario}, only on a simulation. */
+export const isPretendRequest = (r) => r?.simulation === true && isPlain(r?.pretend);
+
+/** s28 (item c): why an undo page has no sample record. */
+export const UNDO_NO_SAMPLE = 'No sample record here: an undo has no pre-check. The terminal shows a fresh sample before it counts.';
+
+/** s28 (O17): the details.queries label that carries an Id list's Ids. */
+export const RECORDS_QUERY = 'records';
+
+/** s28 (O2): the allowed modes of the structured allows. */
+export const ALLOWS_MODES = ['frozen', 'moving'];
+const ALLOWS_KEYS = ['mode', 'kinds', 'integrations', 'failure_tolerance'];
+
+/**
+ * s28 (O2): every problem with a top-level `allows`, each one sentence naming the key; empty when it is absent or
+ * whole. Its shape: {mode: frozen | moving, kinds: [{kind, limit, reason}], integrations: {allowed, reason},
+ * failure_tolerance: {rows, reason}}, every key present and nothing else.
+ */
+export function allowsProblems(a) {
+  if (a === undefined) return [];
+  if (!isPlain(a)) return ['Fix allows: {mode, kinds, integrations, failure_tolerance}, or leave it out.'];
+  const out = [];
+  const extra = Object.keys(a).filter((k) => !ALLOWS_KEYS.includes(k));
+  if (extra.length) out.push(`Fix allows: leave out ${extra.join(', ')}; it has mode, kinds, integrations and failure_tolerance only.`);
+  if (!ALLOWS_MODES.includes(a.mode)) out.push(`Fix allows.mode: ${ALLOWS_MODES.join(' or ')}.`);
+  if (!Array.isArray(a.kinds)) out.push('Fix allows.kinds: a list of {kind, limit, reason}, empty if there are none.');
+  else {
+    a.kinds.forEach((k, i) => {
+      if (!isPlain(k) || !text(k.kind) || !count0(k.limit) || !text(k.reason) || Object.keys(k).some((x) => !['kind', 'limit', 'reason'].includes(x))) {
+        out.push(`Fix allows.kinds[${i}]: {kind, limit (a whole number, 0 or more), reason}, nothing else.`);
+      }
+    });
+  }
+  const ig = a.integrations;
+  if (!isPlain(ig) || typeof ig.allowed !== 'boolean' || !text(ig.reason) || Object.keys(ig).some((x) => !['allowed', 'reason'].includes(x))) {
+    out.push('Fix allows.integrations: {allowed (true or false), reason}, nothing else.');
+  }
+  const ft = a.failure_tolerance;
+  if (!isPlain(ft) || !count0(ft.rows) || !text(ft.reason) || Object.keys(ft).some((x) => !['rows', 'reason'].includes(x))) {
+    out.push('Fix allows.failure_tolerance: {rows (a whole number, 0 or more), reason}, nothing else.');
+  }
+  return out;
+}
+
+/** s28 (O2): the structured allows to draw, or null when it is absent or malformed (never half drawn). */
+export const allowsView = (a) => (a !== undefined && allowsProblems(a).length === 0 ? a : null);
 
 /**
  * Every problem with a request, each one sentence saying what to add or fix. Empty when it can be shown.
@@ -534,6 +586,30 @@ export function requestProblems(r, opts = {}) {
   if (r.page !== 'check' && !['ids', 'filter'].includes(r.selected_by?.kind)) out.push('Add selected_by: kind ids or filter, and its text.');
   if (r.diagnosis_allows !== undefined && !(Array.isArray(r.diagnosis_allows) && r.diagnosis_allows.every(text))) {
     out.push("Fix diagnosis_allows: a list of sentences in diagnosis's words, or leave it out.");
+  }
+  // s28 (O2): the structured allows beside the sentences.
+  out.push(...allowsProblems(r.allows));
+  // s28: pretend, as the queue checks it (256).
+  if (r.pretend !== undefined) {
+    const p = r.pretend;
+    if (!isPlain(p) || Object.keys(p).some((k) => k !== 'scenario') || typeof p.scenario !== 'string' || !PRETEND_SCENARIO.test(p.scenario)) {
+      out.push(`Fix pretend: {"scenario": "<name>"}, the name 1 to 40 lower-case letters, digits, hyphens or underscores, and nothing else. ${NO_LINK}`);
+    } else if (r.simulation !== true) {
+      out.push(`Fix pretend: it needs simulation true, since a pretend run is a simulation whose data the helper makes up. ${NO_LINK}`);
+    }
+  }
+  // s28 (O17): an Id list's Ids are the details.queries entry labelled "records", exactly one.
+  if (r.selected_by?.kind === 'ids') {
+    const qs = Array.isArray(r.details?.queries) ? r.details.queries : [];
+    const n = qs.filter((q) => q?.label === RECORDS_QUERY).length;
+    if (n !== 1) out.push(`Add details.queries: exactly one entry labelled "${RECORDS_QUERY}", the query that lists the Ids (it has ${n}).`);
+  }
+  // s28 (O5): undo_of.request_id names the data operation an undo undoes; the queue checks it is the caller's own.
+  if (isPlain(r.undo_of) && Object.hasOwn(r.undo_of, 'request_id')) {
+    if (r.page !== 'undo') out.push('Leave undo_of.request_id out: only an undo names the data operation it undoes.');
+    else if (typeof r.undo_of.request_id !== 'string' || !LOWER_UUID.test(r.undo_of.request_id)) {
+      out.push("Fix undo_of.request_id: the data operation request's id, a lower-case uuid.");
+    }
   }
   if (r.page === 'precheck' && r.sample) out.push('Leave the sample out of a pre-check: the pre-check reads it.');
   if (r.page === 'check' && !text(r.interrupted?.run_tag)) out.push('Add interrupted: the run_tag of the interrupted run, when, and where it stopped.');
@@ -659,18 +735,19 @@ export const lineText = (t) => {
   return s.length <= LINE_TEXT_MAX ? s : `${s.slice(0, LINE_TEXT_MAX - 1).trimEnd()}…`;
 };
 
-function line(word, id, rest = '') {
-  const sim = SIM_ID.test(String(id));
-  if (!UUID.test(String(id)) && !sim) throw new Error(`not a link id: ${id}`);
-  return `${sim ? 'SIMULATION ' : ''}${word} ${id}${rest}`;
+// s28: `simulated` prefixes SIMULATION on a real link id too: a pretend page's lines (its link is a real one).
+function line(word, id, rest = '', simulated = false) {
+  const simId = SIM_ID.test(String(id));
+  if (!UUID.test(String(id)) && !simId) throw new Error(`not a link id: ${id}`);
+  return `${simId || simulated ? 'SIMULATION ' : ''}${word} ${id}${rest}`;
 }
 const withText = (lead, t) => (lineText(t) ? `${lead}: ${lineText(t)}` : lead);
 
-export const runLine = (id) => line('run', id);
-export const runCancelledLine = (id, reason) => line('run', id, withText(' cancelled', reason));
-export const runResentLine = (id) => line('run', id, ' resent');
+export const runLine = (id, simulated) => line('run', id, '', simulated);
+export const runCancelledLine = (id, reason, simulated) => line('run', id, withText(' cancelled', reason), simulated);
+export const runResentLine = (id, simulated) => line('run', id, ' resent', simulated);
 // A correction page's Approve runs its reruns, not the write (s12b): its own word. A write approval stays runLine.
-export const runRerunsLine = (id) => line('run', id, ' reruns');
+export const runRerunsLine = (id, simulated) => line('run', id, ' reruns', simulated);
 export function checkLine(id, { job, at_goal: goal, at_backup: backup, neither }) {
   return line('check', id, ` done: job ${lineText(job) || 'unknown'}; ${n(goal)} at goal, ${n(backup)} at backup, ${n(neither)} neither`);
 }

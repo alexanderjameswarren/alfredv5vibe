@@ -133,11 +133,65 @@ test("Don't run: the note is one line, capped at 200 with …, and the line carr
   assert.equal(bare.body.line, `run ${LINK} cancelled`);
 });
 
-test("resend calls switchboard_retry_run and keeps the link id in its line", async () => {
+test("resend reads the preview, calls switchboard_retry_run and keeps the link id in its line", async () => {
   const { deps, calls } = fakes();
   const { body } = await read(await handle(post("resend", { token: TOKEN, fingerprint: "fp", desktop: READY }, asAlex), deps));
-  assert.equal(calls.rpc[0].fn, "switchboard_retry_run");
+  assert.deepEqual(calls.rpc.map((c) => c.fn), ["switchboard_run_preview", "switchboard_retry_run"]);
   assert.equal(body.line, `run ${LINK} resent`);
+  assert.equal(body.simulated, false);
+  assert.equal(body.pretend, false);
+});
+
+// s28: a pretend request (256) is a simulation carrying request.pretend; its lines start SIMULATION.
+const pretendFakes = (preview, extra = {}) => fakes({
+  rpcAsUser: async (jwt, fn, args) => {
+    if (fn === "switchboard_run_preview") return { data: { link_id: LINK, request: preview, review: null }, error: null };
+    if (fn === "switchboard_retry_run") return { data: { resent: true, link_id: LINK, action_id: "act-2" }, error: null };
+    if (fn === "switchboard_cancel_run_link") return { data: { cancelled: true, link_id: LINK, reason: args.p_reason }, error: null };
+    if (fn === "switchboard_consume_run_link") return { data: extra.consume, error: null };
+    return { data: null, error: { message: "unexpected", code: "XX000" } };
+  },
+}).deps;
+
+test("s28: a pretend resend and cancel carry simulated and pretend, their lines SIMULATION", async () => {
+  const deps = pretendFakes({ simulation: true, pretend: { scenario: "count_ok" } });
+  const resend = await read(await handle(post("resend", { token: TOKEN, fingerprint: "fp", desktop: READY }, asAlex), deps));
+  assert.equal(resend.body.line, `SIMULATION run ${LINK} resent`);
+  assert.equal(resend.body.simulated, true);
+  assert.equal(resend.body.pretend, true);
+  const cancel = await read(await handle(post("cancel", { token: TOKEN, reason: "no" }, asAlex), deps));
+  assert.equal(cancel.body.line, `SIMULATION run ${LINK} cancelled: no`);
+  assert.equal(cancel.body.pretend, true);
+});
+
+test("s28: a pretend Approve passes consume's simulated and pretend on; its line, and a correction's reruns, start SIMULATION", async () => {
+  const consume = { consumed: true, simulated: true, pretend: true, link_id: LINK, mode: "approve", action_id: "act-1" };
+  const deps = pretendFakes({ simulation: true, pretend: { scenario: "count_ok" } }, { consume });
+  const a = await read(await handle(post("approve", { token: TOKEN, fingerprint: "fp", desktop: READY }, asAlex), deps));
+  assert.equal(a.body.line, `SIMULATION run ${LINK}`);
+  assert.equal(a.body.pretend, true);
+  const d2 = pretendFakes({ simulation: true, pretend: { scenario: "count_ok" } }, { consume: { ...consume, as_rerun: true } });
+  assert.equal((await read(await handle(post("approve", { token: TOKEN, fingerprint: "fp", desktop: READY }, asAlex), d2))).body.line,
+    `SIMULATION run ${LINK} reruns`);
+});
+
+test("s28: a resend whose preview is refused resends nothing, the refusal word for word", async () => {
+  const { deps, calls } = fakes({
+    rpcAsUser: async (jwt, fn) => (calls.rpc.push({ fn }), { data: null, error: { message: "switchboard_run_preview: no such link.", code: "P0002" } }),
+  });
+  const { status, body } = await read(await handle(post("resend", { token: TOKEN, fingerprint: "fp", desktop: READY }, asAlex), deps));
+  assert.equal(status, 404);
+  assert.equal(body.error, "switchboard_run_preview: no such link.");
+  assert.deepEqual(calls.rpc.map((c) => c.fn), ["switchboard_run_preview"]);
+});
+
+test("s28: a plain simulation's cancel is not pretend; a real one's line is unchanged", async () => {
+  const sim = await read(await handle(post("cancel", { token: TOKEN }, asAlex), pretendFakes({ simulation: true })));
+  assert.equal(sim.body.line, `SIMULATION run ${LINK} cancelled`);
+  assert.equal(sim.body.pretend, false);
+  const real = await read(await handle(post("cancel", { token: TOKEN }, asAlex), pretendFakes({ simulation: false, pretend: { scenario: "x" } })));
+  assert.equal(real.body.line, `run ${LINK} cancelled`);
+  assert.equal(real.body.pretend, false);
 });
 
 const reviewPreview = (status = "open", over = {}) => ({

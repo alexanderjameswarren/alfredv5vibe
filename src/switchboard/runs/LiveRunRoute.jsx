@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { BUTTON, RunErrorBoundary, RunShell } from './look';
-import { callRunPages, linkEndedReason, liveReviewSource, liveRunSource } from './liveSource';
+import { callRunPages, kindOf, linkEndedReason, liveReviewSource, liveRunSource } from './liveSource';
 
 // sb3_pages-h6v B4: the live routes, beside today's /approve/ pages. /run/:token is the run page, /review/:token the
 // code review page, both read from switchboard-run-pages' preview once at open (never again by themselves). A signed-out
@@ -40,7 +40,7 @@ function LiveRoute({ review, deps: given }) {
           ?? (review && !preview.review ? 'This is a run page link, not a code review link: open it as /run/ instead.' : null)
           ?? (!review && preview.review ? 'This is a code review link: open it as /review/ instead.' : null);
         // A simulation's ended link still carries the strip: the kind is the database's.
-        if (ended) { setState({ phase: 'ended', message: ended, kind: preview.request?.simulation === false ? 'real' : 'sim' }); return; }
+        if (ended) { setState({ phase: 'ended', message: ended, kind: kindOf(preview) }); return; }
         setState({ phase: 'ready', source: review ? liveReviewSource(token, preview, deps) : liveRunSource(token, preview, deps) });
       } catch (e) {
         // The function's (and so the database's) own words, unchanged.

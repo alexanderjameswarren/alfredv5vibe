@@ -59,6 +59,8 @@ const DATAOP = () => ({
   problem: { label: "P1", sentence: "45 gifts point at the wrong campaign." }, side_effects: "None.",
   operation: { kind: "update", object: "Gift__c", field: "Campaign__c", value: "Spring" },
   selected_by: { kind: "ids", text: "45 listed ids" }, counts: { expected: 45, total: 45 },
+  // s28 (O17): an Id list's Ids are the query labelled "records".
+  details: { queries: [{ label: "records", soql: "SELECT Id FROM Gift__c WHERE Id IN ('a0B000000000001AAA')" }] },
   undo: { level: "standard", mechanics: "Sets each campaign back." },
   steps: [{ code: "still_match_backup" }, { code: "login_can_write" }, { code: "automation_unchanged" }, { code: "type_count" },
     { code: "write" }, { code: "read_back" }, { code: "save_results" }],
@@ -97,6 +99,29 @@ test("queue: runContract's rules refuse first, naming each problem; the database
   assert.equal(db.calls.length, 0);
   const bad = { ...DATAOP(), steps: [{ code: "count_listed" }] };
   await refusal(m.queueSwitchboardRunRequestTool, { request: bad }, /count_listed doesn't belong on a dataop page/);
+});
+
+test("queue (s28): pretend and allows pass through to the database unchanged; undo_of.request_id is lower-cased", async () => {
+  const allows = {
+    mode: "frozen", kinds: [{ kind: "edited gift", limit: 1, reason: "r" }],
+    integrations: { allowed: false, reason: "paused" }, failure_tolerance: { rows: 0, reason: "all or none" },
+  };
+  const r = { ...DATAOP(), simulation: true, pretend: { scenario: "count_ok" }, allows };
+  const { db } = await run(m.queueSwitchboardRunRequestTool, { request: r });
+  assert.deepEqual(db.calls[0][1].p_request.pretend, { scenario: "count_ok" });
+  assert.deepEqual(db.calls[0][1].p_request.allows, allows);
+  const undo = { ...DATAOP(), page: "undo", counts: { expected: 45, undo_up_to: 45 }, steps: [{ code: "skip_edited" }, { code: "write" }],
+    undo_of: { run_tag: "demo-x1y-s1-ab12", request_id: PRE_ID.toUpperCase() } };
+  const u = await run(m.queueSwitchboardRunRequestTool, { request: undo });
+  assert.equal(u.db.calls[0][1].p_request.undo_of.request_id, PRE_ID);
+});
+
+test("queue (s28): runContract refuses a bad pretend, a bad allows, an Id list with no records query, and request_id off an undo", async () => {
+  await refusal(m.queueSwitchboardRunRequestTool, { request: { ...DATAOP(), simulation: true, pretend: true } }, /Fix pretend: \{"scenario"/);
+  await refusal(m.queueSwitchboardRunRequestTool, { request: { ...DATAOP(), pretend: { scenario: "ok" } } }, /Fix pretend: it needs simulation true/);
+  await refusal(m.queueSwitchboardRunRequestTool, { request: { ...DATAOP(), allows: { mode: "still" } } }, /Fix allows.mode/);
+  await refusal(m.queueSwitchboardRunRequestTool, { request: { ...DATAOP(), details: {} } }, /exactly one entry labelled "records"/);
+  await refusal(m.queueSwitchboardRunRequestTool, { request: { ...DATAOP(), undo_of: { run_tag: "x", request_id: PRE_ID } } }, /only an undo names/);
 });
 
 test("queue: the chat never supplies evidence or a sample; pre_check_request_id only on a data operation, a uuid", async () => {

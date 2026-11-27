@@ -162,6 +162,8 @@ For the design thread to reconcile with the data runs thread. The rules live in 
 | problem | {label "P1a", sentence in diagnosis's words}, required |
 | side_effects | diagnosis's words, required |
 | diagnosis_allows | [sentences], or absent |
+| allows | s28 (O2): {mode frozen or moving, kinds [{kind, limit (whole, 0 or more), reason}], integrations {allowed (boolean), reason}, failure_tolerance {rows (whole, 0 or more), reason}}, every key and nothing else, or absent (the data runs thread's module then applies the design's default); drawn under "Allowed"; a correction treats it as wording (256 c_words) |
+| pretend | s28: {scenario: a name of 1 to 40 a-z, 0-9, hyphen, underscore}, only with simulation true; a pretend run (spec 15.2) |
 | operation | {kind update, insert, upsert, delete, undelete or multi, object, field?, value?, file?, external_id?, steps?[{object, kind, count, pause_before}]}; "What changes" is built from it (whatChanges) |
 | selected_by | {kind ids or filter, text, sandbox_text?, not_rehearsed?} |
 | counts | {expected, total, update?, create?, children?, links_blanked?, links_blocking?, undo_up_to?, skipped?} |
@@ -172,7 +174,7 @@ For the design thread to reconcile with the data runs thread. The rules live in 
 | kept | {sandbox_test_data?, temp_code_in_production?} |
 | changed | {edit_kind (EDIT_RERUNS), from_version, reason, items [{what, old, new}]}; still_valid [{check, passed_at}] |
 | steps | [{code, count?, pause_before?, object?, kind?}]; each code maps to one fixed statement, group and org (STEPS); an org sent that differs is refused; a multi-object run's write_step entries must match operation.steps in order; a correction's steps must be within what its edit reruns (rerunSteps, CHECK_STEPS: evidence uses the same check names) |
-| details | {run_folder, hashes [{name, sha256}], queries [{label, soql}], added_ids?} |
+| details | {run_folder, hashes [{name, sha256}], queries [{label, soql}], added_ids?}; s28 (O17): an Id list (selected_by.kind ids) carries exactly one query labelled `records`, the query that lists the Ids |
 | code | {commit, rehearsed_at} when the run carries code |
 
 Refused before any link (requestProblems), each refusal saying what to add: a missing problem label or sentence, missing
@@ -208,7 +210,7 @@ without its text, duplicate finding ids, a note outside its file. At A6 a note m
 | I reviewed this code | `review <link id> reviewed` |
 | Ask a question | `review <link id> question: <text>` (first 200 characters; the full text, up to 1000, is kept on the review) |
 | Not approved. Changes required. | `review <link id> changes required: <text>` (as above) |
-| Simulation | `SIMULATION run sim-...`; shown to copy, never with a run-id mark, never posted |
+| Simulation | `SIMULATION run …`: shown to copy; a plain simulation's is never marked or posted. A pretend run's (s28) lines are marked and post at the click (Approve, reruns, resent, cancelled), and its later lines post on a tile tap, each starting SIMULATION |
 
 Until the extension's POST_LINE learns these (plumbing), the page shows the line to copy, as ResultLine does today.
 
@@ -292,7 +294,8 @@ Until the extension's POST_LINE learns these (plumbing), the page shows the line
 - The undo page's "What changes" describes the undo ("Puts back up to N records of X from the backup of run …"). Once
   closed, its production banner reads "Nothing changes: no undo is offered.", and the count sentence, "After you
   approve", the desktop line and "Undo possible until" are not shown.
-- undo_of (undo page, required): {run_tag, stopped?, changed?, deadline?, deadline_reason?}; deadline and its reason
+- undo_of (undo page, required): {run_tag, stopped?, changed?, deadline?, deadline_reason?, request_id? (s27, s28: the
+  data operation's request id, a lower-case uuid; the queue checks it is the caller's own, 256)}; deadline and its reason
   only for a delete's undo (part 4.7 supersedes the rest of this entry). After a stopped run the page
   says the undo covers only the `changed` records; after `deadline` (checked at page open and at the click) the page
   says "No undo is offered: <deadline_reason>. A further change is a new request through diagnosis." and shows no
@@ -439,7 +442,9 @@ of a page open or a click; nothing runs on a clock.
   closed: the strip shows unless the source's kind is exactly 'real'. The red bar follows RunShell's approvable prop;
   from A2, RunPage sets it from the same value that draws the Approve button. The real
   source refuses anything marked simulation. The database (B1, Q7, part 10a) accepts a request marked simulation and
-  spends its link, but never makes a helper action, a run or a sample for it.
+  spends its link, but never makes a helper action, a run or a sample for it. s28: a pretend request (simulation and
+  request.pretend, 256) is the one exception: consume makes its sf_run, and its made-up evidence, sample and outcome
+  are kept on it; its page is marked as a real one is (14.7).
 - Scenarios cover every page and state: pre-check (ids, filter, a different sandbox filter); data operation update,
   insert, upsert, delete, undelete and multi-object; undo (normal, after a stopped run, past the deadline); correction
   (each edit kind); not started; checks expired; check what happened; code review (open, superseded); and the desktop
@@ -979,7 +984,8 @@ About 1 step here, plus the other threads' own.
   (pre-check and rehearsal, then the data operation on the same request), in place of `sb prod dataop-link` with
   sf_dataop and `sb prod datawrite-link` with sf_datawrite;
 - the result lines: `run <link id>`, `run <id> reruns`, `run <id> resent`, `run <id> cancelled: <note>`, and the
-  `review <id> ...` lines, in place of `dataop` and `datawrite`. A `SIMULATION ` line is never posted;
+  `review <id> ...` lines, in place of `dataop` and `datawrite`. A plain simulation's `SIMULATION ` line is never
+  posted; a pretend run's is (s28), and its PASS is made up;
 - corrections: correct_switchboard_run_request before a write runs. After that it is a new request through diagnosis
   (254);
 - code review: record_switchboard_code_review, then the /review/ link;
@@ -1097,6 +1103,14 @@ isn't counted. The DB guard and the helper's link commands belong to plumbing an
 
 For plumbing's L3 extension, which reads the live pages. Real pages only: a simulation page (the SIMULATION strip,
 the /run-sim/ scenarios) carries none of these, and keeps `data-switchboard-kind="simulation"`.
+
+**s28: a pretend run page is the one exception.** Its source's kind is `pretend` (liveSource kindOf: simulation true
+and request.pretend present). It keeps the SIMULATION strip and `data-switchboard-simulation` on the root, and carries
+every run page mark below as a real page does, with `data-switchboard-kind="run"` and a new
+`data-switchboard-pretend` (empty) on the same project element. Its lines start SIMULATION (`SIMULATION run <link
+id>`, `… reruns`, `… resent`, `… cancelled[: <note>]`), and ResultLine says so. Posting them is the data runs
+thread's extension change. A pretend code review page stays unmarked, as a simulation. The /run-sim/pretend-precheck
+scenario shows the marks on the dev server.
 
 - **Every result line** (ResultLine, look.js), on the run and the review page: its container carries
   `data-switchboard-line` (the line exactly as shown in the copy block) and `data-switchboard-link-id` (the page's
@@ -1429,7 +1443,8 @@ id>"), as the runner's later lines do, which wait for Alex's tap.
     then queued through the MCP tool (request b9e6807e-993d-455c-b8a4-7336f774cb58, project h6v-sim-c).
   - **Outage:** the queue was down from 256's apply (17:45Z) to 257's (about 17:58Z), about 13 minutes.
   - Test 8 queued again with --test as action 2e163d8b-273e-428e-9a2b-9d412fda4dd9 (the first run, 734bef6c, stopped
-    at the break); its result is recorded when it has run.
+    at the break). **It passed 59 of 59** (run d5320d47-75c9-430b-bbef-c00a3066b357). 256 and 257 are on main, and
+    the db: claims were released by the Checkpoint.
 - **No other function changes.** switchboard_issue_link, switchboard_cancel_run_link and the rest need nothing for
   pretend. The cold review's list of other places that read `mode` is under "s26 cold review" below.
 
@@ -1475,6 +1490,61 @@ id>"), as the runner's later lines do, which wait for Alex's tap.
 - **Redeploys (s28b):** mcp (the tool and runContract) and switchboard-run-pages, each holding db:deploy. The pages
   ship with the app build.
 - **Estimate:** 40m: the s25 plan's 25m, plus O17 about 3m, O2 about 10m (contract, page, tests) and O5 about 2m.
+
+**s28 as built** (nothing deployed; s28b deploys):
+- **runContract.js:**
+  - requestProblems refuses a pretend that isn't exactly `{scenario}` (the queue's name rule, PRETEND_SCENARIO) and
+    a pretend without simulation true.
+  - O17: an Id list without exactly one `details.queries` entry labelled `records` is refused (RECORDS_QUERY).
+  - O2: `allows` is checked by allowsProblems, each refusal naming its key; allowsView gives the page whole or null.
+  - O5: `undo_of.request_id` must be a lower-case uuid, on an undo only.
+  - The line builders (runLine, runCancelledLine, runResentLine, runRerunsLine) take a `simulated` flag that prefixes
+    SIMULATION on a real link id. Called without it, every real line is as before.
+- **look.js:** isPretend; the strip's second line for a pretend source ("A pretend run: the desktop helper makes the
+  data up. Nothing here reaches any org."); ResultLine's `pretend` marks the line and keeps the status block, with
+  PRETEND_LINE_NOTE.
+- **RunPage.jsx:**
+  - `marked = !sim || pretend` gates the s20 marks, so a real page's marks are unchanged.
+  - `data-switchboard-pretend` sits on the project element.
+  - The fallback lines carry SIMULATION on a pretend page.
+  - The sent heading reads "Pretend: …", and its text "Sent as a pretend run: its data is made up and no org is
+    touched. It must pick the run up within 15 minutes."
+  - "Allowed" is drawn under "Diagnosis allows" (AllowsRows).
+  - Item c: an open undo page with no sample says UNDO_NO_SAMPLE (runContract.js); a closed one says nothing.
+- **liveSource.js:** `kindOf` (exported, and used by LiveRunRoute's ended page too) gives `pretend` for a
+  simulation carrying request.pretend. A pretend request's code review source is `sim`, so CodeReviewPage is
+  untouched: unmarked, with the plain strip.
+- **Differences from "s28 in detail":**
+  - The sent wording is a "Pretend: " heading plus "Sent as a pretend run: …", not "Sent to the desktop helper as a
+    pretend run: …".
+  - CodeReviewPage.jsx needed no change.
+- **O17 and older requests:** an Id-list request queued before s28 without a `records` query can't be corrected
+  through the tool (it runs requestProblems too) until its correction adds one. Checked at s28: all 5 live Id-list
+  requests lack one (3 of them simulations), so a correction of any of them must add the `records` query.
+- **simulation.js:**
+  - The Id-list queries are labelled `records`.
+  - Two scenarios are new: `pretend-precheck` (its source's kind `pretend`) and `dataop-allows`.
+- **switchboard-run-pages core.ts:** resend reads the preview first, so its `simulated` and line follow the request
+  (it was hard-coded false). Resend and cancel also return `pretend`. Approve already passed consume's `pretend` on.
+- **The tool:** the schema was already a passthrough, so pretend and allows reach the database as sent; the queue
+  tool lower-cases `undo_of.request_id`, as it does pre_check_request_id. mcp's queue description names the
+  `records` query, allows, pretend and undo_of.request_id.
+- **Tests:**
+  - New: pretend.test.jsx and allows.test.jsx.
+  - Added to: runContract.test.js (pretend, O17, O2, O5, the SIMULATION flag), core.test.mjs (resend, cancel and
+    Approve for pretend and plain), switchboard-runs.test.mjs and mcp/index.test.mjs.
+
+**s28b deployed** both functions on 2026-11-26, from the worktree at main's dfd260b, holding db:deploy:
+- mcp at 20:42:35 local time (04:42:35Z on 11-27);
+- switchboard-run-pages at 20:42:45 local time (04:42:45Z).
+
+Live check, read only:
+- The deployed mcp index.ts, downloaded to the scratchpad, is byte-identical to the worktree's. Its
+  queue_switchboard_run_request description names pretend and allows. The claude.ai connector's tool list was fixed
+  at session start, so the tool list was read from the deployed source.
+- A POST to switchboard-run-pages /preview with no JWT and no token answers 401 `{"ok":false,"error":"unauthorized"}`,
+  the function's own body, as before (no 500). The token check comes after the JWT check, so a missing token can't
+  be reached without signing in; core.test.mjs covers its 400.
 
 The Checkpoints follow s27d, s28b and s29. Until s29 lands the runner refuses a pretend result (core.ts:869), so no
 pretend walk starts before then.

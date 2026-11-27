@@ -48,30 +48,20 @@ supabase/migrations/_pending_sb3_pages-h6v_run_pages.sql, supabase/tests/sb3_pag
 
 ## Next step's scope
 
-s27: O5 (undo_of.request_id) is in the pending migration's queue function, and test 8 is drafted (supabase/tests/sb3_pages-h6v/8_pretend_test.sql); s28 is planned in spec 15.2 with O17 and O2 (40m). s26b: pretend is request.pretend = {scenario: "<name>"}; nine functions replaced. s26: the pretend migration drafted (supabase/migrations/_pending_sb3_pages-h6v_pretend.sql, unnumbered, not queued). Steps (15.2): s27b to s27d number and queue, s28 pages, s28b deploys, s29 runner; item b is s30, d s31, e s32.
+s28b: mcp and switchboard-run-pages are deployed with the s28 code (2026-11-26, 20:42 local; spec 15.2 "s28b deployed"). s28: the pages, runContract (pretend, O17, O2, O5), the tool, run-pages core and item c (spec 15.2 "s28 as built"). s26 to s27g: migrations 256 and 257 are live and on main; test 8 passed 59 of 59. Steps (15.2): s29 runner; item b is s30, d s31, e s32.
 
-s27c: drift check clean; supabase/migrations/256_pretend.sql written (the pending file, header renumbered) and queued as action a184baeb-e35e-401f-8d1f-65cef3b9ed09; the pending file deleted. db: claims held: db:table:switchboard_run_requests, db:table:switchboard_runs, db:fn: for the nine functions, db:migration:256. s27b: `allows` in the correction's c_words (O2); number 256.
+Before s29: Alex runs gitpush Checkpoint of the s28 and s28b files, then gitsync in this worktree if it is behind main.
 
-s27d: 256 is applied (run b3f3799f-bc5c-4378-b8ec-a5fce699c45d, CONFORMANT) and checked live; test 8 queued with --test as action f16ddab2-7097-4726-94fa-91a362ee1b48.
-
-s27e: 256 broke every queue call (line 148's `->` and `-` precedence); the fix is drafted (supabase/migrations/_pending_sb3_pages-h6v_fix_queue.sql) and numbered 257 (supabase/migrations/257_fix_queue.sql, db:migration:257 claimed).
-
-s27f: supabase/migrations/257_fix_queue.sql written (the pending file, header renumbered), the pending file deleted, and 257 queued as action eafded11-f30c-46a7-b2b2-54bc84535aa4.
-
-s27g: 257 applied (run d50075fa-7153-46f7-b15f-3f8a5c2f966b, smoke check passed, CONFORMANT) and checked live; the queue was down 17:45Z to about 17:58Z. Test 8 queued again as action 2e163d8b-273e-428e-9a2b-9d412fda4dd9.
-
-Before s27h: test 8 has run, and its run id is passed on.
-
-Run tag: sb3_pages-h6v-s27h-<4>, record test 8's result, then Checkpoint (spec 15.2)
+Run tag: sb3_pages-h6v-s29-<4>, the runner's pretend handling (spec 15.2)
 
 Scope of this step:
 - create: nothing
-- update: docs/technical-spec-sb3_pages-h6v.md, and supabase/tests/sb3_pages-h6v/8_pretend_test.sql only if a failing check is the test's own fault
+- update: supabase/functions/switchboard-runner/core.ts, supabase/functions/switchboard-runner/core.test.mjs, supabase/functions/switchboard-runner/index.ts, docs/technical-spec-sb3_pages-h6v.md
 - delete: nothing
-- deploy: nothing
-- SQL: none (read test 8's run only)
-Estimated run: 3m
-(Once test 8 passes: ask Alex for gitpush Checkpoint of supabase/migrations/256_pretend.sql, supabase/migrations/257_fix_queue.sql, supabase/tests/sb3_pages-h6v/8_pretend_test.sql, docs/technical-spec-sb3_pages-h6v.md and docs/progress-sb3_pages-h6v.md, then check with claims.cmd status that the db: claims went. Then s28.)
+- deploy: switchboard-runner (db:deploy, claimed at this step, Alex's permission prompt), with main's commits present
+- SQL: none
+Estimated run: 20m
+(core.ts:869 accepts a pretend run's result; index.ts:200 stalePicks and 173 pendingActions take mode 'pretend' as well as 'real'. Then the first pretend walk: queue a pretend pre-check with the tool, issue its link, open /run/ and see the strip and the marks.)
 
 Then C2, once its gates are met (spec 14.2): Common Defense Fix D and iwh_ab_codefix-p8v finished, the end-to-end sandbox test passed, and plumbing's L3 reinstall.
 
@@ -206,3 +196,5 @@ Estimated run: 20m
 | s27e | Find 256's break, reproduce, draft fix, number 257, cold review, spec | 09:48:40 | 09:52:40 | 4m00s |
 | s27f | Claims, drift check, write 257, delete pending, spec, queue | 09:54:50 | 09:56:27 | 1m37s |
 | s27g | Check 257's run and live body, queue test 8, spec | 09:58:38 | 09:59:08 | 0m30s |
+| s28 | Pages, runContract, tool, run-pages core, item c, tests, cold review and fixes, spec | 10:03:09 | 10:16:51 | 13m42s |
+| s28b | Check, claim, deploy mcp and switchboard-run-pages, live check, spec | 20:41:52 | 20:44:08 | 2m16s |

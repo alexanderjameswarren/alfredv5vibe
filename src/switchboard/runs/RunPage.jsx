@@ -1,12 +1,12 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import {
-  BUTTON, NOT_READY_BOX, OrgBanners, OrgPill, PANEL, ReasonInput, ResultLine, RunShell, SECOND_BUTTON, isSimulation, localTime, refusalNote,
-  shortHash,
+  BUTTON, NOT_READY_BOX, OrgBanners, OrgPill, PANEL, ReasonInput, ResultLine, RunShell, SECOND_BUTTON, isPretend, isSimulation, localTime,
+  refusalNote, shortHash,
 } from './look';
 import {
-  PHASE_HEADERS, RERUN_LABEL, STOPS_AT_FIRST_FAILURE, afterApproveLines, approveLabel, bannerLines, checkWord, clientOrgLine,
+  PHASE_HEADERS, RERUN_LABEL, STOPS_AT_FIRST_FAILURE, afterApproveLines, allowsView, approveLabel, bannerLines, checkWord, clientOrgLine,
   countDetail, countSentence, daysLeftLine, groupedSteps, knockOnLines, notStarted, pageExpired, phaseWord, rehearsalOrg,
-  rerunRequest, selectedByText, runCancelledLine, runEnd, runLine, runRerunsLine, runResentLine, sampleRoleLabel, stillValid, targetOrg, undoClosedReason,
+  rerunRequest, selectedByText, runCancelledLine, runEnd, runLine, runRerunsLine, runResentLine, sampleRoleLabel, stillValid, targetOrg, UNDO_NO_SAMPLE, undoClosedReason,
   outcomeView, undoHasDeadline, undoLine, undoScopeLine, validUntil, whatChanges,
 } from './runContract';
 import { desktopLine, notReadyReason } from './desktopCheck';
@@ -80,7 +80,37 @@ function ProblemBox({ r, closed }) {
           <dd data-testid="run-allows" className="min-w-0 break-words">{r.diagnosis_allows.map((a) => <span key={a} className="block">{a}</span>)}</dd>
         </>
       )}
+      <AllowsRows allows={r.allows} />
     </dl>
+  );
+}
+
+const rowsWord = (n) => `${n.toLocaleString('en-US')} ${n === 1 ? 'row' : 'rows'}`;
+
+/**
+ * s28 (O2): the structured allows, beside the sentences: the mode, each kind with its limit, integrations and the
+ * failure tolerance, each with its reason. Absent or malformed draws nothing (requestProblems refuses it at queue time).
+ */
+function AllowsRows({ allows }) {
+  const a = allowsView(allows);
+  if (!a) return null;
+  return (
+    <>
+      <dt className="font-medium">Allowed</dt>
+      <dd data-testid="run-allows-structured" data-mode={a.mode} className="min-w-0 break-words">
+        <span data-testid="run-allows-mode" className="block">Mode: {a.mode === 'frozen' ? 'frozen' : 'moving'}</span>
+        {a.kinds.map((k, i) => (
+          // eslint-disable-next-line react/no-array-index-key -- kinds can repeat; the order is fixed
+          <span key={i} data-testid="run-allows-kind" className="block">{k.kind}: up to {k.limit.toLocaleString('en-US')}. {k.reason}</span>
+        ))}
+        <span data-testid="run-allows-integrations" className="block">
+          Integrations: {a.integrations.allowed ? 'allowed' : 'not allowed'}. {a.integrations.reason}
+        </span>
+        <span data-testid="run-allows-tolerance" className="block">
+          Failures tolerated: up to {rowsWord(a.failure_tolerance.rows)}. {a.failure_tolerance.reason}
+        </span>
+      </dd>
+    </>
   );
 }
 
@@ -191,7 +221,11 @@ function Outcome({ r, outcome, used }) {
   );
 }
 
-function SampleRecord({ r, sample }) {
+function SampleRecord({ r, sample, closed }) {
+  // s28 (item c): an open undo with no sample says why; a closed one counts nothing, so it says nothing.
+  if (r.page === 'undo' && !sample?.records?.length) {
+    return closed ? null : <p data-testid="run-sample-none" className="mb-4 text-sm text-dark break-words">{UNDO_NO_SAMPLE}</p>;
+  }
   if (['precheck', 'correction', 'check'].includes(r.page) || !sample?.records?.length) return null;
   return (
     <section data-testid="run-sample" className={PANEL}>
@@ -295,6 +329,10 @@ const lineOf = (reply, fallback) => (typeof reply?.line === 'string' && reply.li
 
 export default function RunPage({ source }) {
   const sim = isSimulation(source);
+  // s28: a pretend page is a simulation whose run goes to the helper: it carries the extension's marks, as a real page
+  // does, with SIMULATION lines and data-switchboard-pretend. A plain simulation carries none.
+  const pretend = isPretend(source);
+  const marked = !sim || pretend;
   const [loaded, setLoaded] = useState(null);
   const [error, setError] = useState(null);
   const [note, setNote] = useState(null);
@@ -448,8 +486,9 @@ export default function RunPage({ source }) {
       <p data-testid="run-headline" data-settled={desktop ? 'true' : 'false'} className="font-bold text-dark mb-2 break-words">{r.headline}</p>
       <p className="text-sm text-dark">Project</p>
       <p
-        className="font-mono text-dark mb-4 break-all" data-switchboard-project={r.project_code} data-switchboard-kind={sim ? 'simulation' : 'run'}
-        data-switchboard-running={!sim && running ? '' : undefined} data-switchboard-action-id={!sim && actionId ? actionId : undefined}
+        className="font-mono text-dark mb-4 break-all" data-switchboard-project={r.project_code} data-switchboard-kind={marked ? 'run' : 'simulation'}
+        data-switchboard-pretend={pretend ? '' : undefined}
+        data-switchboard-running={marked && running ? '' : undefined} data-switchboard-action-id={marked && actionId ? actionId : undefined}
       >{r.project_code}</p>
       <h2 data-testid="run-phase-header" className="text-xl font-bold text-dark mb-1">{PHASE_HEADERS[r.page]}</h2>
       <p data-testid="run-client-org" className="text-dark mb-4 break-words">{clientOrgLine(r)}</p>
@@ -458,7 +497,7 @@ export default function RunPage({ source }) {
       <StatusLine r={r} run={used ? run : null} closed={closed} />
       <Outcome r={r} outcome={loaded.outcome} used={used} />
       <ChangedBlock changed={r.changed} />
-      <SampleRecord r={r} sample={loaded.sample} />
+      <SampleRecord r={r} sample={loaded.sample} closed={closed} />
       {undo && <p data-testid="run-undo" className="mb-4 text-dark font-medium break-words">{undo}</p>}
       {/* A closed undo will run nothing, so "This run will:" is left out (A7). */}
       {!closed && <RunWill r={r} />}
@@ -529,7 +568,7 @@ export default function RunPage({ source }) {
         <div data-testid="run-cancelled" className={PANEL}>
           <p className="font-medium m-0 mb-1">Not run</p>
           <p className="m-0 mb-3 break-words">{cancelled.reason || 'No reason given.'}</p>
-          <ResultLine line={lineOf(cancelled, runCancelledLine(linkId, cancelled.reason))} sim={sim} linkId={linkId} />
+          <ResultLine line={lineOf(cancelled, runCancelledLine(linkId, cancelled.reason, pretend))} sim={sim} pretend={pretend} linkId={linkId} />
         </div>
       ) : closed ? (
         // After the undo deadline: why, and no buttons.
@@ -540,15 +579,20 @@ export default function RunPage({ source }) {
       ) : quiet ? null : sent ? (
         <div data-testid="run-sent" data-mode={mode} className={PANEL}>
           <p className="font-medium m-0 mb-1">
-            {sim ? 'Simulated: ' : ''}{sent.rerun ? 'The pre-check and rehearsal were sent to the desktop helper' : sent.as_rerun ? 'The checks to run again were sent to the desktop helper' : sent.resent ? 'Resent to the desktop helper' : 'Sent to the desktop helper'}
+            {pretend ? 'Pretend: ' : sim ? 'Simulated: ' : ''}{sent.rerun ? 'The pre-check and rehearsal were sent to the desktop helper' : sent.as_rerun ? 'The checks to run again were sent to the desktop helper' : sent.resent ? 'Resent to the desktop helper' : 'Sent to the desktop helper'}
           </p>
-          <p className="m-0 mb-3 break-words">
-            {sim ? 'Nothing was sent: this is a simulation, and no org was touched. ' : 'It must pick the run up within 15 minutes. '}
+          <p data-testid="run-sent-text" className="m-0 mb-3 break-words">
+            {/* s28: a pretend run really goes to the helper, which makes its data up. */}
+            {pretend ? 'Sent as a pretend run: its data is made up and no org is touched. It must pick the run up within 15 minutes. '
+              : sim ? 'Nothing was sent: this is a simulation, and no org was touched. ' : 'It must pick the run up within 15 minutes. '}
             {sent.rerun || sent.as_rerun ? 'Once they pass, this same page offers the data operation.' : ''}
           </p>
           {/* as_rerun on an Approve: the database recorded a correction's Approve as its reruns (251), not the write.
               The expired-checks rerun (mode rerun) also replies as_rerun, and keeps the bare line. */}
-          <ResultLine line={lineOf(sent, sent.resent ? runResentLine(linkId) : mode === 'approve' && sent.as_rerun && !sent.rerun ? runRerunsLine(linkId) : runLine(linkId))} sim={sim} linkId={linkId} />
+          <ResultLine
+            line={lineOf(sent, sent.resent ? runResentLine(linkId, pretend) : mode === 'approve' && sent.as_rerun && !sent.rerun ? runRerunsLine(linkId, pretend) : runLine(linkId, pretend))}
+            sim={sim} pretend={pretend} linkId={linkId}
+          />
         </div>
       ) : (
         <>
